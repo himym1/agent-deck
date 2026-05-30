@@ -158,13 +158,13 @@ struct PiAgentStartupResourcesPopover: View {
 
     private var agentItems: [PiStartupResourceItem] {
         guard session.subagentsEnabled else {
-            return [.init(title: "This session started with subagents disabled", detail: "Re-enable subagents before creating a new session if you want agent discovery again.", kind: .none)]
+            return [.init(title: "This session started with Deck agents disabled", detail: "Re-enable Deck agents before creating a new session if you want agent discovery again.", kind: .none)]
         }
 
         let enabled = viewModel.catalogAgents(for: session)
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         guard !enabled.isEmpty else {
-            return [.init(title: "No subagents selected for this session", detail: "This session runs without subagent delegation.", kind: .none)]
+            return [.init(title: "No Deck agents selected for this session", detail: "This session runs without Deck agent delegation.", kind: .none)]
         }
         return enabled.map { agent in
             let description = agent.resolved.description.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -318,7 +318,7 @@ struct PiAgentSessionSubagentPickerCard: View {
 
         var subtitle: String {
             selectedCount == 0
-                ? "None selected · this session runs without subagents"
+                ? "None selected · this session runs without Deck agents"
                 : "\(selectedCount) of \(rows.count) selected · set before the first message"
         }
     }
@@ -408,7 +408,7 @@ struct PiAgentSessionSubagentPickerCard: View {
                     .foregroundStyle(Self.accent)
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Subagents for this session")
+                    Text("Deck agents for this session")
                         .font(.callout.weight(.semibold))
                         .foregroundStyle(.primary)
                     Text(data.subtitle)

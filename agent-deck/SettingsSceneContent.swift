@@ -80,7 +80,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case automations = "Automations"
     case github = "GitHub"
     case performance = "Performance"
-    case subagents = "Subagents"
+    case subagents = "Deck agents"
     case commands = "Commands"
     case shortcuts = "Shortcuts"
 
@@ -917,6 +917,36 @@ private struct AgentSettingsTab: View {
 
             SettingsSection {
                 SettingsToggleRow(
+                    title: "Deck agents:",
+                    label: "Enable Deck agents by default",
+                    note: "Applies to newly created Pi Agent drafts and sessions. Already-running sessions keep the instructions they launched with.",
+                    isOn: newSessionsSubagentsBinding
+                )
+
+                SettingsRow(
+                    title: "Delegation policy:",
+                ) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Picker("Delegation policy", selection: subagentDelegationPolicyBinding) {
+                            ForEach(NativeSubagentDelegationPolicy.allCases) { policy in
+                                Text(policy.displayName).tag(policy)
+                            }
+                        }
+                        .appSegmentedPicker()
+                        .labelsHidden()
+                        .frame(width: SettingsLayout.controlWidth, alignment: .leading)
+
+                        Text(viewModel.appSettings.nativeSubagentDelegationPolicy.settingsDescription)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .disabled(!viewModel.areSubagentsEnabledForNewSessions)
+            }
+
+            SettingsSection {
+                SettingsToggleRow(
                     title: "Context zones:",
                     label: "Show smart/dumb zone hint",
                     note: "Off by default. When enabled, the context meter shows a 40% smart-zone marker and explains Matt Pocock's warning that added context can degrade model decisions.",
@@ -971,6 +1001,20 @@ private struct AgentSettingsTab: View {
         Binding(
             get: { viewModel.appSettings.showContextSmartZoneHint },
             set: { viewModel.setShowContextSmartZoneHint($0) }
+        )
+    }
+
+    private var newSessionsSubagentsBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.areSubagentsEnabledForNewSessions },
+            set: { viewModel.setSubagentsEnabledForNewSessions($0) }
+        )
+    }
+
+    private var subagentDelegationPolicyBinding: Binding<NativeSubagentDelegationPolicy> {
+        Binding(
+            get: { viewModel.appSettings.nativeSubagentDelegationPolicy },
+            set: { viewModel.setNativeSubagentDelegationPolicy($0) }
         )
     }
 
@@ -1583,7 +1627,7 @@ private struct SubagentsSettingsTab: View {
             SettingsSection {
                 SettingsToggleRow(
                     title: "New sessions:",
-                    label: "Enable native subagents by default",
+                    label: "Enable Deck agents by default",
                     note: "Applies to newly created Pi Agent drafts and sessions. After the first message starts Pi, the session footer becomes read-only.",
                     isOn: newSessionsSubagentsBinding
                 )

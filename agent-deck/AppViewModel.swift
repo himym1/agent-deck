@@ -249,6 +249,8 @@ final class AppViewModel: NSObject {
     private let gitHubAuthService: GitHubAuthService = GitHubCLIAuthService()
     private let gitRepositoryService = GitRepositoryService()
     private let shipService = PiAgentShipService()
+    /// Tag-and-push release flow, scoped to the agent-deck repo itself.
+    var agentDeckReleaseService: ReleaseService { ReleaseService(gitRepositoryService: gitRepositoryService) }
     private let agentAvatarPromptService = AgentAvatarPromptGenerationService()
     private let skillDescriptionService = SkillDescriptionGenerationService()
     private let subagentWorktreeService = PiSubagentWorktreeService()
@@ -2782,12 +2784,12 @@ final class AppViewModel: NSObject {
             return
         }
         guard session.subagentsEnabled else {
-            completion("Native subagents are disabled for this \(AppBrand.displayName) session.")
+            completion("Deck agents are disabled for this \(AppBrand.displayName) session.")
             return
         }
         let continueRunID = request.continueSubagentID.flatMap { UUID(uuidString: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
         if request.continueSubagentID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false, continueRunID == nil {
-            completion("Invalid continueSubagentID `\(request.continueSubagentID ?? "")`. Use the Subagent ID shown on the native subagent card.")
+            completion("Invalid continueSubagentID `\(request.continueSubagentID ?? "")`. Use the Deck agent ID shown on the Deck agent card.")
             return
         }
         let useWorktreeIsolation = false
@@ -2802,8 +2804,8 @@ final class AppViewModel: NSObject {
                 let status = run.status == .completed ? "completed" : run.status.rawValue
                 let summary = run.summary ?? run.error ?? "No summary returned."
                 let isPersistedRun = self.piAgentSessionStore.subagentRuns(for: parentSessionID).contains { $0.id == run.id }
-                let idLine = isPersistedRun ? "\nSubagent ID: \(run.id.uuidString)" : ""
-                completion("Native subagent \(run.agentName) \(status).\(idLine)\n\n\(summary)")
+                let idLine = isPersistedRun ? "\nDeck agent ID: \(run.id.uuidString)" : ""
+                completion("Deck agent \(run.agentName) \(status).\(idLine)\n\n\(summary)")
             }
         }
         if launchedRun.status.isActive, !gate.isCompleted {
@@ -2813,7 +2815,7 @@ final class AppViewModel: NSObject {
                     guard let self else { return }
                     gate.complete {
                         self.nativeSubagentRunner.stop(runID: launchedRun.id, parentSessionID: parentSessionID)
-                        completion("Native subagent \(launchedRun.agentName) timed out after 30 minutes waiting for a result.")
+                        completion("Deck agent \(launchedRun.agentName) timed out after 30 minutes waiting for a result.")
                     }
                 }
             }
@@ -2826,22 +2828,22 @@ final class AppViewModel: NSObject {
             return
         }
         guard session.subagentsEnabled else {
-            completion("Native subagents are disabled for this \(AppBrand.displayName) session.")
+            completion("Deck agents are disabled for this \(AppBrand.displayName) session.")
             return
         }
         let tasks = request.tasks.map { (agentName: $0.agent, task: $0.task) }
         let useWorktreeIsolation = request.worktree == true
         await runNativeParallel(parentSession: session, agentTasks: tasks, concurrency: request.concurrency ?? 4, useWorktreeIsolation: useWorktreeIsolation) { run in
             let status = run.status == .completed ? "completed" : run.status.rawValue
-            completion("Native parallel run \(status).\n\n\(run.summary ?? run.error ?? "No summary returned.")")
+            completion("Deck agent parallel run \(status).\n\n\(run.summary ?? run.error ?? "No summary returned.")")
         }
     }
 
     @discardableResult
     private func runNativeSubagent(parentSession: PiAgentSessionRecord, agentName: String, task: String, continueRunID: UUID? = nil, useWorktreeIsolation: Bool, allowDirectProjectWrites: Bool = false, expectedOutcome: PiSubagentExpectedOutcome = .reportOnly, requestedOutputPath: String? = nil, allowOverwrite: Bool = false, readFirstPaths: [String] = [], completion: ((PiSubagentRunRecord) -> Void)?) async -> PiSubagentRunRecord {
         guard parentSession.subagentsEnabled else {
-            let message = "Native subagents are disabled for this session."
-            piAgentSessionStore.append(.init(sessionID: parentSession.id, role: .error, title: "Subagents Disabled", text: message))
+            let message = "Deck agents are disabled for this session."
+            piAgentSessionStore.append(.init(sessionID: parentSession.id, role: .error, title: "Deck Agents Disabled", text: message))
             let placeholder = PiSubagentRunRecord.failedPlaceholder(parentSessionID: parentSession.id, agentName: agentName, task: task, error: message)
             completion?(placeholder)
             return placeholder
@@ -2849,13 +2851,13 @@ final class AppViewModel: NSObject {
         let snapshot = startupSnapshot(forProjectPath: parentSession.projectPath)
         guard let agent = catalogAgents(for: parentSession).first(where: { $0.name == agentName }) else {
             let message = "No enabled agent named \(agentName) was found for this session."
-            piAgentSessionStore.append(.init(sessionID: parentSession.id, role: .error, title: "Subagent Not Found", text: message))
+            piAgentSessionStore.append(.init(sessionID: parentSession.id, role: .error, title: "Deck Agent Not Found", text: message))
             let placeholder = PiSubagentRunRecord.failedPlaceholder(parentSessionID: parentSession.id, agentName: agentName, task: task, error: message)
             completion?(placeholder)
             return placeholder
         }
         if let validationError = validateNativeSubagentOutcome(parentSession: parentSession, expectedOutcome: expectedOutcome, requestedOutputPath: requestedOutputPath, allowOverwrite: allowOverwrite, allowDirectProjectWrites: allowDirectProjectWrites) {
-            piAgentSessionStore.append(.init(sessionID: parentSession.id, role: .error, title: "Subagent Output Policy", text: validationError))
+            piAgentSessionStore.append(.init(sessionID: parentSession.id, role: .error, title: "Deck Agent Output Policy", text: validationError))
             let placeholder = PiSubagentRunRecord.failedPlaceholder(parentSessionID: parentSession.id, agentName: agentName, task: task, error: validationError)
             completion?(placeholder)
             return placeholder
@@ -2887,7 +2889,7 @@ final class AppViewModel: NSObject {
         do {
             return try await nativeSubagentRunner.runSingle(parentSession: parentSession, agent: agent, snapshot: snapshot, task: task, continueRunID: continueRunID, useWorktreeIsolation: useWorktreeIsolation, expectedOutcome: expectedOutcome, requestedOutputPath: requestedOutputPath, allowOverwrite: allowOverwrite, readFirstPaths: readFirstPaths, onCompletion: completion)
         } catch {
-            piAgentSessionStore.append(.init(sessionID: parentSession.id, role: .error, title: "Subagent Launch Failed", text: error.localizedDescription))
+            piAgentSessionStore.append(.init(sessionID: parentSession.id, role: .error, title: "Deck Agent Launch Failed", text: error.localizedDescription))
             let placeholder = PiSubagentRunRecord.failedPlaceholder(parentSessionID: parentSession.id, agentName: agent.name, task: task, error: error.localizedDescription)
             completion?(placeholder)
             return placeholder
@@ -2913,13 +2915,13 @@ final class AppViewModel: NSObject {
             )
         }
         let limit = max(1, min(concurrency, tasks.count))
-        let run = nativeGraphRun(id: runID, parentSession: parentSession, mode: .parallel, title: "Parallel", task: "\(tasks.count) parallel native subagent task(s)", artifactDirectory: artifactDirectory, children: childRecords, edges: [], concurrency: limit, worktreeIsolation: useWorktreeIsolation)
+        let run = nativeGraphRun(id: runID, parentSession: parentSession, mode: .parallel, title: "Parallel", task: "\(tasks.count) parallel Deck agent task(s)", artifactDirectory: artifactDirectory, children: childRecords, edges: [], concurrency: limit, worktreeIsolation: useWorktreeIsolation)
         piAgentSessionStore.upsertSubagentRun(run)
         piAgentSessionStore.append(.init(
             sessionID: parentSession.id,
             role: .status,
-            title: "Native Parallel Started",
-            text: "Subagent ID: \(run.id.uuidString)\n\nStarted \(tasks.count) task(s), concurrency \(limit).",
+            title: "Parallel Deck Agents Started",
+            text: "Deck agent ID: \(run.id.uuidString)\n\nStarted \(tasks.count) task(s), concurrency \(limit).",
             rawJSON: nativeSubagentCardPayload(for: run)
         ))
         let scheduler = NativeParallelGraphScheduler(parentSession: parentSession, graphRunID: runID, tasks: tasks.map { (agentName: $0.0, task: $0.1) }, concurrency: limit, useWorktreeIsolation: useWorktreeIsolation, completion: completion)
@@ -3020,7 +3022,7 @@ final class AppViewModel: NSObject {
         if let outputPath = piAgentSessionStore.subagentRuns(for: parentSessionID).first(where: { $0.id == runID })?.outputPath {
             try? summary.write(toFile: outputPath, atomically: true, encoding: .utf8)
         }
-        piAgentSessionStore.append(.init(sessionID: parentSessionID, role: status == .completed ? .status : .error, title: status == .completed ? "Native Graph Completed" : "Native Graph Failed", text: summary))
+        piAgentSessionStore.append(.init(sessionID: parentSessionID, role: status == .completed ? .status : .error, title: status == .completed ? "Deck Agent Graph Completed" : "Deck Agent Graph Failed", text: summary))
         if let run = piAgentSessionStore.subagentRuns(for: parentSessionID).first(where: { $0.id == runID }) { completion?(run) }
     }
 
@@ -3145,22 +3147,21 @@ final class AppViewModel: NSObject {
             .map { run in
                 "- \(run.id.uuidString) \(run.agentName) — \(run.status.rawValue) — latest task: \(String(run.task.prefix(120)))"
             }
-        let continuableSection = continuableRuns.isEmpty ? "" : "\n\nRecent continuable subagents:\n\(continuableRuns.joined(separator: "\n"))"
+        let continuableSection = continuableRuns.isEmpty ? "" : "\n\nRecent continuable Deck agents:\n\(continuableRuns.joined(separator: "\n"))"
         return """
-        Native \(AppBrand.displayName) tools: `ask_user`, `set_session_plan`, `update_session_plan`, `managed_subagent`, `managed_parallel`, `list_supervisor_requests`, `answer_supervisor_request`.
-        - Act primarily as the orchestrator: clarify, plan, delegate, supervise, update the visible plan, and synthesize results.
-        - Delegate code implementation to `coder` or another relevant engineer agent by default; edit directly only for trivial, low-risk one-off changes where delegation would add unnecessary overhead.
+        \(AppBrand.displayName) tools: `ask_user`, `set_session_plan`, `update_session_plan`, `managed_subagent`, `managed_parallel`, `list_supervisor_requests`, `answer_supervisor_request`.
+        Deck agents are separate child Pi sessions that \(AppBrand.displayName) launches and supervises. The only way to delegate to one is the `managed_subagent` or `managed_parallel` tool — they are not Pi slash commands, model-internal delegation, or hidden reasoning. If you do not call those tools, no delegation happens.
+        \(appSettings.nativeSubagentDelegationPolicy.promptInstructions)
         - Use `ask_user` for one focused user decision when requirements are ambiguous or preference-dependent.
         - For multi-step work, keep a short parent-owned visible plan with `set_session_plan` and `update_session_plan`.
         - If you delegate planning to `planner`, convert its returned implementation plan into `set_session_plan` before implementation unless the user only asked for a report. Planner text alone does not update the visible \(AppBrand.displayName) plan.
         - Update the visible plan when steps start, complete, block, skip, or materially change.
-        - Delegate bounded implementation work with `managed_subagent`; include `reads` when known. `coder` managed subagents are for approved implementation and will make direct project edits; use explorer, planner, or reviewer for report-only work. Use worktrees for risky or parallel writer tasks when the tool supports it.
-        - Native subagent runs start fresh by default. Do not assume a later `managed_subagent` call remembers an earlier child run.
-        - The tool result and native subagent card show a stable Subagent ID. For a direct follow-up to a previous child, pass that ID as `continueSubagentID` so Agent Deck resumes the same child session and updates the same card.
+        - Deck agent runs start fresh by default. Do not assume a later `managed_subagent` call remembers an earlier child run.
+        - The tool result and Deck agent card show a stable Deck agent ID. For a direct follow-up to a previous child, pass that ID as `continueSubagentID` so Agent Deck resumes the same child session and updates the same card.
         - If starting fresh for follow-up work, pass a compact continuity packet: prior findings/status, what changed, relevant files/artifact paths, and exact expected output.
         - Prefer fresh runs for independent work; prefer continuation for direct refinement, re-review, debugging, or answering a child-specific follow-up.
 
-        Available native subagents:
+        Available Deck agents:
         \(lines.joined(separator: "\n"))\(continuableSection)
         """
     }
@@ -3195,7 +3196,7 @@ final class AppViewModel: NSObject {
                 run.children = children
             }
         }
-        piAgentSessionStore.append(.init(sessionID: parentSessionID, role: .status, title: "Native Graph Stopped", text: "Stopped graph run \(runID.uuidString)."))
+        piAgentSessionStore.append(.init(sessionID: parentSessionID, role: .status, title: "Deck Agent Graph Stopped", text: "Stopped graph run \(runID.uuidString)."))
     }
 
     func stopNativeSubagentGraphChild(graphRunID: UUID, childID: UUID, parentSessionID: UUID) {
@@ -3213,7 +3214,7 @@ final class AppViewModel: NSObject {
             children[index].durationMs = max(0, Int((completedAt.timeIntervalSince(children[index].createdAt) * 1000).rounded()))
             run.children = children
         }
-        piAgentSessionStore.append(.init(sessionID: parentSessionID, role: .status, title: "Native Graph Child Stopped", text: "Stopped \(child.agentName)."))
+        piAgentSessionStore.append(.init(sessionID: parentSessionID, role: .status, title: "Deck Agent Child Stopped", text: "Stopped \(child.agentName)."))
     }
 
     func retryNativeSubagentGraphChild(graphRunID: UUID, childID: UUID, parentSessionID: UUID) {
@@ -3257,7 +3258,7 @@ final class AppViewModel: NSObject {
                         run.worktreeStatus = .patchReady
                         run.worktreePatchPath = patch.patchPath
                     }
-                    piAgentSessionStore.append(.init(sessionID: parentSessionID, role: .status, title: "Subagent Worktree Patch Ready", text: "\(patch.changedFiles.count) changed file(s).\n\n\(patch.patchPath)"))
+                    piAgentSessionStore.append(.init(sessionID: parentSessionID, role: .status, title: "Deck Agent Worktree Patch Ready", text: "\(patch.changedFiles.count) changed file(s).\n\n\(patch.patchPath)"))
                     NSWorkspace.shared.open(URL(fileURLWithPath: patch.patchPath))
                 }
             } catch {
@@ -3277,7 +3278,7 @@ final class AppViewModel: NSObject {
                         run.worktreeStatus = .applied
                         run.worktreePatchPath = patch.patchPath
                     }
-                    piAgentSessionStore.append(.init(sessionID: parentSessionID, role: .status, title: "Subagent Worktree Applied", text: "Applied \(patch.changedFiles.count) changed file(s) from the isolated worktree.\n\nPatch: \(patch.patchPath)"))
+                    piAgentSessionStore.append(.init(sessionID: parentSessionID, role: .status, title: "Deck Agent Worktree Applied", text: "Applied \(patch.changedFiles.count) changed file(s) from the isolated worktree.\n\nPatch: \(patch.patchPath)"))
                 }
             } catch {
                 await MainActor.run { recordSubagentWorktreeError(error, runID: runID, parentSessionID: parentSessionID) }
@@ -3298,7 +3299,7 @@ final class AppViewModel: NSObject {
                     piAgentSessionStore.updateSubagentRun(runID, parentSessionID: parentSessionID) { run in
                         run.worktreeStatus = .discarded
                     }
-                    piAgentSessionStore.append(.init(sessionID: parentSessionID, role: .status, title: "Subagent Worktree Discarded", text: "Removed isolated worktree for run \(runID.uuidString). Artifacts were kept."))
+                    piAgentSessionStore.append(.init(sessionID: parentSessionID, role: .status, title: "Deck Agent Worktree Discarded", text: "Removed isolated worktree for run \(runID.uuidString). Artifacts were kept."))
                 }
             } catch {
                 await MainActor.run { recordSubagentWorktreeError(error, runID: runID, parentSessionID: parentSessionID) }
@@ -3312,7 +3313,7 @@ final class AppViewModel: NSObject {
             run.worktreeStatus = .failed
             run.error = [run.error, message].compactMap { $0 }.joined(separator: "\n")
         }
-        piAgentSessionStore.append(.init(sessionID: parentSessionID, role: .error, title: "Subagent Worktree Failed", text: message))
+        piAgentSessionStore.append(.init(sessionID: parentSessionID, role: .error, title: "Deck Agent Worktree Failed", text: message))
     }
 
     func respondToSubagentSupervisorRequest(_ requestID: String, parentSessionID: UUID, response: String) {
@@ -3325,6 +3326,41 @@ final class AppViewModel: NSObject {
 
     var shouldShowPiAgentGitActions: Bool {
         piAgentCommitMessageModel() != nil
+    }
+
+    /// Whether the dedicated "Release" toolbar button should appear: only when the
+    /// selected session's repo is agent-deck itself. Matches the session's recorded
+    /// `repository` (owner/repo), falling back to the project's GitHub remote.
+    var shouldShowAgentDeckReleaseAction: Bool {
+        guard let session = piAgentSessionStore.selectedSession else { return false }
+        let target = ReleaseService.repository
+        if let repository = session.repository,
+           repository.caseInsensitiveCompare(target) == .orderedSame {
+            return true
+        }
+        if let remote = projectByPath[session.projectPath]?.gitHubRemote?.nameWithOwner,
+           remote.caseInsensitiveCompare(target) == .orderedSame {
+            return true
+        }
+        return false
+    }
+
+    /// The main checkout to tag against — the project path, never a worktree, so the
+    /// release lands on `main` rather than a session's feature branch.
+    var agentDeckReleaseProjectURL: URL? {
+        guard let session = piAgentSessionStore.selectedSession else { return nil }
+        return URL(fileURLWithPath: session.projectPath, isDirectory: true)
+    }
+
+    /// Record a successful release in the selected session's transcript.
+    func recordAgentDeckReleaseSucceeded(tag: String) {
+        guard let session = piAgentSessionStore.selectedSession else { return }
+        piAgentSessionStore.append(.init(
+            sessionID: session.id,
+            role: .status,
+            title: "Release Pushed",
+            text: "Tagged and pushed \(tag). CI build is now running."
+        ))
     }
 
     /// Whether the dev-server toolbar control should appear for the selected
@@ -4832,7 +4868,7 @@ final class AppViewModel: NSObject {
             maxCharacters: min(appSettings.agentMemoryInjectionCharacterBudget, 3_500)
         ) else { return prompts.flatMap { ["--append-system-prompt", $0] } }
         agentMemoryStore.markUsed(retrieval.records.map(\.id))
-        appendMemoryEvent(.recalled, records: retrieval.records, summary: "Loaded \(retrieval.records.count) scoped memor\(retrieval.records.count == 1 ? "y" : "ies") for subagent \(agent.name).", sessionID: parentSession.id)
+        appendMemoryEvent(.recalled, records: retrieval.records, summary: "Loaded \(retrieval.records.count) scoped memor\(retrieval.records.count == 1 ? "y" : "ies") for Deck agent \(agent.name).", sessionID: parentSession.id)
         prompts.append(retrieval.prompt)
         return prompts.flatMap { ["--append-system-prompt", $0] }
     }
@@ -5012,6 +5048,11 @@ final class AppViewModel: NSObject {
         guard appSettingsController.setSubagentsEnabledForNewSessions(isEnabled) else { return }
         syncAppSettings()
         piAgentSessionStore.newSessionSubagentsEnabled = isEnabled
+    }
+
+    func setNativeSubagentDelegationPolicy(_ policy: NativeSubagentDelegationPolicy) {
+        guard appSettingsController.setNativeSubagentDelegationPolicy(policy) else { return }
+        syncAppSettings()
     }
 
     func toggleSubagentsForNewSessions() {

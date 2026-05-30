@@ -67,7 +67,7 @@ xcodebuild -project agent-deck.xcodeproj -scheme agent-deck \
 
 - **Streaming transcript** with steering messages, thinking blocks, tool calls, plans, inline diffs, file previews, and color-coded status — filterable so you see exactly the detail you want.
 - **Live plan checklist** tracks the agent's todo/in-progress/done/blocked/skipped state as it works.
-- **Rich composer** with paste handling, `@`-file suggestions, and attachments (files, folders, images).
+- **Rich composer** with paste handling, `@`-file suggestions, macOS Dictation, and attachments (files, folders, images).
 - **Auto-titling** via Apple's on-device Foundation Model (or any model you pick) — no more "Session 47".
 - **Idle parking** frees system resources when you walk away.
 - **Terminal handoff** when you need raw CLI for one-off debugging.

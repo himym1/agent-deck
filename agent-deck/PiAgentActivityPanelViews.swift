@@ -388,7 +388,7 @@ private struct PiAgentActivitySubagentsCard: View {
             HStack(spacing: 7) {
                 Image(systemName: "paperplane")
                     .foregroundStyle(AppTheme.mutedText)
-                Text("Native Subagents")
+                Text("Deck Agents")
                     .font(.caption.weight(.semibold))
                 Spacer(minLength: 0)
                 Text("\(runs.count)")
@@ -616,7 +616,7 @@ private enum PiAgentActivityKind: String, Hashable {
         case .read: return "Read"
         case .bash: return "Shell"
         case .web: return "Web"
-        case .subagent: return "Subagent"
+        case .subagent: return "Deck agent"
         case .supervisor: return "Supervisor"
         case .tool: return "Tool"
         case .error: return "Error"
@@ -767,7 +767,7 @@ private struct PiAgentActivityItem: Identifiable, Hashable {
         case .web:
             return "\(prefix)web · \(status.label)"
         case .subagent:
-            return "\(prefix)native delegation · \(status.label)"
+            return "\(prefix)Deck agent delegation · \(status.label)"
         case .supervisor:
             return "\(prefix)routing · \(status.label)"
         case .tool:
@@ -917,7 +917,7 @@ private struct PiAgentActivityDetail: View {
             case .web:
                 PiAgentWebActivitySnippet(entry: item.entry)
             case .subagent:
-                quietNote("Native subagent details are shown in the inline subagent card. Open Transcript there for the full child run.")
+                quietNote("Deck agent details are shown in the inline Deck agent card. Open Transcript there for the full child run.")
             default:
                 quietNote(item.detailText)
             }

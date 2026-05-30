@@ -104,7 +104,7 @@ struct PiAgentAddSessionMenuButton: View {
 }
 
 /// Icon-only round button surfaced next to the `+` only when the user has
-/// native subagents enabled. Opens a native `Menu` (NSMenu) listing every
+/// Deck agents enabled. Opens a native `Menu` (NSMenu) listing every
 /// discovered agent — tap one to launch a fresh 1:1 chat in the resolved
 /// project (scoped sidebar project → most recently active → first available).
 struct PiAgentChatWithAgentButton: View {
@@ -113,20 +113,17 @@ struct PiAgentChatWithAgentButton: View {
     @State private var resolvedAgents: [EffectiveAgentRecord] = []
 
     var body: some View {
-        Menu {
-            menuContent
-        } label: {
+        AppCircleIconMenu(
+            style: .soft,
+            tint: AppTheme.brandAccent,
+            size: 30,
+            symbolWeight: .bold,
+            help: "Chat directly with an agent"
+        ) {
             Image(systemName: "paperplane")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(AppTheme.mutedText)
-                .frame(width: 30, height: 30)
-                .glassEffect(.regular.tint(AppTheme.mutedText.opacity(0.18)), in: Circle())
-                .contentShape(Circle())
+        } content: {
+            menuContent
         }
-        .menuIndicator(.hidden)
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("Chat directly with an agent")
         .accessibilityLabel("Chat with agent")
         .onAppear { refresh() }
         .onChange(of: viewModel.selectedDiscoveredProject?.path) { _, _ in refresh() }

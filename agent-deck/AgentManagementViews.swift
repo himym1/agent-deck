@@ -1706,7 +1706,7 @@ private func agentFieldHelpText(for title: String) -> String? {
     case "Skills":
         return "Skills assigned to this agent are passed to Pi with explicit --skill paths. The agent needs the read tool to load full skill files."
     case "Disabled", "Availability":
-        return "Disabled agents are hidden from subagent discovery and normal launches."
+        return "Disabled agents are hidden from Deck agent discovery and normal launches."
     case "Output", "Output File":
         return "Default output file for single-agent runs. Most useful in managed workflows such as parallel runs."
     case "Default Reads":
@@ -1716,7 +1716,7 @@ private func agentFieldHelpText(for title: String) -> String? {
     case "Interactive", "Interaction":
         return "Compatibility frontmatter field for interactive behavior. Parsed and preserved."
     case "Max Subagent Depth", "Max Depth":
-        return "Limits how many more nested subagent launches this agent can create below itself."
+        return "Limits how many more nested Deck agent launches this agent can create below itself."
     case "Extensions":
         return "Extension loading mode. Omitted means normal extension loading, empty means none, and explicit values act as an allowlist."
     case "Tool Access":
@@ -2517,7 +2517,7 @@ private struct SubagentsProjectRecapPanel: View {
             HStack(spacing: 10) {
                 ProjectIconView(imageURL: project.iconFileURL, symbolName: project.fallbackSymbolName, size: 32, assetName: project.projectType.assetName)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Pi Subagents Recap").font(.headline).fontWidth(.expanded)
+                    Text("Deck Agents Recap").font(.headline).fontWidth(.expanded)
                     Text(project.name).font(.caption).foregroundStyle(AppTheme.mutedText)
                 }
                 Spacer()
@@ -2529,7 +2529,7 @@ private struct SubagentsProjectRecapPanel: View {
             Divider()
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("These are the native agents \(AppBrand.displayName) discovers for this project, after global/project precedence and builtin overrides.")
+                    Text("These are the Deck agents \(AppBrand.displayName) discovers for this project, after global/project precedence and builtin overrides.")
                         .font(.caption)
                         .foregroundStyle(AppTheme.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2580,7 +2580,7 @@ private struct SubagentsProjectRecapPanel: View {
 struct SubagentsInfoPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Subagent library")
+            Text("Deck agent library")
                 .font(.headline)
                 .fontWidth(.expanded)
             VStack(alignment: .leading, spacing: 10) {

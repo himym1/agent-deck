@@ -2247,14 +2247,14 @@ private enum PiInstructionPreviewBuilder {
         }
 
         if includesNativeSubagentCatalog {
-            prompt += "\n\n[AGENT DECK NATIVE SUBAGENT CATALOG]"
+            prompt += "\n\n[AGENT DECK — DECK AGENT CATALOG]"
             sections.append(PiPromptPreview.Section(
                 id: "subagent-catalog",
                 kind: .subagentCatalog,
-                title: "Native subagent catalog",
+                title: "Deck agent catalog",
                 sourceLabel: nil,
                 sourcePath: nil,
-                content: "Agent Deck inserts its native subagent catalog here when native subagents are enabled."
+                content: "Agent Deck inserts its Deck agent catalog here when Deck agents are enabled."
             ))
         }
 

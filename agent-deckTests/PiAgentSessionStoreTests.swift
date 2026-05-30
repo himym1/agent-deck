@@ -9,7 +9,7 @@ final class PiAgentSessionStoreTests: XCTestCase {
 
         let plan = store.setSessionPlan(sessionID: session.id, items: [
             .init(id: "inspect", title: "Inspect smoke", status: .inProgress),
-            .init(id: "delegate", title: "Run native subagent smoke", status: .todo),
+            .init(id: "delegate", title: "Run Deck agent smoke", status: .todo),
             .init(id: "finish", title: "Summarize result", status: .todo)
         ])
 

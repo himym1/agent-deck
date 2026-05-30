@@ -175,7 +175,7 @@ final class PiNativeBundledSubagentRealRPCEvalTests: XCTestCase {
                 id: "explorer-native-subagent-model-flow",
                 agent: "explorer",
                 prompt: """
-                Recon the native subagent model/thinking resolution path in this repo.
+                Recon the Deck agent model/thinking resolution path in this repo.
                 Find the relevant files and symbols for how a child subagent chooses provider, model,
                 and thinking level, and how that becomes Pi RPC launch arguments.
                 Do not edit files. Do not run formatting, tests, or git commands.
@@ -196,7 +196,7 @@ final class PiNativeBundledSubagentRealRPCEvalTests: XCTestCase {
                 agent: "explorer",
                 prompt: """
                 Recon how parent Pi RPC sessions handle system prompt and append-system-prompt arguments.
-                Identify where native subagent catalog prompt injection happens and how APPEND_SYSTEM.md
+                Identify where Deck agent catalog prompt injection happens and how APPEND_SYSTEM.md
                 preservation is represented in the current code/docs.
                 Do not edit files. Do not run formatting, tests, or git commands.
                 """,
@@ -222,7 +222,7 @@ final class PiNativeBundledSubagentRealRPCEvalTests: XCTestCase {
                 Requirements:
                 1. Inspect the current chat UI and list all user-visible and functional capabilities it has.
                 2. Plan an AppKit solution that is 1:1 equivalent in rendering, information density, look and feel,
-                   row behavior, selection/copy affordances, native subagent cards, thinking/tool rendering, and
+                   row behavior, selection/copy affordances, Deck agent cards, thinking/tool rendering, and
                    auto-scrolling while Pi streams content.
                 3. Plan how to use web research and Apple documentation for the AppKit design choices. If an
                    `apple-documentation` skill is available locally, use it.
@@ -277,7 +277,7 @@ final class PiNativeBundledSubagentRealRPCEvalTests: XCTestCase {
                 prompt: """
                 Report-only implementation task. Do not edit files. Do not run formatting, tests, or git commands.
                 Work out the exact patch you would make to add an opt-in real RPC eval test for bundled
-                native subagents, with configurable models and thinking levels.
+                Deck agents, with configurable models and thinking levels.
                 Put all proposed code changes in your final response in a readable file-style format,
                 using paths and fenced Swift snippets or pseudodiff. Agent Deck will save that final response
                 to output.md for analysis; do not write project files yourself.
@@ -300,7 +300,7 @@ final class PiNativeBundledSubagentRealRPCEvalTests: XCTestCase {
                 agent: "coder",
                 prompt: """
                 Report-only implementation task. Do not edit files. Do not run formatting, tests, or git commands.
-                Inspect native subagent fallback model support and describe the minimal code change
+                Inspect Deck agent fallback model support and describe the minimal code change
                 required to add ordered fallback retry behavior for child runs if it is not already present.
                 Put all proposed code changes in your final response in a readable file-style format,
                 using paths and fenced Swift snippets or pseudodiff. Agent Deck will save that final response
@@ -343,7 +343,7 @@ final class PiNativeBundledSubagentRealRPCEvalTests: XCTestCase {
                 agent: "reviewer",
                 prompt: """
                 Review the Pi Agent transcript rendering path for risks related to blank first paint,
-                thinking entries, and native subagent cards. Do not edit files.
+                thinking entries, and Deck agent cards. Do not edit files.
                 Do not run formatting, tests, or git commands.
                 Return correctness or regression risks with evidence from current SwiftUI code.
                 """,
@@ -352,7 +352,7 @@ final class PiNativeBundledSubagentRealRPCEvalTests: XCTestCase {
                     "PiAgentTranscriptViews",
                     "PiAgentRPCEventRenderCache",
                     "thinking",
-                    "native subagent card",
+                    "Deck agent card",
                     "ScrollView",
                     "Lazy"
                 ]
@@ -362,7 +362,7 @@ final class PiNativeBundledSubagentRealRPCEvalTests: XCTestCase {
 
     func testBundledNativeSubagentsAcrossModelsAndThinkingLevelsUsingRealRPC() async throws {
         guard ProcessInfo.processInfo.environment["AGENT_DECK_REAL_RPC_EVAL"] == "1" else {
-            throw XCTSkip("Set AGENT_DECK_REAL_RPC_EVAL=1 to run real Pi RPC native subagent evals.")
+            throw XCTSkip("Set AGENT_DECK_REAL_RPC_EVAL=1 to run real Pi RPC Deck agent evals.")
         }
         guard ProcessInfo.processInfo.environment["AGENT_DECK_PI_PATH"]?.isEmpty == false else {
             throw XCTSkip("Set AGENT_DECK_PI_PATH to the real pi executable before running real RPC evals.")
@@ -555,7 +555,7 @@ final class PiNativeBundledSubagentRealRPCEvalTests: XCTestCase {
     private func evalAgent(from base: EffectiveAgentRecord) -> EffectiveAgentRecord {
         var config = base.resolved
         // Keep provider/model/thinking inherited from the parent session so this
-        // exercises the same default native subagent path the app uses.
+        // exercises the same default Deck agent path the app uses.
         config.model = nil
         if base.name == "coder", let tools = config.tools {
             config.tools = tools.filter { tool in

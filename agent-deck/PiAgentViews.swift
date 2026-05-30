@@ -2504,8 +2504,8 @@ struct PiAgentScreen: View {
         case "Input Needed": return nil
         case "Retry": return "Retrying request"
         case "Compaction": return "Compacting context"
-        case "Native Subagent Requested": return "Starting subagent"
-        case "Native Parallel Requested": return "Starting parallel run"
+        case "Deck Agent Requested": return "Starting Deck agent"
+        case "Parallel Deck Agents Requested": return "Starting parallel run"
         case "Supervisor Response Routed": return "Routing response"
         case "System Prompt Captured": return "Preparing context"
         case "Process Ended", "Stopped": return nil
@@ -2537,11 +2537,11 @@ struct PiAgentScreen: View {
         case "code_search": return target.map { "Searching the code for \($0)" } ?? "Searching the code"
         case "get_search_content", "fetch_content": return "Fetching a page"
         case "update_session_plan", "set_session_plan": return "Updating the plan"
-        case "managed_subagent": return "Starting subagent"
+        case "managed_subagent": return "Starting Deck agent"
         case "managed_parallel": return "Starting parallel agents"
         case "ask_user": return "Waiting for your input"
         case "agent_deck_memory_write", "agent_deck_memory_mark_stale": return "Updating memory"
-        case "list_supervisor_requests", "answer_supervisor_request": return "Coordinating subagents"
+        case "list_supervisor_requests", "answer_supervisor_request": return "Coordinating Deck agents"
         case "": return "Running tool"
         default: return "Running \(name.replacingOccurrences(of: "_", with: " "))"
         }

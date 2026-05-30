@@ -176,6 +176,77 @@ struct GitRepositoryService {
         return [stat, diff].filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined(separator: "\n\n")
     }
 
+    // MARK: - Release tagging
+
+    func fetch(remote: String, branch: String, in repositoryURL: URL) async throws {
+        try await runGitMutation(
+            arguments: ["fetch", remote, branch, "--quiet"],
+            commandDescription: "git fetch \(remote) \(branch)",
+            in: repositoryURL,
+            timeout: 60
+        )
+    }
+
+    func fetchTags(remote: String, in repositoryURL: URL) async throws {
+        try await runGitMutation(
+            arguments: ["fetch", remote, "--tags", "--quiet"],
+            commandDescription: "git fetch \(remote) --tags",
+            in: repositoryURL,
+            timeout: 60
+        )
+    }
+
+    /// The highest `v<MAJOR>.<MINOR>` tag, or nil when the repo has none.
+    func latestVersionTag(in repositoryURL: URL) async throws -> String? {
+        let text = try await runText(
+            arguments: ["tag", "-l", "v*.*", "--sort=-v:refname"],
+            commandDescription: "git tag -l v*.* --sort=-v:refname",
+            in: repositoryURL
+        )
+        return text
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty }
+    }
+
+    func localTagExists(_ tag: String, in repositoryURL: URL) async throws -> Bool {
+        let result = try await commandRunner.run(
+            "git",
+            arguments: ["rev-parse", "--verify", "--quiet", "refs/tags/\(tag)"],
+            currentDirectoryURL: repositoryURL,
+            timeout: 10,
+            environment: nil
+        )
+        return result.exitCode == 0
+    }
+
+    func remoteTagExists(_ tag: String, remote: String, in repositoryURL: URL) async throws -> Bool {
+        let text = try await runText(
+            arguments: ["ls-remote", "--tags", remote, tag],
+            commandDescription: "git ls-remote --tags \(remote) \(tag)",
+            in: repositoryURL,
+            timeout: 30
+        )
+        return text.contains("refs/tags/\(tag)")
+    }
+
+    func createAnnotatedTag(_ tag: String, message: String, in repositoryURL: URL) async throws {
+        try await runGitMutation(
+            arguments: ["tag", "-a", tag, "-m", message],
+            commandDescription: "git tag -a \(tag)",
+            in: repositoryURL
+        )
+    }
+
+    func pushTag(_ tag: String, remote: String, in repositoryURL: URL) async throws {
+        try await runGitMutation(
+            arguments: ["push", remote, tag],
+            commandDescription: "git push \(remote) \(tag)",
+            in: repositoryURL,
+            timeout: 60
+        )
+    }
+
     private func runDiff(arguments: [String], commandDescription: String, in repositoryURL: URL) async throws -> String {
         let diffResult = try await commandRunner.run(
             "git",

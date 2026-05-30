@@ -14,6 +14,7 @@ enum AgentDeckShortcutAction: String, CaseIterable, Identifiable {
     case stopSession
     case deleteSession
     case resumeInTerminal
+    case startComposerDictation
     case refreshGitHub
     case commitChanges
     case pushBranch
@@ -65,7 +66,8 @@ extension AgentDeckShortcutSection {
             .init(.newSession, "New Session", key: "n", modifiers: [.command], description: "Create a new Pi Agent session for the current project."),
             .init(.stopSession, "Stop Session", key: ".", modifiers: [.command], description: "Stop the currently running session."),
             .init(.deleteSession, "Delete Session", key: "delete", modifiers: [.command], description: "Delete the selected session."),
-            .init(.resumeInTerminal, "Resume in Terminal", key: "t", modifiers: [.command, .option], description: "Resume the selected session in your configured terminal.")
+            .init(.resumeInTerminal, "Resume in Terminal", key: "t", modifiers: [.command, .option], description: "Resume the selected session in your configured terminal."),
+            .init(.startComposerDictation, "Start Composer Dictation", key: "d", modifiers: [.option], description: "Start macOS Dictation in the focused Pi Agent composer.")
         ]),
         AgentDeckShortcutSection(title: "Agents", items: [
             .init(.newAgent, "New Agent", key: "n", modifiers: [.command, .shift], description: "Create a new custom agent.")

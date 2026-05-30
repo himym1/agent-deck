@@ -101,7 +101,7 @@ struct PiAgentSubagentTranscriptView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Label("Subagent run", systemImage: "person.2.wave.2")
+                Label("Deck agent run", systemImage: "person.2.wave.2")
                     .font(.headline)
                     .foregroundStyle(.cyan)
                 Text(title)

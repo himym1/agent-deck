@@ -89,6 +89,32 @@ final class ThemeTests: XCTestCase {
         XCTAssertTrue(settings.customThemes.isEmpty)
     }
 
+    func testNativeSubagentDelegationPolicyDefaultsToBalancedForLegacySettings() throws {
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        XCTAssertEqual(settings.nativeSubagentDelegationPolicy, .balanced)
+    }
+
+    func testNativeSubagentDelegationPolicyRoundTripsStrictValue() throws {
+        var settings = AppSettings()
+        settings.nativeSubagentDelegationPolicy = .strict
+
+        let encoded = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: encoded)
+
+        XCTAssertEqual(decoded.nativeSubagentDelegationPolicy, .strict)
+    }
+
+    func testNativeSubagentDelegationPolicyPromptInstructionsStayDistinctAndToolAware() {
+        XCTAssertTrue(NativeSubagentDelegationPolicy.light.promptInstructions.contains("when delegation would clearly improve"))
+        XCTAssertTrue(NativeSubagentDelegationPolicy.balanced.promptInstructions.contains("Delegate substantive implementation, investigation, planning, or review work"))
+        XCTAssertTrue(NativeSubagentDelegationPolicy.strict.promptInstructions.contains("if an available Deck agent could reasonably perform it"))
+
+        for policy in NativeSubagentDelegationPolicy.allCases {
+            XCTAssertTrue(policy.promptInstructions.contains("managed_subagent"), "\(policy) should keep the Pi tool name in the injected guidance")
+            XCTAssertFalse(policy.promptInstructions.contains("coder` or another relevant engineer agent by default"), "\(policy) should not reintroduce coder-specific default routing")
+        }
+    }
+
     func testAppSettingsRoundTripsCustomThemes() throws {
         var settings = AppSettings()
         let custom = Theme(

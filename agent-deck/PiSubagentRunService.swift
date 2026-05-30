@@ -347,7 +347,7 @@ final class PiSubagentRunService {
         }
         notifyCompletion(runID: runID, parentSessionID: parentSessionID)
         if recordTranscript {
-            store.append(.init(sessionID: parentSessionID, role: .status, title: "Subagent Stopped", text: "Subagent run stopped."))
+            store.append(.init(sessionID: parentSessionID, role: .status, title: "Deck Agent Stopped", text: "Deck agent run stopped."))
         }
     }
 
@@ -774,22 +774,22 @@ final class PiSubagentRunService {
     private func continuableRun(parentSessionID: UUID, runID: UUID?) throws -> PiSubagentRunRecord? {
         guard let runID else { return nil }
         guard let run = store.subagentRuns(for: parentSessionID).first(where: { $0.id == runID }) else {
-            throw NativeSubagentError.continuationUnavailable("No subagent with ID `\(runID.uuidString)` exists in this parent session.")
+            throw NativeSubagentError.continuationUnavailable("No Deck agent with ID `\(runID.uuidString)` exists in this parent session.")
         }
         guard run.mode == .single else {
-            throw NativeSubagentError.continuationUnavailable("Only single native subagent runs can be continued.")
+            throw NativeSubagentError.continuationUnavailable("Only single Deck agent runs can be continued.")
         }
         guard !run.status.isActive else {
-            throw NativeSubagentError.continuationUnavailable("Subagent `\(runID.uuidString)` is still active; wait for it to finish or stop it before continuing.")
+            throw NativeSubagentError.continuationUnavailable("Deck agent `\(runID.uuidString)` is still active; wait for it to finish or stop it before continuing.")
         }
         guard run.isWorktreeIsolated != true else {
-            throw NativeSubagentError.continuationUnavailable("Worktree-isolated subagents cannot be continued safely. Start a fresh subagent instead.")
+            throw NativeSubagentError.continuationUnavailable("Worktree-isolated Deck agents cannot be continued safely. Start a fresh Deck agent instead.")
         }
         guard let sessionFile = run.childPiSessionFile?.trimmingCharacters(in: .whitespacesAndNewlines), !sessionFile.isEmpty else {
-            throw NativeSubagentError.continuationUnavailable("Subagent `\(runID.uuidString)` has no child session file to resume. Start a fresh subagent instead.")
+            throw NativeSubagentError.continuationUnavailable("Deck agent `\(runID.uuidString)` has no child session file to resume. Start a fresh Deck agent instead.")
         }
         guard fileManager.fileExists(atPath: sessionFile) else {
-            throw NativeSubagentError.continuationUnavailable("The child session file for `\(runID.uuidString)` no longer exists. Start a fresh subagent instead.")
+            throw NativeSubagentError.continuationUnavailable("The child session file for `\(runID.uuidString)` no longer exists. Start a fresh Deck agent instead.")
         }
         return run
     }
@@ -801,11 +801,11 @@ final class PiSubagentRunService {
 
     private func upsertSubagentStatusCard(run: PiSubagentRunRecord, parentSessionID: UUID, isContinuation: Bool) {
         let turnText = (run.child?.index ?? 0) > 0 ? "\n\nContinuation: \((run.child?.index ?? 0) + 1)" : ""
-        let text = "Subagent ID: \(run.id.uuidString)\n\n\(run.agentName) is running.\n\nTask: \(run.task)\(turnText)"
+        let text = "Deck agent ID: \(run.id.uuidString)\n\n\(run.agentName) is running.\n\nTask: \(run.task)\(turnText)"
         let entry = PiAgentTranscriptEntry(
             sessionID: parentSessionID,
             role: .status,
-            title: "Native Subagent",
+            title: "Deck Agent",
             text: text,
             rawJSON: subagentStartedAuditPayload(run: run)
         )
@@ -828,8 +828,8 @@ final class PiSubagentRunService {
         let continuationLine = (run.child?.index ?? 0) > 0 ? "\n\nContinuation: \((run.child?.index ?? 0) + 1)" : ""
         let taskLine = "\n\nLatest task: \(run.task)"
         store.updateEntry(entryID, in: parentSessionID) { entry in
-            entry.title = "Native Subagent"
-            entry.text = "Subagent ID: \(run.id.uuidString)\n\n\(run.agentName) \(run.status.rawValue).\(continuationLine)\(taskLine)\n\n\(summary)"
+            entry.title = "Deck Agent"
+            entry.text = "Deck agent ID: \(run.id.uuidString)\n\n\(run.agentName) \(run.status.rawValue).\(continuationLine)\(taskLine)\n\n\(summary)"
             entry.rawJSON = subagentStartedAuditPayload(run: run)
             entry.timestamp = Date()
         }
@@ -953,7 +953,7 @@ final class PiSubagentRunService {
     private func childInput(agent: EffectiveAgentRecord, task: String, readFirstPaths: [String]) -> String {
         var sections = [
             """
-        # Native subagent input
+        # Deck agent input
 
         Agent: \(agent.name)
         Description: \(agent.resolved.description)
@@ -1083,7 +1083,7 @@ final class PiSubagentRunService {
                 run.child?.updatedAt = Date()
             }
             scheduleSupervisorTimeout(requestID: appRequestID, runID: runID, parentSessionID: parentSessionID)
-            store.append(.init(sessionID: parentSessionID, role: .status, title: "Subagent Needs Decision", text: "Request ID: \(appRequestID)\n\n\(message)"))
+            store.append(.init(sessionID: parentSessionID, role: .status, title: "Deck Agent Needs Decision", text: "Request ID: \(appRequestID)\n\n\(message)"))
         } else {
             store.append(.init(sessionID: parentSessionID, role: .status, title: requestTitle, text: message))
             clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: "Acknowledged.")
@@ -1143,9 +1143,9 @@ final class PiSubagentRunService {
 
     private func supervisorTitle(for kind: PiSubagentSupervisorRequestKind) -> String {
         switch kind {
-        case .progressUpdate: return "Subagent Progress"
-        case .needDecision: return "Subagent Needs Decision"
-        case .interviewRequest: return "Subagent Interview Request"
+        case .progressUpdate: return "Deck Agent Progress"
+        case .needDecision: return "Deck Agent Needs Decision"
+        case .interviewRequest: return "Deck Agent Interview Request"
         }
     }
 
@@ -1211,11 +1211,11 @@ private enum NativeSubagentError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .emptyTask:
-            return "Enter a task before running a subagent."
+            return "Enter a task before running a Deck agent."
         case let .disabledAgent(name):
             return "Agent \(name) is disabled."
         case let .worktreeFailed(message):
-            return "Could not create subagent worktree: \(message)"
+            return "Could not create Deck agent worktree: \(message)"
         case let .continuationUnavailable(message):
             return message
         }

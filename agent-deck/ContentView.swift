@@ -184,6 +184,7 @@ struct ContentView: View {
     @State private var skillSearchText = ""
     @State private var promptSearchText = ""
     @State private var piAgentSessionSearchText = ""
+    @State private var isMemoryInfoPresented = false
     @State private var isSkillsInfoPresented = false
     @State private var isSubagentsInfoPresented = false
     @State private var isEnvironmentInfoPresented = false
@@ -662,6 +663,9 @@ struct ContentView: View {
         if viewModel.selectedSidebarItem == .issues {
             issuesPrimaryToolbarContent
         }
+        if viewModel.selectedSidebarItem == .memory {
+            memoryPrimaryToolbarContent
+        }
         if viewModel.selectedSidebarItem == .agents {
             agentsPrimaryToolbarContent
         }
@@ -781,7 +785,7 @@ struct ContentView: View {
         } label: {
             Label("Info", systemImage: "info.circle")
         }
-        .help("Explain subagent library visibility")
+        .help("Explain Deck agent library visibility")
         .popover(isPresented: $isSubagentsInfoPresented, arrowEdge: .bottom) {
             SubagentsInfoPopover()
         }
@@ -950,6 +954,18 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var piAgentPrimaryToolbarContent: some ToolbarContent {
+        // agent-deck only: standalone "Release" island left of the first group.
+        // A bare leading ToolbarItem coalesces the whole toolbar into one capsule,
+        // so it gets its own ControlGroup to render as a distinct glass island.
+        if viewModel.shouldShowAgentDeckReleaseAction {
+            ToolbarItem(placement: .primaryAction) {
+                ControlGroup {
+                    PiAgentReleaseToolbarButton(viewModel: viewModel)
+                }
+            }
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+        }
+
         ToolbarItem(placement: .primaryAction) {
             ControlGroup {
                 PiAgentPlanToolbarButton(store: viewModel.piAgentSessionStore)
@@ -1024,9 +1040,66 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var issuesPrimaryToolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) { issuesFilterButton }
-        ToolbarSpacer(.fixed, placement: .primaryAction)
-        ToolbarItem(placement: .primaryAction) { issuesRefreshButton }
+        // One ControlGroup so the two buttons share an island with the same
+        // spacing as every other view (Memory, Projects, …), instead of the
+        // narrower separate-items + ToolbarSpacer look.
+        ToolbarItem(placement: .primaryAction) {
+            ControlGroup {
+                issuesFilterButton
+                issuesRefreshButton
+            }
+        }
+    }
+
+    // Memory's toolbar lives here in the central switch — same level as every
+    // other view — so its button island sits in the same place and doesn't jump
+    // when switching to/from Projects. The "New Memory" action is posted to
+    // MemoryScreen (which owns the editor sheet) via NotificationCenter.
+    @ToolbarContentBuilder
+    private var memoryPrimaryToolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            ControlGroup {
+                Button {
+                    isMemoryInfoPresented.toggle()
+                } label: {
+                    Label("Info", systemImage: "info.circle")
+                }
+                .toolbarNeutralChrome()
+                .help("Explain Agent Deck memory")
+                .popover(isPresented: $isMemoryInfoPresented, arrowEdge: .bottom) {
+                    let counts = memoryInfoCounts()
+                    MemoryInfoPopover(
+                        enabled: viewModel.appSettings.agentMemoryEnabled,
+                        projectName: viewModel.selectedProjectPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No project selected",
+                        recordCount: counts.total,
+                        injectableCount: counts.injectable,
+                        staleCount: counts.stale
+                    )
+                }
+
+                Button {
+                    NotificationCenter.default.post(name: .agentDeckNewMemoryRequested, object: nil)
+                } label: {
+                    Label("New Memory", systemImage: "plus")
+                }
+                .toolbarPrimaryActionChrome()
+                .help(viewModel.selectedProjectPath == nil ? "Select a project before creating memory." : "Create a project memory")
+                .disabled(viewModel.selectedProjectPath == nil)
+            }
+        }
+    }
+
+    /// Counts for the memory info popover. Computed only when the popover opens
+    /// (inside its content closure), never on the toolbar render path.
+    private func memoryInfoCounts() -> (total: Int, injectable: Int, stale: Int) {
+        let records = viewModel.agentMemoryStore.records(projectPath: viewModel.selectedProjectPath)
+        var injectable = 0
+        var stale = 0
+        for record in records {
+            if record.isInjectable { injectable += 1 }
+            if record.status == .stale { stale += 1 }
+        }
+        return (records.count, injectable, stale)
     }
 
     private var issuesFilterButton: some View {

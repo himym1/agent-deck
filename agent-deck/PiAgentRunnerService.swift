@@ -1342,8 +1342,8 @@ final class PiAgentRunnerService {
             "tool_calls": "Tool calls",
             "toolResults": "Tool results",
             "tool_results": "Tool results",
-            "subagentResults": "Subagent results",
-            "subagent_results": "Subagent results",
+            "subagentResults": "Deck agent results",
+            "subagent_results": "Deck agent results",
             "freeSpace": "Free space",
             "free_space": "Free space",
             "autocompactBuffer": "Autocompact buffer",
@@ -1843,7 +1843,7 @@ final class PiAgentRunnerService {
             return
         }
         guard let onManagedSubagentRequest else {
-            clientsBySessionID[sessionID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) native subagent bridge is not available.")
+            clientsBySessionID[sessionID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName)'s Deck agent bridge is not available.")
             return
         }
         onManagedSubagentRequest(sessionID, request) { [weak self] result in
@@ -1860,7 +1860,7 @@ final class PiAgentRunnerService {
             return
         }
         guard let onManagedParallelRequest else {
-            clientsBySessionID[sessionID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) native parallel bridge is not available.")
+            clientsBySessionID[sessionID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName)'s Deck agent parallel bridge is not available.")
             return
         }
         onManagedParallelRequest(sessionID, request) { [weak self] result in

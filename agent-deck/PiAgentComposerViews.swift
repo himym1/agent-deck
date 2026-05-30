@@ -163,7 +163,10 @@ struct PiAgentComposerBox: View {
                     onSend: onSend,
                     onClear: onClear,
                     isDisabled: isDisabled,
-                    suggestionKeyBridge: suggestionKeyBridge
+                    suggestionKeyBridge: suggestionKeyBridge,
+                    onDictationUnavailable: {
+                        attachmentError = "Dictation is unavailable. Enable Dictation in System Settings > Keyboard, then try again."
+                    }
                 )
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
@@ -461,6 +464,7 @@ struct PiAgentDropSafeTextEditor: NSViewRepresentable {
     var onClear: () -> Void
     var isDisabled: Bool
     var suggestionKeyBridge: ComposerSuggestionKeyBridge
+    var onDictationUnavailable: () -> Void = {}
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
@@ -511,6 +515,16 @@ struct PiAgentDropSafeTextEditor: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
+    }
+
+    private func startSystemDictation(in textView: NSTextView, onUnavailable: @escaping () -> Void) {
+        textView.window?.makeFirstResponder(textView)
+        DispatchQueue.main.async {
+            guard NSApp.sendAction(Selector(("startDictation:")), to: nil, from: textView) else {
+                onUnavailable()
+                return
+            }
+        }
     }
 
     @MainActor
@@ -598,6 +612,11 @@ struct PiAgentDropSafeTextEditor: NSViewRepresentable {
         func dismissSuggestions() {
             parent.suggestionKeyBridge.onDismiss()
         }
+
+        func startDictation(in textView: NSTextView) {
+            guard !parent.isDisabled else { return }
+            parent.startSystemDictation(in: textView, onUnavailable: parent.onDictationUnavailable)
+        }
     }
 }
 
@@ -619,6 +638,7 @@ protocol DropSafeNSTextViewKeyHandler: AnyObject {
     /// Returns true if a highlighted suggestion was accepted (and the event consumed).
     func acceptSuggestionHighlight() -> Bool
     func dismissSuggestions()
+    func startDictation(in textView: NSTextView)
 }
 
 @MainActor
@@ -665,6 +685,11 @@ final class DropSafeNSTextView: NSTextView {
         let characters = event.charactersIgnoringModifiers ?? ""
         let isReturn = characters == "\r" || characters == "\n"
         let modifiers = event.modifierFlags.intersection([.shift, .command, .option, .control])
+
+        if characters.lowercased() == "d", modifiers == .option {
+            keyHandler?.startDictation(in: self)
+            return
+        }
 
         // While the suggestion panel is open, navigation keys drive the panel
         // instead of the caret / send action.
@@ -725,14 +750,14 @@ struct PiAgentSubagentPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                Label("Subagents", systemImage: "paperplane")
+                Label("Deck agents", systemImage: "paperplane")
                     .font(.body.weight(.medium))
                 Spacer(minLength: 24)
-                Toggle("Subagents", isOn: $isEnabled)
+                Toggle("Deck agents", isOn: $isEnabled)
                     .appSwitch()
                     .labelsHidden()
             }
-            Text(isEnabled ? "Parent Pi can delegate to native subagents when useful." : "Native subagent tools are not exposed to this session.")
+            Text(isEnabled ? "Parent Pi can delegate to Deck agents when useful." : "Deck agent tools are not exposed to this session.")
                 .font(.caption)
                 .foregroundStyle(AppTheme.mutedText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -2115,14 +2140,14 @@ struct PiAgentRuntimeFooter: View {
             if showsSubagentsToggle {
                 if subagentsToggleEnabled {
                     metricButton(
-                        "subagents: \(session.subagentsEnabled ? "on" : "off")",
+                        "Deck agents: \(session.subagentsEnabled ? "on" : "off")",
                         icon: "paperplane",
                         action: onToggleSubagents
                     )
                     .help("Draft only. This sets the current draft and the default for new sessions.")
                 } else {
-                    metric("subagents: \(session.subagentsEnabled ? "on" : "off")", icon: "paperplane")
-                        .help("Subagents can only be changed before the first message starts Pi.")
+                    metric("Deck agents: \(session.subagentsEnabled ? "on" : "off")", icon: "paperplane")
+                        .help("Deck agents can only be changed before the first message starts Pi.")
                 }
             }
             if let openAIFastStatus {

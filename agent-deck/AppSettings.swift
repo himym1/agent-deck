@@ -36,6 +36,56 @@ struct PiAgentTranscriptVisibilitySettings: Codable, Hashable {
     }
 }
 
+enum NativeSubagentDelegationPolicy: String, Codable, CaseIterable, Hashable, Identifiable {
+    case light
+    case balanced
+    case strict
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .light: return "Light"
+        case .balanced: return "Balanced"
+        case .strict: return "Strict"
+        }
+    }
+
+    var settingsDescription: String {
+        switch self {
+        case .light:
+            return "Use Deck agents when they clearly improve the result; the parent may handle straightforward work directly."
+        case .balanced:
+            return "Delegate substantive specialist work by default, but let the parent handle trivial low-risk tasks."
+        case .strict:
+            return "Delegate any substantive work when a matching Deck agent exists; the parent focuses on orchestration and synthesis."
+        }
+    }
+
+    var promptInstructions: String {
+        switch self {
+        case .light:
+            return """
+            - Act primarily as the coordinator for Deck agents when delegation would clearly improve the result.
+            - Use `managed_subagent` for separable specialist work, large investigations, parallel research, or tasks where an available agent is clearly a better fit.
+            - You may do straightforward implementation, inspection, explanation, and small fixes yourself when delegation would add unnecessary overhead.
+            """
+        case .balanced:
+            return """
+            - Act primarily as the orchestrator: clarify, plan, delegate, supervise, update the visible plan, and synthesize results.
+            - Delegate substantive implementation, investigation, planning, or review work to a relevant Deck agent by default; work directly only for trivial, low-risk one-off changes where delegation would add unnecessary overhead.
+            - Use `managed_subagent` for bounded specialist work; include `reads` when known. Choose the available agent whose routing guidance best matches the task and expected outcome.
+            """
+        case .strict:
+            return """
+            - Act primarily as the orchestrator: clarify, plan, delegate, supervise, update the visible plan, and synthesize results.
+            - For any substantive task, if an available Deck agent could reasonably perform it, delegate it with `managed_subagent`.
+            - Do not keep implementation, investigation, planning, or review work in the parent merely because you can do it yourself. Work directly only for trivial conversational replies, direct user clarification, plan/status updates, synthesis of Deck agent results, or when no listed Deck agent fits.
+            """
+        }
+    }
+}
+
 struct AppSettings: Codable, Hashable {
     var gitHubBoardCacheLifetimeMinutes: Int = 15
     var piAgentNotificationDelayMinutes: Int = 3
@@ -46,6 +96,7 @@ struct AppSettings: Codable, Hashable {
     var projectsRootPaths: [String] = [ProjectDiscovery.defaultRootDirectoryURL().path]
     var didConfirmProjectsRootPaths: Bool = false
     var nativeSubagentsEnabledForNewSessions: Bool = true
+    var nativeSubagentDelegationPolicy: NativeSubagentDelegationPolicy = .balanced
     var agentMemoryEnabled: Bool = false
     var agentMemorySubagentsEnabled: Bool = true
     var agentMemoryShowTranscriptCards: Bool = true
@@ -92,6 +143,7 @@ struct AppSettings: Codable, Hashable {
         case projectsRootPaths
         case didConfirmProjectsRootPaths
         case nativeSubagentsEnabledForNewSessions
+        case nativeSubagentDelegationPolicy
         case agentMemoryEnabled
         case agentMemorySubagentsEnabled
         case agentMemoryShowTranscriptCards
@@ -143,6 +195,7 @@ struct AppSettings: Codable, Hashable {
         projectsRootPaths = try container.decodeIfPresent([String].self, forKey: .projectsRootPaths) ?? [ProjectDiscovery.defaultRootDirectoryURL().path]
         didConfirmProjectsRootPaths = try container.decodeIfPresent(Bool.self, forKey: .didConfirmProjectsRootPaths) ?? hasStoredProjectsRootPaths
         nativeSubagentsEnabledForNewSessions = try container.decodeIfPresent(Bool.self, forKey: .nativeSubagentsEnabledForNewSessions) ?? true
+        nativeSubagentDelegationPolicy = try container.decodeIfPresent(NativeSubagentDelegationPolicy.self, forKey: .nativeSubagentDelegationPolicy) ?? .balanced
         agentMemoryEnabled = try container.decodeIfPresent(Bool.self, forKey: .agentMemoryEnabled) ?? false
         agentMemorySubagentsEnabled = try container.decodeIfPresent(Bool.self, forKey: .agentMemorySubagentsEnabled) ?? true
         agentMemoryShowTranscriptCards = try container.decodeIfPresent(Bool.self, forKey: .agentMemoryShowTranscriptCards) ?? true

@@ -145,6 +145,10 @@ final class AppSettingsController {
         settings.nativeSubagentsEnabledForNewSessions
     }
 
+    var nativeSubagentDelegationPolicy: NativeSubagentDelegationPolicy {
+        settings.nativeSubagentDelegationPolicy
+    }
+
     var isAgentMemoryEnabled: Bool {
         settings.agentMemoryEnabled
     }
@@ -760,6 +764,14 @@ final class AppSettingsController {
     func setSubagentsEnabledForNewSessions(_ isEnabled: Bool) -> Bool {
         guard settings.nativeSubagentsEnabledForNewSessions != isEnabled else { return false }
         settings.nativeSubagentsEnabledForNewSessions = isEnabled
+        persist()
+        return true
+    }
+
+    @discardableResult
+    func setNativeSubagentDelegationPolicy(_ policy: NativeSubagentDelegationPolicy) -> Bool {
+        guard settings.nativeSubagentDelegationPolicy != policy else { return false }
+        settings.nativeSubagentDelegationPolicy = policy
         persist()
         return true
     }

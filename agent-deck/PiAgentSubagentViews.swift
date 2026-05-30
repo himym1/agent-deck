@@ -295,7 +295,7 @@ struct PiNativeSubagentRunCard: View {
 
     private var detailRows: [(String, String)] {
         var rows: [(String, String)] = [
-            ("Subagent ID", run.id.uuidString)
+            ("Deck agent ID", run.id.uuidString)
         ]
         if let turnIndex = run.child?.index, turnIndex > 0 {
             rows.append(("Continuation", "Turn \(turnIndex + 1)"))
@@ -796,7 +796,7 @@ struct PiNativeSubagentGraphSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Native Graph · \(run.agentName)")
+                    Text("Deck agent graph · \(run.agentName)")
                         .font(.title3.bold())
                     Text("\(run.mode.rawValue.capitalized) · \(run.status.rawValue.capitalized) · \(run.children?.count ?? 0) child runs")
                         .font(.caption)
@@ -918,7 +918,7 @@ struct PiNativeSubagentTranscriptSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Subagent transcript")
+                    Text("Deck agent transcript")
                         .font(.title3.bold())
                     Text("\(run.agentName) · \(run.status.rawValue.capitalized)")
                         .font(.caption.weight(.semibold))
@@ -1073,7 +1073,7 @@ struct PiNativeSubagentRunSheet: View {
                 Image(systemName: "paperplane")
                     .foregroundStyle(AppTheme.brandAccent)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Run Subagent")
+                    Text("Run Deck Agent")
                         .font(.title3.bold())
                     Text("Launches a separate Pi RPC child session managed by \(AppBrand.displayName). This does not insert or send a raw /run command.")
                         .font(.caption)
@@ -1103,7 +1103,7 @@ struct PiNativeSubagentRunSheet: View {
                         subagentInfoLine("Default Outcome", selectedInfo.defaultExpectedOutcome?.displayName ?? "Report only")
                     }
                     if selectedInfo.output != nil {
-                        Label("Native runs save the final response to app artifacts by default. Project-file output should be explicit in the task.", systemImage: "exclamationmark.triangle")
+                        Label("Deck agent runs save the final response to app artifacts by default. Project-file output should be explicit in the task.", systemImage: "exclamationmark.triangle")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
@@ -1183,7 +1183,7 @@ struct PiNativeSubagentRunSheet: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Label("Native run", systemImage: "checkmark.seal")
+                Label("Deck agent run", systemImage: "checkmark.seal")
                     .font(.subheadline.weight(.semibold))
                 Text("\(AppBrand.displayName) starts and tracks the child session directly, records artifacts under Application Support, and posts a status/result entry back to the parent transcript.")
                     .font(.caption)

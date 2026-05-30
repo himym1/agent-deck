@@ -733,13 +733,13 @@ struct AgentEditorSheet: View {
                                 TextField("Name", text: $draft.config.name)
                                 TextField("Description", text: $draft.config.description)
                                 TextField("When to Use", text: binding(for: \.whenToUse))
-                                    .help("Concise routing guidance injected into parent sessions when subagents are enabled. Prefer one short sentence.")
+                                    .help("Concise routing guidance injected into parent sessions when Deck agents are enabled. Prefer one short sentence.")
                             }
                         } else {
                             Section("Builtin") {
                                 TextField("Name", text: .constant(draft.originalName))
                                     .disabled(true)
-                                Text("Builtin overrides only patch the supported subagent settings fields.")
+                                Text("Builtin overrides only patch the supported Deck agent settings fields.")
                                     .foregroundStyle(AppTheme.mutedText)
                             }
                         }
@@ -810,7 +810,7 @@ struct AgentEditorSheet: View {
                             }
 
                             Toggle(isOn: optionalBoolBinding(for: \ .disabled)) {
-                                editorFieldLabel("Disabled", help: "Disabled agents are hidden from normal native subagent discovery and launch flows while keeping the agent installed.")
+                                editorFieldLabel("Disabled", help: "Disabled agents are hidden from normal Deck agent discovery and launch flows while keeping the agent installed.")
                             }
                         }
 

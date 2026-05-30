@@ -1763,7 +1763,7 @@ struct PiAgentActivitySummaryView: View {
         case "write": return "Write"
         case "set_session_plan": return "Plan"
         case "update_session_plan": return "Plan update"
-        case "subagent": return count == 1 ? "Subagent" : "Subagents"
+        case "subagent": return count == 1 ? "Deck agent" : "Deck agents"
         case "web_search": return "Web search"
         case "fetch_content", "get_search_content", "web_fetch": return "Web content"
         default:
@@ -3204,7 +3204,7 @@ struct PiAgentTranscriptCard: View {
 
     private var toolHeaderTitle: String {
         if entry.title.localizedCaseInsensitiveContains("subagent") || entry.text.localizedCaseInsensitiveContains("subagent") {
-            return "Subagents"
+            return "Deck agents"
         }
         if entry.title.hasPrefix("Tool: ") {
             return "Tool · " + entry.title.replacingOccurrences(of: "Tool: ", with: "")

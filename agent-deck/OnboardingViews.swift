@@ -16,8 +16,8 @@ private enum WelcomeTourContent {
             ),
             TourPage(
                 imageName: "pop-onb-3",
-                title: "Orchestrate Subagents",
-                description: "Delegate focused work to custom subagents, run them alone or in parallel, supervise decisions, and keep worktrees isolated."
+                title: "Orchestrate Deck Agents",
+                description: "Delegate focused work to custom Deck agents, run them alone or in parallel, supervise decisions, and keep worktrees isolated."
             ),
             TourPage(
                 imageName: "pop-onb-4",
@@ -845,8 +845,8 @@ struct OnboardingPreferencesView: View {
     private var subagentsRow: some View {
         OnboardingPreferenceRow(
             icon: "paperplane",
-            title: "Native subagents",
-            caption: "Let new sessions delegate focused work to subagents you've configured."
+            title: "Deck agents",
+            caption: "Let new sessions delegate focused work to Deck agents you've configured."
         ) {
             Toggle("", isOn: Binding(
                 get: { viewModel.areSubagentsEnabledForNewSessions },

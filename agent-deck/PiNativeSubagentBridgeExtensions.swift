@@ -45,7 +45,7 @@ struct PiNativeSubagentBridgeExtensions {
         let appSupport = URL.applicationSupportDirectory
         return appSupport
             .appendingPathComponent("\(AppBrand.displayName)", isDirectory: true)
-            .appendingPathComponent("Native Subagent Extensions", isDirectory: true)
+            .appendingPathComponent("Deck Agent Extensions", isDirectory: true)
     }
 
     static func writeExtension(named fileName: String, content: String, fileManager: FileManager) throws -> URL {
@@ -274,19 +274,19 @@ struct PiNativeSubagentBridgeExtensions {
         import { Type } from "typebox";
 
         const ManagedSubagentParams = Type.Object({
-            agent: Type.String({ description: "Name of the native subagent to run." }),
-            task: Type.String({ description: "Specific task for the subagent." }),
-            continueSubagentID: Type.Optional(Type.String({ description: "Stable Subagent ID to continue for a direct follow-up. Omit to start a fresh child session." })),
-            reads: Type.Optional(Type.Array(Type.String(), { description: "Project-relative files the subagent should read first if current and relevant." }))
+            agent: Type.String({ description: "Name of the Deck agent to run." }),
+            task: Type.String({ description: "Specific task for the Deck agent." }),
+            continueSubagentID: Type.Optional(Type.String({ description: "Stable Deck agent ID to continue for a direct follow-up. Omit to start a fresh child session." })),
+            reads: Type.Optional(Type.Array(Type.String(), { description: "Project-relative files the Deck agent should read first if current and relevant." }))
         }, { additionalProperties: false });
 
         const ManagedParallelTask = Type.Object({
-            agent: Type.String({ description: "Name of the native subagent to run." }),
-            task: Type.String({ description: "Specific bounded task for this subagent." })
+            agent: Type.String({ description: "Name of the Deck agent to run." }),
+            task: Type.String({ description: "Specific bounded task for this Deck agent." })
         }, { additionalProperties: false });
 
         const ManagedParallelParams = Type.Object({
-            tasks: Type.Array(ManagedParallelTask, { minItems: 1, maxItems: 8, description: "Parallel native subagent tasks." }),
+            tasks: Type.Array(ManagedParallelTask, { minItems: 1, maxItems: 8, description: "Parallel Deck agent tasks." }),
             concurrency: Type.Optional(Type.Number({ minimum: 1, maximum: 8, description: "Maximum child runs at once." })),
             worktree: Type.Optional(Type.Boolean({ description: "Use an isolated worktree per child for writer work." }))
         }, { additionalProperties: false });
@@ -317,13 +317,13 @@ struct PiNativeSubagentBridgeExtensions {
         export default function (pi: ExtensionAPI) {
             pi.registerTool({
                 name: "managed_subagent",
-                description: "Delegate a bounded task to a \(AppBrand.displayName) native subagent. Use this when a specialized subagent can work separately and return a compact result.",
+                description: "Delegate a bounded task to a Deck agent (a separate child Pi session that \(AppBrand.displayName) launches and supervises — not a Pi slash command or model-internal delegation). Use this when a specialized Deck agent can work separately and return a compact result.",
                 parameters: ManagedSubagentParams,
-                promptSnippet: "managed_subagent(agent, task, continueSubagentID?): delegate to a \(AppBrand.displayName) native subagent. Omit continueSubagentID to start fresh; provide it for a direct follow-up.",
+                promptSnippet: "managed_subagent(agent, task, continueSubagentID?): delegate to a Deck agent. Omit continueSubagentID to start fresh; provide it for a direct follow-up.",
                 promptGuidelines: [
                     "Use managed_subagent for separable specialist work; keep tasks narrow and include expected output.",
                     "When delegating approved implementation to coder, expect direct project edits; use explorer, planner, or reviewer for report-only work.",
-                    "Native subagents start fresh by default; use continueSubagentID only for direct follow-ups to an existing child session.",
+                    "Deck agents start fresh by default; use continueSubagentID only for direct follow-ups to an existing child session.",
                     "If starting fresh for follow-up work, pass a compact continuity packet instead of assuming prior child memory."
                 ],
                 async execute(toolCallId, params, _signal, onUpdate, ctx) {
@@ -336,17 +336,17 @@ struct PiNativeSubagentBridgeExtensions {
                         continueSubagentID: (params as any).continueSubagentID ? String((params as any).continueSubagentID) : undefined,
                         reads: Array.isArray((params as any).reads) ? (params as any).reads.map((item: any) => String(item)) : undefined
                     });
-                    onUpdate?.({ content: [{ type: "text", text: `Starting native subagent ${(params as any).agent}…` }] });
+                    onUpdate?.({ content: [{ type: "text", text: `Starting Deck agent ${(params as any).agent}…` }] });
                     const result = await ctx.ui.editor("AGENT_DECK_BRIDGE managed_subagent", payload);
-                    return { content: [{ type: "text", text: result || "Native subagent finished without a result." }] };
+                    return { content: [{ type: "text", text: result || "Deck agent finished without a result." }] };
                 }
             });
 
             pi.registerTool({
                 name: "managed_parallel",
-                description: "Run multiple \(AppBrand.displayName) native subagents concurrently and return an aggregate result.",
+                description: "Run multiple Deck agents concurrently and return an aggregate result.",
                 parameters: ManagedParallelParams,
-                promptSnippet: "managed_parallel(tasks, concurrency?, worktree?): run bounded native subagent tasks concurrently.",
+                promptSnippet: "managed_parallel(tasks, concurrency?, worktree?): run bounded Deck agent tasks concurrently.",
                 promptGuidelines: ["Use managed_parallel for independent advisory/research tasks. Use worktree isolation for writer tasks."],
                 async execute(toolCallId, params, _signal, onUpdate, ctx) {
                     const rawTasks = Array.isArray((params as any).tasks) ? (params as any).tasks : [];
@@ -358,17 +358,17 @@ struct PiNativeSubagentBridgeExtensions {
                         concurrency: (params as any).concurrency ? Number((params as any).concurrency) : undefined,
                         worktree: Boolean((params as any).worktree ?? false)
                     });
-                    onUpdate?.({ content: [{ type: "text", text: `Starting ${rawTasks.length} native subagents…` }] });
+                    onUpdate?.({ content: [{ type: "text", text: `Starting ${rawTasks.length} Deck agents…` }] });
                     const result = await ctx.ui.editor("AGENT_DECK_BRIDGE managed_parallel", payload);
-                    return { content: [{ type: "text", text: result || "Native parallel run finished without a result." }] };
+                    return { content: [{ type: "text", text: result || "Deck agent parallel run finished without a result." }] };
                 }
             });
 
             pi.registerTool({
                 name: "list_supervisor_requests",
-                description: "List pending \(AppBrand.displayName) native child supervisor requests for this parent session.",
+                description: "List pending supervisor requests from Deck agent children for this parent session.",
                 parameters: Type.Object({}, { additionalProperties: false }),
-                promptSnippet: "list_supervisor_requests(): list pending native child questions awaiting a supervisor response.",
+                promptSnippet: "list_supervisor_requests(): list pending questions from Deck agent children awaiting a supervisor response.",
                 promptGuidelines: ["Use list_supervisor_requests before answer_supervisor_request when a child needs a decision."],
                 async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
                     const result = await ctx.ui.editor("AGENT_DECK_BRIDGE list_supervisor_requests", JSON.stringify({ kind: "list_supervisor_requests" }));
@@ -425,9 +425,9 @@ struct PiNativeSubagentBridgeExtensions {
 
             pi.registerTool({
                 name: "answer_supervisor_request",
-                description: "Answer a pending \(AppBrand.displayName) native child supervisor request.",
+                description: "Answer a pending supervisor request from a Deck agent child.",
                 parameters: AnswerSupervisorParams,
-                promptSnippet: "answer_supervisor_request(requestID, response): answer a blocked native child subagent.",
+                promptSnippet: "answer_supervisor_request(requestID, response): answer a blocked Deck agent child.",
                 promptGuidelines: ["Use answer_supervisor_request only for pending request ids returned by list_supervisor_requests."],
                 async execute(toolCallId, params, _signal, _onUpdate, ctx) {
                     const payload = JSON.stringify({
@@ -474,7 +474,7 @@ struct PiNativeSubagentBridgeExtensions {
                 promptGuidelines: [
                     "Use this after discovering durable project knowledge: architecture, important files, commands, CI, deployment, conventions, decisions, recurring failures, runbooks, or project-specific preferences.",
                     "Do not store temporary session state, raw logs, credentials, tokens, private keys, customer data, or speculative facts.",
-                    "Subagent findings should be stored as normal project memory."
+                    "Deck agent findings should be stored as normal project memory."
                 ],
                 async execute(toolCallId, params, _signal, onUpdate, ctx) {
                     const payload = JSON.stringify({

@@ -1045,7 +1045,7 @@ final class PiAgentSessionStore {
                     var request = request
                     if request.status == .pending, let runStatus = subagentStatusesByRunID[request.runID], !runStatus.isActive {
                         request.status = .cancelled
-                        request.response = request.response ?? "Cancelled because the child subagent is no longer connected."
+                        request.response = request.response ?? "Cancelled because the child Deck agent is no longer connected."
                         request.updatedAt = Date()
                     }
                     return request
@@ -1140,7 +1140,7 @@ final class PiAgentSessionStore {
                 var request = request
                 if request.status == .pending, let runStatus = subagentStatusesByRunID[request.runID], !runStatus.isActive {
                     request.status = .cancelled
-                    request.response = request.response ?? "Cancelled because the child subagent is no longer connected."
+                    request.response = request.response ?? "Cancelled because the child Deck agent is no longer connected."
                     request.updatedAt = Date()
                 }
                 return request

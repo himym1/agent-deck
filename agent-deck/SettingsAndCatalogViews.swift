@@ -513,7 +513,7 @@ struct ModelsScreen: View {
         }
         .buttonStyle(.plain)
         .disabled(!isModelEnabled)
-        .help("Use OpenAI priority service tier for this ChatGPT-auth Codex model in parent sessions and native subagents.")
+        .help("Use OpenAI priority service tier for this ChatGPT-auth Codex model in parent sessions and Deck agents.")
         .animation(.snappy(duration: 0.18), value: isFastEnabled)
     }
 
@@ -543,7 +543,7 @@ struct SubagentsScreen: View {
     var viewModel: AppViewModel
 
     var body: some View {
-        AppPage("Subagents", subtitle: "Native app-managed delegation and supervision") {
+        AppPage("Deck agents", subtitle: "App-managed delegation and supervision") {
             nativeRuntimeCard
             sessionDefaultsCard
             availableAgentsCard
@@ -552,11 +552,11 @@ struct SubagentsScreen: View {
     }
 
     private var nativeRuntimeCard: some View {
-        AppCard(title: "Native Runtime") {
+        AppCard(title: "Deck Agent Runtime") {
             VStack(alignment: .leading, spacing: 10) {
                 Text("• \(AppBrand.displayName) launches child Pi sessions itself and keeps parent, child, transcript, artifact, and supervisor state in the app.")
                 Text("• Parent sessions receive app-provided managed tools for single and parallel delegation.")
-                Text("• Child sessions can contact the supervisor through \(AppBrand.displayName)'s native request cards.")
+                Text("• Child sessions can contact the supervisor through \(AppBrand.displayName)'s supervisor request cards.")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -565,7 +565,7 @@ struct SubagentsScreen: View {
     private var sessionDefaultsCard: some View {
         AppCard(title: "Session Defaults") {
             AppKeyValueList(rows: [
-                ("New Sessions", viewModel.areSubagentsEnabledForNewSessions ? "Native subagents enabled" : "Native subagents disabled"),
+                ("New Sessions", viewModel.areSubagentsEnabledForNewSessions ? "Deck agents enabled" : "Deck agents disabled"),
                 ("Selected Session", selectedSessionStatus),
                 ("Available Agents", "\(viewModel.snapshot.effectiveAgents.count(where: { $0.resolved.disabled != true }))")
             ])
@@ -573,7 +573,7 @@ struct SubagentsScreen: View {
     }
 
     private var availableAgentsCard: some View {
-        AppCard(title: "Available Native Agents") {
+        AppCard(title: "Available Deck Agents") {
             VStack(alignment: .leading, spacing: 10) {
                 let agents = viewModel.snapshot.effectiveAgents
                     .filter { $0.resolved.disabled != true }
@@ -609,7 +609,7 @@ struct SubagentsScreen: View {
     private var safetyCard: some View {
         AppCard(title: "Safety") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("• Writer-like native runs use isolated worktrees unless direct project writes are explicitly allowed.")
+                Text("• Writer-like Deck agent runs use isolated worktrees unless direct project writes are explicitly allowed.")
                 Text("• Parent and child transcript state is persisted by \(AppBrand.displayName).")
                 Text("• Supervisor questions stay scoped to the owning parent session and window.")
             }
@@ -619,10 +619,10 @@ struct SubagentsScreen: View {
 
     private var selectedSessionStatus: String {
         guard let session = viewModel.piAgentSessionStore.selectedSession else { return "No session selected" }
-        guard session.subagentsEnabled else { return "Native subagents disabled" }
+        guard session.subagentsEnabled else { return "Deck agents disabled" }
         return viewModel.catalogAgents(for: session).isEmpty
-            ? "Native subagents disabled (no agents selected)"
-            : "Native subagents enabled"
+            ? "Deck agents disabled (no agents selected)"
+            : "Deck agents enabled"
     }
 }
 

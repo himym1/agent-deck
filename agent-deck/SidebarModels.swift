@@ -9,7 +9,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     case agents = "Agents"
     case skills = "Skills"
     case prompts = "Prompts"
-    case subagents = "Subagents"
+    case subagents = "Deck agents"
     case models = "Models"
     case environment = "Environment"
     case doctor = "Doctor"

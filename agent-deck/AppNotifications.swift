@@ -6,4 +6,5 @@ extension Notification.Name {
     static let agentDeckNewSkillRequested = Notification.Name("agentDeckNewSkillRequested")
     static let agentDeckNewPromptRequested = Notification.Name("agentDeckNewPromptRequested")
     static let agentDeckImportPromptRequested = Notification.Name("agentDeckImportPromptRequested")
+    static let agentDeckNewMemoryRequested = Notification.Name("agentDeckNewMemoryRequested")
 }

@@ -12,7 +12,7 @@ struct SkillsInfoPopover: View {
                 infoRow("Catalog", "Agent Deck scans skills from bundled, user, project, compatibility, package, and imported external locations.")
                 infoRow("Default", "Default skills are passed to every parent Pi Agent session with explicit --skill flags.")
                 infoRow("Project", "Project assignments are passed only to parent sessions for that project.")
-                infoRow("Agents", "Native subagents receive only skills explicitly assigned to that agent.")
+                infoRow("Agents", "Deck agents receive only skills explicitly assigned to that agent.")
             }
 
             Text("Discovery does not inject a skill. Agent Deck launches with --no-skills and passes only assigned skills using --skill <path>.")
@@ -424,7 +424,7 @@ struct SkillsScreen: View {
                 sections.append(AppListSection(
                     id: "catalog",
                     title: "Catalog",
-                    info: "Available skills. They are not injected until made Default, assigned to a project runtime, or assigned to a subagent.",
+                    info: "Available skills. They are not injected until made Default, assigned to a project runtime, or assigned to a Deck agent.",
                     items: catalog
                 ))
             }
@@ -444,7 +444,7 @@ struct SkillsScreen: View {
                 sections.append(AppListSection(
                     id: "catalog",
                     title: "Catalog",
-                    info: "Available skills. They are not injected until made Default, assigned to a project runtime, or assigned to a subagent.",
+                    info: "Available skills. They are not injected until made Default, assigned to a project runtime, or assigned to a Deck agent.",
                     items: catalog
                 ))
             }
@@ -623,7 +623,7 @@ struct SkillsScreen: View {
                 projectAssignmentList(for: skill)
             }
 
-            AppCard(title: "Subagent Runtime Assignment") {
+            AppCard(title: "Deck Agent Runtime Assignment") {
                 agentAssignmentList(for: skill)
             }
 
@@ -1668,7 +1668,7 @@ private struct SkillAgentAssignmentList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Assign this skill only to the selected native subagents when they run. Parent Pi Agent sessions do not receive it from this setting.")
+            Text("Assign this skill only to the selected Deck agents when they run. Parent Pi Agent sessions do not receive it from this setting.")
                 .foregroundStyle(AppTheme.mutedText)
 
             VStack(alignment: .leading, spacing: 14) {
@@ -1679,7 +1679,7 @@ private struct SkillAgentAssignmentList: View {
                     viewModel: viewModel,
                     presentError: presentError,
                     isInactiveSection: false,
-                    emptyText: "No active subagents."
+                    emptyText: "No active Deck agents."
                 )
 
                 if !inactiveAgents.isEmpty {
@@ -1690,7 +1690,7 @@ private struct SkillAgentAssignmentList: View {
                         viewModel: viewModel,
                         presentError: presentError,
                         isInactiveSection: true,
-                        emptyText: "No inactive subagents."
+                        emptyText: "No inactive Deck agents."
                     )
                 }
             }

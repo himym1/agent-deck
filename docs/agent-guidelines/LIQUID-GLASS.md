@@ -62,6 +62,8 @@ In agent-deck:
 - **`PiAgentSendButton`** (the `↑` / `■` in the composer) — system style: `.buttonStyle(.glassProminent).buttonBorderShape(.circle).tint(tintColor)` where `tintColor` is `brandAccent` (sendable), `Color.red` (running/stop), or `mutedText` (disabled).
 - **`PiAgentAddSessionButton`** (the `+` in the sidebar) — system style: `.buttonStyle(.glassProminent).buttonBorderShape(.capsule).tint(...)`.
 - **`AppCopyIconButton`** (every transcript copy button) — manual pattern: `.buttonStyle(.plain)` + `Color.clear` hit layer + `.glassEffect(.regular, in: Capsule)` + explicit `.contentShape(Capsule)`. Footprint must be exactly the size the caller passes (44×22 in headers, 32×32 in popovers) so the hover slot doesn't reflow on appearance.
+- **`AppCircleIconButton`** (icon-only round buttons: `+` add session, compact icon actions) — manual chrome with `.glassEffect(.regular.tint(...), in: Circle())`, exact `size` diameter, `.buttonStyle(.plain)`. Two styles: `.prominent` (opaque tint, accent-foreground symbol) and `.soft` (low-opacity tint, tint-colored symbol).
+- **`AppCircleIconMenu`** (icon-only round menu buttons: agent-picker paperplane) — same chrome as `AppCircleIconButton` but wraps a `Menu` instead of a `Button`. Same `.prominent`/`.soft` style options and exact `size` control.
 - **All other formerly-`.borderedProminent` buttons** — `.buttonStyle(.glassProminent)`. Previously `.bordered` → `.buttonStyle(.glass)`.
 
 Migration cheatsheet (already applied):
@@ -172,6 +174,11 @@ For the few places we still need explicit `NSColor` palettes (TextKit-driven nat
 .buttonStyle(.glassProminent)
 .buttonBorderShape(.capsule | .circle | .roundedRectangle(radius:))
 .tint(Color)
+
+// Exact-footprint icon buttons / menus (system styles add unpredictable padding,
+// so these compose the glass chrome manually for precise sizing)
+AppCircleIconButton(style:.soft, tint:brandAccent, size:30) { Image(systemName:"plus") } action: { … }
+AppCircleIconMenu(style:.soft, tint:brandAccent, size:30) { Image(systemName:"paperplane") } content: { … }
 ```
 
 ## What this app **does not** use

@@ -256,6 +256,53 @@ struct AppCircleIconButton<Symbol: View>: View {
     }
 }
 
+/// Circle icon menu button — the `Menu` counterpart of `AppCircleIconButton`.
+/// Renders the same glass circle chrome but opens a native dropdown menu on
+/// click instead of firing an action. Use for icon-buttons that show a menu
+/// of choices (e.g. the agent-picker paperplane button in the session list).
+struct AppCircleIconMenu<Symbol: View, Content: View>: View {
+    enum Style { case prominent, soft }
+
+    var style: Style = .soft
+    var tint: Color = AppTheme.brandAccent
+    var size: CGFloat = 30
+    var imageScale: Image.Scale = .large
+    var symbolWeight: Font.Weight = .bold
+    var help: String? = nil
+    @ViewBuilder var symbol: () -> Symbol
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        Menu { content() } label: {
+            symbol()
+                .imageScale(imageScale)
+                .fontWeight(symbolWeight)
+                .foregroundStyle(symbolColor)
+                .frame(width: size, height: size)
+                .glassEffect(.regular.tint(tintMaterial), in: Circle())
+                .contentShape(Circle())
+        }
+        .menuIndicator(.hidden)
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help(help ?? "")
+    }
+
+    private var symbolColor: Color {
+        switch style {
+        case .prominent: return AppTheme.accentForeground
+        case .soft: return tint
+        }
+    }
+
+    private var tintMaterial: Color {
+        switch style {
+        case .prominent: return tint
+        case .soft: return tint.opacity(0.18)
+        }
+    }
+}
+
 struct AppLoadingView: View {
     let title: String
 

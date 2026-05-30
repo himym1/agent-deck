@@ -8,14 +8,12 @@ struct MemoryScreen: View {
     @State private var selectedKind: AgentMemoryKind?
     @State private var selectedRecordID: String?
     @State private var isNewMemoryPresented = false
-    @State private var isInfoPresented = false
     /// Cached derivations of `memoryStore.records(projectPath:)`. Re-computed
     /// only when one of the input drivers changes — not on every body eval.
-    /// Without this, every observable read of `memoryStore` (and the four
-    /// counts in `MemoryInfoPopover`) would re-walk the full records array.
+    /// Without this, every observable read of `memoryStore` would re-walk the
+    /// full records array.
     @State private var cachedCurrent: [AgentMemoryRecord] = []
     @State private var cachedFiltered: [AgentMemoryRecord] = []
-    @State private var cachedCounts: (total: Int, injectable: Int, stale: Int) = (0, 0, 0)
 
     var body: some View {
         AppPage("Memory", subtitle: "Review project memories used by Agent Deck") {
@@ -23,36 +21,11 @@ struct MemoryScreen: View {
             overviewCard
             libraryCard
         }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                ControlGroup {
-                    Button {
-                        isInfoPresented.toggle()
-                    } label: {
-                        Label("Info", systemImage: "info.circle")
-                    }
-                    .popover(isPresented: $isInfoPresented, arrowEdge: .bottom) {
-                        MemoryInfoPopover(
-                            enabled: viewModel.appSettings.agentMemoryEnabled,
-                            projectName: projectLabel,
-                            recordCount: cachedCounts.total,
-                            injectableCount: cachedCounts.injectable,
-                            staleCount: cachedCounts.stale
-                        )
-                    }
-                    .toolbarNeutralChrome()
-                    .help("Explain Agent Deck memory")
-
-                    Button {
-                        isNewMemoryPresented = true
-                    } label: {
-                        Label("New Memory", systemImage: "plus")
-                    }
-                    .toolbarPrimaryActionChrome()
-                    .help(viewModel.selectedProjectPath == nil ? "Select a project before creating memory." : "Create a project memory")
-                    .disabled(viewModel.selectedProjectPath == nil)
-                }
-            }
+        // Toolbar buttons live in ContentView's central switch (memoryPrimaryToolbarContent)
+        // so the island doesn't jump when switching views. "New Memory" arrives here
+        // via notification because this screen owns the editor sheet.
+        .onReceive(NotificationCenter.default.publisher(for: .agentDeckNewMemoryRequested)) { _ in
+            isNewMemoryPresented = true
         }
         .sheet(isPresented: $isNewMemoryPresented) {
             MemoryEditorSheet(
@@ -80,15 +53,6 @@ struct MemoryScreen: View {
         let current = memoryStore.records(projectPath: viewModel.selectedProjectPath)
         cachedCurrent = current
 
-        // Single pass populates all three counts.
-        var injectable = 0
-        var stale = 0
-        for record in current {
-            if record.isInjectable { injectable += 1 }
-            if record.status == .stale { stale += 1 }
-        }
-        cachedCounts = (current.count, injectable, stale)
-
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         cachedFiltered = current.filter { record in
             if let selectedStatus, record.status != selectedStatus { return false }
@@ -107,10 +71,6 @@ struct MemoryScreen: View {
     private var selectedRecord: AgentMemoryRecord? {
         guard let selectedRecordID else { return filteredRecords.first }
         return filteredRecords.first(where: { $0.id == selectedRecordID }) ?? filteredRecords.first
-    }
-
-    private var projectLabel: String {
-        viewModel.selectedProjectPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No project selected"
     }
 
     private var overviewCard: some View {
@@ -246,7 +206,7 @@ struct MemoryScreen: View {
 }
 
 
-private struct MemoryInfoPopover: View {
+struct MemoryInfoPopover: View {
     let enabled: Bool
     let projectName: String
     let recordCount: Int
