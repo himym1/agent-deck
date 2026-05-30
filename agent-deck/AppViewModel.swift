@@ -2374,6 +2374,13 @@ final class AppViewModel: NSObject {
         guard let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID }) else { return }
         if isPiAgentSessionActuallyVisible(sessionID) {
             acknowledgePiAgentSession(sessionID)
+            // Pi may have changed files during the completed turn. Refresh once at
+            // the turn boundary so Git toolbar actions don't keep reading a clean
+            // cached snapshot until the user changes sessions.
+            if shouldShowPiAgentGitActions,
+               piAgentSessionStore.selectedSession?.id == sessionID {
+                prepareRepoChangesForSelectedPiAgentSession(force: true)
+            }
             return
         }
 
