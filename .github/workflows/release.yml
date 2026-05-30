@@ -268,8 +268,7 @@ jobs:
             if [ -z "$COMMITS" ]; then
               COMMITS="- Maintenance and internal improvements"
             fi
-            NOTES=$(printf '## What'\''s new in %s\n\n%s\n\n**Full Changelog**: https://github.com/%s/compare/%s...%s\n' \
-                    "$VERSION" "$COMMITS" "$GITHUB_REPOSITORY" "$PREV_TAG" "$TAG")
+            NOTES=$(printf '## What'\''s new in %s\n\n%s\n' "$VERSION" "$COMMITS")
           else
             NOTES=$(printf '## Agent Deck %s\n\nFirst public release.\n' "$VERSION")
           fi
