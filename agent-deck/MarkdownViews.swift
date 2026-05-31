@@ -264,9 +264,6 @@ private final class NativeMarkdownTextContainer: NSView {
     private var isDismantled = false
     private var lastMeasuredWidth: CGFloat = 0
     private var lastMeasuredHeight: CGFloat = 0
-    /// Diagnostic only: last height handed to the streaming-jank logger, so we
-    /// emit one line per actual change (and flag DOWN moves) instead of flooding.
-    private var lastLoggedMeasureHeight: CGFloat = -1
     /// Memoized result of `measureHeight(forWidth:)`, keyed by width. Lives only
     /// for the current runloop turn (see `scheduleHeightCacheInvalidation`): long
     /// enough to collapse SwiftUI's burst of `sizeThatFits` probes into one
@@ -459,17 +456,6 @@ private final class NativeMarkdownTextContainer: NSView {
         // children may still report stale heights.
         stackView.layoutSubtreeIfNeeded()
         let height = ceil(stackView.fittingSize.height)
-        if TranscriptJankLog.enabled, abs(height - lastLoggedMeasureHeight) > 0.5 {
-            let dir = lastLoggedMeasureHeight >= 0 && height < lastLoggedMeasureHeight ? "DOWN" : "up"
-            TranscriptJankLog.log("mdMeasure", [
-                "w": String(format: "%.1f", width),
-                "h": String(format: "%.1f", height),
-                "d": String(format: "%+.1f", lastLoggedMeasureHeight >= 0 ? height - lastLoggedMeasureHeight : 0),
-                "dir": dir,
-                "blocks": "\(lastDocument?.blocks.count ?? 0)"
-            ])
-            lastLoggedMeasureHeight = height
-        }
         heightCache = (width, height)
         scheduleHeightCacheInvalidation()
         return height

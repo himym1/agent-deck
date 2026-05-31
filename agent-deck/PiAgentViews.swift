@@ -7,38 +7,6 @@ import UniformTypeIdentifiers
 
 let piAgentLeakedToolNames: Set<String> = ["bash", "read", "edit", "write", "find", "grep", "subagent", "web_search", "fetch_content", "get_search_content", "web_fetch"]
 
-/// Diagnostic timeline logger for the streaming-transcript scroll/height path.
-/// Off unless the app is launched with `AGENTDECK_TRANSCRIPT_LOG=1` in the
-/// environment. Writes one tab-separated line per event to
-/// `/tmp/agentdeck-transcript-jank.log` (truncated on first write each launch)
-/// plus stderr, both stamped with a monotonic clock so the per-token ordering
-/// of measure → re-tile → scroll is exactly reconstructable. Used to *see* the
-/// streaming bounce; meant to be removed once the jank is fixed.
-@MainActor
-enum TranscriptJankLog {
-    static let enabled = ProcessInfo.processInfo.environment["AGENTDECK_TRANSCRIPT_LOG"] != nil
-    private static let path = "/tmp/agentdeck-transcript-jank.log"
-    private static var handle: FileHandle? = {
-        guard enabled else { return nil }
-        FileManager.default.createFile(atPath: path, contents: nil)
-        return FileHandle(forWritingAtPath: path)
-    }()
-    private static var startTime: CFTimeInterval = CACurrentMediaTime()
-
-    /// `event` is a short tag; `fields` are key=value pairs appended verbatim.
-    static func log(_ event: String, _ fields: [String: String] = [:]) {
-        guard enabled else { return }
-        let t = String(format: "%9.3f", (CACurrentMediaTime() - startTime) * 1000)
-        let kv = fields.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "\t")
-        let line = "\(t)ms\t\(event)\t\(kv)\n"
-        FileHandle.standardError.write(Data("[jank] \(line)".utf8))
-        handle?.write(Data(line.utf8))
-    }
-
-    /// Short, stable id suffix so log lines stay readable.
-    static func shortID(_ id: String) -> String { String(id.suffix(6)) }
-}
-
 @MainActor
 enum PiAgentRPCEventRenderCache {
     private static var cache: [String: PiAgentRPCEvent] = [:]
@@ -580,11 +548,29 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private var pendingRemeasureWork: DispatchWorkItem?
         private var pendingScrollSettle = false
         private var pendingWidthWork: DispatchWorkItem?
+        // Smooth auto-follow. The streaming follow doesn't snap to the bottom each
+        // batch (that reads as a step every ~130ms); instead a 60fps timer eases
+        // the clip origin toward the *current* bottom each frame, continuously
+        // chasing the growing document so the motion is a glide. It disengages the
+        // instant the user scrolls (checked per tick + on live-scroll start + on
+        // any user-driven bounds change). Explicit scrolls (send, jump-to-latest,
+        // session switch) still snap — see `performScrollToBottom(_:animated:)`.
+        private var followGlideTimer: Timer?
+        // Fraction of the remaining gap consumed per frame. Higher = snappier /
+        // smaller trailing gap during fast streaming; lower = softer glide.
+        private let followGlideFactor: CGFloat = 0.5
         private var boundsObserver: NSObjectProtocol?
         private var frameObserver: NSObjectProtocol?
         private var liveScrollStartObserver: NSObjectProtocol?
         private var liveScrollEndObserver: NSObjectProtocol?
         private var lastPinnedState = true
+        // Auto-follow *intent*, distinct from the position-based `isPinnedToBottom`.
+        // True = stick to the bottom as content streams. Only a user scroll changes
+        // it (set from the resulting position) or an explicit jump/send/session
+        // switch (set true). The follow decisions read this, NOT the live position,
+        // so the smooth-glide trailing a little behind the bottom never causes the
+        // follow to give up and leave the view parked below the latest content.
+        private var isAutoFollowing = true
         private var isProgrammaticScroll = false
         // True between willStartLiveScroll / didEndLiveScroll — an authoritative
         // "user is driving the scroll" signal, but it only fires for trackpad
@@ -661,6 +647,16 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                         // wheels and scroller drags that post no live-scroll
                         // notification at all.
                         self.lastUserScrollTime = CACurrentMediaTime()
+                        // A genuine user-driven bounds change ends the auto-follow
+                        // glide immediately (the glide's own scrolls set the
+                        // programmatic flag, so they don't reach here).
+                        self.stopFollowGlide()
+                        // Re-evaluate follow intent from where the *user* left the
+                        // viewport: at the bottom → keep following, scrolled away →
+                        // stop. This is the ONLY place position decides intent —
+                        // the auto-glide's own trailing never flips it, so a glide
+                        // running a little behind the bottom can't disengage itself.
+                        self.isAutoFollowing = self.isPinnedToBottom(scrollView)
                         self.pendingScrollWork?.cancel()
                         self.pendingScrollWork = nil
                         self.pendingSettleScrollWork?.cancel()
@@ -671,7 +667,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     // so resync column width here to avoid a one-frame horizontal overflow
                     // when the inspector slides in or the window resizes.
                     self.updateColumnWidthIfNeeded()
-                    self.publishPinnedState(self.isPinnedToBottom(scrollView))
+                    self.publishPinnedState(self.isAutoFollowing)
                 }
             }
 
@@ -694,7 +690,15 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 object: scrollView,
                 queue: nil
             ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.isLiveScrolling = true }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.isLiveScrolling = true
+                    self.stopFollowGlide()
+                    // The user grabbed the scroll — drop follow intent until they
+                    // either land back at the bottom or jump to latest.
+                    self.isAutoFollowing = false
+                    self.publishPinnedState(false)
+                }
             }
             liveScrollEndObserver = NotificationCenter.default.addObserver(
                 forName: NSScrollView.didEndLiveScrollNotification,
@@ -732,6 +736,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             pendingSettleScrollWork?.cancel()
             pendingRemeasureWork?.cancel()
             pendingWidthWork?.cancel()
+            stopFollowGlide()
         }
 
         func apply(
@@ -743,7 +748,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             bottomScrollRequest: Int
         ) {
             guard let tableView, let scrollView else { return }
-            let wasPinned = isPinnedToBottom(scrollView)
+            let wasFollowing = isAutoFollowing
             let isSessionSwitch = self.sessionID != sessionID
             let structuralUpdate = lastRenderRevision != renderRevision
             let streamingUpdate = lastStreamingRevision != streamingRevision
@@ -756,7 +761,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             let idsChanged = nextIDs != orderedIDs
 
             if isSessionSwitch || idsChanged {
-                let anchor = (!isSessionSwitch && !explicitScroll && !wasPinned) ? captureScrollAnchor() : nil
+                let anchor = (!isSessionSwitch && !explicitScroll && !wasFollowing) ? captureScrollAnchor() : nil
                 if isSessionSwitch {
                     pendingHeightIDs.removeAll()
                     pendingHeightWork?.cancel()
@@ -794,17 +799,11 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     // reconfigure those whose item revision has shifted.
                     self.reconfigureChangedVisibleCells()
                     self.restoreScrollAnchorIfNeeded(anchor)
-                    self.handleScrollAfterUpdate(isSessionSwitch: isSessionSwitch, explicitScroll: explicitScroll, wasPinned: wasPinned)
+                    self.handleScrollAfterUpdate(isSessionSwitch: isSessionSwitch, explicitScroll: explicitScroll, wasFollowing: wasFollowing)
                 }
             } else {
                 let changedIDs = nextIDs.filter { contentRevisionByID[$0] != nextRevisions[$0] }
                 for (id, revision) in nextRevisions { contentRevisionByID[id] = revision }
-                TranscriptJankLog.log("apply.stream", [
-                    "wasPinned": "\(wasPinned)",
-                    "userScroll": "\(isUserScrollingRecently)",
-                    "changed": changedIDs.map { TranscriptJankLog.shortID($0) }.joined(separator: ","),
-                    "streamRev": "\(streamingRevision)"
-                ])
                 if !changedIDs.isEmpty {
                     // Keep the last measured height (see the idsChanged branch):
                     // the cell re-renders and reports the new height, so the
@@ -829,9 +828,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                         noteHeightsChanged(forIDs: retileIDs)
                     }
                 } else if streamingUpdate || structuralUpdate {
-                    publishPinnedState(isPinnedToBottom(scrollView))
+                    publishPinnedState(isAutoFollowing)
                 }
-                handleScrollAfterUpdate(isSessionSwitch: false, explicitScroll: explicitScroll, wasPinned: wasPinned)
+                handleScrollAfterUpdate(isSessionSwitch: false, explicitScroll: explicitScroll, wasFollowing: wasFollowing)
             }
 
             self.sessionID = sessionID
@@ -980,13 +979,6 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // laid-out height actually changing.
             let baseline = lastNotedHeight[itemID] ?? priorMeasured ?? estimatedRowHeight
             let delta = abs(baseline - height)
-            TranscriptJankLog.log("measure", [
-                "id": TranscriptJankLog.shortID(itemID),
-                "h": String(format: "%.1f", height),
-                "baseline": String(format: "%.1f", baseline),
-                "delta": String(format: "%.1f", delta),
-                "retile": delta > heightChangeEpsilon ? "yes" : "no"
-            ])
             guard delta > heightChangeEpsilon else { return }
             pendingHeightIDs.insert(itemID)
             guard pendingHeightWork == nil else { return }
@@ -1003,7 +995,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
         private func noteHeightsChanged(forIDs ids: Set<String>) {
             guard let tableView, let scrollView, !ids.isEmpty else { return }
-            let wasPinned = isPinnedToBottom(scrollView)
+            let wasFollowing = isAutoFollowing
             var rows = IndexSet()
             for id in ids {
                 if let row = orderedIDs.firstIndex(of: id), row < tableView.numberOfRows {
@@ -1037,32 +1029,37 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // to absorb. (Was previously gated on `!isUserScrollingRecently`, which
             // disabled compensation during the one gesture that needs it most.)
             // Every re-tile must compensate one way or the other: follow to the
-            // bottom when pinned, otherwise hold the top-visible anchor. The one
-            // case that must NOT be left bare is "pinned but the user just started
-            // scrolling" (wasPinned && isUserScrollingRecently): autoFollow is off
-            // (we don't yank a scrolling user to the bottom) so the anchor must
+            // bottom when auto-following, otherwise hold the top-visible anchor. The
+            // one case that must NOT be left bare is "following but the user just
+            // started scrolling" (wasFollowing && isUserScrollingRecently): autoFollow
+            // is off (we don't yank a scrolling user to the bottom) so the anchor must
             // carry it, or the streaming row grows with nothing holding position.
-            let willAutoFollow = wasPinned && !isUserScrollingRecently
+            let willAutoFollow = wasFollowing && !isUserScrollingRecently
             let preserveAnchor = !willAutoFollow
             let anchor = preserveAnchor ? captureScrollAnchor() : nil
-            TranscriptJankLog.log("retile", [
-                "rows": rows.map(String.init).joined(separator: ","),
-                "wasPinned": "\(wasPinned)",
-                "autoFollow": "\(willAutoFollow)",
-                "anchor": preserveAnchor ? (anchor.map { TranscriptJankLog.shortID($0.id) } ?? "nil") : "off"
-            ])
             NSAnimationContext.beginGrouping()
             NSAnimationContext.current.duration = 0
             // Suppress implicit Core Animation actions so a streaming row's
             // height change re-tiles instantly with no per-token animation.
             CATransaction.begin()
             CATransaction.setDisableActions(true)
+            // Flag the whole re-tile as programmatic. `noteHeightOfRows` /
+            // `layoutSubtreeIfNeeded` can nudge the clip origin by a sub-pixel as
+            // AppKit re-lays the rows; that nudge posts a boundsDidChange, and if
+            // the flag isn't set the observer mistakes it for a *user* scroll. On a
+            // streaming row that fires every token, re-stamping `lastUserScrollTime`
+            // continuously — which pins `isUserScrollingRecently` true and the
+            // auto-follow off until the stream ends (a stray touch could leave the
+            // view parked below the latest content for the rest of the response).
+            let wasProgrammatic = isProgrammaticScroll
+            isProgrammaticScroll = true
             tableView.noteHeightOfRows(withIndexesChanged: rows)
             if let anchor {
                 // rect(ofRow:) must see the new heights before we re-anchor.
                 tableView.layoutSubtreeIfNeeded()
                 restoreScrollAnchor(anchor)
             }
+            isProgrammaticScroll = wasProgrammatic
             CATransaction.commit()
             NSAnimationContext.endGrouping()
             if willAutoFollow {
@@ -1109,31 +1106,32 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             let maxY = max(0, documentView.bounds.height - scrollView.contentView.bounds.height)
             let targetY = min(max(0, rowRect.minY + anchor.offsetFromRowTop), maxY)
             let originY = scrollView.contentView.bounds.origin.y
-            TranscriptJankLog.log("restore", [
-                "anchorRow": "\(row)",
-                "fromY": String(format: "%.1f", originY),
-                "targetY": String(format: "%.1f", targetY),
-                "move": String(format: "%+.1f", targetY - originY)
-            ])
             guard abs(originY - targetY) > 0.5 else { return }
+            // Save/restore rather than force-false: this runs nested inside the
+            // `noteHeightsChanged` re-tile, which holds the flag true around the
+            // whole transaction. Clearing it here would unflag the rest of that
+            // transaction's AppKit-driven origin nudges.
+            let wasProgrammatic = isProgrammaticScroll
             isProgrammaticScroll = true
             scrollView.contentView.scroll(to: NSPoint(x: 0, y: targetY))
             scrollView.reflectScrolledClipView(scrollView.contentView)
-            isProgrammaticScroll = false
+            isProgrammaticScroll = wasProgrammatic
         }
 
-        private func handleScrollAfterUpdate(isSessionSwitch: Bool, explicitScroll: Bool, wasPinned: Bool) {
+        private func handleScrollAfterUpdate(isSessionSwitch: Bool, explicitScroll: Bool, wasFollowing: Bool) {
             guard let scrollView else { return }
             if isSessionSwitch || explicitScroll {
                 // An explicit request (send, jump-to-latest) or a session
-                // switch always wins — the user isn't fighting it.
+                // switch always wins — the user isn't fighting it. Re-arm
+                // follow intent so streaming after the jump keeps tracking.
+                isAutoFollowing = true
                 scrollToBottom(settle: true)
-            } else if wasPinned && !isUserScrollingRecently {
+            } else if wasFollowing && !isUserScrollingRecently {
                 // Passive streaming follow — but never while the user is
                 // actively scrolling, or it would yank the viewport.
                 scrollToBottom(settle: false)
             } else {
-                publishPinnedState(isPinnedToBottom(scrollView))
+                publishPinnedState(isAutoFollowing)
             }
         }
 
@@ -1145,7 +1143,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 let shouldSettle = self.pendingScrollSettle
                 self.pendingScrollWork = nil
                 self.pendingScrollSettle = false
-                self.performScrollToBottom(scrollView)
+                // Streaming follow (settle == false) glides; explicit / session
+                // switch (settle == true) snaps.
+                self.performScrollToBottom(scrollView, animated: !shouldSettle)
                 guard shouldSettle else { return }
                 self.pendingSettleScrollWork?.cancel()
                 let settleWork = DispatchWorkItem { [weak self] in
@@ -1154,7 +1154,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     // Don't force a re-measure here — pre-measurement and the synchronous
                     // height-work flush inside performScrollToBottom mean heights are already
                     // accurate. Re-measuring would risk a small secondary scroll jump.
-                    self.performScrollToBottom(scrollView)
+                    self.performScrollToBottom(scrollView, animated: false)
                 }
                 self.pendingSettleScrollWork = settleWork
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: settleWork)
@@ -1163,7 +1163,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             DispatchQueue.main.async(execute: work)
         }
 
-        private func performScrollToBottom(_ scrollView: NSScrollView) {
+        private func performScrollToBottom(_ scrollView: NSScrollView, animated: Bool) {
             guard let documentView = scrollView.documentView else { return }
             // Flush any debounced height work and force a layout pass so the documentView's
             // bounds reflect current row heights. Without this, the math below uses stale
@@ -1173,22 +1173,79 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             documentView.layoutSubtreeIfNeeded()
             let maxY = max(0, documentView.bounds.height - scrollView.contentView.bounds.height)
             let clipView = scrollView.contentView
-            let fromY = clipView.bounds.origin.y
-            TranscriptJankLog.log("scrollBottom", [
-                "fromY": String(format: "%.1f", fromY),
-                "maxY": String(format: "%.1f", maxY),
-                "docH": String(format: "%.1f", documentView.bounds.height),
-                "move": String(format: "%+.1f", maxY - fromY)
-            ])
             guard abs(clipView.bounds.origin.y - maxY) > 1 else {
+                stopFollowGlide()
                 publishPinnedState(true)
                 return
             }
+            // Streaming follow: hand off to the glide timer, which eases toward the
+            // (still-growing) bottom over the next frames instead of snapping.
+            if animated {
+                startFollowGlide()
+                return
+            }
+            // Explicit / settle: snap immediately.
+            stopFollowGlide()
             isProgrammaticScroll = true
             clipView.scroll(to: NSPoint(x: 0, y: maxY))
             scrollView.reflectScrolledClipView(clipView)
             isProgrammaticScroll = false
             publishPinnedState(true)
+        }
+
+        /// Begin (or keep) easing the clip origin toward the document bottom each
+        /// frame. Idempotent — if a glide is already running it simply continues
+        /// and naturally picks up the new, larger bottom on its next tick.
+        private func startFollowGlide() {
+            guard followGlideTimer == nil else { return }
+            let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    // self is nil only after the coordinator tore down, which
+                    // invalidates this timer in `invalidate()`; nothing to do here.
+                    self?.stepFollowGlide()
+                }
+            }
+            // .common so the glide keeps ticking during resize / tracking runloop modes.
+            RunLoop.main.add(timer, forMode: .common)
+            followGlideTimer = timer
+        }
+
+        private func stepFollowGlide() {
+            guard let scrollView, let documentView = scrollView.documentView else {
+                stopFollowGlide()
+                return
+            }
+            // The user's scroll is authoritative — disengage and let it stand.
+            if isUserScrollingRecently {
+                stopFollowGlide()
+                return
+            }
+            let clipView = scrollView.contentView
+            let maxY = max(0, documentView.bounds.height - clipView.bounds.height)
+            let current = clipView.bounds.origin.y
+            let gap = maxY - current
+            // Within a frame's worth of the bottom — land exactly and stop.
+            guard abs(gap) > 0.5 else {
+                if abs(gap) > 0.01 {
+                    isProgrammaticScroll = true
+                    clipView.scroll(to: NSPoint(x: 0, y: maxY))
+                    scrollView.reflectScrolledClipView(clipView)
+                    isProgrammaticScroll = false
+                }
+                stopFollowGlide()
+                publishPinnedState(true)
+                return
+            }
+            let nextY = current + gap * followGlideFactor
+            isProgrammaticScroll = true
+            clipView.scroll(to: NSPoint(x: 0, y: nextY))
+            scrollView.reflectScrolledClipView(clipView)
+            isProgrammaticScroll = false
+        }
+
+        private func stopFollowGlide() {
+            followGlideTimer?.invalidate()
+            followGlideTimer = nil
         }
 
         private func isPinnedToBottom(_ scrollView: NSScrollView) -> Bool {

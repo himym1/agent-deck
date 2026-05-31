@@ -1,6 +1,8 @@
 import Foundation
+import os
 
 final class PiRPCClient: @unchecked Sendable {
+    nonisolated private static let logger = Logger(subsystem: "streetcoding.agent-deck", category: "PiRPC")
     struct EventLine: Sendable {
         let rawLine: String
         let event: PiAgentRPCEvent?
@@ -143,6 +145,10 @@ final class PiRPCClient: @unchecked Sendable {
         guard JSONSerialization.isValidJSONObject(command),
               let data = try? JSONSerialization.data(withJSONObject: command),
               let line = String(data: data, encoding: .utf8) else { return }
+        let type = command["type"] as? String ?? "unknown"
+        let requestID = command["id"] as? String ?? "extension-ui"
+        let streamingBehavior = command["streamingBehavior"] as? String ?? ""
+        Self.logger.info("Sending RPC command type=\(type, privacy: .public) id=\(requestID, privacy: .public) hasMessage=\(command["message"] != nil) hasImages=\(command["images"] != nil) streamingBehavior=\(streamingBehavior, privacy: .public)")
         process.writeJSONLine(line)
     }
 

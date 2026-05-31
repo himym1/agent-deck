@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 enum PiParentAppendPromptResolver {
     static func appendSystemPromptArguments(
@@ -44,6 +45,10 @@ enum PiParentAppendPromptResolver {
 
 @MainActor
 final class PiAgentRunnerService {
+    nonisolated private static let logger = Logger(subsystem: "streetcoding.agent-deck", category: "PiRPC")
+    /// Number of inbound events still to log after a compaction completes, per session.
+    /// Lets us prove whether Pi continues a turn after compaction without logging message content.
+    private var postCompactionLogCountBySessionID: [UUID: Int] = [:]
     private let store: PiAgentSessionStore
     private var clientsBySessionID: [UUID: PiRPCClient] = [:]
     private var clientRunIDsBySessionID: [UUID: UUID] = [:]
@@ -1049,6 +1054,17 @@ final class PiAgentRunnerService {
 
     private func handle(rawLine: String, event: PiAgentRPCEvent?, sessionID: UUID, clientRunID: UUID) {
         guard isCurrentClientRun(clientRunID, for: sessionID) else { return }
+        // Within the window after a compaction completes, log the type of each inbound
+        // event (never its content) so we can confirm whether Pi continues the turn.
+        if let remaining = postCompactionLogCountBySessionID[sessionID], remaining > 0 {
+            let type = event?.type ?? "unparsed"
+            Self.logger.info("Post-compaction inbound event type=\(type, privacy: .public)")
+            if remaining <= 1 {
+                postCompactionLogCountBySessionID[sessionID] = nil
+            } else {
+                postCompactionLogCountBySessionID[sessionID] = remaining - 1
+            }
+        }
         guard let event else {
             store.append(.init(sessionID: sessionID, role: .raw, title: "Raw Output", text: rawLine))
             return
@@ -1560,6 +1576,10 @@ final class PiAgentRunnerService {
             let assistantEntryID = assistantEntryIDsBySessionID[sessionID] ?? UUID()
             let thinkingEntryID = thinkingEntryIDsBySessionID[sessionID] ?? UUID()
             let thinkingBeforeID = assistantEntryIDsBySessionID[sessionID]
+            // The text accumulated from streaming deltas — what the user actually
+            // saw. Capture it before clearing the buffer so we can fall back to it
+            // below when the end event omits the body.
+            let streamedText = assistantTextBySessionID[sessionID] ?? ""
             assistantEntryIDsBySessionID[sessionID] = nil
             assistantTextBySessionID[sessionID] = nil
             thinkingEntryIDsBySessionID[sessionID] = nil
@@ -1571,6 +1591,16 @@ final class PiAgentRunnerService {
                     return
                 }
                 store.upsert(.init(id: assistantEntryID, sessionID: sessionID, role: .assistant, title: "Assistant", text: visibleText, rawJSON: nil))
+            } else if !streamedText.isEmpty {
+                // The end event carried no assistant body. Some model backends
+                // stream the response only through deltas and omit the text from the
+                // final message payload (observed with non-Pi providers routed via
+                // opencode). Without this, the turn-start placeholder — persisted
+                // empty — is all that reaches disk, and the response the user watched
+                // stream vanishes on reload. Persist the streamed buffer on the SAME
+                // entry id (updates the in-memory streamed entry in place, so no
+                // duplicate).
+                store.upsert(.init(id: assistantEntryID, sessionID: sessionID, role: .assistant, title: "Assistant", text: streamedText, rawJSON: nil))
             } else {
                 let thinkingText = extractAssistantThinking(from: message)
                 if !thinkingText.isEmpty {
@@ -1735,6 +1765,10 @@ final class PiAgentRunnerService {
         }
         store.upsert(.init(id: entryID, sessionID: sessionID, role: .status, title: "Compaction", text: text, rawJSON: rawLine))
         if event.type == "compaction_end" {
+            let willRetry = event.willRetry == true
+            Self.logger.info("Compaction complete reason=\(reason, privacy: .public) willRetry=\(willRetry, privacy: .public)")
+            // Open a short window so we can see whether Pi emits a continuation turn next.
+            postCompactionLogCountBySessionID[sessionID] = 12
             clientsBySessionID[sessionID]?.getState()
             clientsBySessionID[sessionID]?.getSessionStats()
         }
