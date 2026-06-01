@@ -1045,6 +1045,13 @@ final class PiAgentRunnerService {
         if isConnectionError(trimmed) {
             let message = normalizedConnectionError(trimmed)
             store.append(.init(sessionID: sessionID, role: .error, title: "Connection Error", text: message))
+            // The RPC websocket died mid-turn, so no turn_end/message_end will arrive to
+            // schedule idle confirmation, and the local Pi process may keep running so
+            // handleTermination never fires either. Without this the session is stranded
+            // in .running ("active" with nothing streaming) until the app is restarted.
+            // Wipe the stale streaming buffers and move the session to a terminal state.
+            clearStreamingState(sessionID: sessionID)
+            mark(sessionID, status: .failed, error: message)
         } else {
             store.append(.init(sessionID: sessionID, role: .stderr, title: "stderr", text: trimmed))
         }
