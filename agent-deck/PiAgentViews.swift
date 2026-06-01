@@ -4147,8 +4147,7 @@ private struct PiAgentComposerPanel: View {
 // is driven by `@Observable` reads of those stores — so comparing store identity
 // (and ignoring the closures, which are recreated every parent pass) is correct:
 // `.equatable()` skips parent-churn re-renders while observation still drives
-// every real update (e.g. run/stop transitions). Mirrors osaurus isolating its
-// `FloatingInputCard` from streaming via a separate observable store.
+// every real update (e.g. run/stop transitions).
 extension PiAgentComposerPanel: Equatable {
     nonisolated static func == (lhs: PiAgentComposerPanel, rhs: PiAgentComposerPanel) -> Bool {
         lhs.viewModel === rhs.viewModel && lhs.store === rhs.store

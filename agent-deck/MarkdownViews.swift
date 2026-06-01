@@ -809,7 +809,7 @@ private final class NativeMarkdownTextContainer: NSView {
         // otherwise runs against `textStorage` on every edit. During streaming
         // each appended token is an edit, so spell/grammar/substitution/link/data
         // passes would fire ~30×/sec per block for zero benefit on non-editable
-        // content. (Mirrors osaurus's `SelectableTextView`.)
+        // content.
         textView.isContinuousSpellCheckingEnabled = false
         textView.isGrammarCheckingEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false

@@ -507,6 +507,7 @@ final class PiAgentSessionStore {
         let preNeedsAttention = sessions[index].needsAttention
         let preTitle = sessions[index].title
         let preProjectPath = sessions[index].projectPath
+        let preStatus = sessions[index].status
         mutate(&sessions[index])
         if bumpUpdatedAt {
             sessions[index].updatedAt = Date()
@@ -516,7 +517,13 @@ final class PiAgentSessionStore {
             sortSessions()
         } else if sessions[index].needsAttention != preNeedsAttention
             || sessions[index].title != preTitle
-            || sessions[index].projectPath != preProjectPath {
+            || sessions[index].projectPath != preProjectPath
+            // Status drives the row's ACTIVE badge. The session list renders from a
+            // cached snapshot (`cachedVisibleSessions`) that only rebuilds on a
+            // `sessionListRevision` bump, so without this a stop (→ .stopped) left the
+            // row showing a stale ACTIVE badge. Only transitions reach here (no change
+            // → no bump), so streaming's steady .running stays cheap.
+            || sessions[index].status != preStatus {
             bumpSessionListRevision()
         }
         save()

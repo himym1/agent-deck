@@ -331,6 +331,7 @@ final class PiAgentRunnerService {
     }
 
     func stop(sessionID: UUID, recordTranscript: Bool = true) {
+        RPCDebugLog.log("DEBUG-STOP stop() called session=\(sessionID.uuidString) hasClient=\(clientsBySessionID[sessionID] != nil)")
         cancelIdleParking(for: sessionID)
         clearStreamingState(sessionID: sessionID)
         pendingConfigurationRestartSessionIDs.remove(sessionID)
@@ -1434,6 +1435,8 @@ final class PiAgentRunnerService {
                 record.thinkingLevel = reportedThinkingLevel ?? record.thinkingLevel
             }
             if let streaming = data["isStreaming"]?.compactDescription, streaming == "true" {
+                let prevStatus = String(describing: record.status)
+                RPCDebugLog.log("DEBUG-STOP applyState isStreaming=true -> .running (prev=\(prevStatus)) session=\(sessionID.uuidString)")
                 cancelPendingIdle(for: sessionID)
                 cancelIdleParking(for: sessionID)
                 record.status = .running
@@ -2245,6 +2248,7 @@ final class PiAgentRunnerService {
     }
 
     private func mark(_ sessionID: UUID, status: PiAgentRunStatus, error: String?) {
+        RPCDebugLog.log("DEBUG-STOP mark status=\(String(describing: status)) session=\(sessionID.uuidString)")
         cancelPendingIdle(for: sessionID)
         store.updateSession(sessionID) { record in
             record.status = status
