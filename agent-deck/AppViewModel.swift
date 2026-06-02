@@ -7472,7 +7472,7 @@ final class AppViewModel: NSObject {
         let projectSettings = allProjectSnapshots[projectPath]?.settings.first { summary in
             URL(fileURLWithPath: summary.path).standardizedFileURL.path == projectSettingsPath
         }
-        if let projectOverrideDisabled = projectSettings?.agentOverrides.first(where: { $0.agentName == agentName })?.values["disabled"] as? Bool {
+        if let projectOverrideDisabled = projectSettings?.agentOverrides.first(where: { $0.agentName == agentName })?.disabledOverride {
             return projectOverrideDisabled
         }
         if projectSettings?.disableBuiltins == true {
@@ -7483,7 +7483,7 @@ final class AppViewModel: NSObject {
         let globalSettings = globalSnapshot.settings.first { summary in
             URL(fileURLWithPath: summary.path).standardizedFileURL.path == globalSettingsPath
         }
-        if let userOverrideDisabled = globalSettings?.agentOverrides.first(where: { $0.agentName == agentName })?.values["disabled"] as? Bool {
+        if let userOverrideDisabled = globalSettings?.agentOverrides.first(where: { $0.agentName == agentName })?.disabledOverride {
             return userOverrideDisabled
         }
         return globalSettings?.disableBuiltins == true
@@ -7496,8 +7496,8 @@ final class AppViewModel: NSObject {
     func builtinStateBadge(for agent: EffectiveAgentRecord) -> (text: String, color: Color)? {
         guard agent.builtin != nil, agent.globalCustom == nil, agent.projectCustom == nil else { return nil }
 
-        let projectOverrideDisabled = agent.projectOverride?.values["disabled"] as? Bool
-        let userOverrideDisabled = agent.userOverride?.values["disabled"] as? Bool
+        let projectOverrideDisabled = agent.projectOverride?.disabledOverride
+        let userOverrideDisabled = agent.userOverride?.disabledOverride
 
         if agent.resolved.disabled == true {
             if projectOverrideDisabled == true || projectDisableBuiltins {

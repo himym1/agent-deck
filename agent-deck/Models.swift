@@ -82,6 +82,14 @@ nonisolated struct BuiltinOverrideRecord: Hashable, Sendable {
     let scope: ScopeID
     let settingsPath: String
     let values: [String: JSONValue]
+
+    /// The override's explicit `disabled` flag, or nil when it doesn't set one.
+    /// `values` holds `JSONValue` (an enum), so `values["disabled"] as? Bool`
+    /// always yields nil — every read must go through `boolValue`. Centralized
+    /// here so the assignment UI and resolver-mirroring helpers can't diverge.
+    var disabledOverride: Bool? {
+        values["disabled"]?.boolValue
+    }
 }
 
 nonisolated enum ResolutionKind: String, Sendable {

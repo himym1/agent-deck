@@ -1410,7 +1410,7 @@ private struct AgentDetailView: View {
     }
 
     private var isDisabledGlobally: Bool {
-        (agent.userOverride?.values["disabled"] as? Bool) == true || globalDisableBuiltinsActive
+        agent.userOverride?.disabledOverride == true || globalDisableBuiltinsActive
     }
 
     @ViewBuilder
