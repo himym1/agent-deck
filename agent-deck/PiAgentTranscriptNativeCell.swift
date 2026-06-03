@@ -515,11 +515,20 @@ final class PiAgentNativeBubbleView: NSView {
 
     private func report(phase: String, before: CGFloat, after: CGFloat) {
         let moved = abs(after - before) > 0.5
-        guard moved || Self.hoverDebug else { return }
+        let bf = buttonStack.frame
+        let cf = cardView.frame
+        // Questions float buttons LEFT of the card; replies float them RIGHT.
+        // Either way the button stack must not overlap the card.
+        let overCard = (payload?.copySide == .leading)
+            ? bf.maxX > cf.minX + 1
+            : bf.minX < cf.maxX - 1
+        guard moved || overCard || Self.hoverDebug else { return }
         let tag = moved ? "⚠️ MOVED" : "stable"
         let line = "[\(phase)] \(tag) cardMinX \(Int(before))→\(Int(after)) "
-            + "hugged=\(payload?.isUserHugged ?? false) bubbleW=\(Int(bounds.width)) "
-            + "cardW=\(Int(cardWidthC.constant)) leading=\(Int(cardLeadingC.constant))\n"
+            + "hugged=\(payload?.isUserHugged ?? false) side=\(String(describing: payload?.copySide)) "
+            + "bubbleW=\(Int(bounds.width)) cardW=\(Int(cardWidthC.constant)) leading=\(Int(cardLeadingC.constant)) "
+            + "card=[\(Int(cf.minX)),\(Int(cf.maxX))] buttons=[\(Int(bf.minX)),\(Int(bf.maxX))] "
+            + (overCard ? "⚠️BUTTONS-OVER-CARD" : "buttons-in-gutter") + "\n"
         if moved {
             Self.hoverLog.error("YOU-BUBBLE-HOVER \(line, privacy: .public)")
         } else {
