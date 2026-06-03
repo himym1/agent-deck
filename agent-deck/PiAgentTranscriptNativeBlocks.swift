@@ -75,6 +75,14 @@ class PiAgentNativeCardRowView: NSView, PiAgentNativeRowContent {
     var hPad: CGFloat = 14
     var vPad: CGFloat = 11
     var placement: Placement = .leftAtCap
+    var onIntrinsicHeightChange: (() -> Void)?
+
+    /// Subclasses call this after a content change that alters height (e.g. an
+    /// inline expand) so the owning cell re-measures and the table re-tiles.
+    func notifyContentHeightChanged() {
+        needsLayout = true
+        onIntrinsicHeightChange?()
+    }
 
     private var cardWidthC: NSLayoutConstraint!
     private var cardLeadingC: NSLayoutConstraint!
@@ -400,6 +408,7 @@ final class PiAgentNativeStatusDividerView: NSView, PiAgentNativeRowContent {
     private let labelField = NSTextField(labelWithString: "")
     private let timeField = NSTextField(labelWithString: "")
     private let capsuleStack = NSStackView()
+    var onIntrinsicHeightChange: (() -> Void)?
 
     required init() {
         super.init(frame: .zero)

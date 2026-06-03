@@ -1235,6 +1235,15 @@ struct PiAgentThreadDiffSummaryView: View {
         changedFiles(from: activities).map(\.path)
     }
 
+    /// Diff rows (path + diff) for the native tool-group renderer. Mirrors
+    /// `loadRows`: at most 8 files, only those with a non-empty diff.
+    @MainActor
+    static func diffRows(from activities: [PiAgentTranscriptActivity]) -> [Row] {
+        changedFiles(from: activities).prefix(8).compactMap { change in
+            change.diff.isEmpty ? nil : Row(path: change.path, diff: change.diff)
+        }
+    }
+
     @MainActor
     private static func changedFiles(from activities: [PiAgentTranscriptActivity]) -> [ChangedFile] {
         var orderedPaths: [String] = []

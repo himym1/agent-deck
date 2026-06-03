@@ -1759,6 +1759,13 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 lastIntrinsicHeight = -1
             }
             nativeRowSpec = spec
+            // Let an interactive native row (e.g. expanding a list) ask the cell to
+            // re-measure and the table to re-tile when its content height changes.
+            spec.setHeightCallback(row) { [weak self] in
+                guard let self, let itemID = self.configuredItemID, self.configuredWidth > 1 else { return }
+                let h = self.forcedIntrinsicHeight()
+                if h > 0 { self.onMeasuredHeight?(itemID, h) }
+            }
             let insetChanged = configuredTopInset != item.topInset || configuredBottomInset != item.bottomInset
             if insetChanged {
                 nativeTopC?.constant = item.topInset

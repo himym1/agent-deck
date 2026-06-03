@@ -42,6 +42,10 @@ protocol PiAgentNativeRowContent: NSView {
     /// Apply pending layout immediately (recycled cells may draw before the async
     /// layout pass). Default forces a synchronous subtree layout.
     func settleLayoutImmediately()
+    /// Set by the cell. The view calls this when its own content height changes
+    /// at runtime (e.g. expanding an inline list) so the cell re-measures and the
+    /// table re-tiles the row. Views with fixed height never call it.
+    var onIntrinsicHeightChange: (() -> Void)? { get set }
 }
 
 extension PiAgentNativeRowContent {
@@ -62,6 +66,7 @@ final class NativeRowSpec {
     let measure: (NSView, CGFloat) -> CGFloat
     let reset: (NSView) -> Void
     let settle: (NSView) -> Void
+    let setHeightCallback: (NSView, (() -> Void)?) -> Void
 
     private init(
         typeID: ObjectIdentifier,
@@ -69,7 +74,8 @@ final class NativeRowSpec {
         configure: @escaping (NSView, CGFloat) -> Void,
         measure: @escaping (NSView, CGFloat) -> CGFloat,
         reset: @escaping (NSView) -> Void,
-        settle: @escaping (NSView) -> Void
+        settle: @escaping (NSView) -> Void,
+        setHeightCallback: @escaping (NSView, (() -> Void)?) -> Void
     ) {
         self.typeID = typeID
         self.make = make
@@ -77,6 +83,7 @@ final class NativeRowSpec {
         self.measure = measure
         self.reset = reset
         self.settle = settle
+        self.setHeightCallback = setHeightCallback
     }
 
     /// Build a spec for a concrete native row view type `V`. `configure` receives
@@ -91,7 +98,8 @@ final class NativeRowSpec {
             configure: { view, width in configure(view as! V, width) },
             measure: { view, width in (view as! V).measuredHeight(forWidth: width) },
             reset: { view in (view as! V).prepareForReuseIfNeeded() },
-            settle: { view in (view as! V).settleLayoutImmediately() }
+            settle: { view in (view as! V).settleLayoutImmediately() },
+            setHeightCallback: { view, cb in (view as! V).onIntrinsicHeightChange = cb }
         )
     }
 }
@@ -146,6 +154,9 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
     private var trackingArea: NSTrackingArea?
 
     private var payload: NativeBubblePayload?
+
+    /// Bubbles have fixed height per content; never fired (satisfies the protocol).
+    var onIntrinsicHeightChange: (() -> Void)?
 
     private let headerSpacing: CGFloat = 8
     private let prefixSpacing: CGFloat = 6
