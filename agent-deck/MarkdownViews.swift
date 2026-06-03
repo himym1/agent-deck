@@ -741,12 +741,13 @@ final class NativeMarkdownTextContainer: NSView {
     }
 
     private static func listRow(marker: String, text: String, indentLevel: Int, markerWidth: CGFloat) -> NSView {
-        let row = NSStackView()
+        // Manual container (not NSStackView): NSStackView's .firstBaseline doesn't
+        // reliably read an auto-sizing NSTextView's baseline, so the marker floated
+        // above the first text line. An explicit firstBaselineAnchor constraint
+        // between the marker and the body's first line aligns them exactly,
+        // independent of the body's textContainerInset and the marker/body fonts.
+        let row = NSView()
         row.translatesAutoresizingMaskIntoConstraints = false
-        row.orientation = .horizontal
-        row.alignment = .top
-        row.spacing = 8
-        row.edgeInsets = NSEdgeInsets(top: 0, left: CGFloat(max(indentLevel, 0)) * 22, bottom: 0, right: 0)
 
         let bodyFont = NSFont.preferredFont(forTextStyle: .body)
         let markerView = NSTextField(labelWithString: marker)
@@ -762,12 +763,25 @@ final class NativeMarkdownTextContainer: NSView {
         markerView.textColor = .secondaryLabelColor
         markerView.alignment = .right
         markerView.setContentHuggingPriority(.required, for: .horizontal)
-        markerView.widthAnchor.constraint(greaterThanOrEqualToConstant: markerWidth).isActive = true
+        markerView.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         let body = textView(text, font: bodyFont, color: .labelColor)
-        row.addArrangedSubview(markerView)
-        row.addArrangedSubview(body)
-        body.widthAnchor.constraint(greaterThanOrEqualToConstant: 20).isActive = true
+        row.addSubview(markerView)
+        row.addSubview(body)
+
+        let indent = CGFloat(max(indentLevel, 0)) * 22
+        NSLayoutConstraint.activate([
+            markerView.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: indent),
+            markerView.widthAnchor.constraint(greaterThanOrEqualToConstant: markerWidth),
+            markerView.topAnchor.constraint(greaterThanOrEqualTo: row.topAnchor),
+            // The key: marker's baseline sits on the body's first-line baseline.
+            markerView.firstBaselineAnchor.constraint(equalTo: body.firstBaselineAnchor),
+            body.leadingAnchor.constraint(equalTo: markerView.trailingAnchor, constant: 8),
+            body.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            body.topAnchor.constraint(equalTo: row.topAnchor),
+            body.bottomAnchor.constraint(equalTo: row.bottomAnchor),
+            body.widthAnchor.constraint(greaterThanOrEqualToConstant: 20)
+        ])
         return row
     }
 
