@@ -2453,7 +2453,7 @@ enum PiAgentTranscriptCardStyle {
     case threadChild
 }
 
-fileprivate struct PiAgentUserMessageContent: View {
+struct PiAgentUserMessageContent: View {
     let entry: PiAgentTranscriptEntry
     var skills: [SkillRecord] = []
     var commandSlashNames: Set<String> = []
