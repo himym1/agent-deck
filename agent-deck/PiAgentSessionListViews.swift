@@ -399,7 +399,7 @@ struct PiAgentSessionRow: View {
 
     private var activeStatusLabel: some View {
         Text("ACTIVE")
-            .font(.system(size: 7, weight: .bold, design: .monospaced))
+            .font(AppTheme.Font.smallLabel)
             .tracking(1.2)
             .foregroundStyle(AppTheme.brandAccent.opacity(0.72))
             .padding(.horizontal, 5)
@@ -410,7 +410,7 @@ struct PiAgentSessionRow: View {
 
     private var needsAttentionBell: some View {
         Image(systemName: "bell.fill")
-            .font(.system(size: 11, weight: .semibold))
+            .font(AppTheme.Font.caption.weight(.semibold))
             .foregroundStyle(AppTheme.brandAccent)
             .help("Pi Agent finished and needs review")
             .accessibilityLabel("Needs review")
@@ -443,7 +443,7 @@ struct PiAgentSessionRow: View {
         if isRenaming {
             TextField("Session name", text: $draftTitle)
                 .textFieldStyle(.plain)
-                .font(.system(size: 11, weight: .semibold))
+                .font(AppTheme.Font.footnote.weight(.semibold))
                 .fontWidth(.expanded)
                 .lineLimit(1)
                 .frame(height: 22, alignment: .center)
@@ -469,11 +469,11 @@ struct PiAgentSessionRow: View {
                     .opacity(isGeneratingTitle ? 0.62 : 1)
                     .animation(isGeneratingTitle ? .easeInOut(duration: 0.85).repeatForever(autoreverses: true) : .default, value: isGeneratingTitle)
                 Image(systemName: "pencil")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(AppTheme.Font.caption2.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
                     .opacity(isTitleHovered ? 0.8 : 0)
             }
-            .font(.system(size: 11, weight: .semibold))
+            .font(AppTheme.Font.footnote.weight(.semibold))
             .fontWidth(.expanded)
             .foregroundStyle(.primary)
             .padding(.horizontal, 5)
@@ -587,7 +587,7 @@ private struct PiAgentSessionTelemetryStrip: View {
             }
             Spacer(minLength: 0)
             Text("ACTIVE")
-                .font(.system(size: 7, weight: .bold, design: .monospaced))
+                .font(AppTheme.Font.smallLabel)
                 .tracking(1.2)
                 .foregroundStyle(AppTheme.brandAccent.opacity(0.72))
         }

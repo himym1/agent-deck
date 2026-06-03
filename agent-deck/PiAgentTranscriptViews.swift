@@ -892,7 +892,7 @@ private struct ThreadMessageRow<Content: View>: View {
                         Color.clear
                             .contentShape(Capsule(style: .continuous))
                         Image(systemName: "arrow.trianglehead.branch")
-                            .font(.caption.weight(.semibold))
+                            .font(AppTheme.Font.caption.weight(.semibold))
                             .foregroundStyle(.primary)
                     }
                     .frame(width: 28, height: 28)
@@ -966,10 +966,10 @@ struct PiAgentTranscriptThreadCard: View {
 
     @ViewBuilder
     private var fullThreadBody: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: AppTheme.Chat.threadSpacing) {
             questionBlock
             if hasChildren {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: AppTheme.Chat.childSpacing) {
                     ForEach(thread.children) { child in
                         childBlock(child)
                     }
@@ -1495,7 +1495,7 @@ private struct PiAgentFullDiffSheet: View {
                     .lineLimit(2)
                     .truncationMode(.middle)
                 Text(row.changeCountText)
-                    .font(.caption.monospacedDigit())
+                    .font(AppTheme.Font.caption.monospacedDigit())
                     .foregroundStyle(AppTheme.mutedText)
             }
             PiAgentFullDiffView(diffText: row.diff)
@@ -1524,12 +1524,12 @@ private struct PiAgentFullDiffView: View {
                     let line = lines[index]
                     HStack(alignment: .top, spacing: 10) {
                         Text(line.gutter)
-                            .font(.caption.monospaced())
+                            .font(AppTheme.Font.caption.monospaced())
                             .foregroundStyle(line.gutterColor)
                             .frame(width: 56, alignment: .trailing)
                             .textSelection(.enabled)
                         Text(line.content.isEmpty ? " " : line.content)
-                            .font(.caption.monospaced())
+                            .font(AppTheme.Font.caption.monospaced())
                             .foregroundStyle(line.textColor)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1975,10 +1975,10 @@ struct PiAgentActivityDetailView: View {
                     Image(systemName: icon)
                         .foregroundStyle(activity.isError ? AppTheme.roleError : AppTheme.mutedText)
                     Text(activity.name)
-                        .font(.caption.weight(.semibold))
+                        .font(AppTheme.Font.caption.weight(.semibold))
                     if activity.count > 1 {
                         Text("×\(activity.count)")
-                            .font(.caption2.weight(.bold))
+                            .font(AppTheme.Font.caption2.weight(.bold))
                             .foregroundStyle(AppTheme.mutedText)
                     }
                     Spacer()
@@ -1988,7 +1988,7 @@ struct PiAgentActivityDetailView: View {
                 }
                 if activity.entries.count > 3 {
                     Text("\(activity.entries.count - 3) older updates hidden")
-                        .font(.caption2)
+                        .font(AppTheme.Font.caption2)
                         .foregroundStyle(AppTheme.mutedText)
                 }
             }
@@ -2022,7 +2022,7 @@ struct PiAgentStatusTranscriptRow: View {
             compactionDivider
         } else {
             compactStatusRow
-                .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous))
                 .onTapGesture {
                     guard showsErrorPopover else { return }
                     isErrorPopoverPresented = true
@@ -2277,11 +2277,11 @@ struct PiAgentForkOriginCard: View {
                     .truncationMode(.middle)
                     if let snapshot = transcriptSnapshot, !snapshot.isEmpty {
                         Text("~\(formatPromptTokens(estimatedPromptTokens(snapshot))) of parent transcript captured")
-                            .font(.caption)
+                            .font(AppTheme.Font.caption)
                             .foregroundStyle(AppTheme.mutedText)
                     } else {
                         Text("Parent transcript not captured")
-                            .font(.caption)
+                            .font(AppTheme.Font.caption)
                             .foregroundStyle(AppTheme.mutedText)
                     }
                 }
@@ -2334,11 +2334,11 @@ struct PiAgentSystemPromptAuditCard: View {
                             Text("·")
                         }
                         Image(systemName: "tugriksign.circle")
-                            .font(.caption2.weight(.semibold))
+                            .font(AppTheme.Font.caption2.weight(.semibold))
                         Text("~\(formatPromptTokens(estimatedPromptTokens(prompt)))")
-                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .font(AppTheme.Font.caption.monospacedDigit().weight(.semibold))
                     }
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                 }
 
@@ -2413,14 +2413,14 @@ struct PiAgentPromptAuditPopover: View {
 
             ScrollView(showsIndicators: false) {
                 Text(text.isEmpty ? "No prompt content captured." : text)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(AppTheme.Font.code)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
             }
             .frame(width: 720, height: 520)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(AppTheme.contentSubtleFill))
-            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(AppTheme.contentStroke, lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: AppTheme.Chat.codeCornerRadius, style: .continuous).fill(AppTheme.contentSubtleFill))
+            .overlay(RoundedRectangle(cornerRadius: AppTheme.Chat.codeCornerRadius, style: .continuous).stroke(AppTheme.contentStroke, lineWidth: 1))
         }
         .padding(14)
     }
@@ -2446,7 +2446,7 @@ struct PiAgentErrorDetailPopover: View {
             }
 
             Text(text)
-                .font(.callout)
+                .font(AppTheme.Font.callout)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(width: 360, alignment: .leading)
@@ -2522,7 +2522,7 @@ struct PiAgentUserMessageContent: View {
                     }
                     if hiddenCount > 0 {
                         Text("+\(hiddenCount)")
-                            .font(.caption2.weight(.bold))
+                            .font(AppTheme.Font.caption2.weight(.bold))
                             .foregroundStyle(AppTheme.mutedText)
                             .padding(8)
                             .appGlassCapsule()
@@ -2926,7 +2926,7 @@ struct PiAgentUserMessageContent: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            .font(.caption2)
+            .font(AppTheme.Font.caption2)
         }
         .appSmallSecondaryButton()
         .help("Preview \(name)")
@@ -3073,13 +3073,13 @@ private struct AttachmentPreviewPopover: View {
                 Text(use.skill?.body.isEmpty == false
                     ? use.skill!.body
                     : (use.skill?.filePath ?? "Skill details are not available in \(AppBrand.displayName)'s current scan snapshot."))
-                    .font(.caption.monospaced())
+                    .font(AppTheme.Font.code)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
             }
             .frame(maxHeight: .infinity)
-            .background(RoundedRectangle(cornerRadius: 8).fill(AppTheme.contentSubtleFill))
+            .background(RoundedRectangle(cornerRadius: AppTheme.Chat.codeCornerRadius).fill(AppTheme.contentSubtleFill))
         }
     }
 
@@ -3089,24 +3089,24 @@ private struct AttachmentPreviewPopover: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             Text("/\(use.name)")
-                .font(.caption.monospaced())
+                .font(AppTheme.Font.code)
                 .textSelection(.enabled)
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 8).fill(AppTheme.contentSubtleFill))
+                .background(RoundedRectangle(cornerRadius: AppTheme.Chat.codeCornerRadius).fill(AppTheme.contentSubtleFill))
         }
     }
 
     private func pastePreviewBody(paste: PiAgentPasteAttachment) -> some View {
         ScrollView(showsIndicators: false) {
             Text(paste.text)
-                .font(.caption.monospaced())
+                .font(AppTheme.Font.code)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(8)
         }
         .frame(maxHeight: .infinity)
-        .background(RoundedRectangle(cornerRadius: 8).fill(AppTheme.contentSubtleFill))
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.codeCornerRadius).fill(AppTheme.contentSubtleFill))
     }
 
     private func issuePreviewBody(issue: PiAgentIssueAttachment) -> some View {
@@ -3120,37 +3120,37 @@ private struct AttachmentPreviewPopover: View {
         return ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 8) {
                 Text(issue.repository)
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
                 Text("#\(issue.number) \(issue.title)")
-                    .font(.body.weight(.semibold))
+                    .font(AppTheme.Font.body.weight(.semibold))
                 if let author = issue.author, !author.isEmpty {
                     Text("Author: \(author)")
-                        .font(.caption)
+                        .font(AppTheme.Font.caption)
                         .foregroundStyle(AppTheme.mutedText)
                 }
                 Text("State: \(issue.state)")
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                 if !issue.labels.isEmpty {
                     Text("Labels: \(issue.labels.joined(separator: ", "))")
-                        .font(.caption)
+                        .font(AppTheme.Font.caption)
                         .foregroundStyle(AppTheme.mutedText)
                 }
                 Text("Comments: \(issue.comments.count)")
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                 if !issue.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Divider()
                     Text(issue.body)
-                        .font(.caption)
+                        .font(AppTheme.Font.caption)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if !issue.comments.isEmpty {
                     Divider()
                     Text(commentsText)
-                        .font(.caption)
+                        .font(AppTheme.Font.caption)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -3159,7 +3159,7 @@ private struct AttachmentPreviewPopover: View {
             .padding(8)
         }
         .frame(maxHeight: .infinity)
-        .background(RoundedRectangle(cornerRadius: 8).fill(AppTheme.contentSubtleFill))
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.codeCornerRadius).fill(AppTheme.contentSubtleFill))
     }
 
     @ViewBuilder private func filePreviewBody(path: String) -> some View {
@@ -3169,13 +3169,13 @@ private struct AttachmentPreviewPopover: View {
         } else if let text = filePreviewText {
             ScrollView(showsIndicators: false) {
                 Text(String(text.prefix(12_000)))
-                    .font(.caption.monospaced())
+                    .font(AppTheme.Font.code)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
             }
             .frame(maxHeight: .infinity)
-            .background(RoundedRectangle(cornerRadius: 8).fill(AppTheme.contentSubtleFill))
+            .background(RoundedRectangle(cornerRadius: AppTheme.Chat.codeCornerRadius).fill(AppTheme.contentSubtleFill))
         } else {
             VStack(spacing: 8) {
                 Image(systemName: "doc")
@@ -3183,7 +3183,7 @@ private struct AttachmentPreviewPopover: View {
                     .foregroundStyle(AppTheme.mutedText)
                 Text("Preview is not available for this file type.")
                 Text(path)
-                    .font(.caption.monospaced())
+                    .font(AppTheme.Font.code)
                     .foregroundStyle(AppTheme.mutedText)
                     .lineLimit(3)
                     .truncationMode(.middle)
@@ -3196,7 +3196,7 @@ private struct AttachmentPreviewPopover: View {
     @ViewBuilder private func folderPreviewBody(folder: FolderAttachmentPreview) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(folder.path)
-                .font(.caption.monospaced())
+                .font(AppTheme.Font.code)
                 .foregroundStyle(AppTheme.mutedText)
                 .lineLimit(3)
                 .truncationMode(.middle)

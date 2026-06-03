@@ -176,7 +176,7 @@ struct PiAgentComposerBox: View {
 
             if let attachmentError {
                 Label(attachmentError, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(.orange)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 8)
@@ -216,12 +216,12 @@ struct PiAgentComposerBox: View {
                         } label: {
                             HStack(spacing: 3) {
                                 Image("branch")
-                                    .font(.caption2.weight(.semibold))
+                                    .font(AppTheme.Font.caption2.weight(.semibold))
                                 Text(piAgentSessionDisplayBranchName(branch))
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                             }
-                            .font(.caption)
+                            .font(AppTheme.Font.caption)
                             .foregroundStyle(AppTheme.mutedText)
                         }
                         .buttonStyle(.plain)
@@ -354,7 +354,7 @@ struct PiAgentComposerBox: View {
 
             Button(action: attachImagesFromOpenPanel) {
                 Image(systemName: "paperclip")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
                     .frame(width: 24, height: 24)
                     .appGlassCircle()
@@ -758,7 +758,7 @@ struct PiAgentSubagentPopover: View {
                     .labelsHidden()
             }
             Text(isEnabled ? "Parent Pi can delegate to Deck agents when useful." : "Deck agent tools are not exposed to this session.")
-                .font(.caption)
+                .font(AppTheme.Font.caption)
                 .foregroundStyle(AppTheme.mutedText)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -816,7 +816,7 @@ struct PiAgentIssueAttachmentChip: View {
             }
             .buttonStyle(.plain)
         }
-        .font(.caption.weight(.medium))
+        .font(AppTheme.Font.caption.weight(.medium))
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .appGlassCapsule()
@@ -853,13 +853,13 @@ private struct PiAgentIssuePickerPopover: View {
 
             if let errorText {
                 Text(errorText)
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(.orange)
             }
 
             if items.isEmpty {
                 Text(emptyStateText)
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .frame(width: 400, alignment: .leading)
             } else {
@@ -943,7 +943,7 @@ private struct PiAgentPathAttachmentChip: View {
             }
             .buttonStyle(.plain)
         }
-        .font(.caption.weight(.medium))
+        .font(AppTheme.Font.caption.weight(.medium))
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .appGlassCapsule()
@@ -1287,7 +1287,7 @@ private struct PiAgentComposerProjectPickerPopover: View {
                 Text("New Session")
                     .font(.headline)
                 Text("Choose a project for Pi Agent.")
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
             }
             .padding(.horizontal, 12)
@@ -1309,7 +1309,7 @@ private struct PiAgentComposerProjectPickerPopover: View {
                                         .foregroundStyle(.primary)
                                         .lineLimit(1)
                                     Text(project.path)
-                                        .font(.caption2)
+                                        .font(AppTheme.Font.caption2)
                                         .foregroundStyle(AppTheme.mutedText)
                                         .lineLimit(1)
                                         .truncationMode(.middle)
@@ -1430,10 +1430,10 @@ struct PiAgentContextUsageMeter: View {
                 AppSpinner()
                     .controlSize(.small)
                 Text("Compacting context")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                 if let tokens = session.contextTokens {
                     Text("\(compact(tokens)) tokens")
-                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .font(AppTheme.Font.caption.monospacedDigit().weight(.semibold))
                         .foregroundStyle(AppTheme.mutedText)
                 }
             }
@@ -1448,7 +1448,7 @@ struct PiAgentContextUsageMeter: View {
                 HStack(spacing: 6) {
                     HStack(spacing: 7) {
                         Text("Context")
-                            .font(.caption.weight(.semibold))
+                            .font(AppTheme.Font.caption.weight(.semibold))
                             .lineLimit(1)
                             .fixedSize()
                         PiAgentSmartZoneContextBar(
@@ -1458,14 +1458,14 @@ struct PiAgentContextUsageMeter: View {
                             height: 10
                         )
                         Text("\(Int(percent))%")
-                            .font(.caption.monospacedDigit().weight(.bold))
+                            .font(AppTheme.Font.caption.monospacedDigit().weight(.bold))
                             .lineLimit(1)
                         Text("\(compact(tokens))/\(compact(window))")
-                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .font(AppTheme.Font.caption.monospacedDigit().weight(.semibold))
                             .foregroundStyle(AppTheme.mutedText)
                             .lineLimit(1)
                         Image(systemName: "info.circle")
-                            .font(.caption2.weight(.semibold))
+                            .font(AppTheme.Font.caption2.weight(.semibold))
                             .foregroundStyle(AppTheme.mutedText)
                             .accessibilityLabel("Show context usage details")
                     }
@@ -1492,7 +1492,7 @@ struct PiAgentContextUsageMeter: View {
                         isConfirmingCompaction = true
                     } label: {
                         Image(systemName: "arrow.down.right.and.arrow.up.left")
-                            .font(.caption.weight(.semibold))
+                            .font(AppTheme.Font.caption.weight(.semibold))
                             .foregroundStyle(AppTheme.mutedText)
                             .frame(width: 24, height: 24)
                             .appGlassCircle()
@@ -1629,14 +1629,14 @@ struct PiAgentContextBreakdownPopover: View {
                 if let tokens = session.contextTokens, let window = session.contextWindow {
                     HStack(spacing: 4) {
                         Image(systemName: "tugriksign.circle")
-                            .font(.caption.weight(.semibold))
+                            .font(AppTheme.Font.caption.weight(.semibold))
                         Text("\(format(tokens)) of \(format(window)) tokens · \(formatPercent(usedPercent))")
-                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .font(AppTheme.Font.caption.monospacedDigit().weight(.semibold))
                     }
                     .foregroundStyle(AppTheme.mutedText)
                 } else {
                     Text("Exact usage will appear after Pi reports session stats.")
-                        .font(.caption)
+                        .font(AppTheme.Font.caption)
                         .foregroundStyle(AppTheme.mutedText)
                 }
             }
@@ -1646,7 +1646,7 @@ struct PiAgentContextBreakdownPopover: View {
             VStack(alignment: .leading, spacing: 8) {
                 if session.contextBreakdown.isEmpty == false {
                     Text("Exact from Pi RPC")
-                        .font(.caption.weight(.bold))
+                        .font(AppTheme.Font.caption.weight(.bold))
                         .foregroundStyle(AppTheme.mutedText)
                     ForEach(session.contextBreakdown) { item in
                         PiAgentContextBreakdownRow(
@@ -1659,7 +1659,7 @@ struct PiAgentContextBreakdownPopover: View {
                     }
                 } else {
                     Text("Estimated")
-                        .font(.caption.weight(.bold))
+                        .font(AppTheme.Font.caption.weight(.bold))
                         .foregroundStyle(AppTheme.mutedText)
                     if estimate.rows.isEmpty {
                         PiAgentContextBreakdownRow(
@@ -1681,7 +1681,7 @@ struct PiAgentContextBreakdownPopover: View {
                         }
                     }
                     Text(estimate.note)
-                        .font(.caption.italic())
+                        .font(AppTheme.Font.caption.italic())
                         .foregroundStyle(AppTheme.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1692,13 +1692,13 @@ struct PiAgentContextBreakdownPopover: View {
                 VStack(alignment: .leading, spacing: 7) {
                     HStack(spacing: 6) {
                         Text("Prompt composition")
-                            .font(.caption.weight(.bold))
+                            .font(AppTheme.Font.caption.weight(.bold))
                         Spacer()
                         tokenLabel(promptComposition.totalTokens, prefix: "~")
                             .foregroundStyle(AppTheme.mutedText)
                     }
                     Text("Estimated from the captured Pi runtime system prompt.")
-                        .font(.caption2.italic())
+                        .font(AppTheme.Font.caption2.italic())
                         .foregroundStyle(AppTheme.mutedText)
                     ForEach(promptComposition.rows) { row in
                         PiAgentPromptCompositionRowView(
@@ -1766,9 +1766,9 @@ struct PiAgentContextBreakdownPopover: View {
     private func tokenLabel(_ value: Int, prefix: String = "") -> some View {
         HStack(spacing: 3) {
             Image(systemName: "tugriksign.circle")
-                .font(.caption2.weight(.semibold))
+                .font(AppTheme.Font.caption2.weight(.semibold))
             Text("\(prefix)\(format(value))")
-                .font(.caption.monospacedDigit().weight(.semibold))
+                .font(AppTheme.Font.caption.monospacedDigit().weight(.semibold))
         }
     }
 }
@@ -1788,7 +1788,7 @@ private struct PiAgentContextBreakdownRow: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 8) {
                 Text(title)
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 summaryView
@@ -1807,7 +1807,7 @@ private struct PiAgentContextBreakdownRow: View {
             .frame(height: 6)
             if let detail, detail.isEmpty == false {
                 Text(detail)
-                    .font(.caption2)
+                    .font(AppTheme.Font.caption2)
                     .foregroundStyle(AppTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1821,25 +1821,25 @@ private struct PiAgentContextBreakdownRow: View {
             HStack(spacing: 4) {
                 tokenValue(tokens)
                 Text("· \(formatPercent(percent))")
-                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .font(AppTheme.Font.caption.monospacedDigit().weight(.semibold))
             }
         case let (tokens?, nil):
             tokenValue(tokens)
         case let (nil, percent?):
             Text(formatPercent(percent))
-                .font(.caption.monospacedDigit().weight(.semibold))
+                .font(AppTheme.Font.caption.monospacedDigit().weight(.semibold))
         default:
             Text("Unavailable")
-                .font(.caption.monospacedDigit().weight(.semibold))
+                .font(AppTheme.Font.caption.monospacedDigit().weight(.semibold))
         }
     }
 
     private func tokenValue(_ value: Int) -> some View {
         HStack(spacing: 3) {
             Image(systemName: "tugriksign.circle")
-                .font(.caption2.weight(.semibold))
+                .font(AppTheme.Font.caption2.weight(.semibold))
             Text(format(value))
-                .font(.caption.monospacedDigit().weight(.semibold))
+                .font(AppTheme.Font.caption.monospacedDigit().weight(.semibold))
         }
     }
 
@@ -1972,18 +1972,18 @@ private struct PiAgentPromptCompositionRowView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Text(title)
-                    .font(.caption2.weight(.semibold))
+                    .font(AppTheme.Font.caption2.weight(.semibold))
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 HStack(spacing: 4) {
                     HStack(spacing: 3) {
                         Image(systemName: "tugriksign.circle")
-                            .font(.caption2.weight(.semibold))
+                            .font(AppTheme.Font.caption2.weight(.semibold))
                         Text(format(tokens))
-                            .font(.caption2.monospacedDigit().weight(.semibold))
+                            .font(AppTheme.Font.caption2.monospacedDigit().weight(.semibold))
                     }
                     Text("· \(formatPercent(percent))")
-                        .font(.caption2.monospacedDigit().weight(.semibold))
+                        .font(AppTheme.Font.caption2.monospacedDigit().weight(.semibold))
                 }
                 .foregroundStyle(AppTheme.mutedText)
             }
@@ -2019,13 +2019,13 @@ private struct PiAgentContextStat: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
-                .font(.caption2.weight(.semibold))
+                .font(AppTheme.Font.caption2.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
             HStack(spacing: 3) {
                 Image(systemName: icon)
-                    .font(.caption2.weight(.semibold))
+                    .font(AppTheme.Font.caption2.weight(.semibold))
                 Text(value)
-                    .font(.caption.monospacedDigit().weight(.bold))
+                    .font(AppTheme.Font.caption.monospacedDigit().weight(.bold))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2094,11 +2094,11 @@ struct PiAgentShortcutChip: View {
         HStack(spacing: 4) {
             Image(systemName: symbol)
             Text(key)
-                .font(.caption2.monospaced().weight(.bold))
+                .font(AppTheme.Font.caption2.monospaced().weight(.bold))
             Text(label)
                 .fontWidth(.condensed)
         }
-        .font(.caption2.weight(.semibold))
+        .font(AppTheme.Font.caption2.weight(.semibold))
         .foregroundStyle(AppTheme.mutedText)
         .padding(.horizontal, 7)
         .padding(.vertical, 5)
@@ -2166,7 +2166,7 @@ struct PiAgentRuntimeFooter: View {
                 )
             }
         }
-        .font(.caption)
+        .font(AppTheme.Font.caption)
         .foregroundStyle(AppTheme.mutedText)
         .frame(maxWidth: .infinity, alignment: .leading)
         .animation(.snappy(duration: 0.18), value: memoryEnabled)
@@ -2177,7 +2177,7 @@ struct PiAgentRuntimeFooter: View {
     private func metric(_ text: String, icon: String) -> some View {
         HStack(spacing: 3) {
             Image(systemName: icon)
-                .font(.caption2.weight(.semibold))
+                .font(AppTheme.Font.caption2.weight(.semibold))
                 .contentTransition(.opacity)
             Text(text)
                 .contentTransition(.opacity)
@@ -2223,10 +2223,10 @@ struct PiAgentModelPicker: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Image(systemName: "chevron.down")
-                    .font(.caption2.weight(.bold))
+                    .font(AppTheme.Font.caption2.weight(.bold))
                     .foregroundStyle(AppTheme.mutedText)
             }
-            .font(.caption.weight(.semibold))
+            .font(AppTheme.Font.caption.weight(.semibold))
             .foregroundStyle(.primary)
             .padding(.horizontal, 9)
             .padding(.vertical, 5)
@@ -2239,7 +2239,7 @@ struct PiAgentModelPicker: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Label("Model", systemImage: "cpu")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTheme.Font.caption.weight(.semibold))
                         .foregroundStyle(AppTheme.mutedText)
                     Spacer()
                     Button {
@@ -2258,7 +2258,7 @@ struct PiAgentModelPicker: View {
                             VStack(alignment: .leading, spacing: 5) {
                                 HStack(spacing: 6) {
                                     ProviderLabel(provider: group.provider, logoSize: 14, spacing: 5)
-                                        .font(.caption.weight(.bold))
+                                        .font(AppTheme.Font.caption.weight(.bold))
                                         .fontWidth(.expanded)
                                         .foregroundStyle(.primary)
                                     Spacer(minLength: 0)
@@ -2300,11 +2300,11 @@ struct PiAgentModelPicker: View {
                 .frame(width: 16)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(subtitle)
-                    .font(.caption2)
+                    .font(AppTheme.Font.caption2)
                     .foregroundStyle(AppTheme.mutedText)
                     .lineLimit(1)
             }
@@ -2405,10 +2405,10 @@ struct PiAgentThinkingPicker: View {
                     .lineLimit(1)
                     .truncationMode(.head)
                 Image(systemName: "chevron.down")
-                    .font(.caption2.weight(.bold))
+                    .font(AppTheme.Font.caption2.weight(.bold))
                     .foregroundStyle(AppTheme.mutedText)
             }
-            .font(.caption.weight(.semibold))
+            .font(AppTheme.Font.caption.weight(.semibold))
             .foregroundStyle(.primary)
             .padding(.horizontal, 9)
             .padding(.vertical, 5)
@@ -2419,7 +2419,7 @@ struct PiAgentThinkingPicker: View {
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Thinking", systemImage: "brain.head.profile")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
 
                 if isLoadingLevels {
@@ -2427,7 +2427,7 @@ struct PiAgentThinkingPicker: View {
                         AppSpinner()
                             .controlSize(.small)
                         Text("Loading")
-                            .font(.caption.weight(.semibold))
+                            .font(AppTheme.Font.caption.weight(.semibold))
                             .foregroundStyle(AppTheme.mutedText)
                         Spacer(minLength: 0)
                     }
@@ -2466,12 +2466,12 @@ struct PiAgentThinkingPicker: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(AppTheme.Font.body.weight(.semibold))
                     .foregroundStyle(isSelected ? AppTheme.brandAccent : AppTheme.mutedText)
                     .frame(width: 18, height: 18)
 
                 Text(candidate.capitalized)
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                     .foregroundStyle(.primary)
 
                 Spacer(minLength: 0)

@@ -119,7 +119,7 @@ struct NativeBubblePayload {
     var bodyPrefix: String?
     var copyText: String
     var copySide: CopySide
-    /// Thread-child rows use tighter padding (12/9) than standalone cards (14/11).
+    /// Thread-child rows use tighter padding than standalone cards.
     var isThreadChild: Bool
     /// User question bubbles hug their content width and sit at the trailing edge.
     var isUserHugged: Bool = false
@@ -170,7 +170,7 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
 
         cardView.translatesAutoresizingMaskIntoConstraints = false
         cardView.wantsLayer = true
-        cardView.layer?.cornerRadius = 16
+        cardView.layer?.cornerRadius = AppTheme.Chat.bubbleCornerRadius
         cardView.layer?.cornerCurve = .continuous
         cardView.layer?.borderWidth = 1
         cardView.layer?.actions = [
@@ -192,7 +192,7 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
         headerLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         prefixLabel.translatesAutoresizingMaskIntoConstraints = false
-        prefixLabel.font = NSFont.preferredFont(forTextStyle: .caption1).bold()
+        prefixLabel.font = NSFont.systemFont(ofSize: AppTheme.Font.captionSize).bold()
         prefixLabel.textColor = .secondaryLabelColor
         prefixLabel.isHidden = true
 
@@ -221,9 +221,9 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
 
     // MARK: Fonts
 
-    /// `.footnote` semibold, expanded width — matches the SwiftUI header.
+    /// Footnote-sized semibold, expanded width — matches the SwiftUI header.
     static let headerFont: NSFont = {
-        let base = NSFont.preferredFont(forTextStyle: .footnote)
+        let base = NSFont.systemFont(ofSize: AppTheme.Font.footnoteSize)
         let semibold = NSFontManager.shared.convert(base, toHaveTrait: .boldFontMask)
         let merged = semibold.fontDescriptor.addingAttributes([
             .traits: [NSFontDescriptor.TraitKey.width: 0.2]
@@ -233,8 +233,8 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
 
     // MARK: Layout
 
-    private var hPad: CGFloat { (payload?.isThreadChild ?? false) ? 12 : 14 }
-    private var vPad: CGFloat { (payload?.isThreadChild ?? false) ? 9 : 11 }
+    private var hPad: CGFloat { (payload?.isThreadChild ?? false) ? AppTheme.Chat.bubbleChildHPadding : AppTheme.Chat.bubbleHPadding }
+    private var vPad: CGFloat { (payload?.isThreadChild ?? false) ? AppTheme.Chat.bubbleChildVPadding : AppTheme.Chat.bubbleVPadding }
 
     // cardView placement / size — a fixed width plus a SINGLE, never-toggled
     // leading constraint. Its constant is set once in configure() from the known

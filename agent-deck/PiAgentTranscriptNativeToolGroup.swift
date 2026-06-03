@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 // Native (pure AppKit) tool-group row. Mirrors `PiAgentTranscriptThreadCard`'s
 // `toolGroupView`: a reply-column container (no outer card chrome, hover copy in
@@ -188,7 +189,11 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
     private var expandedWebRows: Set<UUID> = []
 
     private static let inlineLinkLimit = 5
-    private static let subtleFill = AppTheme.ns(AppTheme.contentSubtleFill).withAlphaComponent(0.65)
+    // Mirror SwiftUI exactly: `contentSubtleFill.opacity(0.65)` — and
+    // contentSubtleFill already carries .opacity(0.62), so the resolved fill is
+    // controlColor at ~0.40 alpha. Apply .opacity on the Color (not
+    // withAlphaComponent, which would REPLACE the alpha and over-darken it).
+    private static let subtleFill = AppTheme.ns(AppTheme.contentSubtleFill.opacity(0.65))
     private static let subtleStroke = AppTheme.ns(AppTheme.contentStroke)
     private static let muted = AppTheme.ns(AppTheme.mutedText)
 
@@ -460,7 +465,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
     }
 
     private func buildDiffRow(_ row: PiAgentThreadDiffSummaryView.Row) -> NSView {
-        let inner = makeSubCard(cornerRadius: 10, fill: AppTheme.ns(AppTheme.textContentFill).withAlphaComponent(0.75), stroke: .clear)
+        let inner = makeSubCard(cornerRadius: 10, fill: AppTheme.ns(AppTheme.textContentFill.opacity(0.75)), stroke: .clear)
         let stack = NSStackView()
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
