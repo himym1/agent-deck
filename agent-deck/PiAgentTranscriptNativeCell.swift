@@ -28,6 +28,74 @@ struct ForkAgentOption {
     let action: () -> Void
 }
 
+// MARK: - Generalized native-row seam
+
+/// A pure-AppKit transcript row view. Self-measures (the owning cell adds the
+/// row insets) and releases per-content resources before reuse. Every native
+/// block type conforms to this so the cell can drive them all through one path.
+protocol PiAgentNativeRowContent: NSView {
+    init()
+    /// Content height for a given full row width (EXCLUDES the cell's row insets).
+    func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat
+    /// Called when the cell is about to reuse the view for different content.
+    func prepareForReuseIfNeeded()
+    /// Apply pending layout immediately (recycled cells may draw before the async
+    /// layout pass). Default forces a synchronous subtree layout.
+    func settleLayoutImmediately()
+}
+
+extension PiAgentNativeRowContent {
+    func prepareForReuseIfNeeded() {}
+    func settleLayoutImmediately() { layoutSubtreeIfNeeded() }
+}
+
+/// A type-erased native transcript row. Built once in the items pass; the cell
+/// creates/reuses the concrete view, configures it for the row width, and reads
+/// its measured height. Using a spec (instead of one enum case + cell branch per
+/// view type) keeps the cell's native path uniform as more row types go native.
+final class NativeRowSpec {
+    /// Identifies the concrete view class so a recycled cell can reuse a view of
+    /// the same type and only swap content rather than rebuild it.
+    let typeID: ObjectIdentifier
+    let make: () -> NSView
+    let configure: (NSView, CGFloat) -> Void
+    let measure: (NSView, CGFloat) -> CGFloat
+    let reset: (NSView) -> Void
+    let settle: (NSView) -> Void
+
+    private init(
+        typeID: ObjectIdentifier,
+        make: @escaping () -> NSView,
+        configure: @escaping (NSView, CGFloat) -> Void,
+        measure: @escaping (NSView, CGFloat) -> CGFloat,
+        reset: @escaping (NSView) -> Void,
+        settle: @escaping (NSView) -> Void
+    ) {
+        self.typeID = typeID
+        self.make = make
+        self.configure = configure
+        self.measure = measure
+        self.reset = reset
+        self.settle = settle
+    }
+
+    /// Build a spec for a concrete native row view type `V`. `configure` receives
+    /// the typed view and the row width; height comes from `measuredHeight`.
+    static func of<V: PiAgentNativeRowContent>(
+        _ type: V.Type,
+        configure: @escaping (V, CGFloat) -> Void
+    ) -> NativeRowSpec {
+        NativeRowSpec(
+            typeID: ObjectIdentifier(V.self),
+            make: { V() },
+            configure: { view, width in configure(view as! V, width) },
+            measure: { view, width in (view as! V).measuredHeight(forWidth: width) },
+            reset: { view in (view as! V).prepareForReuseIfNeeded() },
+            settle: { view in (view as! V).settleLayoutImmediately() }
+        )
+    }
+}
+
 /// Typed payload for a native message bubble. Built once in the items pass; the
 /// cell configures a `PiAgentNativeBubbleView` from it.
 struct NativeBubblePayload {
@@ -54,7 +122,7 @@ struct NativeBubblePayload {
 /// A full-width transcript row: a sized, role-tinted card plus hover-revealed
 /// glass copy/fork buttons in the gutter. Self-measures via
 /// `measuredHeight(forWidth:)`; the owning cell adds the row insets.
-final class PiAgentNativeBubbleView: NSView {
+final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
     /// The bubble proper — rounded chrome drawn by its own layer; holds the
     /// header + markdown. Sized to `replyCap` / hugged width and aligned left
     /// (replies) or right (questions). The buttons live OUTSIDE it.
@@ -133,6 +201,8 @@ final class PiAgentNativeBubbleView: NSView {
         setupButtons()
         buildConstraints()
     }
+
+    convenience init() { self.init(frame: .zero) }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 

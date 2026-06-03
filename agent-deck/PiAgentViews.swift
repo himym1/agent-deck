@@ -336,8 +336,18 @@ private struct PiAgentTranscriptTimelineSnapshot {
 enum PiAgentTranscriptCellKind {
     /// Legacy: render this SwiftUI view inside the cell's `NSHostingView`.
     case hosted(AnyView)
-    /// Native: a message bubble drawn fully in AppKit (no SwiftUI).
-    case bubble(NativeBubblePayload)
+    /// Native: a row drawn fully in AppKit (no SwiftUI). The spec knows how to
+    /// build/configure/measure the concrete view.
+    case native(NativeRowSpec)
+}
+
+extension PiAgentTranscriptCellKind {
+    /// Convenience for a native message bubble.
+    static func bubble(_ payload: NativeBubblePayload) -> PiAgentTranscriptCellKind {
+        .native(.of(PiAgentNativeBubbleView.self) { view, width in
+            view.configure(payload: payload, width: width)
+        })
+    }
 }
 
 private struct PiAgentAppKitTranscriptItem {
@@ -362,7 +372,7 @@ private struct PiAgentAppKitTranscriptItem {
     var hostedView: AnyView? {
         switch kind {
         case .hosted(let view): return view
-        case .bubble: return nil
+        case .native: return nil
         }
     }
 
@@ -1602,7 +1612,12 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         fileprivate var hostingView: NSHostingView<AnyView>?
         // Native render path (no SwiftUI). Mutually exclusive with `hostingView`
         // for a given configuration; switching modes tears down the other.
-        fileprivate var nativeBubble: PiAgentNativeBubbleView?
+        // `nativeRow` is the concrete view; `nativeRowTypeID`/`nativeRowSpec`
+        // track which kind it is so a recycled cell reuses a same-typed view and
+        // can read the row height through the spec's measure closure.
+        fileprivate var nativeRow: NSView?
+        private var nativeRowTypeID: ObjectIdentifier?
+        private var nativeRowSpec: NativeRowSpec?
         private var nativeTopC: NSLayoutConstraint?
         private var nativeBottomC: NSLayoutConstraint?
         private var configuredTopInset: CGFloat = 0
@@ -1662,20 +1677,13 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// cell visibly empty — the transparent-block bug).
         func installRootView(item: PiAgentAppKitTranscriptItem, width: CGFloat, profiler: TranscriptScrollProfiler? = nil) {
             self.profiler = profiler
-            if case .bubble(let payload) = item.kind {
-                installNativeBubble(payload: payload, item: item, width: width)
+            if case .native(let spec) = item.kind {
+                installNativeRow(spec: spec, item: item, width: width)
                 return
             }
             // Hosted (SwiftUI) path. Tear down any native body if the recycled
             // cell is switching modes.
-            if let bubble = nativeBubble {
-                bubble.prepareForReuseIfNeeded()
-                bubble.removeFromSuperview()
-                nativeBubble = nil
-                nativeTopC = nil
-                nativeBottomC = nil
-                lastIntrinsicHeight = -1
-            }
+            teardownNativeRow()
             let newRoot = TranscriptTableCellView.makeRoot(item: item, width: width)
             if let host = hostingView {
                 let revisionChanged = configuredItemID != item.id || configuredRevision != item.contentRevision
@@ -1702,35 +1710,55 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             configuredWidth = width
         }
 
-        /// Native render path: build/configure a `PiAgentNativeBubbleView` pinned
-        /// to the cell with the row insets, tearing down any hosted view first.
-        private func installNativeBubble(payload: NativeBubblePayload, item: PiAgentAppKitTranscriptItem, width: CGFloat) {
+        /// Tear down the native row view (when switching a recycled cell back to
+        /// the hosted path, or to a different native view type).
+        private func teardownNativeRow() {
+            guard let row = nativeRow else { return }
+            nativeRowSpec?.reset(row)
+            row.removeFromSuperview()
+            nativeRow = nil
+            nativeRowTypeID = nil
+            nativeRowSpec = nil
+            nativeTopC = nil
+            nativeBottomC = nil
+            lastIntrinsicHeight = -1
+        }
+
+        /// Native render path: build/configure the spec's view pinned to the cell
+        /// with the row insets, tearing down any hosted view (or a native view of
+        /// a different type) first.
+        private func installNativeRow(spec: NativeRowSpec, item: PiAgentAppKitTranscriptItem, width: CGFloat) {
             if let host = hostingView {
                 host.removeFromSuperview()
                 hostingView = nil
                 lastIntrinsicHeight = -1
             }
-            let bubble: PiAgentNativeBubbleView
-            if let existing = nativeBubble {
-                bubble = existing
+            // A recycled cell holding a different native view type must rebuild it.
+            if let existingType = nativeRowTypeID, existingType != spec.typeID {
+                teardownNativeRow()
+            }
+            let row: NSView
+            if let existing = nativeRow {
+                row = existing
             } else {
-                bubble = PiAgentNativeBubbleView()
-                bubble.translatesAutoresizingMaskIntoConstraints = false
-                addSubview(bubble)
-                // The bubble is a full-width row; it sizes/positions its own card
-                // (replyCap or hugged) and floats the buttons in the gutter.
-                let top = bubble.topAnchor.constraint(equalTo: topAnchor, constant: item.topInset)
-                let bottom = bubble.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -item.bottomInset)
+                row = spec.make()
+                row.translatesAutoresizingMaskIntoConstraints = false
+                addSubview(row)
+                // Full-width row; the view sizes/positions its own content.
+                let top = row.topAnchor.constraint(equalTo: topAnchor, constant: item.topInset)
+                let bottom = row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -item.bottomInset)
                 NSLayoutConstraint.activate([
-                    bubble.leadingAnchor.constraint(equalTo: leadingAnchor),
-                    bubble.trailingAnchor.constraint(equalTo: trailingAnchor),
+                    row.leadingAnchor.constraint(equalTo: leadingAnchor),
+                    row.trailingAnchor.constraint(equalTo: trailingAnchor),
                     top, bottom
                 ])
                 nativeTopC = top
                 nativeBottomC = bottom
-                nativeBubble = bubble
+                nativeRow = row
+                nativeRowTypeID = spec.typeID
                 lastIntrinsicHeight = -1
             }
+            nativeRowSpec = spec
             let insetChanged = configuredTopInset != item.topInset || configuredBottomInset != item.bottomInset
             if insetChanged {
                 nativeTopC?.constant = item.topInset
@@ -1740,11 +1768,11 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             let revisionChanged = configuredItemID != item.id || configuredRevision != item.contentRevision
             let widthChanged = abs(configuredWidth - width) > 0.5
             if revisionChanged || widthChanged {
-                bubble.configure(payload: payload, width: width)
+                spec.configure(row, width)
                 lastIntrinsicHeight = -1
             }
             if revisionChanged || widthChanged || insetChanged {
-                bubble.settleLayoutImmediately()
+                spec.settle(row)
             }
             configuredItemID = item.id
             configuredRevision = item.contentRevision
@@ -1764,8 +1792,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             } else {
                 super.layout()
             }
-            if let bubble = nativeBubble, let itemID = configuredItemID, configuredWidth > 1 {
-                let h = configuredTopInset + bubble.measuredHeight(forWidth: configuredWidth) + configuredBottomInset
+            if let row = nativeRow, let spec = nativeRowSpec, let itemID = configuredItemID, configuredWidth > 1 {
+                let h = configuredTopInset + spec.measure(row, configuredWidth) + configuredBottomInset
                 guard h > 0, h.isFinite, abs(h - lastIntrinsicHeight) > 0.5 else { return }
                 lastIntrinsicHeight = h
                 onMeasuredHeight?(itemID, h)
@@ -1790,9 +1818,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// Records `lastIntrinsicHeight` so the subsequent async `layout()` sees
         /// no change and doesn't redundantly re-report.
         func forcedIntrinsicHeight() -> CGFloat {
-            if let bubble = nativeBubble, configuredWidth > 1 {
-                bubble.layoutSubtreeIfNeeded()
-                let h = configuredTopInset + bubble.measuredHeight(forWidth: configuredWidth) + configuredBottomInset
+            if let row = nativeRow, let spec = nativeRowSpec, configuredWidth > 1 {
+                row.layoutSubtreeIfNeeded()
+                let h = configuredTopInset + spec.measure(row, configuredWidth) + configuredBottomInset
                 guard h > 0, h.isFinite else { return -1 }
                 lastIntrinsicHeight = h
                 return h
