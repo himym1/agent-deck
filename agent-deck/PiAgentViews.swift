@@ -2729,9 +2729,24 @@ struct PiAgentScreen: View {
                 isThreadChild: true
             ))
         case .status(let entry):
-            // Memory, subagent-run, and prompt-audit statuses stay hosted.
+            // Memory and prompt-audit statuses stay hosted.
             if entry.agentMemoryEvent != nil { return nil }
-            if let runID = entry.nativeSubagentRunID, subagentRuns[runID] != nil { return nil }
+            if let runID = entry.nativeSubagentRunID, let run = subagentRuns[runID] {
+                // Single-run subagent cards render natively (the scroll-hang fix);
+                // parallel-grid runs stay hosted for now.
+                if NativeSubagentCardPayload.isParallel(run) { return nil }
+                let payload = NativeSubagentCardPayload.make(
+                    run: run,
+                    imageStore: viewModel.agentImageStore,
+                    onStop: { [viewModel] in viewModel.stopNativeSubagent(runID: run.id, parentSessionID: run.parentSessionID) },
+                    onTranscript: { [self] in selectedSubagentTranscriptRunID = run.id },
+                    onReveal: { [self] in revealSubagentRun(run) },
+                    onGraph: { [self] in selectedSubagentGraphRunID = run.id }
+                )
+                return .native(.of(PiAgentNativeSubagentRunCardView.self) { view, width in
+                    view.configure(payload: payload, width: width)
+                })
+            }
             if entry.title == "System Prompt Captured" || entry.title == "Subagent Started" { return nil }
             if entry.isDividerStatus {
                 let payload = NativeDividerPayload.make(for: entry)
