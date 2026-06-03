@@ -90,11 +90,24 @@ enum NativeBubblePreviewDebug {
             .environment(\.transcriptContentWidth, rowWidth)
         ))
 
-        // (3) Native question bubble (must stay right-aligned).
+        // (3) Native question bubble — the exact list+paragraph content that
+        // showed the bottom-crop, so the clip detector can confirm numerically.
+        let listQuestion = """
+        Create these files:
+
+        1. `title.txt` — the app title (max 30 chars)
+        2. `subtitle.txt` — (max 30 chars) targeting a high-value secondary keyword from the focus list.
+        3. `keywords.txt` — exactly 100 characters of comma-separated, no-spaces keywords, optimized from the 30 focus keywords. Must be competitive but winnable. No single keywords over 15 chars if possible. Remove low-value or overly generic terms.
+        4. `description.txt` — the existing long description from EN.txt
+        5. `promotional_text.txt` — the existing promotional text
+        6. `release_notes.txt` — leave empty with a comment saying "Managed manually per release"
+
+        Return the exact contents of title, subtitle, and keywords files in your response so I can review them. Do NOT create files for other locales.
+        """
         let nativeQuestion = PiAgentNativeBubbleView()
         nativeQuestion.configure(payload: NativeBubblePayload(
             role: .user, headerTitle: "You", iconSymbol: "person.crop.circle",
-            markdownSource: "hello", bodyPrefix: nil, copyText: "hello",
+            markdownSource: listQuestion, bodyPrefix: nil, copyText: listQuestion,
             copySide: .leading, isThreadChild: false, isUserHugged: true,
             fork: ForkModel(onForkSession: {}, agentOptions: [])
         ), width: rowWidth)

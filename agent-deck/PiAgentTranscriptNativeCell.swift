@@ -215,6 +215,24 @@ final class PiAgentNativeBubbleView: NSView {
     override func layout() {
         super.layout()
         cardView.layer?.frame = cardView.bounds
+        // Numeric bottom-crop detector (debug-only; the re-measure is too costly
+        // for the production layout path). With TranscriptHoverDebug on, if the
+        // rendered markdown needs more height than it was allocated, log the
+        // exact deficit to /tmp so the automated harness can read it.
+        guard Self.hoverDebug else { return }
+        let allocated = markdownContainer.bounds.height
+        guard allocated > 1 else { return }
+        let needed = markdownContainer.renderedContentHeight
+        let deficit = needed - allocated
+        guard deficit > 0.5 else { return }
+        let line = "role=\(String(describing: payload?.role)) needed=\(Int(needed)) "
+            + "allocated=\(Int(allocated)) deficit=\(Int(deficit)) "
+            + "cardH=\(Int(cardView.bounds.height)) vPad=\(Int(vPad)) ⚠️CROP\n"
+        if let d = line.data(using: .utf8) {
+            let url = URL(fileURLWithPath: "/tmp/agentdeck-mdclip.txt")
+            if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(d); try? h.close() }
+            else { try? d.write(to: url) }
+        }
     }
 
     // MARK: Card sizing

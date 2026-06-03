@@ -577,6 +577,15 @@ final class NativeMarkdownTextContainer: NSView {
         }
     }
 
+    /// The true laid-out height of the rendered block stack at its current width
+    /// (re-measured, not cached) — used by callers to detect when the row was
+    /// sized shorter than the content actually needs (the bottom-crop bug).
+    var renderedContentHeight: CGFloat {
+        invalidateBlockIntrinsics(in: stackView)
+        stackView.layoutSubtreeIfNeeded()
+        return ceil(stackView.fittingSize.height)
+    }
+
     // Must be side-effect-free: AppKit calls this during the window's update-constraints
     // pass, and `measureHeight` mutates an active layout constraint, which re-enters the
     // constraint engine and loops the window's update-constraints pass until AppKit bails.
