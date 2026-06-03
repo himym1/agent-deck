@@ -474,9 +474,18 @@ final class NativeMarkdownTextContainer: NSView {
     }
 
     private static func updateTextView(_ textView: NSTextView, with kind: MarkdownBlock.Kind) {
-        let (font, color, parseInline) = textStyling(for: kind)
-        let body = bodyText(from: kind)
-        let attr = attributedString(body, font: font, color: color, parseInlineMarkdown: parseInline)
+        let attr: NSAttributedString
+        switch kind {
+        case let .bullet(text, indentLevel):
+            // List items carry their marker + hanging indent inside the same text
+            // view, so rebuild the full line (not just the body) on reuse/streaming.
+            attr = listAttributedString(marker: bulletMarker(for: indentLevel), text: text, indentLevel: indentLevel, markerWidth: 18)
+        case let .numbered(number, text, indentLevel):
+            attr = listAttributedString(marker: "\(number).", text: text, indentLevel: indentLevel, markerWidth: 22)
+        default:
+            let (font, color, parseInline) = textStyling(for: kind)
+            attr = attributedString(bodyText(from: kind), font: font, color: color, parseInlineMarkdown: parseInline)
+        }
         if let storage = textView.textStorage {
             storage.beginEditing()
             storage.setAttributedString(attr)
@@ -740,49 +749,52 @@ final class NativeMarkdownTextContainer: NSView {
         }
     }
 
+    // Gap between the marker column and the text column, in points.
+    private static let listMarkerTextGap: CGFloat = 8
+    // Each nesting level shifts the whole item right by this much.
+    private static let listIndentPerLevel: CGFloat = 22
+
     private static func listRow(marker: String, text: String, indentLevel: Int, markerWidth: CGFloat) -> NSView {
-        // Manual container (not NSStackView): NSStackView's .firstBaseline doesn't
-        // reliably read an auto-sizing NSTextView's baseline, so the marker floated
-        // above the first text line. An explicit firstBaselineAnchor constraint
-        // between the marker and the body's first line aligns them exactly,
-        // independent of the body's textContainerInset and the marker/body fonts.
-        let row = NSView()
-        row.translatesAutoresizingMaskIntoConstraints = false
+        // A list item is a SINGLE text view: `marker` + tab + body in one attributed
+        // string with a hanging-indent paragraph style. Because the marker and the
+        // text are one text run on one line, they share a baseline structurally —
+        // there is no separate marker view to misalign. Wrapped lines align under the
+        // text (headIndent), not under the marker. This is the standard TextKit list
+        // layout and removes the baseline/constraint guesswork entirely.
+        let tv = textView("", font: NSFont.preferredFont(forTextStyle: .body), color: .labelColor)
+        tv.textStorage?.setAttributedString(
+            listAttributedString(marker: marker, text: text, indentLevel: indentLevel, markerWidth: markerWidth)
+        )
+        return tv
+    }
 
+    /// Build `marker` + tab + body as one attributed string with a hanging indent so
+    /// the marker sits at `indentLevel * listIndentPerLevel` and the text (and any
+    /// wrapped lines) align at `+ markerWidth + gap`.
+    private static func listAttributedString(marker: String, text: String, indentLevel: Int, markerWidth: CGFloat) -> NSAttributedString {
         let bodyFont = NSFont.preferredFont(forTextStyle: .body)
-        let markerView = NSTextField(labelWithString: marker)
-        markerView.translatesAutoresizingMaskIntoConstraints = false
         // Numbered lists use monospaced digits in SwiftUI (`.body.monospacedDigit().weight(.semibold)`).
-        // Detect "1.", "2.", … so the marker font matches.
         let isNumberedMarker = marker.last == "." && marker.dropLast().allSatisfy(\.isNumber)
-        if isNumberedMarker {
-            markerView.font = NSFont.monospacedDigitSystemFont(ofSize: bodyFont.pointSize, weight: .semibold)
-        } else {
-            markerView.font = NSFontManager.shared.convert(bodyFont, toHaveTrait: .boldFontMask)
-        }
-        markerView.textColor = .secondaryLabelColor
-        markerView.alignment = .right
-        markerView.setContentHuggingPriority(.required, for: .horizontal)
-        markerView.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let markerFont = isNumberedMarker
+            ? NSFont.monospacedDigitSystemFont(ofSize: bodyFont.pointSize, weight: .semibold)
+            : NSFontManager.shared.convert(bodyFont, toHaveTrait: .boldFontMask)
 
-        let body = textView(text, font: bodyFont, color: .labelColor)
-        row.addSubview(markerView)
-        row.addSubview(body)
+        let result = NSMutableAttributedString(
+            string: marker,
+            attributes: [.font: markerFont, .foregroundColor: NSColor.secondaryLabelColor]
+        )
+        result.append(NSAttributedString(string: "\t", attributes: [.font: bodyFont]))
+        result.append(attributedString(text, font: bodyFont, color: .labelColor, parseInlineMarkdown: true))
 
-        let indent = CGFloat(max(indentLevel, 0)) * 22
-        NSLayoutConstraint.activate([
-            markerView.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: indent),
-            markerView.widthAnchor.constraint(greaterThanOrEqualToConstant: markerWidth),
-            markerView.topAnchor.constraint(greaterThanOrEqualTo: row.topAnchor),
-            // The key: marker's baseline sits on the body's first-line baseline.
-            markerView.firstBaselineAnchor.constraint(equalTo: body.firstBaselineAnchor),
-            body.leadingAnchor.constraint(equalTo: markerView.trailingAnchor, constant: 8),
-            body.trailingAnchor.constraint(equalTo: row.trailingAnchor),
-            body.topAnchor.constraint(equalTo: row.topAnchor),
-            body.bottomAnchor.constraint(equalTo: row.bottomAnchor),
-            body.widthAnchor.constraint(greaterThanOrEqualToConstant: 20)
-        ])
-        return row
+        let firstLineIndent = CGFloat(max(indentLevel, 0)) * listIndentPerLevel
+        let textColumn = firstLineIndent + markerWidth + listMarkerTextGap
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.firstLineHeadIndent = firstLineIndent          // marker starts here
+        paragraph.headIndent = textColumn                        // wrapped lines align with text
+        paragraph.tabStops = [NSTextTab(textAlignment: .left, location: textColumn, options: [:])]
+        paragraph.defaultTabInterval = textColumn
+        result.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: result.length))
+        return result
     }
 
     private static func quoteBlock(_ text: String) -> NSView {
