@@ -2348,7 +2348,7 @@ struct PiAgentSystemPromptAuditCard: View {
     }
 }
 
-private extension PiAgentTranscriptEntry {
+extension PiAgentTranscriptEntry {
     var nativeSubagentRunID: UUID? {
         guard let rawJSON,
               let data = rawJSON.data(using: .utf8),

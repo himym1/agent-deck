@@ -2533,9 +2533,11 @@ struct PiAgentScreen: View {
                     for child in PiAgentTranscriptThreadCard.visibleChildren(
                         of: thread, visibility: visibility, nativeSubagentRunsByID: subagentRuns
                     ) {
-                        // Native fast path for plain text replies (assistant /
-                        // thinking). All other children still render hosted.
-                        let nativeKind = Self.nativeReplyPayload(for: child).map { PiAgentTranscriptCellKind.bubble($0) }
+                        // Native rendering for the supported child types; the
+                        // rest (tool groups, subagent/memory cards) still hosted.
+                        let nativeKind = nativeChildKind(
+                            for: child, visibility: visibility, skills: skills,
+                            commandSlashNames: commandSlashNames, subagentRuns: subagentRuns)
                         descriptors.append(PiAgentTranscriptBlockDescriptor(
                             id: child.id,
                             view: nativeKind == nil ? AnyView(threadBlockCard(
@@ -2687,6 +2689,66 @@ struct PiAgentScreen: View {
         let charsPerLine = max(Int(cardWidth / 7), 20)
         let lines = max(1, (entry.text.count + charsPerLine - 1) / charsPerLine)
         return CGFloat(lines) * 18 + 56
+    }
+
+    /// Native render kind for a thread child, or nil to fall back to the hosted
+    /// SwiftUI path. Tool groups and subagent/memory status cards stay hosted
+    /// (later stages); everything else renders natively.
+    private func nativeChildKind(
+        for child: PiAgentThreadChild,
+        visibility: PiAgentTranscriptVisibilitySettings,
+        skills: [SkillRecord],
+        commandSlashNames: Set<String>,
+        subagentRuns: [UUID: PiSubagentRunRecord]
+    ) -> PiAgentTranscriptCellKind? {
+        switch child {
+        case .assistant, .thinking:
+            return Self.nativeReplyPayload(for: child).map { .bubble($0) }
+        case .steering(let entry):
+            // Chip-bearing steering messages keep the hosted chip layout.
+            let hasChips = PiAgentUserMessageContent.displayChipsNaturalWidth(
+                for: entry, skills: skills, commandSlashNames: commandSlashNames) > 0
+            if hasChips { return nil }
+            let text = PiAgentUserMessageContent.displayMessageText(
+                for: entry, skills: skills, commandSlashNames: commandSlashNames)
+            return .bubble(NativeBubblePayload(
+                role: .user,
+                headerTitle: "Steering",
+                iconSymbol: "arrowshape.turn.up.forward.circle",
+                markdownSource: text,
+                bodyPrefix: nil,
+                copyText: entry.text,
+                copySide: .trailing,
+                isThreadChild: true
+            ))
+        case .status(let entry):
+            // Memory, subagent-run, and prompt-audit statuses stay hosted.
+            if entry.agentMemoryEvent != nil { return nil }
+            if let runID = entry.nativeSubagentRunID, subagentRuns[runID] != nil { return nil }
+            if entry.title == "System Prompt Captured" || entry.title == "Subagent Started" { return nil }
+            if entry.isDividerStatus {
+                let payload = NativeDividerPayload.make(for: entry)
+                return .native(.of(PiAgentNativeStatusDividerView.self) { view, width in
+                    view.configure(payload: payload, width: width)
+                })
+            }
+            let payload = NativeStatusPayload.make(for: entry)
+            return .native(.of(PiAgentNativeStatusRowView.self) { view, width in
+                view.configure(payload: payload, width: width)
+            })
+        case .error(let entry):
+            let payload = NativeStatusPayload.make(for: entry)
+            return .native(.of(PiAgentNativeStatusRowView.self) { view, width in
+                view.configure(payload: payload, width: width)
+            })
+        case .retry(let entry, let info):
+            let payload = NativeRetryPayload.make(info: info, timestamp: entry.timestamp)
+            return .native(.of(PiAgentNativeRetryRowView.self) { view, width in
+                view.configure(payload: payload, width: width)
+            })
+        case .toolGroup:
+            return nil  // Native tool-group lands in a later step.
+        }
     }
 
     /// Maps a thread child to a native bubble payload for the plain-text reply
