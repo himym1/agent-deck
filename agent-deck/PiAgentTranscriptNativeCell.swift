@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Symbols
 
 // Native (pure AppKit) rendering for transcript message bubbles. Replaces the
 // SwiftUI card hosted in an NSHostingView for the common text rows so scrolling
@@ -64,11 +65,15 @@ final class PiAgentNativeBubbleView: NSView {
     private let markdownApplier = MarkdownSourceApplier()
 
     // Hover-revealed copy (+ fork) buttons, real Liquid Glass via NSGlassEffectView.
+    // The glyphs are NSImageViews (not NSButtons) so we can drive the SF Symbol
+    // replace transition (doc.on.doc → checkmark) exactly like SwiftUI's
+    // .contentTransition(.symbolEffect(.replace)); clicks come via gestures.
     private let buttonStack = NSStackView()
     private let copyGlass = NSGlassEffectView()
-    private let copyButton = NSButton()
+    private let copyIcon = NSImageView()
     private let forkGlass = NSGlassEffectView()
-    private let forkButton = NSButton()
+    private let forkIcon = NSImageView()
+    private var copiedResetWork: DispatchWorkItem?
     private var trackingArea: NSTrackingArea?
 
     private var payload: NativeBubblePayload?
@@ -299,8 +304,8 @@ final class PiAgentNativeBubbleView: NSView {
         headerLabel.textColor = headerColor
         // Glass button glyphs use the primary label color — matches the SwiftUI
         // AppCopyIconButton / AppForkIconButton (.foregroundStyle(.primary)).
-        copyButton.contentTintColor = .labelColor
-        forkButton.contentTintColor = .labelColor
+        copyIcon.contentTintColor = .labelColor
+        forkIcon.contentTintColor = .labelColor
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -328,32 +333,33 @@ final class PiAgentNativeBubbleView: NSView {
 
     // MARK: Copy / fork buttons (Liquid Glass)
 
-    private func glassIconButton(_ glass: NSGlassEffectView, _ button: NSButton, symbol: String, help: String, action: Selector) {
+    private static func symbolImage(_ name: String) -> NSImage? {
+        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+        return NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
+    }
+
+    private func glassIcon(_ glass: NSGlassEffectView, _ icon: NSImageView, symbol: String, help: String, action: Selector) {
         glass.translatesAutoresizingMaskIntoConstraints = false
         glass.cornerRadius = 14
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.isBordered = false
-        button.bezelStyle = .regularSquare
-        button.imagePosition = .imageOnly
-        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: help)?
-            .withSymbolConfiguration(config)
-        button.toolTip = help
-        button.contentTintColor = .labelColor
-        button.target = self
-        button.action = action
-        glass.contentView = button
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.image = Self.symbolImage(symbol)
+        icon.contentTintColor = .labelColor
+        icon.imageScaling = .scaleNone
+        icon.toolTip = help
+        glass.contentView = icon
+        glass.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: action))
         NSLayoutConstraint.activate([
             glass.widthAnchor.constraint(equalToConstant: 28),
             glass.heightAnchor.constraint(equalToConstant: 28),
-            button.widthAnchor.constraint(equalToConstant: 28),
-            button.heightAnchor.constraint(equalToConstant: 28)
+            icon.widthAnchor.constraint(equalToConstant: 28),
+            icon.heightAnchor.constraint(equalToConstant: 28)
         ])
     }
 
     private func setupButtons() {
-        glassIconButton(copyGlass, copyButton, symbol: "doc.on.doc", help: "Copy message", action: #selector(copyTapped))
-        glassIconButton(forkGlass, forkButton, symbol: "arrow.trianglehead.branch", help: "Fork session…", action: #selector(forkTapped))
+        glassIcon(copyGlass, copyIcon, symbol: "doc.on.doc", help: "Copy message", action: #selector(copyTapped))
+        glassIcon(forkGlass, forkIcon, symbol: "arrow.trianglehead.branch", help: "Fork session…", action: #selector(forkTapped))
         buttonStack.translatesAutoresizingMaskIntoConstraints = false
         buttonStack.orientation = .horizontal
         buttonStack.spacing = 4
@@ -395,6 +401,18 @@ final class PiAgentNativeBubbleView: NSView {
         guard let text = payload?.copyText else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+        // Animate doc.on.doc → checkmark and back after ~1.1s, matching the
+        // SwiftUI AppCopyIconButton's .symbolEffect(.replace) + copied feedback.
+        copiedResetWork?.cancel()
+        if let checkmark = Self.symbolImage("checkmark") {
+            copyIcon.setSymbolImage(checkmark, contentTransition: .replace)
+        }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let doc = Self.symbolImage("doc.on.doc") else { return }
+            self.copyIcon.setSymbolImage(doc, contentTransition: .replace)
+        }
+        copiedResetWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1, execute: work)
     }
 
     @objc private func forkTapped() {
@@ -446,6 +464,9 @@ final class PiAgentNativeBubbleView: NSView {
 
     override func mouseEntered(with event: NSEvent) { setButtonsVisible(true) }
     override func mouseExited(with event: NSEvent) { setButtonsVisible(false) }
+
+    /// Force the hover buttons visible (used by the offscreen preview harness).
+    func previewRevealButtons() { buttonStack.alphaValue = 1 }
 
     private func setButtonsVisible(_ visible: Bool) {
         NSAnimationContext.runAnimationGroup { ctx in
