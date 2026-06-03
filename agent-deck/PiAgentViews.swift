@@ -2753,8 +2753,13 @@ struct PiAgentScreen: View {
             return .native(.of(PiAgentNativeRetryRowView.self) { view, width in
                 view.configure(payload: payload, width: width)
             })
-        case .toolGroup:
-            return nil  // Native tool-group lands in a later step.
+        case .toolGroup(let group):
+            guard let model = NativeToolGroupModel.make(
+                group: group, visibility: visibility, projectPath: store.selectedSession.map { $0.worktreePath ?? $0.projectPath }
+            ) else { return nil }
+            return .native(.of(PiAgentNativeToolGroupView.self) { view, width in
+                view.configure(model: model, width: width)
+            })
         }
     }
 

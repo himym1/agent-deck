@@ -10,6 +10,59 @@ enum AppTheme {
     static let toolbarIconFrame = CGSize(width: 26, height: 20)
     static let toolbarAssetIconSize = CGSize(width: 16, height: 16)
 
+    // MARK: Typography
+    //
+    // Fixed-size font tokens for the chat / transcript UI. macOS semantic
+    // styles (.body = 13pt, .caption = 10pt, .caption2 = 9pt) render too small
+    // for comfortable reading in a conversation thread. These tokens bump every
+    // tier up ~1pt so body text lands at 14pt, captions at 11–12pt — matching
+    // the sizing used by osaurus and aligned with Apple HIG guidance to avoid
+    // sub-11pt readable text.
+    //
+    // Non-chat views (settings, management, sidebar) can keep using semantic
+    // styles directly — those contexts have native control sizing that already
+    // reads well.
+    enum Font {
+        static let bodySize: CGFloat = 14
+        static let calloutSize: CGFloat = 13
+        static let footnoteSize: CGFloat = 12
+        static let captionSize: CGFloat = 11
+        static let caption2Size: CGFloat = 10
+        static let codeSize: CGFloat = 13
+        static let smallLabelSize: CGFloat = 9
+
+        static let body = SwiftUI.Font.system(size: bodySize)
+        static let callout = SwiftUI.Font.system(size: calloutSize)
+        static let footnote = SwiftUI.Font.system(size: footnoteSize)
+        static let caption = SwiftUI.Font.system(size: captionSize)
+        static let caption2 = SwiftUI.Font.system(size: caption2Size)
+        static let code = SwiftUI.Font.system(size: codeSize, design: .monospaced)
+        static let smallLabel = SwiftUI.Font.system(size: smallLabelSize, weight: .bold, design: .monospaced)
+    }
+
+    // MARK: Component geometry
+    //
+    // Corner radii and padding for the transcript / chat component set. Keeps
+    // bubbles, tool cards, diff cards, and status rows visually consistent and
+    // avoids the scatter of 6/8/10/11/12/14/16 radii that crept in ad-hoc.
+    enum Chat {
+        static let bubbleCornerRadius: CGFloat = 12
+        static let cardCornerRadius: CGFloat = 12
+        static let codeCornerRadius: CGFloat = 8
+        static let inputCornerRadius: CGFloat = 8
+
+        static let bubbleHPadding: CGFloat = 16
+        static let bubbleVPadding: CGFloat = 12
+        static let bubbleChildHPadding: CGFloat = 14
+        static let bubbleChildVPadding: CGFloat = 10
+
+        static let cardHPadding: CGFloat = 12
+        static let cardVPadding: CGFloat = 10
+
+        static let threadSpacing: CGFloat = 10
+        static let childSpacing: CGFloat = 8
+    }
+
     // Brand accent and the assistant tint are theme-driven — see Theme.swift and
     // ThemeManager. The macOS *global* accent still comes from the `AccentColor`
     // asset catalog (Apple's cyan); it is intentionally left fixed because in-app

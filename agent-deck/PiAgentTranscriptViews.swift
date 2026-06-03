@@ -1199,18 +1199,18 @@ struct PiAgentThreadDiffSummaryView: View {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 8) {
                     Image(systemName: "doc.text.magnifyingglass")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTheme.Font.caption.weight(.semibold))
                         .foregroundStyle(AppTheme.mutedText)
                     Text("Changes")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTheme.Font.caption.weight(.semibold))
                     Text(changes.count == 1 ? "1 file" : "\(changes.count) files")
-                        .font(.caption)
+                        .font(AppTheme.Font.caption)
                         .foregroundStyle(AppTheme.mutedText)
                     Spacer(minLength: 0)
                 }
                 if isLoading && rows.isEmpty {
                     Text("Preparing file changes…")
-                        .font(.caption2)
+                        .font(AppTheme.Font.caption2)
                         .foregroundStyle(AppTheme.mutedText)
                 }
                 ForEach(rows.prefix(4)) { row in
@@ -1218,14 +1218,14 @@ struct PiAgentThreadDiffSummaryView: View {
                 }
                 if rows.count > 4 {
                     Text("\(rows.count - 4) more changed file\(rows.count - 4 == 1 ? "" : "s") hidden")
-                        .font(.caption2)
+                        .font(AppTheme.Font.caption2)
                         .foregroundStyle(AppTheme.mutedText)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, AppTheme.Chat.cardHPadding)
+            .padding(.vertical, AppTheme.Chat.cardVPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.65)).stroke(AppTheme.contentStroke, lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.65)).stroke(AppTheme.contentStroke, lineWidth: 1))
             .task(id: Self.signature(for: changes)) { await loadRows(changes: changes) }
         }
     }
@@ -1418,11 +1418,11 @@ private struct PiAgentInlineDiffCard: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text(row.path.truncatedMiddle(max: 54))
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(row.changeCountText)
-                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .font(AppTheme.Font.caption2.monospacedDigit().weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
                 Spacer(minLength: 0)
                 Button {
@@ -1437,15 +1437,15 @@ private struct PiAgentInlineDiffCard: View {
                         Text("Open")
                     }
                 }
-                .font(.caption2.weight(.semibold))
+                .font(AppTheme.Font.caption2.weight(.semibold))
                 .appSmallSecondaryButton()
                 .help("Open full diff")
                 PiAgentDiffCopyButton(text: row.diff)
             }
             PiAgentCompactDiffPreview(diffText: row.diff)
         }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(AppTheme.textContentFill.opacity(0.75)))
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.textContentFill.opacity(0.75)))
         .sheet(isPresented: $isDiffSheetPresented) {
             PiAgentFullDiffSheet(row: row)
         }
@@ -1469,7 +1469,7 @@ private struct PiAgentDiffCopyButton: View {
                 Text("Copy")
             }
         }
-        .font(.caption2.weight(.semibold))
+        .font(AppTheme.Font.caption2.weight(.semibold))
         .appSmallSecondaryButton()
         .help(copied ? "Copied" : "Copy diff")
     }
@@ -1612,11 +1612,11 @@ private struct PiAgentCompactDiffPreview: View {
                     let line = visible[index]
                     HStack(spacing: 9) {
                         Text(line.gutter)
-                            .font(.caption2.monospaced().weight(.semibold))
+                            .font(AppTheme.Font.caption.monospaced().weight(.semibold))
                             .foregroundStyle(line.color)
                             .frame(width: 40, alignment: .trailing)
                         Text(line.content.isEmpty ? " " : line.content)
-                            .font(.caption2.monospaced())
+                            .font(AppTheme.Font.caption.monospaced())
                             .foregroundStyle(line.color)
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -1626,7 +1626,7 @@ private struct PiAgentCompactDiffPreview: View {
                     .background(line.background)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: AppTheme.Chat.codeCornerRadius, style: .continuous))
             if parsedAllLines.count > 10 {
                 Button {
                     withAnimation(reduceMotion ? nil : .snappy(duration: 0.18)) {
@@ -1634,7 +1634,7 @@ private struct PiAgentCompactDiffPreview: View {
                     }
                 } label: {
                     Label(isExpanded ? "Show fewer lines" : "Show \(parsedAllLines.count - 10) more lines", systemImage: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption2.monospaced())
+                        .font(AppTheme.Font.caption2.monospaced())
                         .foregroundStyle(AppTheme.mutedText)
                 }
                 .buttonStyle(.plain)
@@ -1710,32 +1710,32 @@ struct PiAgentWebActivitySummaryView: View {
     @State private var expandedRows: Set<UUID> = []
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: AppTheme.Chat.childSpacing) {
             HStack(spacing: 8) {
                 Image(systemName: "globe")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                     .foregroundStyle(hasErrors ? AppTheme.roleError : AppTheme.mutedText)
                 Text(title)
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                 Text(callCountText)
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                 Spacer(minLength: 0)
             }
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: AppTheme.Chat.childSpacing) {
                 ForEach(displayRows) { row in
                     VStack(alignment: .leading, spacing: 5) {
                         HStack(alignment: .firstTextBaseline, spacing: 7) {
                             Image(systemName: row.icon)
-                                .font(.caption2.weight(.semibold))
+                                .font(AppTheme.Font.caption2.weight(.semibold))
                                 .foregroundStyle(row.isError ? AppTheme.roleError : AppTheme.mutedText)
                                 .frame(width: 14)
                             Text(row.title)
-                                .font(.caption.weight(.semibold))
+                                .font(AppTheme.Font.caption.weight(.semibold))
                             if let detail = row.detail {
                                 Text(detail)
-                                    .font(.caption)
+                                    .font(AppTheme.Font.caption)
                                     .foregroundStyle(AppTheme.mutedText)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
@@ -1750,11 +1750,11 @@ struct PiAgentWebActivitySummaryView: View {
                                         Text("•")
                                             .foregroundStyle(AppTheme.mutedText)
                                         Text(link.title)
-                                            .font(.caption2.weight(.semibold))
+                                            .font(AppTheme.Font.caption2.weight(.semibold))
                                             .lineLimit(1)
                                             .truncationMode(.tail)
                                         Text(link.domain)
-                                            .font(.caption2)
+                                            .font(AppTheme.Font.caption2)
                                             .foregroundStyle(AppTheme.mutedText)
                                             .lineLimit(1)
                                             .truncationMode(.middle)
@@ -1765,7 +1765,7 @@ struct PiAgentWebActivitySummaryView: View {
                                         withAnimation(reduceMotion ? nil : .snappy(duration: 0.18)) { toggleExpanded(row.id) }
                                     } label: {
                                         Text(expandedRows.contains(row.id) ? "Show fewer results" : "+\(row.links.count - inlineLinkLimit) more results")
-                                            .font(.caption2.weight(.semibold))
+                                            .font(AppTheme.Font.caption2.weight(.semibold))
                                             .foregroundStyle(AppTheme.brandAccent)
                                     }
                                     .buttonStyle(.plain)
@@ -1778,15 +1778,15 @@ struct PiAgentWebActivitySummaryView: View {
                 }
                 if hiddenCount > 0 {
                     Text("\(hiddenCount) older web update\(hiddenCount == 1 ? "" : "s") hidden")
-                        .font(.caption2)
+                        .font(AppTheme.Font.caption2)
                         .foregroundStyle(AppTheme.mutedText)
                 }
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, AppTheme.Chat.cardHPadding)
+        .padding(.vertical, AppTheme.Chat.cardVPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.65)).stroke(AppTheme.contentStroke, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.65)).stroke(AppTheme.contentStroke, lineWidth: 1))
     }
 
     private let inlineLinkLimit = 5
@@ -1877,12 +1877,12 @@ struct PiAgentActivitySummaryView: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: hasErrors ? "exclamationmark.triangle" : "wrench.and.screwdriver")
-                .font(.caption.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
                 .foregroundStyle(hasErrors ? AppTheme.roleError : AppTheme.mutedText)
             Text("Tools")
-                .font(.caption.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
             Text(callCountText)
-                .font(.caption)
+                .font(AppTheme.Font.caption)
                 .foregroundStyle(AppTheme.mutedText)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
@@ -1893,10 +1893,10 @@ struct PiAgentActivitySummaryView: View {
             }
             .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.horizontal, AppTheme.Chat.cardHPadding)
+        .padding(.vertical, AppTheme.Chat.cardVPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.65)).stroke(AppTheme.contentStroke, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.65)).stroke(AppTheme.contentStroke, lineWidth: 1))
     }
 
     private var hasErrors: Bool {
@@ -1911,11 +1911,11 @@ struct PiAgentActivitySummaryView: View {
     private func activityChip(_ activity: PiAgentTranscriptActivity) -> some View {
         HStack(spacing: 5) {
             Image(systemName: icon(for: activity.name))
-                .font(.caption2.weight(.semibold))
+                .font(AppTheme.Font.caption2.weight(.semibold))
             Text(displayName(for: activity.name, count: activity.count))
-                .font(.caption)
+                .font(AppTheme.Font.caption)
             Text("\(activity.count)")
-                .font(.caption2.weight(.bold))
+                .font(AppTheme.Font.caption2.weight(.bold))
                 .monospacedDigit()
                 .padding(.horizontal, 5)
                 .padding(.vertical, 1)
@@ -2047,15 +2047,15 @@ struct PiAgentStatusTranscriptRow: View {
                         .controlSize(.small)
                 } else {
                     Image(systemName: dividerIcon)
-                        .font(.caption.weight(.semibold))
+                        .font(AppTheme.Font.caption.weight(.semibold))
                         .foregroundStyle(AppTheme.mutedText)
                 }
                 Text(detail)
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
                     .lineLimit(1)
                 Text(entry.timestamp.formatted(date: .omitted, time: .shortened))
-                    .font(.caption2)
+                    .font(AppTheme.Font.caption2)
                     .foregroundStyle(AppTheme.mutedText)
             }
             .padding(.horizontal, 10)
@@ -2072,18 +2072,18 @@ struct PiAgentStatusTranscriptRow: View {
     private var compactStatusRow: some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
-                .font(.caption.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
                 .foregroundStyle(color)
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
             Text(detail)
-                .font(.caption)
+                .font(AppTheme.Font.caption)
                 .foregroundStyle(AppTheme.mutedText)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
             Text(entry.timestamp.formatted(date: .omitted, time: .shortened))
-                .font(.caption2)
+                .font(AppTheme.Font.caption2)
                 .foregroundStyle(AppTheme.mutedText)
             if isCopyableToolError {
                 AppCopyIconButton(
@@ -2097,7 +2097,7 @@ struct PiAgentStatusTranscriptRow: View {
                     promptPopover = .init(title: action.title, text: action.text())
                 } label: {
                     Image(systemName: action.icon)
-                        .font(.caption.weight(.semibold))
+                        .font(AppTheme.Font.caption.weight(.semibold))
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.borderless)
@@ -2105,9 +2105,9 @@ struct PiAgentStatusTranscriptRow: View {
                 .disabled(!action.isEnabled)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(color.opacity(0.08)).stroke(color.opacity(0.16), lineWidth: 1))
+        .padding(.horizontal, AppTheme.Chat.cardHPadding)
+        .padding(.vertical, AppTheme.Chat.cardVPadding)
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(color.opacity(0.08)).stroke(color.opacity(0.16), lineWidth: 1))
     }
 
     private var title: String {
@@ -3258,7 +3258,7 @@ private struct AttachmentPreviewPopover: View {
 
     private func empty(_ text: String) -> some View {
         Text(text)
-            .font(.callout)
+            .font(AppTheme.Font.callout)
             .foregroundStyle(AppTheme.mutedText)
             .frame(maxWidth: .infinity, minHeight: 80)
     }
@@ -3280,11 +3280,11 @@ struct PiAgentTranscriptCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: AppTheme.Chat.childSpacing) {
             HStack(spacing: 7) {
                 headerIcon
                 Text(headerTitle)
-                    .font(.footnote.weight(.semibold))
+                    .font(AppTheme.Font.footnote.weight(.semibold))
                     .fontWidth(.expanded)
                     .foregroundStyle(headerColor)
                 Spacer(minLength: 0)
@@ -3292,18 +3292,18 @@ struct PiAgentTranscriptCard: View {
 
             content
         }
-        .padding(.horizontal, style == .threadChild ? 12 : 14)
-        .padding(.vertical, style == .threadChild ? 9 : 11)
+        .padding(.horizontal, style == .threadChild ? AppTheme.Chat.bubbleChildHPadding : AppTheme.Chat.bubbleHPadding)
+        .padding(.vertical, style == .threadChild ? AppTheme.Chat.bubbleChildVPadding : AppTheme.Chat.bubbleVPadding)
         // User bubbles size to their content (the outer thread card caps the
         // width and pushes them right). Other cards stretch full-width as
         // before. Internal alignment is always .leading so text reads naturally.
         .frame(maxWidth: isUserBubble ? nil : .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: AppTheme.Chat.bubbleCornerRadius, style: .continuous)
                 .fill(backgroundStyle)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: AppTheme.Chat.bubbleCornerRadius, style: .continuous)
                 .stroke(strokeColor, lineWidth: 1)
         )
     }
@@ -3342,7 +3342,7 @@ struct PiAgentTranscriptCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             Text(entry.text)
-                .font(entry.role == .tool || entry.role == .stderr || entry.role == .raw ? .system(.body, design: .monospaced) : .body)
+                .font(entry.role == .tool || entry.role == .stderr || entry.role == .raw ? AppTheme.Font.code : AppTheme.Font.body)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -3357,7 +3357,7 @@ struct PiAgentTranscriptCard: View {
         let displayText = source.trimmingCharacters(in: .whitespacesAndNewlines)
         return VStack(alignment: .leading, spacing: 6) {
             Text("Reasoning")
-                .font(.caption.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
             MarkdownTextView(source: displayText.isEmpty ? "Pi has not emitted reasoning text yet." : displayText)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -3459,14 +3459,14 @@ struct PiAgentToolTranscriptView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: AppTheme.Chat.childSpacing) {
             HStack(spacing: 8) {
                 Label(toolName, systemImage: icon)
-                    .font(.callout.weight(.semibold))
+                    .font(AppTheme.Font.callout.weight(.semibold))
                     .foregroundStyle(color)
                 Text(phaseLabel)
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 7)
+                    .font(AppTheme.Font.caption.weight(.semibold))
+                    .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .background(Capsule(style: .continuous).fill(color.opacity(0.12)))
                     .foregroundStyle(color)
@@ -3475,19 +3475,19 @@ struct PiAgentToolTranscriptView: View {
                     Button(isExpanded ? "Show less" : "Show details") {
                         withAnimation(reduceMotion ? nil : .snappy(duration: 0.18)) { isExpanded.toggle() }
                     }
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                     .buttonStyle(.plain)
                 }
             }
 
             Text(displayText)
-                .font(.caption.monospaced())
+                .font(AppTheme.Font.code)
                 .foregroundStyle(.primary.opacity(0.82))
                 .lineLimit(isExpanded ? nil : 6)
                 .textSelection(.enabled)
-                .padding(10)
+                .padding(AppTheme.Chat.cardVPadding)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.7)))
+                .background(RoundedRectangle(cornerRadius: AppTheme.Chat.codeCornerRadius, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.7)))
         }
     }
 
