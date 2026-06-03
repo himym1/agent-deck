@@ -143,10 +143,14 @@ final class PiAgentNativeBubbleView: NSView {
     private var hPad: CGFloat { (payload?.isThreadChild ?? false) ? 12 : 14 }
     private var vPad: CGFloat { (payload?.isThreadChild ?? false) ? 9 : 11 }
 
-    // cardView placement / size — a single always-active leading constraint
-    // (constant carries the alignment) + width. Deterministic; no edge toggle.
+    // cardView placement / size — a fixed width plus EXACTLY ONE horizontal
+    // edge pin (leading for replies, trailing for questions). The alignment is
+    // carried by *which* pin is active, never by a width-derived constant, so
+    // the card lands correctly even if `configure` runs before the real row
+    // width is known (the "sometimes left / cropped-then-jumps" bug).
     private var cardWidthC: NSLayoutConstraint!
     private var cardLeadingC: NSLayoutConstraint!
+    private var cardTrailingC: NSLayoutConstraint!
     // inner content (pinned to cardView)
     private var iconLeadingC: NSLayoutConstraint!
     private var iconTopC: NSLayoutConstraint!
@@ -161,6 +165,7 @@ final class PiAgentNativeBubbleView: NSView {
     private func buildConstraints() {
         cardWidthC = cardView.widthAnchor.constraint(equalToConstant: 100)
         cardLeadingC = cardView.leadingAnchor.constraint(equalTo: leadingAnchor)
+        cardTrailingC = cardView.trailingAnchor.constraint(equalTo: trailingAnchor)
 
         iconLeadingC = iconView.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: hPad)
         iconTopC = iconView.topAnchor.constraint(equalTo: cardView.topAnchor, constant: vPad)
@@ -185,8 +190,12 @@ final class PiAgentNativeBubbleView: NSView {
             prefixLeadingC,
             mdLeadingC, mdTrailingC, mdTopC, mdBottomC
         ])
-        // Default placement (replies): left-aligned.
+        // Default placement (replies): pinned to the leading edge. `configure`
+        // swaps to the trailing pin for hugged questions. Exactly one of the two
+        // is ever active, so the card is always fully constrained (width + one
+        // edge + top + bottom) and can never be left under-constrained.
         cardLeadingC.isActive = true
+        cardTrailingC.isActive = false
     }
 
     override func layout() {
@@ -218,14 +227,21 @@ final class PiAgentNativeBubbleView: NSView {
         mdTrailingC.constant = -hPad
         mdBottomC.constant = -vPad
 
-        // Deterministic horizontal placement: width + one leading constraint
-        // whose constant carries the alignment. Replies sit at the column edge
-        // (inset 0); questions are right-aligned by insetting leading by the
-        // remaining width. No leading/trailing isActive toggle, so the card can
-        // never be left under-constrained (the random left/right jump).
+        // Deterministic horizontal placement: a fixed width plus exactly one
+        // edge pin. Replies pin leading (column edge); questions pin trailing
+        // (right edge), independent of the row width value — so an early
+        // configure with a not-yet-final width can't strand the card on the
+        // wrong side. Deactivate the unwanted pin BEFORE activating the wanted
+        // one so the two are never simultaneously active (over-constrained).
         let cardW = cardWidth(forRowWidth: rowWidth)
         cardWidthC.constant = cardW
-        cardLeadingC.constant = payload.isUserHugged ? max(0, rowWidth - cardW) : 0
+        if payload.isUserHugged {
+            cardLeadingC.isActive = false
+            cardTrailingC.isActive = true
+        } else {
+            cardTrailingC.isActive = false
+            cardLeadingC.isActive = true
+        }
 
         // Header.
         headerLabel.stringValue = payload.headerTitle
