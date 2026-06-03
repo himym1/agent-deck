@@ -548,13 +548,33 @@ final class NativeMarkdownTextContainer: NSView {
             return heightCache.height
         }
         configureWidthConstraint(to: width)
-        // Force layout so the per-block AutoSizingMarkdownTextView intrinsics resolve
-        // before we ask the stack for its fitting size — without this, freshly-rebuilt
-        // children may still report stale heights.
+        // Two layout passes. A text view's intrinsicContentSize wraps at
+        // max(bounds.width, containerSize.width): on the FIRST pass bounds.width
+        // may still be stale-wide, so the text wraps to too few lines and the
+        // measured height comes back short — which then gets cached and leaves
+        // the last line crowding the card's bottom edge. The first pass assigns
+        // each block its real width; we then invalidate the per-block intrinsics
+        // and lay out again so they re-wrap at that width before we read the
+        // fitting size.
+        stackView.layoutSubtreeIfNeeded()
+        invalidateBlockIntrinsics(in: stackView)
         stackView.layoutSubtreeIfNeeded()
         let height = ceil(stackView.fittingSize.height)
         heightCache = (width, height)
         return height
+    }
+
+    /// Recursively invalidate every `AutoSizingMarkdownTextView`'s cached
+    /// intrinsic size so the next layout pass re-measures it at its now-correct
+    /// width (text blocks can be nested inside list/quote row stacks).
+    private func invalidateBlockIntrinsics(in view: NSView) {
+        for sub in view.subviews {
+            if let tv = sub as? AutoSizingMarkdownTextView {
+                tv.invalidateIntrinsicContentSize()
+            } else {
+                invalidateBlockIntrinsics(in: sub)
+            }
+        }
     }
 
     // Must be side-effect-free: AppKit calls this during the window's update-constraints
