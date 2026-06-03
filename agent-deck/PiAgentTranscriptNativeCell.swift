@@ -486,23 +486,53 @@ final class PiAgentNativeBubbleView: NSView {
         trackingArea = area
     }
 
-    override func mouseEntered(with event: NSEvent) { logHover("enter"); setButtonsVisible(true) }
-    override func mouseExited(with event: NSEvent) { logHover("exit"); setButtonsVisible(false) }
+    override func mouseEntered(with event: NSEvent) { detectHoverMove("enter") { self.setButtonsVisible(true) } }
+    override func mouseExited(with event: NSEvent) { detectHoverMove("exit") { self.setButtonsVisible(false) } }
 
-    /// Diagnostic: with `defaults write streetcoding.agent-deck TranscriptHoverDebug -bool YES`,
-    /// logs the card geometry on hover so a single run reveals any shift (and
-    /// exactly which value — bubble width, card width, or leading — changed).
+    /// Movement detector for the "You bubble shifts on hover" bug. Records the
+    /// card's x before the hover transition, re-checks after layout settles AND
+    /// again after the reveal animation, and if the card actually moved writes a
+    /// loud line to `/tmp/agentdeck-hover-shift.txt` (+ the OS log) naming the
+    /// before→after x and the geometry, so a single hover tells us definitively
+    /// whether it moves and which value changed. Always active for question
+    /// bubbles (rare event, low noise); set `TranscriptHoverDebug` to also log
+    /// the stable (no-move) cases as confirmation.
     private static let hoverLog = Logger(subsystem: "streetcoding.agent-deck", category: "HoverShift")
     private static let hoverDebug = UserDefaults.standard.bool(forKey: "TranscriptHoverDebug")
-    private func logHover(_ phase: String) {
-        guard Self.hoverDebug else { return }
-        Self.hoverLog.log("""
-        \(phase, privacy: .public) role=\(String(describing: self.payload?.role), privacy: .public) \
-        hugged=\(self.payload?.isUserHugged ?? false) bubbleW=\(Double(self.bounds.width)) \
-        cardW=\(Double(self.cardWidthC.constant)) leading=\(Double(self.cardLeadingC.constant)) \
-        cardFrame=\(NSStringFromRect(self.cardView.frame), privacy: .public) \
-        buttonsFrame=\(NSStringFromRect(self.buttonStack.frame), privacy: .public)
-        """)
+
+    private func detectHoverMove(_ phase: String, _ action: () -> Void) {
+        let before = cardView.frame.minX
+        action()
+        layoutSubtreeIfNeeded()
+        report(phase: "\(phase)-sync", before: before, after: cardView.frame.minX)
+        // The reveal animates alpha (0.15s); re-check after it in case anything
+        // shifts the card asynchronously.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else { return }
+            self.report(phase: "\(phase)-async", before: before, after: self.cardView.frame.minX)
+        }
+    }
+
+    private func report(phase: String, before: CGFloat, after: CGFloat) {
+        let moved = abs(after - before) > 0.5
+        guard moved || Self.hoverDebug else { return }
+        let tag = moved ? "⚠️ MOVED" : "stable"
+        let line = "[\(phase)] \(tag) cardMinX \(Int(before))→\(Int(after)) "
+            + "hugged=\(payload?.isUserHugged ?? false) bubbleW=\(Int(bounds.width)) "
+            + "cardW=\(Int(cardWidthC.constant)) leading=\(Int(cardLeadingC.constant))\n"
+        if moved {
+            Self.hoverLog.error("YOU-BUBBLE-HOVER \(line, privacy: .public)")
+        } else {
+            Self.hoverLog.log("YOU-BUBBLE-HOVER \(line, privacy: .public)")
+        }
+        if let data = line.data(using: .utf8) {
+            let url = URL(fileURLWithPath: "/tmp/agentdeck-hover-shift.txt")
+            if let h = try? FileHandle(forWritingTo: url) {
+                h.seekToEndOfFile(); h.write(data); try? h.close()
+            } else {
+                try? data.write(to: url)
+            }
+        }
     }
 
     /// Force the hover buttons visible (used by the offscreen preview harness).
