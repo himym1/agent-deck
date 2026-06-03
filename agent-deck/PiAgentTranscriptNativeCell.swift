@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Symbols
+import os
 
 // Native (pure AppKit) rendering for transcript message bubbles. Replaces the
 // SwiftUI card hosted in an NSHostingView for the common text rows so scrolling
@@ -112,6 +113,11 @@ final class PiAgentNativeBubbleView: NSView {
 
         markdownContainer.translatesAutoresizingMaskIntoConstraints = false
         markdownContainer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        // The card width is authoritative; the markdown must yield to it rather
+        // than push the card wider (which would fight `cardWidthC` and let
+        // AppKit break a different constraint per relayout — a source of the
+        // card appearing to jump). Low compression resistance = always yields.
+        markdownContainer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         cardView.addSubview(iconView)
         cardView.addSubview(headerLabel)
@@ -143,14 +149,13 @@ final class PiAgentNativeBubbleView: NSView {
     private var hPad: CGFloat { (payload?.isThreadChild ?? false) ? 12 : 14 }
     private var vPad: CGFloat { (payload?.isThreadChild ?? false) ? 9 : 11 }
 
-    // cardView placement / size — a fixed width plus EXACTLY ONE horizontal
-    // edge pin (leading for replies, trailing for questions). The alignment is
-    // carried by *which* pin is active, never by a width-derived constant, so
-    // the card lands correctly even if `configure` runs before the real row
-    // width is known (the "sometimes left / cropped-then-jumps" bug).
+    // cardView placement / size — a fixed width plus a SINGLE leading
+    // constraint whose constant is recomputed from the bubble's real width each
+    // layout pass (see applyCardOffset). One constraint can't over-constrain, so
+    // the card can never flip sides on a relayout, and recomputing from the live
+    // width means it's correct even if `configure` ran before the width settled.
     private var cardWidthC: NSLayoutConstraint!
     private var cardLeadingC: NSLayoutConstraint!
-    private var cardTrailingC: NSLayoutConstraint!
     // inner content (pinned to cardView)
     private var iconLeadingC: NSLayoutConstraint!
     private var iconTopC: NSLayoutConstraint!
@@ -165,7 +170,6 @@ final class PiAgentNativeBubbleView: NSView {
     private func buildConstraints() {
         cardWidthC = cardView.widthAnchor.constraint(equalToConstant: 100)
         cardLeadingC = cardView.leadingAnchor.constraint(equalTo: leadingAnchor)
-        cardTrailingC = cardView.trailingAnchor.constraint(equalTo: trailingAnchor)
 
         iconLeadingC = iconView.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: hPad)
         iconTopC = iconView.topAnchor.constraint(equalTo: cardView.topAnchor, constant: vPad)
@@ -190,15 +194,29 @@ final class PiAgentNativeBubbleView: NSView {
             prefixLeadingC,
             mdLeadingC, mdTrailingC, mdTopC, mdBottomC
         ])
-        // Default placement (replies): pinned to the leading edge. `configure`
-        // swaps to the trailing pin for hugged questions. Exactly one of the two
-        // is ever active, so the card is always fully constrained (width + one
-        // edge + top + bottom) and can never be left under-constrained.
+        // A single always-active leading constraint positions the card. Its
+        // constant is recomputed from the bubble's REAL width in `layout()`
+        // (replies → 0; questions → width − cardWidth, i.e. right-aligned), so
+        // it never depends on the width passed to `configure` being final, and
+        // there is no second edge pin that could over-constrain and flip which
+        // side wins on a relayout (the "shifts on hover" bug).
         cardLeadingC.isActive = true
-        cardTrailingC.isActive = false
+    }
+
+    /// Recompute the card's leading offset from the bubble's current width so
+    /// the placement is correct on every layout pass (no dependency on the
+    /// `configure`-time width, no second constraint to conflict with).
+    private func applyCardOffset() {
+        let target = (payload?.isUserHugged ?? false)
+            ? max(0, bounds.width - cardWidthC.constant)
+            : 0
+        if abs(cardLeadingC.constant - target) > 0.5 {
+            cardLeadingC.constant = target
+        }
     }
 
     override func layout() {
+        applyCardOffset()
         super.layout()
         cardView.layer?.frame = cardView.bounds
     }
@@ -227,21 +245,11 @@ final class PiAgentNativeBubbleView: NSView {
         mdTrailingC.constant = -hPad
         mdBottomC.constant = -vPad
 
-        // Deterministic horizontal placement: a fixed width plus exactly one
-        // edge pin. Replies pin leading (column edge); questions pin trailing
-        // (right edge), independent of the row width value — so an early
-        // configure with a not-yet-final width can't strand the card on the
-        // wrong side. Deactivate the unwanted pin BEFORE activating the wanted
-        // one so the two are never simultaneously active (over-constrained).
+        // Fix the card width; the leading offset (and thus left/right alignment)
+        // is applied from the real bubble width in `layout()` via applyCardOffset.
         let cardW = cardWidth(forRowWidth: rowWidth)
         cardWidthC.constant = cardW
-        if payload.isUserHugged {
-            cardLeadingC.isActive = false
-            cardTrailingC.isActive = true
-        } else {
-            cardTrailingC.isActive = false
-            cardLeadingC.isActive = true
-        }
+        cardLeadingC.constant = payload.isUserHugged ? max(0, rowWidth - cardW) : 0
 
         // Header.
         headerLabel.stringValue = payload.headerTitle
@@ -478,8 +486,24 @@ final class PiAgentNativeBubbleView: NSView {
         trackingArea = area
     }
 
-    override func mouseEntered(with event: NSEvent) { setButtonsVisible(true) }
-    override func mouseExited(with event: NSEvent) { setButtonsVisible(false) }
+    override func mouseEntered(with event: NSEvent) { logHover("enter"); setButtonsVisible(true) }
+    override func mouseExited(with event: NSEvent) { logHover("exit"); setButtonsVisible(false) }
+
+    /// Diagnostic: with `defaults write streetcoding.agent-deck TranscriptHoverDebug -bool YES`,
+    /// logs the card geometry on hover so a single run reveals any shift (and
+    /// exactly which value — bubble width, card width, or leading — changed).
+    private static let hoverLog = Logger(subsystem: "streetcoding.agent-deck", category: "HoverShift")
+    private static let hoverDebug = UserDefaults.standard.bool(forKey: "TranscriptHoverDebug")
+    private func logHover(_ phase: String) {
+        guard Self.hoverDebug else { return }
+        Self.hoverLog.log("""
+        \(phase, privacy: .public) role=\(String(describing: self.payload?.role), privacy: .public) \
+        hugged=\(self.payload?.isUserHugged ?? false) bubbleW=\(Double(self.bounds.width)) \
+        cardW=\(Double(self.cardWidthC.constant)) leading=\(Double(self.cardLeadingC.constant)) \
+        cardFrame=\(NSStringFromRect(self.cardView.frame), privacy: .public) \
+        buttonsFrame=\(NSStringFromRect(self.buttonStack.frame), privacy: .public)
+        """)
+    }
 
     /// Force the hover buttons visible (used by the offscreen preview harness).
     func previewRevealButtons() { buttonStack.alphaValue = 1 }
