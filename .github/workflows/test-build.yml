@@ -1,0 +1,139 @@
+name: Test Build
+
+# Manually-triggered, signed + notarized build for testing on another Mac.
+# Unlike the Release workflow this does NOT create a GitHub Release, does NOT
+# touch the appcast, and does NOT sign/advertise a Sparkle update — it just
+# uploads the notarized .app as a downloadable workflow artifact. Run it from
+# the Actions tab → "Test Build" → Run workflow (pick the branch).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch or ref to build (defaults to the selected branch)'
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  test-build:
+    name: Build, sign, notarize (artifact only)
+    runs-on: macos-26
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          for app in \
+            /Applications/Xcode_26.5.app \
+            /Applications/Xcode_26.5_beta_2.app \
+            /Applications/Xcode_26.4.1.app \
+            /Applications/Xcode_26.4.app \
+            /Applications/Xcode_26.4_Release_Candidate.app; do
+            if [ -d "$app" ]; then
+              echo "DEVELOPER_DIR=$app/Contents/Developer" >> "$GITHUB_ENV"
+              echo "Selected $app"
+              exit 0
+            fi
+          done
+          echo "No Xcode 26.4+ install found" >&2
+          ls -1 /Applications | grep '^Xcode' || true
+          exit 1
+
+      - name: Import signing certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/build.keychain"
+          echo "$MACOS_CERTIFICATE" | base64 -d > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | xargs)
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project agent-deck.xcodeproj \
+            -scheme agent-deck
+
+      - name: Archive
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          set -o pipefail
+          mkdir -p build/release
+          xcodebuild archive \
+            -project agent-deck.xcodeproj \
+            -scheme agent-deck \
+            -configuration Release \
+            -archivePath build/release/agent-deck.xcarchive \
+            CODE_SIGN_IDENTITY="$SIGN_IDENTITY" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM=D37Z4S3883 \
+            ENABLE_HARDENED_RUNTIME=YES \
+            OTHER_CODE_SIGN_FLAGS="--timestamp" 2>&1 | tee build/release/archive.log
+
+      - name: Export .app
+        run: |
+          cat > build/release/ExportOptions.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>developer-id</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>teamID</key><string>D37Z4S3883</string>
+            <key>stripSwiftSymbols</key><true/>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath build/release/agent-deck.xcarchive \
+            -exportPath build/release/export \
+            -exportOptionsPlist build/release/ExportOptions.plist
+
+      - name: Notarize and staple the .app
+        env:
+          NOTARY_KEY: ${{ secrets.NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          APP="build/release/export/Agent Deck.app"
+          echo "$NOTARY_KEY" | base64 -d > "$RUNNER_TEMP/AuthKey.p8"
+          # notarytool takes a zip; ditto preserves the bundle's symlinks.
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID" \
+            --wait
+          # Staple the ticket onto the .app so it opens offline with no Gatekeeper prompt.
+          xcrun stapler staple "$APP"
+          spctl --assess --type execute -vv "$APP" || true
+
+      - name: Package notarized .app
+        run: |
+          set -euo pipefail
+          APP="build/release/export/Agent Deck.app"
+          mkdir -p artifact
+          # ditto zip preserves the stapled bundle + symlinks intact.
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "artifact/AgentDeck-test.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgentDeck-test-${{ github.run_number }}-${{ github.sha }}
+          path: artifact/AgentDeck-test.zip
+          retention-days: 14
+          if-no-files-found: error
