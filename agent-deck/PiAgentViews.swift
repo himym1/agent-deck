@@ -1094,7 +1094,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// so each gesture summary records what was on screen (row count + how many
         /// rows are tall markdown/code) — the "why is *this* chat slow" signal.
         private func updateBenchFingerprint() {
-            let width = max(1, tableView?.tableColumns.first?.width ?? tableView?.bounds.width ?? 1)
+            let width = currentViewportWidth()
             var tall = 0
             var totalEst: CGFloat = 0
             for item in items {
@@ -1113,8 +1113,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         }
 
         func updateColumnWidthIfNeeded() {
-            guard let scrollView, let tableView else { return }
-            let width = max(200, scrollView.contentView.bounds.width)
+            guard let tableView else { return }
+            let width = currentViewportWidth()
             guard abs(width - contentWidth) > 0.5 else { return }
             contentWidth = width
             tableView.tableColumns.first?.width = width
@@ -1215,7 +1215,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         }
 
         private func configure(_ cell: TranscriptTableCellView, with item: PiAgentAppKitTranscriptItem, row: Int) {
-            let width = max(contentWidth, tableView?.tableColumns.first?.width ?? 200)
+            let width = currentViewportWidth()
             // Each cell owns its own NSHostingView for its lifetime. Recycling
             // a cell for a new item just swaps the host's rootView — never
             // detaches the host. That's what keeps multiple visible cells from
@@ -1225,6 +1225,25 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // No measurement here — the cell reports its real height via
             // `onMeasuredHeight` once it lays out. Until then `heightOfRow`
             // serves the char-count estimate (or a cached real height).
+        }
+
+        private func currentViewportWidth() -> CGFloat {
+            let viewportCandidates = [
+                scrollView?.bounds.width,
+                scrollView?.contentView.bounds.width,
+                tableView?.enclosingScrollView?.bounds.width,
+                tableView?.enclosingScrollView?.contentView.bounds.width
+            ].compactMap { $0 }.filter { $0.isFinite && $0 > 1 }
+            if let width = viewportCandidates.max() {
+                return max(200, width)
+            }
+
+            let tableCandidates = [
+                tableView?.visibleRect.width,
+                tableView?.bounds.width,
+                tableView?.tableColumns.first?.width
+            ].compactMap { $0 }.filter { $0.isFinite && $0 > 1 }
+            return max(200, tableCandidates.max() ?? contentWidth)
         }
 
         /// Called by a live cell once it has laid out, with the SwiftUI
@@ -1712,7 +1731,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 nativeBubble = bubble
                 lastIntrinsicHeight = -1
             }
-            if configuredTopInset != item.topInset || configuredBottomInset != item.bottomInset {
+            let insetChanged = configuredTopInset != item.topInset || configuredBottomInset != item.bottomInset
+            if insetChanged {
                 nativeTopC?.constant = item.topInset
                 nativeBottomC?.constant = -item.bottomInset
             }
@@ -1722,6 +1742,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             if revisionChanged || widthChanged {
                 bubble.configure(payload: payload, width: width)
                 lastIntrinsicHeight = -1
+            }
+            if revisionChanged || widthChanged || insetChanged {
+                bubble.settleLayoutImmediately()
             }
             configuredItemID = item.id
             configuredRevision = item.contentRevision

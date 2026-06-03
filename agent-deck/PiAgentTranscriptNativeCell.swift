@@ -94,6 +94,12 @@ final class PiAgentNativeBubbleView: NSView {
         cardView.layer?.cornerRadius = 16
         cardView.layer?.cornerCurve = .continuous
         cardView.layer?.borderWidth = 1
+        cardView.layer?.actions = [
+            "bounds": NSNull(),
+            "frame": NSNull(),
+            "position": NSNull(),
+            "transform": NSNull()
+        ]
         addSubview(cardView)
 
         iconView.translatesAutoresizingMaskIntoConstraints = false
@@ -215,13 +221,12 @@ final class PiAgentNativeBubbleView: NSView {
     // layout (e.g. hover). Laying out here, right before the view draws, guarantees
     // the card is at its correct position in the painted frame. Cheap when clean.
     override func viewWillDraw() {
-        layoutSubtreeIfNeeded()
+        settleLayoutImmediately()
         super.viewWillDraw()
     }
 
     override func layout() {
         super.layout()
-        cardView.layer?.frame = cardView.bounds
         // Numeric bottom-crop detector (debug-only; the re-measure is too costly
         // for the production layout path). With TranscriptHoverDebug on, if the
         // rendered markdown needs more height than it was allocated, log the
@@ -256,6 +261,7 @@ final class PiAgentNativeBubbleView: NSView {
 
     func configure(payload: NativeBubblePayload, width rowWidth: CGFloat) {
         self.payload = payload
+        cardView.layer?.removeAllAnimations()
 
         // Padding can change with style; keep constraints in sync.
         iconLeadingC.constant = hPad
@@ -311,6 +317,21 @@ final class PiAgentNativeBubbleView: NSView {
         configureButtonStack(side: payload.copySide, hasFork: payload.fork != nil)
 
         applyChromeColors()
+    }
+
+    /// Apply pending Auto Layout changes without allowing layer-backed views to
+    /// animate from a recycled position. The constraints can be correct while a
+    /// backing layer still paints an old presentation position for a frame; this
+    /// keeps the first drawn frame and hover reveal in the final geometry.
+    func settleLayoutImmediately() {
+        cardView.layer?.removeAllAnimations()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layoutSubtreeIfNeeded()
+        cardView.layoutSubtreeIfNeeded()
+        buttonStack.layoutSubtreeIfNeeded()
+        CATransaction.commit()
+        cardView.layer?.removeAllAnimations()
     }
 
     // MARK: Chrome colors
@@ -530,7 +551,7 @@ final class PiAgentNativeBubbleView: NSView {
     private func detectHoverMove(_ phase: String, _ action: () -> Void) {
         let before = cardView.frame.minX
         action()
-        layoutSubtreeIfNeeded()
+        settleLayoutImmediately()
         report(phase: "\(phase)-sync", before: before, after: cardView.frame.minX)
         // The reveal animates alpha (0.15s); re-check after it in case anything
         // shifts the card asynchronously.
@@ -544,19 +565,24 @@ final class PiAgentNativeBubbleView: NSView {
         let moved = abs(after - before) > 0.5
         let bf = buttonStack.frame
         let cf = cardView.frame
+        let layerFrame = cardView.layer?.frame ?? .zero
+        let presentationFrame = cardView.layer?.presentation()?.frame ?? layerFrame
+        let layerMoved = abs(presentationFrame.minX - cf.minX) > 0.5
         // Questions float buttons LEFT of the card; replies float them RIGHT.
         // Either way the button stack must not overlap the card.
         let overCard = (payload?.copySide == .leading)
             ? bf.maxX > cf.minX + 1
             : bf.minX < cf.maxX - 1
-        guard moved || overCard || Self.hoverDebug else { return }
-        let tag = moved ? "⚠️ MOVED" : "stable"
+        guard moved || layerMoved || overCard || Self.hoverDebug else { return }
+        let tag = moved ? "⚠️ MOVED" : (layerMoved ? "⚠️ LAYER-MOVED" : "stable")
         let line = "[\(phase)] \(tag) cardMinX \(Int(before))→\(Int(after)) "
+            + "role=\(String(describing: payload?.role)) "
             + "hugged=\(payload?.isUserHugged ?? false) side=\(String(describing: payload?.copySide)) "
             + "bubbleW=\(Int(bounds.width)) cardW=\(Int(cardWidthC.constant)) leading=\(Int(cardLeadingC.constant)) "
+            + "layerX=\(Int(layerFrame.minX)) presentationX=\(Int(presentationFrame.minX)) "
             + "card=[\(Int(cf.minX)),\(Int(cf.maxX))] buttons=[\(Int(bf.minX)),\(Int(bf.maxX))] "
             + (overCard ? "⚠️BUTTONS-OVER-CARD" : "buttons-in-gutter") + "\n"
-        if moved {
+        if moved || layerMoved {
             Self.hoverLog.error("YOU-BUBBLE-HOVER \(line, privacy: .public)")
         } else {
             Self.hoverLog.log("YOU-BUBBLE-HOVER \(line, privacy: .public)")
@@ -577,7 +603,7 @@ final class PiAgentNativeBubbleView: NSView {
     private func setButtonsVisible(_ visible: Bool) {
         // Settle the stack's frame BEFORE animating opacity, so the first reveal
         // fades in place instead of sliding in from x=0 (the "jumps on hover" bug).
-        layoutSubtreeIfNeeded()
+        settleLayoutImmediately()
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.15
             ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
