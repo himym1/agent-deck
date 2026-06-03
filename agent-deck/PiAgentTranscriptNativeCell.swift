@@ -143,10 +143,10 @@ final class PiAgentNativeBubbleView: NSView {
     private var hPad: CGFloat { (payload?.isThreadChild ?? false) ? 12 : 14 }
     private var vPad: CGFloat { (payload?.isThreadChild ?? false) ? 9 : 11 }
 
-    // cardView placement / size
+    // cardView placement / size — a single always-active leading constraint
+    // (constant carries the alignment) + width. Deterministic; no edge toggle.
     private var cardWidthC: NSLayoutConstraint!
     private var cardLeadingC: NSLayoutConstraint!
-    private var cardTrailingC: NSLayoutConstraint!
     // inner content (pinned to cardView)
     private var iconLeadingC: NSLayoutConstraint!
     private var iconTopC: NSLayoutConstraint!
@@ -161,7 +161,6 @@ final class PiAgentNativeBubbleView: NSView {
     private func buildConstraints() {
         cardWidthC = cardView.widthAnchor.constraint(equalToConstant: 100)
         cardLeadingC = cardView.leadingAnchor.constraint(equalTo: leadingAnchor)
-        cardTrailingC = cardView.trailingAnchor.constraint(equalTo: trailingAnchor)
 
         iconLeadingC = iconView.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: hPad)
         iconTopC = iconView.topAnchor.constraint(equalTo: cardView.topAnchor, constant: vPad)
@@ -219,15 +218,14 @@ final class PiAgentNativeBubbleView: NSView {
         mdTrailingC.constant = -hPad
         mdBottomC.constant = -vPad
 
-        // Card size + side.
-        cardWidthC.constant = cardWidth(forRowWidth: rowWidth)
-        if payload.isUserHugged {
-            cardLeadingC.isActive = false
-            cardTrailingC.isActive = true
-        } else {
-            cardTrailingC.isActive = false
-            cardLeadingC.isActive = true
-        }
+        // Deterministic horizontal placement: width + one leading constraint
+        // whose constant carries the alignment. Replies sit at the column edge
+        // (inset 0); questions are right-aligned by insetting leading by the
+        // remaining width. No leading/trailing isActive toggle, so the card can
+        // never be left under-constrained (the random left/right jump).
+        let cardW = cardWidth(forRowWidth: rowWidth)
+        cardWidthC.constant = cardW
+        cardLeadingC.constant = payload.isUserHugged ? max(0, rowWidth - cardW) : 0
 
         // Header.
         headerLabel.stringValue = payload.headerTitle
