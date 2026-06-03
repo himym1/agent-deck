@@ -365,11 +365,13 @@ final class PiAgentNativeBubbleView: NSView {
         buttonStack.spacing = 4
         buttonStack.alphaValue = 0
         addSubview(buttonStack)
-        buttonStackTopC = buttonStack.topAnchor.constraint(equalTo: topAnchor, constant: 4)
-        buttonStackTopC.isActive = true
+        // Vertically centered on the card — matches the SwiftUI overlay(alignment:
+        // .leading/.trailing), which centers the buttons on the card's edge.
+        buttonStackCenterC = buttonStack.centerYAnchor.constraint(equalTo: centerYAnchor)
+        buttonStackCenterC.isActive = true
     }
 
-    private var buttonStackTopC: NSLayoutConstraint!
+    private var buttonStackCenterC: NSLayoutConstraint!
     private var buttonStackSideC: NSLayoutConstraint?
 
     /// Rebuilds the button stack order/edge and floats it in the gutter beside
@@ -469,9 +471,13 @@ final class PiAgentNativeBubbleView: NSView {
     func previewRevealButtons() { buttonStack.alphaValue = 1 }
 
     private func setButtonsVisible(_ visible: Bool) {
+        // Settle the stack's frame BEFORE animating opacity, so the first reveal
+        // fades in place instead of sliding in from x=0 (the "jumps on hover" bug).
+        layoutSubtreeIfNeeded()
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.15
             ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            ctx.allowsImplicitAnimation = false
             buttonStack.animator().alphaValue = visible ? 1 : 0
         }
     }
