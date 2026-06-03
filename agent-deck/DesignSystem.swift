@@ -71,6 +71,12 @@ enum AppTheme {
     // surface reads as a defined code panel rather than a flat highlight box.
     static let nsCodeBlockBorder = adaptiveNSColor(light: RGB(214, 214, 218), dark: RGB(56, 56, 60))
 
+    /// AppKit `NSColor` from any AppTheme SwiftUI `Color`, for native
+    /// (CALayer / NSView) surfaces that must match the SwiftUI rendering. Theme
+    /// tints resolve to static RGB for the active theme (same as SwiftUI draws
+    /// them); system-derived colors stay dynamic across light/dark.
+    static func ns(_ color: Color) -> NSColor { NSColor(color) }
+
     static let windowBackground = Color(nsColor: .windowBackgroundColor)
     static let panelFill = Color(nsColor: .windowBackgroundColor)
     static let contentFill = Color(nsColor: .windowBackgroundColor)

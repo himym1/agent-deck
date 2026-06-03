@@ -208,19 +208,8 @@ private struct NativeMarkdownRepresentable: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator {
-        /// The balanced source whose parse is currently in flight (or last
-        /// applied async). Guards against re-spawning a parse for the same text
-        /// and against a stale async result overwriting a newer one.
-        var pendingSource: String?
-        var parseTask: Task<Void, Never>?
-        deinit { parseTask?.cancel() }
+        let applier = MarkdownSourceApplier()
     }
-
-    /// Above this many characters an uncached source is parsed off the main
-    /// thread. Below it, the line-based parse is cheap enough that a synchronous
-    /// pass costs less than a frame — and staying synchronous keeps the height
-    /// measurement (and the transcript's anti-wobble machinery) exact.
-    private static let asyncParseThreshold = 4_000
 
     // SwiftUI's sizing pass for an NSViewRepresentable goes through this method on
     // macOS 13+. Returning the TextKit-computed height for the proposed width is what
@@ -235,62 +224,12 @@ private struct NativeMarkdownRepresentable: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: NativeMarkdownTextContainer, coordinator: Coordinator) {
-        coordinator.parseTask?.cancel()
+        coordinator.applier.cancel()
         nsView.dismantle()
     }
 
     private func configure(view: NativeMarkdownTextContainer, coordinator: Coordinator) {
-        let displaySource = StreamingMarkdownBalancer.balance(source)
-
-        // Synchronous fast paths — no wobble, height stays exact this frame:
-        //  • cache hit (re-render, scroll-back, unchanged text), or
-        //  • small/medium source where a main-thread parse costs < one frame.
-        // This covers the overwhelming majority of flushes, including streaming
-        // of normal-length messages.
-        if let cached = MarkdownRenderCache.cachedDocument(for: displaySource) {
-            coordinator.parseTask?.cancel()
-            coordinator.pendingSource = nil
-            view.configure(document: cached)
-            return
-        }
-        if displaySource.count <= Self.asyncParseThreshold {
-            coordinator.parseTask?.cancel()
-            coordinator.pendingSource = nil
-            view.configure(document: MarkdownRenderCache.document(for: displaySource))
-            return
-        }
-
-        // First appearance of a large uncached block (e.g. session load, or
-        // scroll-back after cache eviction): parse synchronously so the row never
-        // flashes blank. Only a block already on screen and growing during
-        // streaming takes the async path below.
-        guard view.hasDocument else {
-            coordinator.parseTask?.cancel()
-            coordinator.pendingSource = nil
-            view.configure(document: MarkdownRenderCache.document(for: displaySource))
-            return
-        }
-
-        // Large, uncached source on an already-displayed block: parse off the main
-        // thread. Keep the previously applied document on screen until the parse
-        // lands (no blank/wobble) — for streaming it differs only by the newest
-        // tokens, and the table's height drift detector absorbs the eventual
-        // growth. Skip if this exact source is already being parsed.
-        if coordinator.pendingSource == displaySource { return }
-        coordinator.pendingSource = displaySource
-        coordinator.parseTask?.cancel()
-        coordinator.parseTask = Task { [weak coordinator, weak view] in
-            let document = await Task.detached(priority: .userInitiated) {
-                MarkdownRenderCache.parseDocument(for: displaySource)
-            }.value
-            guard !Task.isCancelled, let coordinator, let view else { return }
-            MarkdownRenderCache.store(document, for: displaySource)
-            // Only apply if this is still the latest requested source; a newer
-            // synchronous/async pass may have superseded it.
-            guard coordinator.pendingSource == displaySource else { return }
-            coordinator.pendingSource = nil
-            view.configure(document: document)
-        }
+        coordinator.applier.apply(source: source, to: view)
     }
 }
 
@@ -322,7 +261,77 @@ private struct NativeMarkdownTextView: NSViewRepresentable {
     }
 }
 
-private final class NativeMarkdownTextContainer: NSView {
+/// Applies a markdown *source string* to a `NativeMarkdownTextContainer`,
+/// owning the parse-policy state (sync fast path, off-main parse for large
+/// growing blocks, and the in-flight de-dup) that used to live inside the
+/// SwiftUI representable. Shared by the representable and the native cell so
+/// both render markdown identically — and streaming flushes keep hitting the
+/// container's in-place update rather than a full rebuild.
+final class MarkdownSourceApplier {
+    /// The balanced source whose parse is currently in flight (or last applied
+    /// async). Guards against re-spawning a parse for the same text and against
+    /// a stale async result overwriting a newer one.
+    private var pendingSource: String?
+    private var parseTask: Task<Void, Never>?
+
+    /// Above this many characters an uncached source is parsed off the main
+    /// thread. Below it, the line-based parse is cheap enough that a synchronous
+    /// pass costs less than a frame — and staying synchronous keeps the height
+    /// measurement (and the transcript's anti-wobble machinery) exact.
+    private static let asyncParseThreshold = 4_000
+
+    deinit { parseTask?.cancel() }
+
+    func cancel() { parseTask?.cancel() }
+
+    func apply(source: String, to view: NativeMarkdownTextContainer) {
+        let displaySource = StreamingMarkdownBalancer.balance(source)
+
+        // Synchronous fast paths — no wobble, height stays exact this frame:
+        //  • cache hit (re-render, scroll-back, unchanged text), or
+        //  • small/medium source where a main-thread parse costs < one frame.
+        if let cached = MarkdownRenderCache.cachedDocument(for: displaySource) {
+            parseTask?.cancel()
+            pendingSource = nil
+            view.configure(document: cached)
+            return
+        }
+        if displaySource.count <= Self.asyncParseThreshold {
+            parseTask?.cancel()
+            pendingSource = nil
+            view.configure(document: MarkdownRenderCache.document(for: displaySource))
+            return
+        }
+
+        // First appearance of a large uncached block: parse synchronously so the
+        // row never flashes blank. Only an already-displayed block growing during
+        // streaming takes the async path below.
+        guard view.hasDocument else {
+            parseTask?.cancel()
+            pendingSource = nil
+            view.configure(document: MarkdownRenderCache.document(for: displaySource))
+            return
+        }
+
+        // Large, uncached source on an already-displayed block: parse off the main
+        // thread, keeping the prior document on screen until the parse lands.
+        if pendingSource == displaySource { return }
+        pendingSource = displaySource
+        parseTask?.cancel()
+        parseTask = Task { [weak self, weak view] in
+            let document = await Task.detached(priority: .userInitiated) {
+                MarkdownRenderCache.parseDocument(for: displaySource)
+            }.value
+            guard !Task.isCancelled, let self, let view else { return }
+            MarkdownRenderCache.store(document, for: displaySource)
+            guard self.pendingSource == displaySource else { return }
+            self.pendingSource = nil
+            view.configure(document: document)
+        }
+    }
+}
+
+final class NativeMarkdownTextContainer: NSView {
     private let stackView = NSStackView()
     private var lastDocument: CachedMarkdownDocument?
     /// Whether a document has ever been applied. Lets the representable parse
@@ -334,15 +343,24 @@ private final class NativeMarkdownTextContainer: NSView {
     private var isDismantled = false
     private var lastMeasuredWidth: CGFloat = 0
     private var lastMeasuredHeight: CGFloat = 0
-    /// Memoized result of `measureHeight(forWidth:)`, keyed by width. Lives only
-    /// for the current runloop turn (see `scheduleHeightCacheInvalidation`): long
-    /// enough to collapse SwiftUI's burst of `sizeThatFits` probes into one
-    /// TextKit layout, short enough that a later pass always re-measures — so a
-    /// height taken before the content settled can never get frozen (that froze
-    /// too-short rows and cropped cards). Also wiped in `configure` on any
-    /// document change.
+    /// Memoized result of `measureHeight(forWidth:)`, keyed by width. Invalidated
+    /// only when the height can actually change: the document changes (wiped in
+    /// `configure`) or the width changes (the cache key carries width). A late
+    /// per-block intrinsic-size resolution after a rebuild is handled by the
+    /// settle loop (`settleMeasurementsRemaining`), not by dropping the cache.
+    /// It deliberately does NOT drop every runloop turn, and is NOT dropped in
+    /// `layout()` — a stable visible row keeps its measurement across scroll
+    /// frames instead of re-running a full TextKit layout on every `sizeThatFits`
+    /// probe (that per-frame re-measure was the transcript's 30fps scroll cap).
     private var heightCache: (width: CGFloat, height: CGFloat)?
-    private var heightCacheInvalidationScheduled = false
+    /// Budget of forced fresh re-measures after a content change, to self-heal a
+    /// too-short first measure (per-block TextKit views can report a stale
+    /// intrinsic size on the first pass after a rebuild). The debounced
+    /// `measureHeight()` decrements this and re-measures fresh until the height
+    /// stabilizes, then it returns to 0 — so steady scroll (no content change)
+    /// always hits the cache and never forces a TextKit layout.
+    private var settleMeasurementsRemaining = 0
+    private static let settleMeasurementBudget = 4
     var onHeightChange: ((CGFloat) -> Void)?
 
     override init(frame frameRect: NSRect) {
@@ -370,7 +388,7 @@ private final class NativeMarkdownTextContainer: NSView {
         ])
     }
 
-    func configure(document: CachedMarkdownDocument) {
+    fileprivate func configure(document: CachedMarkdownDocument) {
         isDismantled = false
         guard document != lastDocument else {
             scheduleHeightMeasurement()
@@ -379,8 +397,11 @@ private final class NativeMarkdownTextContainer: NSView {
         let previous = lastDocument
         lastDocument = document
         // The document changed (the unchanged case returned at the guard above),
-        // so any cached height is now stale. `measureHeight(forWidth:)` repopulates.
+        // so any cached height is now stale. `measureHeight(forWidth:)` repopulates,
+        // and the settle loop re-measures fresh for a few runloops until the new
+        // height stabilizes (covers a too-short first measure after a rebuild).
         heightCache = nil
+        settleMeasurementsRemaining = Self.settleMeasurementBudget
         // Try the cheap streaming-friendly path first: when only the last block's text
         // changed (and its kind stayed the same), update that block's text view in place
         // instead of rebuilding the whole NSStackView. This is the hot path for every
@@ -502,6 +523,12 @@ private final class NativeMarkdownTextContainer: NSView {
 
     override func layout() {
         super.layout()
+        // NOTE: do NOT invalidate `heightCache` here. `layout()` runs inside the
+        // cell's scroll layout pass, and SwiftUI calls `sizeThatFits` several
+        // times per pass; wiping the cache mid-pass forces repeated full TextKit
+        // layouts every frame (the scroll cap). The cache is invalidated only on
+        // a real content change (`configure`) or width change (cache key) — see
+        // `heightCache` and the settle loop in `measureHeight()`.
         scheduleHeightMeasurement()
     }
 
@@ -527,22 +554,7 @@ private final class NativeMarkdownTextContainer: NSView {
         stackView.layoutSubtreeIfNeeded()
         let height = ceil(stackView.fittingSize.height)
         heightCache = (width, height)
-        scheduleHeightCacheInvalidation()
         return height
-    }
-
-    /// Drop the height cache at the end of the current runloop turn. Keeping it
-    /// only that long means the within-pass `sizeThatFits` burst is deduped, but
-    /// every subsequent layout pass re-measures — preserving the self-healing
-    /// re-measurement the transcript table's drift detector relies on.
-    private func scheduleHeightCacheInvalidation() {
-        guard !heightCacheInvalidationScheduled else { return }
-        heightCacheInvalidationScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.heightCacheInvalidationScheduled = false
-            self.heightCache = nil
-        }
     }
 
     // Must be side-effect-free: AppKit calls this during the window's update-constraints
@@ -604,6 +616,15 @@ private final class NativeMarkdownTextContainer: NSView {
 
     private func scheduleHeightMeasurement() {
         guard !isDismantled else { return }
+        // The debounced measure → `onHeightChange` callback path is only used by
+        // the binding-based representable (`NativeMarkdownTextView`). The
+        // transcript (`MarkdownTextView`/`NativeMarkdownRepresentable`) sizes via
+        // `sizeThatFits` and reports height through the cell's intrinsic size, so
+        // it has no `onHeightChange` — running this here just re-measures TextKit
+        // on every `layout()` during scroll AND thrashes `heightCache` (it
+        // measures at `bounds.width`, while `sizeThatFits` uses the proposed
+        // width). Skip entirely when nobody consumes the result.
+        guard onHeightChange != nil else { return }
         guard !pendingHeightMeasurement else { return }
         pendingHeightMeasurement = true
         DispatchQueue.main.async { [weak self] in
@@ -625,10 +646,26 @@ private final class NativeMarkdownTextContainer: NSView {
         }
 
         guard abs(lastMeasuredWidth - width) > 0.5 || lastDocument != nil else { return }
-        // Route through the memoized path — when width and document are unchanged
-        // this is a cache hit and avoids a redundant TextKit layout per scroll pass.
+        // While settling after a content change, force a fresh measurement so a
+        // too-short first measure self-corrects; otherwise route through the
+        // memoized path so steady scroll is a cache hit (no TextKit layout).
+        if settleMeasurementsRemaining > 0 {
+            heightCache = nil
+        }
         let height = measureHeight(forWidth: width)
-        guard abs(lastMeasuredHeight - height) > 0.5 || abs(lastMeasuredWidth - width) > 0.5 else { return }
+        let changed = abs(lastMeasuredHeight - height) > 0.5 || abs(lastMeasuredWidth - width) > 0.5
+        if settleMeasurementsRemaining > 0 {
+            settleMeasurementsRemaining -= 1
+            // Keep re-measuring while the height is still moving and we have
+            // budget; the moment it stabilizes, stop forcing fresh measures so
+            // scroll returns to pure cache hits.
+            if changed && settleMeasurementsRemaining > 0 {
+                scheduleHeightMeasurement()
+            } else {
+                settleMeasurementsRemaining = 0
+            }
+        }
+        guard changed else { return }
         lastMeasuredWidth = width
         lastMeasuredHeight = height
         onHeightChange?(max(1, height))

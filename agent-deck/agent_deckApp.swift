@@ -20,6 +20,10 @@ final class AgentDeckAppDelegate: NSObject, NSApplicationDelegate, UNUserNotific
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Crash-proof hang detector: when the main thread freezes (janky scroll),
+        // it auto-captures the hung backtrace via the external `sample` tool to
+        // /tmp/agentdeck-hang-<n>.txt. Disable with HangWatchdogEnabled=NO.
+        HangWatchdog.shared.start()
         // Agent Deck is a dark-only app — force the appearance at the AppKit
         // layer so menus, file panels, and the Sparkle updater are dark too
         // (SwiftUI's `.preferredColorScheme` does not reach those surfaces).

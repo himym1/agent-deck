@@ -528,6 +528,7 @@ struct ContentView: View {
         ctx.canCreateAgent = true
         ctx.canDeletePiAgentSession = selectedSession != nil
         ctx.canStopPiAgentSession = selectedSessionIsRunning
+        ctx.canNavigatePiAgentSessions = viewModel.canNavigatePiAgentSessions
         ctx.canOpenPiAgentInTerminal = viewModel.canOpenSelectedPiAgentSessionInTerminal
         ctx.canCommitGitHubChanges = hasGitProject && !commitMessage.isEmpty && !viewModel.githubIsCommitting
         ctx.canPushGitHubBranch = hasGitProject && !viewModel.githubIsPushing
@@ -553,6 +554,8 @@ struct ContentView: View {
         ctx.openSkills = { viewModel.selectedSidebarItem = .skills }
         ctx.openPrompts = { viewModel.selectedSidebarItem = .prompts }
         ctx.createPiAgentSession = { viewModel.createPiAgentDraftForSelectedProject() }
+        ctx.selectNextPiAgentSession = { viewModel.selectNextPiAgentSession() }
+        ctx.selectPreviousPiAgentSession = { viewModel.selectPreviousPiAgentSession() }
         ctx.createAgent = {
             editingAgent = nil
             agentDraft = viewModel.makeNewAgentDraft(scope: viewModel.selectedProjectPath == nil ? .library : .project)

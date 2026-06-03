@@ -2328,6 +2328,34 @@ final class AppViewModel: NSObject {
         acknowledgePiAgentSession(id)
     }
 
+    /// Sessions for the active project, in the store's stable order (pinned +
+    /// recency) — the base order the sidebar shows before any search filter.
+    /// Drives next/previous session navigation and the scroll benchmark.
+    func scopedPiAgentSessionsInOrder() -> [PiAgentSessionRecord] {
+        guard let path = selectedProjectPath else { return piAgentSessionStore.sessions }
+        return piAgentSessionStore.sessions.filter { $0.projectPath == path }
+    }
+
+    /// Move selection by `offset` within the scoped session list, wrapping at
+    /// both ends. No-op when there are no sessions. Used by the ⌘] / ⌘[
+    /// shortcuts and reused as the scroll benchmark's "advance" mechanism.
+    func selectAdjacentPiAgentSession(offset: Int) {
+        let sessions = scopedPiAgentSessionsInOrder()
+        guard !sessions.isEmpty else { return }
+        let currentID = piAgentSessionStore.selectedSessionID
+        let currentIndex = sessions.firstIndex { $0.id == currentID } ?? 0
+        let count = sessions.count
+        let nextIndex = ((currentIndex + offset) % count + count) % count
+        selectPiAgentSession(sessions[nextIndex].id)
+    }
+
+    func selectNextPiAgentSession() { selectAdjacentPiAgentSession(offset: 1) }
+    func selectPreviousPiAgentSession() { selectAdjacentPiAgentSession(offset: -1) }
+
+    var canNavigatePiAgentSessions: Bool {
+        scopedPiAgentSessionsInOrder().count > 1
+    }
+
     func acknowledgeVisibleSelectedPiAgentSession() {
         guard let sessionID = piAgentSessionStore.selectedSession?.id,
               isPiAgentSessionActuallyVisible(sessionID) else { return }
