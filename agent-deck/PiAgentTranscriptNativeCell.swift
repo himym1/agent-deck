@@ -309,18 +309,20 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
     }
 
     override func layout() {
-        super.layout()
         // Hugged question cards are right-aligned: derive the leading from the
         // ACTUAL laid-out width, not the (possibly stale/zero) configured rowWidth,
         // so a cell vended before its column width resolved still paints at the
-        // correct x instead of at 0 and snapping right on first hover. Guarded so
-        // it converges in one pass (set → re-layout → already correct → stop).
+        // correct x instead of at 0 and snapping right on first hover. Set this
+        // BEFORE super.layout() so the new constant is applied in THIS pass — setting
+        // it afterward only dirties the next pass, which wouldn't run until a hover
+        // forced it (the original 0→x snap). Guarded so it converges in one pass.
         if let payload, payload.isUserHugged, bounds.width > 1 {
             let leading = max(0, bounds.width - cardWidthC.constant)
             if abs(cardLeadingC.constant - leading) > 0.5 {
                 cardLeadingC.constant = leading
             }
         }
+        super.layout()
         // Numeric bottom-crop detector (debug-only; the re-measure is too costly
         // for the production layout path). With TranscriptHoverDebug on, if the
         // rendered markdown needs more height than it was allocated, log the

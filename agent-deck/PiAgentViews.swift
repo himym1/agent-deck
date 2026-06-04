@@ -1735,6 +1735,95 @@ private extension PiAgentTranscriptThread {
     }
 }
 
+/// The session list, isolated as an `Equatable` view so it can be wrapped in
+/// `.equatable()`. It lives next to the transcript inside `PiAgentScreen.body`,
+/// which re-runs at the streaming cadence (the transcript render cache is an
+/// ObservableObject, so any of its published changes invalidates the whole body).
+/// A SwiftUI `List` re-measures every row whenever its enclosing view updates —
+/// even when the rows themselves are unchanged — so those pulses were re-laying
+/// out the entire list ~30×/sec (the dominant `sizeThatFits` cost in the scroll
+/// profiles). Comparing the value inputs lets SwiftUI skip the list entirely on a
+/// pulse and rebuild it only when something it actually shows changed.
+///
+/// All per-row dynamic state (selection, running, renaming, title-generating, git
+/// activity, project) is passed in as resolved values and compared in `==`, so the
+/// list can never go stale: a real change to any of them differs the inputs and
+/// forces a rebuild. Bindings and callbacks are intentionally excluded from `==`.
+private struct SessionListContent: View, Equatable {
+    let visibleSessions: [PiAgentSessionRecord]
+    let selectedSessionIDs: Set<UUID>
+    let renamingSessionID: UUID?
+    let workingSessionIDs: Set<UUID>
+    let generatingTitleIDs: Set<UUID>
+    let activityByID: [UUID: PiAgentSessionGitActivity]
+    let projectsByID: [UUID: DiscoveredProject?]
+
+    @Binding var selection: Set<UUID>
+    let onSelect: (PiAgentSessionRecord) -> Void
+    let onBeginRename: (PiAgentSessionRecord) -> Void
+    let onEndRename: () -> Void
+    let onRename: (UUID, String) -> Void
+    let onTogglePinned: (UUID) -> Void
+    let onDelete: (UUID) -> Void
+
+    static func == (lhs: SessionListContent, rhs: SessionListContent) -> Bool {
+        lhs.visibleSessions == rhs.visibleSessions
+            && lhs.selectedSessionIDs == rhs.selectedSessionIDs
+            && lhs.renamingSessionID == rhs.renamingSessionID
+            && lhs.workingSessionIDs == rhs.workingSessionIDs
+            && lhs.generatingTitleIDs == rhs.generatingTitleIDs
+            && lhs.activityByID == rhs.activityByID
+            && lhs.projectsByID == rhs.projectsByID
+    }
+
+    var body: some View {
+        AppList(
+            sections: [AppListSection(id: "sessions", title: nil, items: visibleSessions)],
+            selection: .multi($selection),
+            cornerRadius: AppTheme.Chat.subCardCornerRadius,
+            rowHorizontalPadding: 0,
+            rowVerticalPadding: 0,
+            listHorizontalInset: 6
+        ) { session in
+            row(session)
+        }
+        .animation(.snappy(duration: 0.24), value: visibleSessions.map(\.id))
+        .bottomEdgeFade(height: 34)
+    }
+
+    @ViewBuilder
+    private func row(_ session: PiAgentSessionRecord) -> some View {
+        PiAgentSessionRow(
+            session: session,
+            project: projectsByID[session.id] ?? nil,
+            isSelected: selectedSessionIDs.contains(session.id),
+            isRunning: workingSessionIDs.contains(session.id),
+            isRenaming: renamingSessionID == session.id,
+            isGeneratingTitle: generatingTitleIDs.contains(session.id),
+            gitActivity: activityByID[session.id] ?? .none,
+            onSelect: { onSelect(session) },
+            onBeginRename: { onBeginRename(session) },
+            onEndRename: onEndRename,
+            onRename: { onRename(session.id, $0) },
+            onTogglePinned: { onTogglePinned(session.id) },
+            onDelete: { onDelete(session.id) }
+        )
+        .equatable()
+        .contextMenu {
+            Button {
+                onTogglePinned(session.id)
+            } label: {
+                Label(session.isPinned ? "Unpin Session" : "Pin Session", systemImage: session.isPinned ? "pin.slash" : "pin")
+            }
+            Button(role: .destructive) {
+                onDelete(session.id)
+            } label: {
+                Label(selectedSessionIDs.contains(session.id) && selectedSessionIDs.count > 1 ? "Delete Selected Sessions" : "Delete Session", systemImage: "trash")
+            }
+        }
+    }
+}
+
 struct PiAgentScreen: View {
     var viewModel: AppViewModel
     var store: PiAgentSessionStore
@@ -2080,18 +2169,35 @@ struct PiAgentScreen: View {
                     if visibleSessions.isEmpty {
                         AppEmptyState("No sessions found", systemImage: "magnifyingglass", description: "Try another search.", layout: .fill)
                     } else {
-                        AppList(
-                            sections: [AppListSection(id: "sessions", title: nil, items: visibleSessions)],
-                            selection: .multi($selectedSessionIDs),
-                            cornerRadius: AppTheme.Chat.subCardCornerRadius,
-                            rowHorizontalPadding: 0,
-                            rowVerticalPadding: 0,
-                            listHorizontalInset: 6
-                        ) { session in
-                            sessionListRow(session)
-                        }
-                        .animation(.snappy(duration: 0.24), value: visibleSessionIDs)
-                        .bottomEdgeFade(height: 34)
+                        SessionListContent(
+                            visibleSessions: visibleSessions,
+                            selectedSessionIDs: selectedSessionIDs,
+                            renamingSessionID: renamingSessionID,
+                            workingSessionIDs: workingVisibleSessionIDs,
+                            generatingTitleIDs: viewModel.piAgentTitleGeneratingSessionIDs,
+                            activityByID: visibleSessionActivityByID,
+                            projectsByID: visibleSessionProjectsByID,
+                            selection: $selectedSessionIDs,
+                            onSelect: { session in
+                                renamingSessionID = nil
+                                selectSessionFromList(session)
+                            },
+                            onBeginRename: { session in
+                                selectSessionFromList(session, forceSingle: true)
+                                renamingSessionID = session.id
+                            },
+                            onEndRename: { renamingSessionID = nil },
+                            onRename: { viewModel.renamePiAgentSession($0, title: $1) },
+                            onTogglePinned: { viewModel.togglePiAgentSessionPinned($0) },
+                            onDelete: { id in
+                                requestDeleteSessions(
+                                    selectedSessionIDs.contains(id) && selectedSessionIDs.count > 1
+                                        ? selectedSessionIDs
+                                        : [id]
+                                )
+                            }
+                        )
+                        .equatable()
                     }
                 }
             }
@@ -2099,50 +2205,28 @@ struct PiAgentScreen: View {
         .background(Color.clear)
     }
 
-    @ViewBuilder
-    private func sessionListRow(_ session: PiAgentSessionRecord) -> some View {
-        let isWorking = viewModel.piAgentSessionIsWorking(session)
+    // Per-row dynamic state resolved up front so the session list can be an
+    // Equatable view (see SessionListContent): comparing these resolved values is
+    // what lets a streaming-cadence body re-eval skip the list unless a row's
+    // contents actually changed. Each iterates only the (cached) visible sessions.
+    private var workingVisibleSessionIDs: Set<UUID> {
+        Set(visibleSessions.filter { viewModel.piAgentSessionIsWorking($0) }.map(\.id))
+    }
 
-        PiAgentSessionRow(
-            session: session,
-            project: viewModel.projectByPath[session.projectPath],
-            isSelected: selectedSessionIDs.contains(session.id),
-            isRunning: isWorking,
-            isRenaming: renamingSessionID == session.id,
-            isGeneratingTitle: viewModel.piAgentTitleGeneratingSessionIDs.contains(session.id),
-            gitActivity: sessionActivityCache[session.id] ?? .none,
-            onSelect: {
-                renamingSessionID = nil
-                selectSessionFromList(session)
-            },
-            onBeginRename: {
-                selectSessionFromList(session, forceSingle: true)
-                renamingSessionID = session.id
-            },
-            onEndRename: { renamingSessionID = nil },
-            onRename: { viewModel.renamePiAgentSession(session.id, title: $0) },
-            onTogglePinned: { viewModel.togglePiAgentSessionPinned(session.id) },
-            onDelete: {
-                requestDeleteSessions(
-                    selectedSessionIDs.contains(session.id) && selectedSessionIDs.count > 1
-                        ? selectedSessionIDs
-                        : [session.id]
-                )
-            }
-        )
-        .equatable()
-        .contextMenu {
-            Button {
-                viewModel.togglePiAgentSessionPinned(session.id)
-            } label: {
-                Label(session.isPinned ? "Unpin Session" : "Pin Session", systemImage: session.isPinned ? "pin.slash" : "pin")
-            }
-            Button(role: .destructive) {
-                requestDeleteSessions(selectedSessionIDs.contains(session.id) && selectedSessionIDs.count > 1 ? selectedSessionIDs : [session.id])
-            } label: {
-                Label(selectedSessionIDs.contains(session.id) && selectedSessionIDs.count > 1 ? "Delete Selected Sessions" : "Delete Session", systemImage: "trash")
-            }
+    private var visibleSessionActivityByID: [UUID: PiAgentSessionGitActivity] {
+        var map: [UUID: PiAgentSessionGitActivity] = [:]
+        for session in visibleSessions where sessionActivityCache[session.id] != nil {
+            map[session.id] = sessionActivityCache[session.id]
         }
+        return map
+    }
+
+    private var visibleSessionProjectsByID: [UUID: DiscoveredProject?] {
+        var map: [UUID: DiscoveredProject?] = [:]
+        for session in visibleSessions {
+            map[session.id] = viewModel.projectByPath[session.projectPath]
+        }
+        return map
     }
 
     private var activeSessionColumn: some View {
