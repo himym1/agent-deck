@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Version tag (e.g. v1.0)'
+        description: 'Version tag (e.g. v1.7 or v1.7.1)'
         required: true
 
 permissions:
@@ -314,6 +314,9 @@ jobs:
           repo = os.environ["GITHUB_REPOSITORY"]
           min_os = os.environ["MIN_OS"]
           pubdate = os.environ["PUBDATE"]
+          version_parts = version.split(".")
+          is_major_release = len(version_parts) == 2 and version_parts[1] == "0"
+          should_phase_release = not is_major_release
 
           notes_md = subprocess.check_output(
               ["gh", "release", "view", tag, "--json", "body", "--jq", ".body"],
@@ -333,6 +336,12 @@ jobs:
               f"      <sparkle:version>{run}</sparkle:version>",
               f"      <sparkle:shortVersionString>{version}</sparkle:shortVersionString>",
               f"      <sparkle:minimumSystemVersion>{min_os}</sparkle:minimumSystemVersion>",
+          ]
+          if should_phase_release:
+              # Patch and minor releases are still visible immediately to manual checks,
+              # while scheduled checks roll out across Sparkle's seven groups.
+              lines.append("      <sparkle:phasedRolloutInterval>86400</sparkle:phasedRolloutInterval>")
+          lines += [
               f'      <enclosure url="{url}" type="application/octet-stream" {ed}/>',
               "      <description><![CDATA[",
               notes_html,

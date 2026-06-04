@@ -214,6 +214,15 @@ struct ContentView: View {
 
     var body: some View {
         mainContent
+            // One calm loading state on launch instead of each pane (and the
+            // background project/agent/skill/gh refresh) flickering in piecemeal.
+            .overlay {
+                if !viewModel.hasCompletedInitialRefresh {
+                    AppInitialLoadOverlay()
+                        .transition(.opacity)
+                }
+            }
+            .animation(.easeInOut(duration: 0.3), value: viewModel.hasCompletedInitialRefresh)
             .sheet(isPresented: $isOnboardingPresented, onDismiss: completeOnboarding) {
                 WelcomeOnboardingSheet(viewModel: viewModel) { target in
                     if let target {

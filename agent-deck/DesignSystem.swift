@@ -398,6 +398,51 @@ struct AppLoadingView: View {
     }
 }
 
+/// Full-window frosted overlay shown until the first workspace refresh
+/// (projects + agents + skills + GitHub) completes. On launch that refresh
+/// fans out background work — project discovery, `gh` calls, file scans — that
+/// makes the individual panes load piecemeal and feel janky. Covering the window
+/// with one calm loading state until `AppViewModel.hasCompletedInitialRefresh`
+/// flips presents a single intentional moment instead, and blocks interaction
+/// with half-populated views. Fades out (see the call site's `.animation`).
+struct AppInitialLoadOverlay: View {
+    var message: String = "Loading workspace…"
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(.regularMaterial)
+                .ignoresSafeArea()
+
+            VStack(spacing: 18) {
+                Image("pi")
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 34, height: 34)
+                    .foregroundStyle(AppTheme.piLogo.gradient)
+
+                AppSpinner()
+
+                Text(message)
+                    .font(AppTheme.Font.callout.weight(.semibold))
+                    .foregroundStyle(AppTheme.mutedText)
+            }
+            .padding(.horizontal, 36)
+            .padding(.vertical, 30)
+            .background(
+                RoundedRectangle(cornerRadius: AppTheme.Chat.panelCornerRadius, style: .continuous)
+                    .fill(.thinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: AppTheme.Chat.panelCornerRadius, style: .continuous)
+                            .stroke(AppTheme.contentStroke, lineWidth: 1)
+                    )
+            )
+            .shadow(color: .black.opacity(0.18), radius: 24, y: 10)
+        }
+    }
+}
+
 /// Themed indeterminate spinner. Use everywhere instead of `ProgressView()`
 /// so the spinner stroke tracks the active app theme accent. macOS otherwise
 /// paints `NSProgressIndicator` from `NSColor.controlAccentColor`, which
@@ -1132,6 +1177,8 @@ struct AppKeyValueList: View {
                         .foregroundStyle(AppTheme.mutedText)
                     Text(row.1)
                         .textSelection(.enabled)
+                        .lineLimit(3)
+                        .truncationMode(.middle)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if row.0 != rows.last?.0 {

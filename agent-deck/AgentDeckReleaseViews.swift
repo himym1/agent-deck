@@ -25,7 +25,7 @@ struct PiAgentReleaseToolbarButton: View {
     }
 }
 
-/// Replaces `scripts/release.sh`: preflights main, lets you pick a minor/major
+/// Replaces `scripts/release.sh`: preflights main, lets you pick a patch/minor/major
 /// bump, and tags + pushes. Follows the shared modal-sheet chrome.
 struct AgentDeckReleaseSheet: View {
     var viewModel: AppViewModel
@@ -148,6 +148,7 @@ struct AgentDeckReleaseSheet: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppTheme.mutedText)
                     Picker("Bump", selection: $bump) {
+                        Text("Patch — \(preflight.nextPatch)").tag(ReleaseService.Bump.patch)
                         Text("Minor — \(preflight.nextMinor)").tag(ReleaseService.Bump.minor)
                         Text("Major — \(preflight.nextMajor)").tag(ReleaseService.Bump.major)
                     }

@@ -196,7 +196,7 @@ struct GitRepositoryService {
         )
     }
 
-    /// The highest `v<MAJOR>.<MINOR>` tag, or nil when the repo has none.
+    /// The highest `v<MAJOR>.<MINOR>[.<PATCH>]` tag, or nil when the repo has none.
     func latestVersionTag(in repositoryURL: URL) async throws -> String? {
         let text = try await runText(
             arguments: ["tag", "-l", "v*.*", "--sort=-v:refname"],
