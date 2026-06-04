@@ -2456,13 +2456,17 @@ struct PiAgentScreen: View {
                 ))
             }
             for request in store.supervisorRequests(for: session.id).filter({ $0.status == .pending }) {
+                let supervisorPayload = NativeSupervisorPayload.make(
+                    request: request,
+                    onRespond: { response in viewModel.respondToSubagentSupervisorRequest(request.id, parentSessionID: session.id, response: response) },
+                    onCancel: { viewModel.cancelSubagentSupervisorRequest(request.id, parentSessionID: session.id) }
+                )
                 descriptors.append(PiAgentTranscriptBlockDescriptor(
                     id: "supervisor-request-\(request.id)",
-                    view: AnyView(PiSubagentSupervisorRequestCard(
-                        request: request,
-                        onRespond: { response in viewModel.respondToSubagentSupervisorRequest(request.id, parentSessionID: session.id, response: response) },
-                        onCancel: { viewModel.cancelSubagentSupervisorRequest(request.id, parentSessionID: session.id) }
-                    )),
+                    view: nil,
+                    kind: .native(.of(PiAgentNativeSupervisorCardView.self) { view, width in
+                        view.configure(payload: supervisorPayload, width: width)
+                    }),
                     baseRevision: request.hashValue,
                     estimatedContentHeight: { _ in 180 },
                     threadID: nil,
