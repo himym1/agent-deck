@@ -755,7 +755,7 @@ struct PiSubagentActivityGlyph: View {
                     }
             } else {
                 Image(systemName: "paperplane")
-                    .imageScale(.medium)
+                    .imageScale(.large)
                     .fontWeight(.medium)
                     .foregroundStyle(color)
                     .transaction { transaction in
