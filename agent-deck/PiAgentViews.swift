@@ -435,6 +435,40 @@ private struct PiAgentTranscriptBlockDescriptor {
     var bottomInset: CGFloat = 0
 }
 
+/// The transcript-rendering unit, deliberately split out from `PiAgentScreen` so
+/// that it — and only it — observes `PiAgentTranscriptRenderCache`. The render
+/// cache pulses `streamingRevision` ~30Hz during streaming; isolating the
+/// subscription here keeps that pulse from re-evaluating the screen's session
+/// list and composer (see the `@State transcriptCache` note in `PiAgentScreen`).
+///
+/// `makeItems` is supplied by the parent and re-run on every pulse. It reads the
+/// live cache (`threads`) and parent references (`store`/`viewModel`), so the
+/// rebuilt items reflect the latest streamed content even though the parent view
+/// struct captured in the closure isn't itself re-evaluated between pulses.
+private struct PiAgentTranscriptHost: View {
+    @ObservedObject var cache: PiAgentTranscriptRenderCache
+    let sessionID: UUID?
+    let bottomScrollRequest: Int
+    let makeItems: () -> [PiAgentAppKitTranscriptItem]
+    let onPinnedToBottomChange: (Bool) -> Void
+    let onBenchAdvanceSession: () -> Void
+    let benchSessionCount: () -> Int
+
+    var body: some View {
+        PiAgentAppKitTranscriptView(
+            items: makeItems(),
+            sessionID: sessionID,
+            renderRevision: cache.renderRevision,
+            streamingRevision: cache.streamingRevision,
+            autoScrollTurnRevision: cache.autoScrollTurnRevision,
+            bottomScrollRequest: bottomScrollRequest,
+            onPinnedToBottomChange: onPinnedToBottomChange,
+            onBenchAdvanceSession: onBenchAdvanceSession,
+            benchSessionCount: benchSessionCount
+        )
+    }
+}
+
 private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
     let items: [PiAgentAppKitTranscriptItem]
     let sessionID: UUID?
@@ -1896,7 +1930,16 @@ struct PiAgentScreen: View {
     @State private var composerHistoryDraft = ""
     @State private var selectedSubagentTranscriptRunID: UUID?
     @State private var selectedSubagentGraphRunID: UUID?
-    @StateObject private var transcriptCache = PiAgentTranscriptRenderCache()
+    // Owned but NOT observed: `@State` (not `@StateObject`) holds the cache for the
+    // view's lifetime without subscribing `PiAgentScreen.body` to its
+    // `objectWillChange`. The cache pulses `streamingRevision` ~30Hz while a session
+    // streams; subscribing the whole screen re-evaluated the session list + composer
+    // on every pulse (the SessionListContent re-eval storm). Only the extracted
+    // `PiAgentTranscriptHost` child takes the cache as `@ObservedObject`, so the
+    // pulse now re-renders the transcript table alone. The cache is driven entirely
+    // by `store.*`-keyed `.task`/`.onChange` triggers, which the parent still
+    // observes — so dropping the subscription doesn't miss any update.
+    @State private var transcriptCache = PiAgentTranscriptRenderCache()
     @State private var transcriptBottomScrollRequest = 0
     @State private var transcriptIsPinnedToBottom = true
     @State private var showArchivedPreCompactionTranscript = false
@@ -2358,13 +2401,17 @@ struct PiAgentScreen: View {
     }
 
     private var transcript: some View {
-        PiAgentAppKitTranscriptView(
-            items: appKitTranscriptItems,
+        // `PiAgentTranscriptHost` is the ONLY view that observes `transcriptCache`,
+        // so the ~30Hz streaming pulse re-renders the transcript table alone and no
+        // longer invalidates this screen's session list / composer. `makeItems` is
+        // re-run inside the host on each pulse; it reads the live cache + parent
+        // references (store/viewModel), so the items stay correct even though the
+        // parent struct it captured isn't re-evaluated between pulses.
+        PiAgentTranscriptHost(
+            cache: transcriptCache,
             sessionID: store.selectedSession?.id,
-            renderRevision: transcriptCache.renderRevision,
-            streamingRevision: transcriptCache.streamingRevision,
-            autoScrollTurnRevision: transcriptCache.autoScrollTurnRevision,
             bottomScrollRequest: transcriptBottomScrollRequest,
+            makeItems: { appKitTranscriptItems },
             onPinnedToBottomChange: { isPinnedToBottom in
                 transcriptIsPinnedToBottom = isPinnedToBottom
             },
