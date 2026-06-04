@@ -94,6 +94,13 @@ enum AppTheme {
     static var brandAccentShadow: Color { ThemeManager.shared.accentShadow.color }
     static var assistantAccent: Color { ThemeManager.shared.activeTheme.assistant.color }
 
+    /// Subtle theme tint for Liquid Glass *chrome* (composer chips, glass circles,
+    /// floating panels) so the glass picks up the active theme rather than reading as
+    /// a neutral system material. Kept low-opacity so it tints the glass rather than
+    /// coloring it — the button-role tints (primary accent, destructive red) are
+    /// separate and intentionally stronger.
+    static var glassTint: Color { brandAccent.opacity(0.55) }
+
     // Source-kind tags for library list rows / detail avatars. Each kind has a
     // distinct hue per theme so the avatar tint signals where an item came from.
     // The "global" fallback intentionally reuses `brandAccent` — items with no
@@ -208,18 +215,18 @@ extension View {
     /// the navigation/control layer — do NOT apply to content cells (transcript cards,
     /// list rows).
     func appGlassCapsule() -> some View {
-        glassEffect(.regular, in: Capsule(style: .continuous))
+        glassEffect(.regular.tint(AppTheme.glassTint), in: Capsule(style: .continuous))
     }
 
     /// Glass circle for icon-only chrome buttons (compact, attach, etc.).
     func appGlassCircle() -> some View {
-        glassEffect(.regular, in: Circle())
+        glassEffect(.regular.tint(AppTheme.glassTint), in: Circle())
     }
 
     /// Glass rounded rectangle for larger chrome surfaces — popovers, dropdowns,
     /// floating panels. Use for non-capsule, non-circle navigation-layer surfaces.
     func appGlassPanel(cornerRadius: CGFloat = 12) -> some View {
-        glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        glassEffect(.regular.tint(AppTheme.glassTint), in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 
     // MARK: - Button style modifiers
