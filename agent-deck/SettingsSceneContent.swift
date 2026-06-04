@@ -651,6 +651,9 @@ private struct AppearanceSettingsTab: View {
                 AppTextField(text: nameBinding, placeholder: "Theme name")
                     .frame(width: 220)
             }
+            colorRow("Background", \.background, note: "The window and app canvas.")
+            colorRow("Surface", \.surface, note: "Panels, cards, sidebar, and list rows.")
+            colorRow("Border", \.stroke, note: "Separators and card outlines.")
             colorRow("Accent", \.accent, note: "Buttons, links, and selection highlights.")
             colorRow("You", \.assistant, note: "User-side transcript bubbles and secondary accents.")
             colorRow("Thinking", \.thinking)
