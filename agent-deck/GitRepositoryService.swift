@@ -254,8 +254,12 @@ struct GitRepositoryService {
     }
 
     func createAnnotatedTag(_ tag: String, message: String, in repositoryURL: URL) async throws {
+        // --cleanup=verbatim keeps the message exactly as written. Without it,
+        // git tag defaults to `strip`, which deletes lines beginning with `#`
+        // (treating them as comments) — that would silently drop markdown
+        // headings like "### New features" from AI-drafted release notes.
         try await runGitMutation(
-            arguments: ["tag", "-a", tag, "-m", message],
+            arguments: ["tag", "-a", "--cleanup=verbatim", tag, "-m", message],
             commandDescription: "git tag -a \(tag)",
             in: repositoryURL
         )
