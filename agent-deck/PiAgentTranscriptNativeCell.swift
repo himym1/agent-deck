@@ -629,7 +629,13 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
     /// bubbles (rare event, low noise); set `TranscriptHoverDebug` to also log
     /// the stable (no-move) cases as confirmation.
     private static let hoverLog = Logger(subsystem: "streetcoding.agent-deck", category: "HoverShift")
-    private static let hoverDebug = UserDefaults.standard.bool(forKey: "TranscriptHoverDebug")
+    private static let hoverDebug: Bool = {
+#if DEBUG
+        UserDefaults.standard.bool(forKey: "TranscriptHoverDebug")
+#else
+        false
+#endif
+    }()
 
     private func detectHoverMove(_ phase: String, _ action: () -> Void) {
         // Fast path: hover is a hot interaction. `action` (setButtonsVisible)

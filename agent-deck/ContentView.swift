@@ -120,28 +120,17 @@ struct WindowBackgroundApplier: NSViewRepresentable {
     }
 }
 
-/// `NSHostingView` for the launch splash that (a) ignores the window's safe area so
-/// the splash lays out edge-to-edge and centres in the *whole* window, and (b)
-/// swallows every mouse event inside its bounds — including over empty material — so
-/// nothing behind it (the toolbar especially) receives hover/click while it's up.
-private final class InitialLoadCoverHostingView<Content: View>: NSHostingView<Content> {
-    override var safeAreaInsets: NSEdgeInsets { NSEdgeInsetsZero }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        // `point` is in the superview's coordinate space.
-        guard frame.contains(point) else { return super.hitTest(point) }
-        return super.hitTest(point) ?? self
-    }
-}
-
 /// Covers the ENTIRE window — titlebar and toolbar included — with the launch
 /// splash, then fades it out once `isActive` flips false.
 ///
 /// A normal SwiftUI `.overlay` only reaches the window's content region; the
 /// `NavigationSplitView` toolbar lives in the titlebar *above* that, so it would
-/// stay visible and clickable through the splash. Installing the splash as a
-/// subview of the window's frame view (the layer that hosts the titlebar) puts it
-/// on top of everything and lets it block all interaction.
+/// stay visible and clickable through the splash. We cover everything with a
+/// borderless **child window** ordered above the main window. (An earlier version
+/// parented the splash into the window's private `NSThemeFrame`, which worked but
+/// made AppKit log `_didAddUnknownSubview` every launch and is flagged "may break
+/// in the future." A child window is the supported way to overlay the
+/// titlebar/traffic-lights and swallow all interaction.)
 struct AppInitialLoadWindowCover: NSViewRepresentable {
     /// Master switch for the launch splash. Flip to `false` to disable it — the
     /// workspace usually loads fast enough that the splash isn't strictly needed.
@@ -181,7 +170,13 @@ struct AppInitialLoadWindowCover: NSViewRepresentable {
     }
 
     final class Coordinator {
-        private var cover: NSView?
+        /// Borderless child window that overlays the whole main window.
+        private var coverWindow: NSWindow?
+        /// Parent-window frame observers, removed on dismiss. Child windows track
+        /// the parent's *moves* automatically but not its *resizes*, so we mirror
+        /// the frame on both to stay aligned (matters if a restore/resize lands
+        /// while the splash is up).
+        private var frameObservers: [NSObjectProtocol] = []
         /// When the cover became visible, so a too-fast launch still shows the
         /// splash for at least `minimumOnScreen` before it fades.
         private var shownAt: Date?
@@ -195,9 +190,9 @@ struct AppInitialLoadWindowCover: NSViewRepresentable {
         private let maximumOnScreen: TimeInterval = 12.0
 
         func sync(active: Bool, anchor: NSView, retries: Int = 12) {
-            guard let frameView = anchor.window?.contentView?.superview,
-                  frameView.bounds.width > 1, frameView.bounds.height > 1 else {
-                // The window/frame may not exist yet on the very first launch pass.
+            guard let parent = anchor.window,
+                  parent.frame.width > 1, parent.frame.height > 1 else {
+                // The window may not exist yet on the very first launch pass.
                 if active && retries > 0 {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak anchor] in
                         guard let anchor else { return }
@@ -208,18 +203,29 @@ struct AppInitialLoadWindowCover: NSViewRepresentable {
             }
 
             if active {
-                guard cover == nil else { return }
-                let host = InitialLoadCoverHostingView(rootView: AppInitialLoadOverlay())
-                host.frame = frameView.bounds
-                host.autoresizingMask = [.width, .height]
-                frameView.addSubview(host) // last subview → above the toolbar
-                cover = host
+                guard coverWindow == nil else { return }
+                let host = NSHostingView(rootView: AppInitialLoadOverlay())
+                let window = NSWindow(
+                    contentRect: parent.frame,
+                    styleMask: .borderless,
+                    backing: .buffered,
+                    defer: false
+                )
+                window.isOpaque = false
+                window.backgroundColor = .clear
+                window.hasShadow = false
+                window.ignoresMouseEvents = false // swallow clicks so nothing leaks through
+                window.contentView = host
+                window.setFrame(parent.frame, display: true)
+                parent.addChildWindow(window, ordered: .above)
+                coverWindow = window
                 shownAt = Date()
+                installFrameSync(parent: parent, cover: window)
                 // Hard ceiling — dismiss no matter what `active` ever reports.
                 DispatchQueue.main.asyncAfter(deadline: .now() + maximumOnScreen) { [weak self] in
                     self?.dismiss()
                 }
-            } else if cover != nil {
+            } else if coverWindow != nil {
                 // Keep the splash up for its minimum, then fade. Re-dispatch rather
                 // than dismiss now if the refresh beat the floor.
                 let elapsed = shownAt.map { Date().timeIntervalSince($0) } ?? minimumOnScreen
@@ -235,16 +241,40 @@ struct AppInitialLoadWindowCover: NSViewRepresentable {
             }
         }
 
+        private func installFrameSync(parent: NSWindow, cover: NSWindow) {
+            let center = NotificationCenter.default
+            let mirror: (Notification) -> Void = { [weak parent, weak cover] _ in
+                MainActor.assumeIsolated {
+                    guard let parent, let cover else { return }
+                    cover.setFrame(parent.frame, display: false)
+                }
+            }
+            frameObservers = [
+                center.addObserver(forName: NSWindow.didResizeNotification, object: parent, queue: .main, using: mirror),
+                center.addObserver(forName: NSWindow.didMoveNotification, object: parent, queue: .main, using: mirror)
+            ]
+        }
+
+        private func removeFrameSync() {
+            let center = NotificationCenter.default
+            frameObservers.forEach(center.removeObserver)
+            frameObservers.removeAll()
+        }
+
         private func dismiss() {
-            guard let existing = cover else { return }
-            cover = nil
+            guard let window = coverWindow else { return }
+            coverWindow = nil
             shownAt = nil
+            removeFrameSync()
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.3
                 ctx.allowsImplicitAnimation = true
-                existing.animator().alphaValue = 0
+                window.animator().alphaValue = 0
             } completionHandler: {
-                MainActor.assumeIsolated { existing.removeFromSuperview() }
+                MainActor.assumeIsolated {
+                    window.parent?.removeChildWindow(window)
+                    window.orderOut(nil)
+                }
             }
         }
     }
@@ -394,7 +424,15 @@ struct ContentView: View {
             // background project/agent/skill/gh refresh) flickering in piecemeal.
             // Installed at the window level so it covers the whole window —
             // titlebar and toolbar included — and blocks interaction underneath.
-            .background(AppInitialLoadWindowCover(isActive: AppInitialLoadWindowCover.isEnabled && !viewModel.hasCompletedInitialRefresh))
+            // Suppressed during first-run onboarding so a brand-new user lands
+            // straight on the welcome flow instead of watching the splash fade out
+            // behind it. `isOnboardingPresented` is driven by the persisted
+            // completion flag, so quitting mid-onboarding and relaunching keeps the
+            // splash skipped until onboarding is actually finished.
+            .background(AppInitialLoadWindowCover(
+                isActive: AppInitialLoadWindowCover.isEnabled
+                    && !isOnboardingPresented
+                    && !viewModel.hasCompletedInitialRefresh))
             .sheet(isPresented: $isOnboardingPresented, onDismiss: completeOnboarding) {
                 WelcomeOnboardingSheet(viewModel: viewModel) { target in
                     if let target {

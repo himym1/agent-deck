@@ -973,6 +973,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// first time a content-bearing transcript appears, and — once armed —
         /// drives the per-session continuation after each programmatic advance.
         private func maybeStartScrollBenchmark() {
+#if DEBUG
             guard UserDefaults.standard.bool(forKey: "ScrollBenchEnabled") else { return }
             guard let tableView else { return }
 
@@ -1004,6 +1005,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 // Empty/draft or already-tested session — skip straight on.
                 advanceOrFinish()
             }
+#endif
         }
 
         /// Let the freshly-shown transcript settle (initial auto-scroll + first
@@ -1722,21 +1724,42 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             configuredBottomInset = item.bottomInset
         }
 
-        /// AppKit's per-pass layout hook — also where the row reports its height.
-        /// The cell already laid out to display, so reading the native row's
-        /// measured size costs nothing extra; whenever it drifts we hand the
-        /// coordinator the new height and it re-tiles the row.
+        private var pendingLayoutHeightReport = false
+
+        /// AppKit's per-pass layout hook, and where the row reports height drift.
         override func layout() {
             if let profiler {
                 profiler.measureCellLayout { super.layout() }
             } else {
                 super.layout()
             }
-            guard let row = nativeRow, let spec = nativeRowSpec, let itemID = configuredItemID, configuredWidth > 1 else { return }
-            let h = configuredTopInset + spec.measure(row, configuredWidth) + configuredBottomInset
-            guard h > 0, h.isFinite, abs(h - lastIntrinsicHeight) > 0.5 else { return }
-            lastIntrinsicHeight = h
-            onMeasuredHeight?(itemID, h)
+            guard nativeRow != nil, nativeRowSpec != nil, configuredItemID != nil, configuredWidth > 1 else { return }
+            // Reporting height means MEASURING the row, which forces its subtree to
+            // lay out. AppKit recurses into that subtree only AFTER this `layout()`
+            // returns, so forcing it here is illegal re-entrancy — it logs
+            // `_NSDetectedLayoutRecursion` (captured: cell.layout → spec.measure →
+            // NativeMarkdownTextContainer.measureHeight → stackView.layoutSubtreeIfNeeded
+            // inside `_layoutSubtreeWithOldSize`). Hop out of the pass and measure
+            // once it has completed; coalesced so streaming's many passes don't
+            // stack up. Until it lands, `heightOfRow` keeps the row's estimate, and
+            // freshly-streamed rows already report synchronously via
+            // `forcedIntrinsicHeight()` — this path only catches later drift.
+            scheduleLayoutHeightReport()
+        }
+
+        private func scheduleLayoutHeightReport() {
+            guard !pendingLayoutHeightReport else { return }
+            pendingLayoutHeightReport = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.pendingLayoutHeightReport = false
+                guard let row = self.nativeRow, let spec = self.nativeRowSpec,
+                      let itemID = self.configuredItemID, self.configuredWidth > 1 else { return }
+                let h = self.configuredTopInset + spec.measure(row, self.configuredWidth) + self.configuredBottomInset
+                guard h > 0, h.isFinite, abs(h - self.lastIntrinsicHeight) > 0.5 else { return }
+                self.lastIntrinsicHeight = h
+                self.onMeasuredHeight?(itemID, h)
+            }
         }
 
         /// Force the native row to lay out *now* and return its height, instead of

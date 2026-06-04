@@ -379,6 +379,101 @@ extension Theme {
         stroke: ThemeColor(102, 88, 66)
     )
 
+    static let arlecchino = Theme(
+        id: UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!,
+        name: "Arlecchino",
+        isBuiltIn: true,
+        accent: ThemeColor(65, 150, 255),
+        assistant: ThemeColor(230, 50, 200),
+        thinking: ThemeColor(160, 80, 255),
+        tool: ThemeColor(255, 195, 0),
+        error: ThemeColor(255, 65, 75),
+        stderr: ThemeColor(255, 140, 80),
+        diffAdded: ThemeColor(45, 220, 110),
+        sourceBuiltin: ThemeColor(255, 175, 45),
+        sourceLibrary: ThemeColor(185, 110, 245),
+        sourceProject: ThemeColor(45, 210, 190),
+        background: ThemeColor(18, 16, 24),
+        surface: ThemeColor(28, 24, 38),
+        stroke: ThemeColor(70, 60, 95)
+    )
+
+    static let pastel = Theme(
+        id: UUID(uuidString: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD")!,
+        name: "Pastel",
+        isBuiltIn: true,
+        accent: ThemeColor(162, 210, 255),
+        assistant: ThemeColor(205, 180, 219),
+        thinking: ThemeColor(189, 224, 254),
+        tool: ThemeColor(255, 200, 221),
+        error: ThemeColor(255, 175, 204),
+        stderr: ThemeColor(255, 160, 170),
+        diffAdded: ThemeColor(170, 225, 175),
+        sourceBuiltin: ThemeColor(255, 210, 180),
+        sourceLibrary: ThemeColor(205, 180, 219),
+        sourceProject: ThemeColor(160, 220, 210),
+        background: ThemeColor(35, 28, 40),
+        surface: ThemeColor(48, 38, 55),
+        stroke: ThemeColor(110, 95, 125)
+    )
+
+    static let fiery = Theme(
+        id: UUID(uuidString: "EEEEEEEE-EEEE-EEEE-EEEE-EEEEEEEEEEEE")!,
+        name: "Fiery",
+        isBuiltIn: true,
+        accent: ThemeColor(193, 18, 31),
+        assistant: ThemeColor(102, 155, 188),
+        thinking: ThemeColor(230, 145, 60),
+        tool: ThemeColor(253, 240, 213),
+        error: ThemeColor(120, 0, 0),
+        stderr: ThemeColor(215, 55, 50),
+        diffAdded: ThemeColor(90, 195, 115),
+        sourceBuiltin: ThemeColor(240, 175, 50),
+        sourceLibrary: ThemeColor(102, 155, 188),
+        sourceProject: ThemeColor(85, 195, 155),
+        background: ThemeColor(0, 48, 73),
+        surface: ThemeColor(12, 60, 88),
+        stroke: ThemeColor(65, 110, 140)
+    )
+
+    static let purpleRaindrops = Theme(
+        id: UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")!,
+        name: "Purple Raindrops",
+        isBuiltIn: true,
+        accent: ThemeColor(67, 97, 238),
+        assistant: ThemeColor(247, 37, 133),
+        thinking: ThemeColor(63, 55, 201),
+        tool: ThemeColor(76, 201, 240),
+        error: ThemeColor(181, 23, 158),
+        stderr: ThemeColor(114, 9, 183),
+        diffAdded: ThemeColor(80, 215, 170),
+        sourceBuiltin: ThemeColor(72, 149, 239),
+        sourceLibrary: ThemeColor(58, 12, 163),
+        sourceProject: ThemeColor(86, 11, 173),
+        background: ThemeColor(16, 8, 28),
+        surface: ThemeColor(26, 16, 42),
+        stroke: ThemeColor(72, 12, 168)
+    )
+
+    static let neonJungle = Theme(
+        id: UUID(uuidString: "10101010-1010-1010-1010-101010101010")!,
+        name: "Neon Jungle",
+        isBuiltIn: true,
+        accent: ThemeColor(65, 234, 212),
+        assistant: ThemeColor(255, 32, 110),
+        thinking: ThemeColor(155, 65, 235),
+        tool: ThemeColor(251, 255, 18),
+        error: ThemeColor(255, 55, 80),
+        stderr: ThemeColor(225, 40, 145),
+        diffAdded: ThemeColor(125, 240, 65),
+        sourceBuiltin: ThemeColor(245, 205, 30),
+        sourceLibrary: ThemeColor(65, 234, 212),
+        sourceProject: ThemeColor(75, 235, 65),
+        background: ThemeColor(12, 15, 10),
+        surface: ThemeColor(20, 24, 16),
+        stroke: ThemeColor(50, 65, 50)
+    )
+
     /// Default first — the rest are presented as presets in Settings.
     static let builtInThemes: [Theme] = [
         defaultTheme,
@@ -391,7 +486,12 @@ extension Theme {
         catppuccinMocha,
         vortex,
         crimson,
-        sunburst
+        sunburst,
+        arlecchino,
+        pastel,
+        fiery,
+        purpleRaindrops,
+        neonJungle
     ]
 
     // Gradient/depth shades derived from the accent. Tuned so the Default

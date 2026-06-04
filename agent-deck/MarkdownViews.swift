@@ -51,20 +51,30 @@ private enum GitHubMarkdownAttachmentResolver {
     static func resolve(in markdown: String) async -> String {
         let urls = attachmentURLs(in: markdown)
         guard !urls.isEmpty else { return markdown }
+#if DEBUG
         logger.info("Resolving \(urls.count, privacy: .public) GitHub markdown attachment(s).")
+#endif
         guard let token = await githubToken() else {
+#if DEBUG
             logger.error("Cannot resolve GitHub markdown attachments: `gh auth token --hostname github.com` returned no token.")
+#endif
             return markdown
         }
 
         var resolved = markdown
         for urlString in urls {
+#if DEBUG
             logger.info("Fetching GitHub markdown attachment: \(urlString, privacy: .public)")
+#endif
             guard let dataURL = await dataURL(for: urlString, token: token) else {
+#if DEBUG
                 logger.error("Failed to resolve GitHub markdown attachment: \(urlString, privacy: .public)")
+#endif
                 continue
             }
+#if DEBUG
             logger.info("Resolved GitHub markdown attachment to data URL (\(dataURL.count, privacy: .public) characters).")
+#endif
             resolved = resolved.replacingOccurrences(of: urlString, with: dataURL)
         }
         return resolved
@@ -85,10 +95,14 @@ private enum GitHubMarkdownAttachmentResolver {
     private static func githubToken() async -> String? {
         await Task.detached(priority: .utility) {
             guard let ghURL = ghExecutableURL() else {
+#if DEBUG
                 logger.error("Cannot resolve GitHub markdown attachments: `gh` executable was not found in the app environment.")
+#endif
                 return nil
             }
+#if DEBUG
             logger.info("Using gh executable at \(ghURL.path, privacy: .public) for markdown attachment auth.")
+#endif
             let process = Process()
             process.executableURL = ghURL
             process.arguments = ["auth", "token", "--hostname", "github.com"]
@@ -99,19 +113,25 @@ private enum GitHubMarkdownAttachmentResolver {
                 try process.run()
                 process.waitUntilExit()
                 guard process.terminationStatus == 0 else {
+#if DEBUG
                     logger.error("gh auth token failed with exit code \(process.terminationStatus, privacy: .public).")
+#endif
                     return nil
                 }
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let token = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+#if DEBUG
                 if token?.isEmpty == false {
                     logger.info("Loaded GitHub token from gh CLI for markdown attachment fetch.")
                 } else {
                     logger.error("gh auth token succeeded but stdout was empty.")
                 }
+#endif
                 return token?.isEmpty == false ? token : nil
             } catch {
+#if DEBUG
                 logger.error("Failed to run gh auth token: \(error.localizedDescription, privacy: .public)")
+#endif
                 return nil
             }
         }.value
@@ -135,22 +155,32 @@ private enum GitHubMarkdownAttachmentResolver {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
+#if DEBUG
                 logger.error("Attachment fetch returned a non-HTTP response for \(urlString, privacy: .public).")
+#endif
                 return nil
             }
             guard (200..<300).contains(http.statusCode) else {
+#if DEBUG
                 logger.error("Attachment fetch failed for \(urlString, privacy: .public): HTTP \(http.statusCode, privacy: .public).")
+#endif
                 return nil
             }
             guard !data.isEmpty else {
+#if DEBUG
                 logger.error("Attachment fetch returned empty data for \(urlString, privacy: .public).")
+#endif
                 return nil
             }
             let mimeType = http.mimeType ?? "image/png"
+#if DEBUG
             logger.info("Attachment fetch succeeded for \(urlString, privacy: .public): \(data.count, privacy: .public) bytes, mime \(mimeType, privacy: .public).")
+#endif
             return "data:\(mimeType);base64,\(data.base64EncodedString())"
         } catch {
+#if DEBUG
             logger.error("Attachment fetch threw for \(urlString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+#endif
             return nil
         }
     }

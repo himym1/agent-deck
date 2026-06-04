@@ -82,7 +82,9 @@ struct PiNativeSubagentBridgeExtensions {
                 try fileManager.moveItem(at: legacyDirectory, to: stableDirectory)
                 return stableDirectory
             } catch {
+#if DEBUG
                 NSLog("Failed to migrate Agent Deck extension directory from %@ to %@: %@", legacyDirectory.path, stableDirectory.path, String(describing: error))
+#endif
                 return legacyDirectory
             }
         }
@@ -109,7 +111,9 @@ struct PiNativeSubagentBridgeExtensions {
             try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             try fileManager.copyItem(at: source, to: destination)
         } catch {
+#if DEBUG
             NSLog("Failed to migrate Agent Deck dependency artifact from %@ to %@: %@", source.path, destination.path, String(describing: error))
+#endif
         }
     }
 

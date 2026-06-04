@@ -2561,7 +2561,9 @@ final class AppViewModel: NSObject {
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
             openTerminalScript(scriptURL, for: operationID)
         } catch {
+#if DEBUG
             NSLog("Failed to create Pi update terminal script: \(error.localizedDescription)")
+#endif
         }
     }
 
@@ -2587,7 +2589,9 @@ final class AppViewModel: NSObject {
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
             openTerminalScript(scriptURL, for: operationID)
         } catch {
+#if DEBUG
             NSLog("Failed to create Pi install terminal script: \(error.localizedDescription)")
+#endif
         }
     }
 
@@ -7043,7 +7047,9 @@ final class AppViewModel: NSObject {
             do {
                 try await skillRepositorySyncService.setSparseCheckout(directories, inCloneAt: cloneURL)
             } catch {
+#if DEBUG
                 NSLog("Failed to reconcile sparse checkout for imported skill repository %@: %@", repository.displayName, String(describing: error))
+#endif
             }
         }
     }
