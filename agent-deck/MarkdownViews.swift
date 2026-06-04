@@ -10,12 +10,37 @@ struct MarkdownDocumentView: View {
     @State private var resolvedSource: String?
 
     var body: some View {
-        MarkdownWebView(content: resolvedSource ?? source, contentHeight: $contentHeight)
-            .frame(height: max(minimumHeight, contentHeight))
-            .task(id: source) {
-                resolvedSource = nil
-                resolvedSource = await GitHubMarkdownAttachmentResolver.resolve(in: source)
-            }
+        // The TextKit-based native renderer sizes in microseconds and spawns no
+        // helper process. The WKWebView path, by contrast, launches a WebContent
+        // process and can block the main thread for hundreds of ms whenever a
+        // document appears. So only pay for the web view when the content uses
+        // something the native renderer can't draw — images, tables, or raw HTML.
+        // Plain markdown (skills, memory, most docs and issue bodies) goes native.
+        if MarkdownDocumentView.requiresRichRendering(source) {
+            MarkdownWebView(content: resolvedSource ?? source, contentHeight: $contentHeight)
+                .frame(height: max(minimumHeight, contentHeight))
+                .task(id: source) {
+                    resolvedSource = nil
+                    resolvedSource = await GitHubMarkdownAttachmentResolver.resolve(in: source)
+                }
+        } else {
+            MarkdownTextView(source: source)
+                .frame(maxWidth: .infinity, minHeight: minimumHeight, alignment: .topLeading)
+        }
+    }
+
+    /// True when `source` uses markdown the native renderer (headings, paragraphs,
+    /// lists, quotes, code) can't render — images, GFM tables, or raw HTML — and so
+    /// must go through the web view to look right.
+    static func requiresRichRendering(_ source: String) -> Bool {
+        if source.contains("![") || source.contains("<img") || source.contains("<table") || source.contains("</") {
+            return true
+        }
+        // GFM table: a header row immediately followed by a |---|---| separator row.
+        return source.range(
+            of: #"(?m)^\s*\|.*\|\s*\n\s*\|?[\s:|-]*-{2,}[\s:|-]*\|"#,
+            options: .regularExpression
+        ) != nil
     }
 }
 
