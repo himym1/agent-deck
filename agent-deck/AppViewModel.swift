@@ -186,8 +186,17 @@ final class AppViewModel: NSObject {
     var githubLastError: String?
     var githubLastStatusCheckAt: Date?
     var appSettings: AppSettings = AppSettings() {
-        didSet { rebuildAutomationModelCaches() }
+        didSet {
+            rebuildAutomationModelCaches()
+            rebuildExternalSkillPathCache()
+        }
     }
+    /// Standardized `externalSkillPaths` as a set. `isImportedSkill` is called
+    /// per skill row during layout and otherwise re-allocates + standardizes
+    /// every external path for every skill (O(skills × paths) `URL` churn — a
+    /// measured Skills-tab hang hotspot). Derived from `appSettings`, so it is
+    /// observation-ignored and rebuilt in the `didSet` above.
+    @ObservationIgnored private var cachedStandardizedExternalSkillPaths: Set<String> = []
     private(set) var hasCompletedInitialRefresh = false
     private(set) var cachedHasAgentWarnings = false
     private(set) var cachedHasSkillWarnings = false
@@ -6592,6 +6601,12 @@ final class AppViewModel: NSObject {
         cachedAutomationAvailableModels = models
     }
 
+    private func rebuildExternalSkillPathCache() {
+        cachedStandardizedExternalSkillPaths = Set(
+            appSettings.externalSkillPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+        )
+    }
+
     private func rebuildWarningCaches() {
         // Rebuild the agent-display cache first — the warning computations below
         // read `filteredAgents`, which derives from `allDisplayAgents`.
@@ -6929,12 +6944,12 @@ final class AppViewModel: NSObject {
     /// True when `skill` was imported — its root path is tracked in
     /// `externalSkillPaths` (a local-folder import or a Git-synced repo skill).
     func isImportedSkill(_ skill: SkillRecord) -> Bool {
-        let fileURL = URL(fileURLWithPath: skill.filePath).standardizedFileURL
+        let paths = cachedStandardizedExternalSkillPaths
+        guard !paths.isEmpty else { return false }
+        let filePath = URL(fileURLWithPath: skill.filePath).standardizedFileURL.path
+        if paths.contains(filePath) { return true }
         let rootPath = skillDeletionTargetURL(for: skill).standardizedFileURL.path
-        return appSettings.externalSkillPaths.contains { rawPath in
-            let path = URL(fileURLWithPath: rawPath).standardizedFileURL.path
-            return path == rootPath || path == fileURL.path
-        }
+        return paths.contains(rootPath)
     }
 
     /// Filesystem + state mutations for un-importing one skill, WITHOUT
