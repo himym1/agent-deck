@@ -2739,7 +2739,15 @@ struct PiAgentScreen: View {
         subagentRuns: [UUID: PiSubagentRunRecord]
     ) -> PiAgentTranscriptCellKind? {
         switch child {
-        case .assistant, .thinking:
+        case .assistant(let entry):
+            if let summary = PiAgentSubagentSummary.cached(for: entry) {
+                let payload = NativeSubagentSummaryPayload.make(summary: summary)
+                return .native(.of(PiAgentNativeSubagentSummaryView.self) { view, width in
+                    view.configure(payload: payload, width: width)
+                })
+            }
+            return Self.nativeReplyPayload(for: child).map { .bubble($0) }
+        case .thinking:
             return Self.nativeReplyPayload(for: child).map { .bubble($0) }
         case .steering(let entry):
             // Chip-bearing steering messages keep the hosted chip layout.
