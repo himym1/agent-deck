@@ -444,26 +444,39 @@ final class NativeMarkdownTextContainer: NSView {
         guard previous.frontmatter == next.frontmatter else { return false }
         let oldBlocks = previous.blocks
         let newBlocks = next.blocks
-        guard oldBlocks.count == newBlocks.count, !oldBlocks.isEmpty else { return false }
+        // Only handle non-shrinking growth — the streaming case. A shorter document
+        // (rare: edit/merge) falls through to a full rebuild.
+        guard !oldBlocks.isEmpty, newBlocks.count >= oldBlocks.count else { return false }
 
-        // All blocks except (possibly) the last must match byte-for-byte.
+        // All old blocks except the last must match the new prefix byte-for-byte.
         let lastIndex = oldBlocks.count - 1
         for i in 0..<lastIndex where oldBlocks[i] != newBlocks[i] {
             return false
         }
 
-        // Last block: same kind metadata, different text content allowed.
-        let oldLast = oldBlocks[lastIndex].kind
-        let newLast = newBlocks[lastIndex].kind
-        guard Self.sameKindShape(oldLast, newLast) else { return false }
-
         let viewOffset = next.frontmatter != nil ? 1 : 0
-        let viewIndex = viewOffset + lastIndex
-        guard viewIndex < stackView.arrangedSubviews.count else { return false }
-        let view = stackView.arrangedSubviews[viewIndex]
-        guard let textView = Self.firstTextView(in: view) else { return false }
+        // The arranged subviews must line up with the old block count, or our indices
+        // are wrong — bail to a full rebuild rather than corrupt the stack.
+        guard stackView.arrangedSubviews.count == viewOffset + oldBlocks.count else { return false }
 
-        Self.updateTextView(textView, with: newLast)
+        // The old last block may have grown (more text streamed into the same block).
+        // Update it in place when only its text changed; a shape change forces rebuild.
+        if oldBlocks[lastIndex] != newBlocks[lastIndex] {
+            guard Self.sameKindShape(oldBlocks[lastIndex].kind, newBlocks[lastIndex].kind) else { return false }
+            let viewIndex = viewOffset + lastIndex
+            guard let textView = Self.firstTextView(in: stackView.arrangedSubviews[viewIndex]) else { return false }
+            Self.updateTextView(textView, with: newBlocks[lastIndex].kind)
+        }
+
+        // Append views for brand-new trailing blocks — a new paragraph / list item /
+        // code line appearing as the stream continues. This is what turns a long
+        // streaming message from O(N) view tear-down per new block into O(1): the
+        // existing block views are left untouched and only the new ones are built.
+        if newBlocks.count > oldBlocks.count {
+            for i in oldBlocks.count..<newBlocks.count {
+                stackView.addArrangedSubview(Self.view(for: newBlocks[i]))
+            }
+        }
         return true
     }
 
