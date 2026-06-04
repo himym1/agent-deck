@@ -379,9 +379,9 @@ extension Theme {
         stroke: ThemeColor(102, 88, 66)
     )
 
-    static let arlecchino = Theme(
+    static let harleq = Theme(
         id: UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!,
-        name: "Arlecchino",
+        name: "Harleq",
         isBuiltIn: true,
         accent: ThemeColor(65, 150, 255),
         assistant: ThemeColor(230, 50, 200),
@@ -396,25 +396,6 @@ extension Theme {
         background: ThemeColor(18, 16, 24),
         surface: ThemeColor(28, 24, 38),
         stroke: ThemeColor(70, 60, 95)
-    )
-
-    static let pastel = Theme(
-        id: UUID(uuidString: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD")!,
-        name: "Pastel",
-        isBuiltIn: true,
-        accent: ThemeColor(162, 210, 255),
-        assistant: ThemeColor(205, 180, 219),
-        thinking: ThemeColor(189, 224, 254),
-        tool: ThemeColor(255, 200, 221),
-        error: ThemeColor(255, 175, 204),
-        stderr: ThemeColor(255, 160, 170),
-        diffAdded: ThemeColor(170, 225, 175),
-        sourceBuiltin: ThemeColor(255, 210, 180),
-        sourceLibrary: ThemeColor(205, 180, 219),
-        sourceProject: ThemeColor(160, 220, 210),
-        background: ThemeColor(35, 28, 40),
-        surface: ThemeColor(48, 38, 55),
-        stroke: ThemeColor(110, 95, 125)
     )
 
     static let fiery = Theme(
@@ -487,8 +468,7 @@ extension Theme {
         vortex,
         crimson,
         sunburst,
-        arlecchino,
-        pastel,
+        harleq,
         fiery,
         purpleRaindrops,
         neonJungle

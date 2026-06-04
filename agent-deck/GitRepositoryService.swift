@@ -230,6 +230,29 @@ struct GitRepositoryService {
         return text.contains("refs/tags/\(tag)")
     }
 
+    /// Commit subjects (newest first) for the range that this release will cover:
+    /// everything since `sinceTag`, or the most recent commits when the repo has
+    /// no prior version tag. Merge commits are excluded. Used to feed the AI
+    /// release-notes writer.
+    func commitSubjects(sinceTag: String?, in repositoryURL: URL, limit: Int = 200) async throws -> [String] {
+        var arguments = ["log", "--no-merges", "--pretty=format:%s"]
+        if let sinceTag, !sinceTag.isEmpty {
+            arguments.append("\(sinceTag)..HEAD")
+        } else {
+            arguments.append("--max-count=\(limit)")
+        }
+        let text = try await runText(
+            arguments: arguments,
+            commandDescription: "git log \(sinceTag.map { "\($0)..HEAD" } ?? "--max-count=\(limit)")",
+            in: repositoryURL,
+            timeout: 30
+        )
+        return text
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
     func createAnnotatedTag(_ tag: String, message: String, in repositoryURL: URL) async throws {
         try await runGitMutation(
             arguments: ["tag", "-a", tag, "-m", message],

@@ -205,12 +205,20 @@ struct AppInitialLoadWindowCover: NSViewRepresentable {
             if active {
                 guard coverWindow == nil else { return }
                 let host = NSHostingView(rootView: AppInitialLoadOverlay())
-                let window = NSWindow(
+                // A non-activating panel: it overlays and swallows clicks but never
+                // tries to become key/main. A plain borderless NSWindow declines
+                // `canBecomeKeyWindow`, and ordering it front made AppKit attempt
+                // `makeKeyWindow` anyway and log a warning; `.nonactivatingPanel`
+                // tells AppKit not to.
+                let window = NSPanel(
                     contentRect: parent.frame,
-                    styleMask: .borderless,
+                    styleMask: [.borderless, .nonactivatingPanel],
                     backing: .buffered,
                     defer: false
                 )
+                window.isFloatingPanel = false
+                window.level = .normal
+                window.hidesOnDeactivate = false
                 window.isOpaque = false
                 window.backgroundColor = .clear
                 window.hasShadow = false

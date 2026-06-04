@@ -83,14 +83,20 @@ struct ReleaseService {
         )
     }
 
-    func tagAndPush(tag: String, projectURL: URL) async throws {
+    /// Tags and pushes. `notes`, when non-empty, becomes the annotated tag's
+    /// message — CI reads it as the release-notes body for the GitHub release and
+    /// the Sparkle update dialog. When empty (generation skipped/failed/cleared),
+    /// the message falls back to the tag name so CI lists commits instead.
+    func tagAndPush(tag: String, notes: String, projectURL: URL) async throws {
         if try await gitRepositoryService.localTagExists(tag, in: projectURL) {
             throw ReleaseError.tagExistsLocally(tag)
         }
         if try await gitRepositoryService.remoteTagExists(tag, remote: Self.remote, in: projectURL) {
             throw ReleaseError.tagExistsOnRemote(tag)
         }
-        try await gitRepositoryService.createAnnotatedTag(tag, message: tag, in: projectURL)
+        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = trimmedNotes.isEmpty ? tag : trimmedNotes
+        try await gitRepositoryService.createAnnotatedTag(tag, message: message, in: projectURL)
         try await gitRepositoryService.pushTag(tag, remote: Self.remote, in: projectURL)
     }
 

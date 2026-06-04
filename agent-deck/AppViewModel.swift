@@ -266,6 +266,7 @@ final class AppViewModel: NSObject {
     var agentDeckReleaseService: ReleaseService { ReleaseService(gitRepositoryService: gitRepositoryService) }
     private let agentAvatarPromptService = AgentAvatarPromptGenerationService()
     private let skillDescriptionService = SkillDescriptionGenerationService()
+    private let releaseNotesGenerator = ReleaseNotesGenerationService()
     private let subagentWorktreeService = PiSubagentWorktreeService()
     private let sessionWorktreeService = PiAgentSessionWorktreeService()
     @ObservationIgnored private lazy var piAgentRunner = PiAgentRunnerService(store: piAgentSessionStore)
@@ -3427,6 +3428,29 @@ final class AppViewModel: NSObject {
     var agentDeckReleaseProjectURL: URL? {
         guard let session = piAgentSessionStore.selectedSession else { return nil }
         return URL(fileURLWithPath: session.projectPath, isDirectory: true)
+    }
+
+    /// Draft friendly release notes for the pending Agent Deck release using the
+    /// default model (thinking off), from the commits since `sinceTag`. The
+    /// returned markdown body is shown — and editable — in the release sheet, then
+    /// rides the annotated tag into CI. Throws if no default model/project is
+    /// available; the sheet treats that as "fall back to CI commit listing".
+    func generateAgentDeckReleaseNotes(version: String, sinceTag: String?) async throws -> String {
+        guard let model = defaultPiAgentModel() else {
+            throw ReleaseNotesGenerationService.GenerationError.rpc("No default model is configured.")
+        }
+        guard let projectURL = agentDeckReleaseProjectURL else {
+            throw ReleaseNotesGenerationService.GenerationError.rpc("No project is selected.")
+        }
+        let commits = try await gitRepositoryService.commitSubjects(sinceTag: sinceTag, in: projectURL)
+        let environment = EnvRuntimeEnvironment().environment(projectRoot: projectURL)
+        return try await releaseNotesGenerator.generate(
+            version: version,
+            commitSubjects: commits,
+            model: model,
+            projectURL: projectURL,
+            environment: environment
+        )
     }
 
     /// Record a successful release in the selected session's transcript.
