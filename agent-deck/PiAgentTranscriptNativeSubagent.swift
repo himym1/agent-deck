@@ -132,7 +132,7 @@ final class PiAgentNativeExpandableMarkdown: NSView {
     private let collapsedLabel = NSTextField(wrappingLabelWithString: "")
     private let container = NativeMarkdownTextContainer()
     private let applier = MarkdownSourceApplier()
-    private let toggle = NSButton()
+    private let toggle = NSTextField(labelWithString: "")
 
     private var wrapperHeightC: NSLayoutConstraint!
     private(set) var isExpanded = false
@@ -163,17 +163,21 @@ final class PiAgentNativeExpandableMarkdown: NSView {
         container.isHidden = true
         wrapper.addSubview(container)
 
+        // A tight text label (not an NSButton, which carries inline-bezel vertical
+        // padding that reads as extra bottom space below the card content).
         toggle.translatesAutoresizingMaskIntoConstraints = false
-        toggle.isBordered = false
-        toggle.bezelStyle = .inline
         toggle.font = NativeTranscriptFont.caption(.semibold)
-        toggle.contentTintColor = AppTheme.ns(AppTheme.brandAccent)
-        toggle.target = self
-        toggle.action = #selector(toggleTapped)
+        toggle.textColor = AppTheme.ns(AppTheme.brandAccent)
         toggle.isHidden = true
+        toggle.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(toggleTapped)))
         addSubview(toggle)
 
         wrapperHeightC = wrapper.heightAnchor.constraint(equalToConstant: 0)
+        // The view's bottom is the toggle's bottom when the toggle is shown, else
+        // the wrapper's bottom — a hidden toggle must NOT reserve layout space
+        // (otherwise non-truncated rows measure short and crop).
+        toggleBottomC = toggle.bottomAnchor.constraint(equalTo: bottomAnchor)
+        wrapperBottomC = wrapper.bottomAnchor.constraint(equalTo: bottomAnchor)
         NSLayoutConstraint.activate([
             wrapper.topAnchor.constraint(equalTo: topAnchor),
             wrapper.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -186,10 +190,13 @@ final class PiAgentNativeExpandableMarkdown: NSView {
             container.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor),
             container.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor),
             toggle.topAnchor.constraint(equalTo: wrapper.bottomAnchor, constant: 4),
-            toggle.leadingAnchor.constraint(equalTo: leadingAnchor),
-            toggle.bottomAnchor.constraint(equalTo: bottomAnchor)
+            toggle.leadingAnchor.constraint(equalTo: leadingAnchor)
         ])
+        wrapperBottomC.isActive = true
     }
+
+    private var toggleBottomC: NSLayoutConstraint!
+    private var wrapperBottomC: NSLayoutConstraint!
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override var isFlipped: Bool { true }
 
@@ -214,7 +221,10 @@ final class PiAgentNativeExpandableMarkdown: NSView {
         let truncated = fullPlainH > collapsedH + 1
 
         toggle.isHidden = !truncated
-        toggle.title = isExpanded ? "Show less" : "Show more"
+        toggle.stringValue = isExpanded ? "Show less" : "Show more"
+        // Only let the toggle define the bottom when it's actually shown.
+        toggleBottomC.isActive = truncated
+        wrapperBottomC.isActive = !truncated
         let toggleH = truncated ? ceil(toggle.intrinsicContentSize.height) + 4 : 0
 
         if isExpanded {
@@ -293,7 +303,7 @@ final class PiAgentNativeAgentBlockView: NSView {
         metaLabel.maximumNumberOfLines = 1
         metaLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let nameRow = NSStackView(views: [nameLabel, outcomeCapsule])
+        let nameRow = NSStackView(views: [nameLabel])
         nameRow.orientation = .horizontal
         nameRow.spacing = 7
         nameRow.alignment = .centerY
@@ -332,12 +342,6 @@ final class PiAgentNativeAgentBlockView: NSView {
     func configure(_ payload: NativeAgentBlockPayload) {
         glyph.configure(color: payload.statusColor, isActive: payload.isActive, avatarURL: payload.avatarURL)
         nameLabel.stringValue = payload.agentName
-        if let outcome = payload.outcomePill, !outcome.isEmpty {
-            outcomePill.stringValue = outcome
-            outcomeCapsule.isHidden = false
-        } else {
-            outcomeCapsule.isHidden = true
-        }
         metaLabel.attributedStringValue = metaLine(payload)
         task.configure(source: payload.task)
         rebuildButtons(payload.actions)
