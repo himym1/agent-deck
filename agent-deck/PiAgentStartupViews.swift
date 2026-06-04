@@ -178,7 +178,10 @@ struct PiAgentStartupResourcesPopover: View {
     }
 
     private var skillItems: [PiStartupResourceItem] {
-        startupSnapshot.skills
+        // Only the skills the orchestration parent was actually launched with —
+        // global defaults ∪ project-assigned — not every skill discovered on
+        // disk. Reuses the exact active set the composer `/` browser computes.
+        viewModel.activeParentSkills(forProjectPath: session.projectPath)
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             .map { skill in
                 let scope = skill.source.kind == .project ? "Project" : skill.source.kind.rawValue

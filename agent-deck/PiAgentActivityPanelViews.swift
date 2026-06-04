@@ -239,14 +239,6 @@ struct PiAgentCurrentPlanCard: View {
         self.showsSurface = showsSurface
     }
 
-    init(event: PiSessionPlanEventRecord, showsSurface: Bool = true) {
-        self.title = "Plan"
-        self.subtitle = String(event.planID.uuidString.prefix(8))
-        self.isSubtitleIdentifier = true
-        self.items = event.items
-        self.showsSurface = showsSurface
-    }
-
     var body: some View {
         if showsSurface {
             content

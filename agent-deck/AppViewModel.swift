@@ -7243,6 +7243,38 @@ final class AppViewModel: NSObject {
             .filter { seen.insert($0.id).inserted }
     }
 
+    /// Names of the skills actually loaded into the parent session for
+    /// `projectPath`: global defaults ∪ project-assigned. This is the exact set
+    /// `parentSkillArguments` launches the orchestrator with — the single source
+    /// of truth shared by the composer `/` browser's `isActive` flag and the
+    /// session-resources popover, so neither recomputes it independently.
+    func activeParentSkillNames(forProjectPath projectPath: String?) -> Set<String> {
+        var names = appSettings.defaultSkillNames
+        if let path = projectPath ?? selectedProjectPath {
+            names.formUnion(projectPreference(for: path).assignedSkillNames)
+        }
+        return names
+    }
+
+    /// The resolved `SkillRecord`s actually available to the parent session for
+    /// `projectPath` — the active names above, resolved against the same
+    /// disabled-bundled-filtered catalog the launch path uses, deduped by name.
+    func activeParentSkills(forProjectPath projectPath: String?) -> [SkillRecord] {
+        let scopedPath = projectPath ?? selectedProjectPath
+        let activeNames = activeParentSkillNames(forProjectPath: scopedPath)
+        let catalog: [SkillRecord]
+        if let path = scopedPath {
+            catalog = skillCatalog(forProjectPath: path)
+        } else {
+            var seen = Set<String>()
+            catalog = (globalSnapshot.skills + globalSnapshot.librarySkills).filter { seen.insert($0.id).inserted }
+        }
+        var seenName = Set<String>()
+        return catalog
+            .filter { activeNames.contains($0.name) }
+            .filter { seenName.insert($0.name).inserted }
+    }
+
     /// Materializes the full universe of Skills, Prompts, and Commands the
     /// composer's `/` browser can show. Pure in-memory: walks already-cached
     /// scan snapshots + the command catalog. Build once when the panel opens
@@ -7259,10 +7291,7 @@ final class AppViewModel: NSObject {
             var seen = Set<String>()
             skillRecords = (globalSnapshot.skills + globalSnapshot.librarySkills).filter { seen.insert($0.id).inserted }
         }
-        var activeSkillNames = appSettings.defaultSkillNames
-        if let path = scopedPath {
-            activeSkillNames.formUnion(projectPreference(for: path).assignedSkillNames)
-        }
+        let activeSkillNames = activeParentSkillNames(forProjectPath: scopedPath)
         let disabledBundledSkillNames = appSettings.disabledBundledSkillNames
         var seenSkillName = Set<String>()
         let skills = skillRecords

@@ -312,7 +312,6 @@ private extension PiAgentTranscriptEntry {
 private struct PiAgentTranscriptTimelineItem: Identifiable {
     enum Kind {
         case thread(PiAgentTranscriptThread)
-        case plan(PiSessionPlanEventRecord)
     }
 
     let id: String
@@ -2646,19 +2645,6 @@ struct PiAgentScreen: View {
                             isThreadQuestion: false
                         ))
                     }
-                case let .plan(event):
-                    let planPayload = NativePlanCardPayload.make(event: event)
-                    descriptors.append(PiAgentTranscriptBlockDescriptor(
-                        id: item.id,
-                        view: nil,
-                        kind: .native(.of(PiAgentNativePlanCardView.self) { view, width in
-                            view.configure(payload: planPayload, width: width)
-                        }),
-                        baseRevision: appKitTranscriptContentRevision(for: item, snapshot: timelineSnapshot, contextRevision: contextRevision),
-                        estimatedContentHeight: { _ in 120 },
-                        threadID: nil,
-                        isThreadQuestion: false
-                    ))
                 }
             }
         }
@@ -3046,11 +3032,6 @@ struct PiAgentScreen: View {
                 hashThreadRevision(thread, into: &hasher)
                 return hasher.finalize()
             }
-        case let .plan(event):
-            var hasher = Hasher()
-            hasher.combine(contextRevision)
-            hashPlanEventRevision(event, into: &hasher)
-            return hasher.finalize()
         }
     }
 
@@ -3118,19 +3099,6 @@ struct PiAgentScreen: View {
         hasher.combine(entry.timestamp)
     }
 
-    private func hashPlanEventRevision(_ event: PiSessionPlanEventRecord, into hasher: inout Hasher) {
-        hasher.combine(event.id)
-        hasher.combine(event.planID)
-        hasher.combine(event.kind)
-        hasher.combine(event.timestamp)
-        hasher.combine(event.items.count)
-        for item in event.items {
-            hasher.combine(item.id)
-            hasher.combine(item.title.count)
-            hasher.combine(item.status)
-            hasher.combine(item.updatedAt)
-        }
-    }
 
     private var loadingTranscriptCard: some View {
         AppRowCard {
@@ -3336,9 +3304,6 @@ struct PiAgentScreen: View {
                 nativeSubagentCard: nativeSubagentCard
             )
             .id(item.id)
-        case let .plan(event):
-            PiAgentCurrentPlanCard(event: event)
-                .id(item.id)
         }
     }
 
