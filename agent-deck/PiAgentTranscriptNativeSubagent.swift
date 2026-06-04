@@ -89,10 +89,12 @@ private final class PiAgentNativeSubagentGlyph: NSView {
         ringLayer.isHidden = !isActive
         if let nsImage = AgentImageLoader.image(at: avatarURL) {
             avatar.image = nsImage
+            avatar.imageScaling = .scaleProportionallyUpOrDown
             avatar.contentTintColor = nil
         } else {
             avatar.image = NSImage(systemSymbolName: "paperplane.fill", accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
+                .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
+            avatar.imageScaling = .scaleNone
             avatar.contentTintColor = color
         }
         if isActive { startSpin() } else { ringLayer.removeAnimation(forKey: "spin") }
@@ -121,40 +123,43 @@ private final class PiAgentNativeSubagentGlyph: NSView {
 
 // MARK: - Capped + expandable markdown
 
-/// Markdown that renders to a max height when collapsed (bottom fade + "Show more"
-/// toggle) and full height when expanded. Self-measures; the toggle drives the
-/// re-measure hook so the row re-tiles.
+/// Task preview that, when collapsed, shows a clean N-line plain-text excerpt with
+/// a trailing ellipsis (no mid-line pixel clip, no fade); when expanded, renders
+/// the full markdown. The markdown is only built on expand, so collapsed rows stay
+/// cheap. The "Show more"/"Show less" toggle drives the re-measure hook.
 final class PiAgentNativeExpandableMarkdown: NSView {
-    private let clipView = NSView()
+    private let wrapper = NSView()
+    private let collapsedLabel = NSTextField(wrappingLabelWithString: "")
     private let container = NativeMarkdownTextContainer()
     private let applier = MarkdownSourceApplier()
-    private let fadeLayer = CAGradientLayer()
     private let toggle = NSButton()
 
-    private var clipHeightC: NSLayoutConstraint!
+    private var wrapperHeightC: NSLayoutConstraint!
     private(set) var isExpanded = false
-    var collapsedCap: CGFloat = 150
-    var fadeColor: NSColor = .clear
+    var collapsedLineLimit = 4
     var onToggle: (() -> Void)?
 
-    private var currentSource: String?
-    private var measuredContentHeight: CGFloat = 0
-    private var capped = false
+    private var source = ""
+    private var didBuildMarkdown = false
 
     init() {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        clipView.translatesAutoresizingMaskIntoConstraints = false
-        clipView.wantsLayer = true
-        clipView.layer?.masksToBounds = true
-        addSubview(clipView)
+        wrapper.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(wrapper)
+
+        collapsedLabel.translatesAutoresizingMaskIntoConstraints = false
+        collapsedLabel.font = NSFont.preferredFont(forTextStyle: .body)
+        collapsedLabel.textColor = .labelColor
+        collapsedLabel.maximumNumberOfLines = collapsedLineLimit
+        collapsedLabel.lineBreakMode = .byTruncatingTail
+        collapsedLabel.cell?.truncatesLastVisibleLine = true
+        wrapper.addSubview(collapsedLabel)
+
         container.translatesAutoresizingMaskIntoConstraints = false
-        clipView.addSubview(container)
-        fadeLayer.isHidden = true
-        fadeLayer.startPoint = CGPoint(x: 0.5, y: 0)
-        fadeLayer.endPoint = CGPoint(x: 0.5, y: 1)
-        clipView.layer?.addSublayer(fadeLayer)
+        container.isHidden = true
+        wrapper.addSubview(container)
+
         toggle.translatesAutoresizingMaskIntoConstraints = false
         toggle.isBordered = false
         toggle.bezelStyle = .inline
@@ -164,16 +169,20 @@ final class PiAgentNativeExpandableMarkdown: NSView {
         toggle.action = #selector(toggleTapped)
         toggle.isHidden = true
         addSubview(toggle)
-        clipHeightC = clipView.heightAnchor.constraint(equalToConstant: 0)
+
+        wrapperHeightC = wrapper.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
-            clipView.topAnchor.constraint(equalTo: topAnchor),
-            clipView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            clipView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            clipHeightC,
-            container.topAnchor.constraint(equalTo: clipView.topAnchor),
-            container.leadingAnchor.constraint(equalTo: clipView.leadingAnchor),
-            container.trailingAnchor.constraint(equalTo: clipView.trailingAnchor),
-            toggle.topAnchor.constraint(equalTo: clipView.bottomAnchor, constant: 4),
+            wrapper.topAnchor.constraint(equalTo: topAnchor),
+            wrapper.leadingAnchor.constraint(equalTo: leadingAnchor),
+            wrapper.trailingAnchor.constraint(equalTo: trailingAnchor),
+            wrapperHeightC,
+            collapsedLabel.topAnchor.constraint(equalTo: wrapper.topAnchor),
+            collapsedLabel.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor),
+            collapsedLabel.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor),
+            container.topAnchor.constraint(equalTo: wrapper.topAnchor),
+            container.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor),
+            container.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor),
+            toggle.topAnchor.constraint(equalTo: wrapper.bottomAnchor, constant: 4),
             toggle.leadingAnchor.constraint(equalTo: leadingAnchor),
             toggle.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
@@ -182,35 +191,57 @@ final class PiAgentNativeExpandableMarkdown: NSView {
     override var isFlipped: Bool { true }
 
     func configure(source: String) {
-        if source != currentSource { isExpanded = false; currentSource = source }
+        if source != self.source { isExpanded = false; didBuildMarkdown = false; self.source = source }
+        collapsedLabel.stringValue = Self.plainPreview(source)
+        if isExpanded { buildMarkdownIfNeeded() }
+    }
+
+    private func buildMarkdownIfNeeded() {
         applier.apply(source: source, to: container)
+        didBuildMarkdown = true
     }
 
     func measuredHeight(forWidth width: CGFloat) -> CGFloat {
-        measuredContentHeight = container.measureHeight(forWidth: width)
-        capped = measuredContentHeight > collapsedCap + 24
-        let visible = (isExpanded || !capped) ? measuredContentHeight : collapsedCap
-        clipHeightC.constant = visible
-        toggle.isHidden = !capped
-        toggle.title = isExpanded ? "Show less" : "Show more"
-        let toggleH = capped ? ceil(toggle.intrinsicContentSize.height) + 4 : 0
-        return ceil(visible + toggleH)
-    }
+        collapsedLabel.preferredMaxLayoutWidth = width
+        collapsedLabel.maximumNumberOfLines = collapsedLineLimit
+        let collapsedH = ceil(collapsedLabel.intrinsicContentSize.height)
+        collapsedLabel.maximumNumberOfLines = 0
+        let fullPlainH = ceil(collapsedLabel.intrinsicContentSize.height)
+        collapsedLabel.maximumNumberOfLines = collapsedLineLimit
+        let truncated = fullPlainH > collapsedH + 1
 
-    override func layout() {
-        super.layout()
-        let showFade = capped && !isExpanded
-        fadeLayer.isHidden = !showFade
-        if showFade {
-            fadeLayer.frame = CGRect(x: 0, y: clipView.bounds.height - 30, width: clipView.bounds.width, height: 30)
-            effectiveAppearance.performAsCurrentDrawingAppearance {
-                fadeLayer.colors = [fadeColor.withAlphaComponent(0).cgColor, fadeColor.cgColor]
-            }
+        toggle.isHidden = !truncated
+        toggle.title = isExpanded ? "Show less" : "Show more"
+        let toggleH = truncated ? ceil(toggle.intrinsicContentSize.height) + 4 : 0
+
+        if isExpanded {
+            buildMarkdownIfNeeded()
+            collapsedLabel.isHidden = true
+            container.isHidden = false
+            let h = container.measureHeight(forWidth: width)
+            wrapperHeightC.constant = h
+            return ceil(h + toggleH)
+        } else {
+            collapsedLabel.isHidden = false
+            container.isHidden = true
+            wrapperHeightC.constant = collapsedH
+            return ceil(collapsedH + toggleH)
         }
     }
 
     @objc private func toggleTapped() { isExpanded.toggle(); onToggle?() }
     func cancel() { applier.cancel() }
+
+    /// Light markdown→plain strip for the collapsed excerpt: drop leading list /
+    /// heading / quote markers and inline emphasis characters, keep line breaks.
+    static func plainPreview(_ s: String) -> String {
+        s.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+            var l = String(line)
+            l = l.replacingOccurrences(of: #"^\s*(#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s?)"#, with: "", options: .regularExpression)
+            l = l.replacingOccurrences(of: #"[*_`]"#, with: "", options: .regularExpression)
+            return l
+        }.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 // MARK: - Reusable agent block
@@ -295,7 +326,7 @@ final class PiAgentNativeAgentBlockView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override var isFlipped: Bool { true }
 
-    func configure(_ payload: NativeAgentBlockPayload, fadeColor: NSColor) {
+    func configure(_ payload: NativeAgentBlockPayload) {
         glyph.configure(color: payload.statusColor, isActive: payload.isActive, avatarURL: payload.avatarURL)
         nameLabel.stringValue = payload.agentName
         if let outcome = payload.outcomePill, !outcome.isEmpty {
@@ -305,7 +336,6 @@ final class PiAgentNativeAgentBlockView: NSView {
             outcomeCapsule.isHidden = true
         }
         metaLabel.attributedStringValue = metaLine(payload)
-        task.fadeColor = fadeColor
         task.configure(source: payload.task)
         rebuildButtons(payload.actions)
     }
@@ -364,6 +394,7 @@ final class PiAgentNativeSubagentRunCardView: NSView, PiAgentNativeRowContent {
     private let block = PiAgentNativeAgentBlockView()
     var onIntrinsicHeightChange: (() -> Void)?
     private let pad: CGFloat = 16
+    private var surfaceWidthC: NSLayoutConstraint!
 
     required init() {
         super.init(frame: .zero)
@@ -375,11 +406,13 @@ final class PiAgentNativeSubagentRunCardView: NSView, PiAgentNativeRowContent {
         surface.addSubview(block)
         let blockBottom = block.bottomAnchor.constraint(equalTo: surface.bottomAnchor, constant: -pad)
         blockBottom.priority = NSLayoutConstraint.Priority(999)
+        // Cap to the reply column width (left-aligned), like assistant replies.
+        surfaceWidthC = surface.widthAnchor.constraint(equalToConstant: 100)
         NSLayoutConstraint.activate([
             surface.topAnchor.constraint(equalTo: topAnchor),
             surface.bottomAnchor.constraint(equalTo: bottomAnchor),
             surface.leadingAnchor.constraint(equalTo: leadingAnchor),
-            surface.trailingAnchor.constraint(equalTo: trailingAnchor),
+            surfaceWidthC,
             block.topAnchor.constraint(equalTo: surface.topAnchor, constant: pad),
             block.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: pad),
             block.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -pad),
@@ -389,16 +422,20 @@ final class PiAgentNativeSubagentRunCardView: NSView, PiAgentNativeRowContent {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override var isFlipped: Bool { true }
 
+    private func cardWidth(_ rowWidth: CGFloat) -> CGFloat {
+        max(1, min(rowWidth, PiAgentBubbleWidth.replyCap(for: rowWidth)))
+    }
+
     func configure(payload: NativeAgentBlockPayload, width rowWidth: CGFloat) {
-        let fill = AppTheme.ns(AppTheme.contentSubtleFill.opacity(0.55))
-        surface.fillColor = fill
+        surface.fillColor = AppTheme.ns(AppTheme.contentSubtleFill.opacity(0.55))
         surface.strokeColor = AppTheme.ns(AppTheme.contentStroke)
-        block.configure(payload, fadeColor: fill)
+        surfaceWidthC.constant = cardWidth(rowWidth)
+        block.configure(payload)
         needsLayout = true
     }
 
     func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat {
-        ceil(pad + block.measuredHeight(forWidth: max(1, rowWidth - pad * 2)) + pad)
+        ceil(pad + block.measuredHeight(forWidth: max(1, cardWidth(rowWidth) - pad * 2)) + pad)
     }
 
     func prepareForReuseIfNeeded() { block.cancel() }
@@ -417,6 +454,7 @@ final class PiAgentNativeSubagentParallelCardView: NSView, PiAgentNativeRowConte
     private let pad: CGFloat = 16
     private let childPad: CGFloat = 14
     private let childSpacing: CGFloat = 10
+    private var surfaceWidthC: NSLayoutConstraint!
 
     required init() {
         super.init(frame: .zero)
@@ -436,11 +474,12 @@ final class PiAgentNativeSubagentParallelCardView: NSView, PiAgentNativeRowConte
 
         let stackBottom = childStack.bottomAnchor.constraint(equalTo: surface.bottomAnchor, constant: -pad)
         stackBottom.priority = NSLayoutConstraint.Priority(999)
+        surfaceWidthC = surface.widthAnchor.constraint(equalToConstant: 100)
         NSLayoutConstraint.activate([
             surface.topAnchor.constraint(equalTo: topAnchor),
             surface.bottomAnchor.constraint(equalTo: bottomAnchor),
             surface.leadingAnchor.constraint(equalTo: leadingAnchor),
-            surface.trailingAnchor.constraint(equalTo: trailingAnchor),
+            surfaceWidthC,
             headerLabel.topAnchor.constraint(equalTo: surface.topAnchor, constant: pad),
             headerLabel.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: pad),
             headerLabel.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -pad),
@@ -453,9 +492,16 @@ final class PiAgentNativeSubagentParallelCardView: NSView, PiAgentNativeRowConte
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override var isFlipped: Bool { true }
 
+    private func cardWidth(_ rowWidth: CGFloat) -> CGFloat {
+        max(1, min(rowWidth, PiAgentBubbleWidth.replyCap(for: rowWidth)))
+    }
+
     func configure(payload: NativeSubagentParallelPayload, width rowWidth: CGFloat) {
-        surface.fillColor = AppTheme.ns(AppTheme.contentSubtleFill.opacity(0.45))
+        // Outer is an outline only (no fill) so the child cards are the single grey
+        // layer — avoids grey-in-grey-in-grey.
+        surface.fillColor = .clear
         surface.strokeColor = AppTheme.ns(AppTheme.contentStroke)
+        surfaceWidthC.constant = cardWidth(rowWidth)
         headerLabel.attributedStringValue = headerLine(payload)
 
         // Rebuild child cards if the count changed; otherwise reconfigure in place.
@@ -482,11 +528,11 @@ final class PiAgentNativeSubagentParallelCardView: NSView, PiAgentNativeRowConte
                 blocks.append(blk); childSurfaces.append(card)
             }
         }
-        let childFill = AppTheme.ns(AppTheme.contentSubtleFill.opacity(0.7))
+        let childFill = AppTheme.ns(AppTheme.contentSubtleFill.opacity(0.6))
         for (i, child) in payload.children.enumerated() {
             childSurfaces[i].fillColor = childFill
             childSurfaces[i].strokeColor = AppTheme.ns(AppTheme.contentStroke)
-            blocks[i].configure(child, fadeColor: childFill)
+            blocks[i].configure(child)
         }
         needsLayout = true
     }
@@ -510,7 +556,7 @@ final class PiAgentNativeSubagentParallelCardView: NSView, PiAgentNativeRowConte
 
     func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat {
         let headerH = max(20, ceil(headerLabel.intrinsicContentSize.height))
-        let childInner = max(1, rowWidth - pad * 2 - childPad * 2)
+        let childInner = max(1, cardWidth(rowWidth) - pad * 2 - childPad * 2)
         var h = pad + headerH + 12
         for (i, blk) in blocks.enumerated() {
             if i > 0 { h += childSpacing }
