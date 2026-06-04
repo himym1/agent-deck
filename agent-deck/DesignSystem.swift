@@ -767,21 +767,35 @@ extension View {
 struct AppPage<Content: View>: View {
     let title: String
     let subtitle: String?
+    /// When true, sections render lazily as they scroll into view rather than all
+    /// at once. Use for pages whose lower sections are expensive to build (e.g. a
+    /// large markdown document) so navigating to the page doesn't pay that cost up
+    /// front. Defaults to false so every existing page is byte-for-byte unchanged.
+    let lazy: Bool
     @ViewBuilder let content: Content
 
-    init(_ title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content) {
+    init(_ title: String, subtitle: String? = nil, lazy: Bool = false, @ViewBuilder content: () -> Content) {
         self.title = title
         self.subtitle = subtitle
+        self.lazy = lazy
         self.content = content()
     }
 
     var body: some View {
         ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
-                content
+            if lazy {
+                LazyVStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
+                    content
+                }
+                .padding(AppTheme.pagePadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
+                    content
+                }
+                .padding(AppTheme.pagePadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(AppTheme.pagePadding)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

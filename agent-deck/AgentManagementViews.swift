@@ -1000,7 +1000,7 @@ private struct AgentDetailView: View {
     @State private var deleteErrorMessage: String?
 
     var body: some View {
-        AppPage(agent.name, subtitle: agent.resolved.description.isEmpty ? nil : agent.resolved.description) {
+        AppPage(agent.name, subtitle: agent.resolved.description.isEmpty ? nil : agent.resolved.description, lazy: true) {
             summaryTab
             promptTab
             toolsTab
