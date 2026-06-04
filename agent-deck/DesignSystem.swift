@@ -407,13 +407,8 @@ struct AppLoadingView: View {
 /// with half-populated views. Fades out (see the call site's `.animation`).
 struct AppInitialLoadOverlay: View {
     var message: String = "Loading workspace…"
-
-    /// The app icon the user currently has selected (Default vs Alternate), so the
-    /// splash matches their Dock icon. Falls back to the live application icon.
-    private var appIcon: NSImage? {
-        let choice = AppIconChoice.choice(forStoredName: AppSettingsStore.shared.settings.selectedAppIconName)
-        return NSImage(named: choice.assetName) ?? NSApplication.shared.applicationIconImage
-    }
+    /// Drives the looping "in flight" motion. Toggled on `.onAppear`.
+    @State private var inFlight = false
 
     var body: some View {
         ZStack {
@@ -421,33 +416,26 @@ struct AppInitialLoadOverlay: View {
                 .fill(.regularMaterial)
                 .ignoresSafeArea()
 
-            VStack(spacing: 18) {
-                if let appIcon {
-                    Image(nsImage: appIcon)
-                        .resizable()
-                        .interpolation(.high)
-                        .scaledToFit()
-                        .frame(width: 60, height: 60)
-                }
-
-                AppSpinner()
+            VStack(spacing: 22) {
+                // The paper-plane swarm gently surges along its diagonal so the
+                // planes read as "in flight" — the motion itself is the loading
+                // cue, no separate spinner needed.
+                Image("paperplanes")
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: 240)
+                    .scaleEffect(inFlight ? 1.03 : 0.99)
+                    .offset(x: inFlight ? 12 : -8, y: inFlight ? -10 : 6)
+                    .animation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true), value: inFlight)
+                    .shadow(color: AppTheme.brandAccent.opacity(0.25), radius: 18, y: 6)
 
                 Text(message)
                     .font(AppTheme.Font.callout.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
             }
-            .padding(.horizontal, 36)
-            .padding(.vertical, 30)
-            .background(
-                RoundedRectangle(cornerRadius: AppTheme.Chat.panelCornerRadius, style: .continuous)
-                    .fill(.thinMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: AppTheme.Chat.panelCornerRadius, style: .continuous)
-                            .stroke(AppTheme.contentStroke, lineWidth: 1)
-                    )
-            )
-            .shadow(color: .black.opacity(0.18), radius: 24, y: 10)
         }
+        .onAppear { inFlight = true }
     }
 }
 
