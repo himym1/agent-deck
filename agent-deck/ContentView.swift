@@ -89,6 +89,31 @@ private final class HiddenScroller: NSScroller {
 /// SwiftUI does not make the scroll view a reachable ancestor — and swaps in
 /// `HiddenScroller`s. Once swapped, the scrollers stay hidden permanently
 /// regardless of how `List` re-renders, so there is no visible "fighting".
+/// Sets the host `NSWindow`'s background color so the theme's canvas shows through
+/// the app's transparent surfaces (the native transcript and the detail scroll
+/// views draw no background of their own). SwiftUI's `.background(Color)` only fills
+/// the view's own rect, not the window chrome/gaps — this reaches the window.
+private struct WindowBackgroundApplier: NSViewRepresentable {
+    var color: Color
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        apply(from: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        apply(from: nsView)
+    }
+
+    private func apply(from view: NSView) {
+        let nsColor = NSColor(color)
+        DispatchQueue.main.async {
+            view.window?.backgroundColor = nsColor
+        }
+    }
+}
+
 final class ScrollerHidingProbe: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -313,6 +338,10 @@ struct ContentView: View {
         }
         .frame(minWidth: 1180, minHeight: 700)
         .navigationTitle(toolbarTitle)
+        // Theme the window canvas itself — the transcript and detail scroll views are
+        // transparent, so without this they'd show the system (gray) window background
+        // instead of the active theme's. Re-applies on theme switch via the root .id.
+        .background(WindowBackgroundApplier(color: AppTheme.windowBackground))
         .background(AgentDeckCommandsScope(context: commandContext).equatable())
         .onAppear(perform: updateCommandContext)
         // .task(id:) cancels and restarts asynchronously after body settles, so at most

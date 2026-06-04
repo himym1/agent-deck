@@ -148,13 +148,19 @@ enum AppTheme {
     /// them); system-derived colors stay dynamic across light/dark.
     static func ns(_ color: Color) -> NSColor { NSColor(color) }
 
-    static let windowBackground = Color(nsColor: .windowBackgroundColor)
-    static let panelFill = Color(nsColor: .windowBackgroundColor)
-    static let contentFill = Color(nsColor: .windowBackgroundColor)
-    static let textContentFill = Color(nsColor: .textBackgroundColor)
-    static let contentStroke = Color(nsColor: .separatorColor).opacity(0.55)
-    static let hairlineStroke = Color(nsColor: .separatorColor).opacity(0.38)
-    static let contentSubtleFill = Color(nsColor: .controlColor).opacity(0.62)
+    // Neutral surfaces are theme-driven (see Theme.background/surface/stroke) so the
+    // whole canvas takes on each theme's personality, not just the accents. These are
+    // computed `var`s — a theme switch repaints via `.id(themeManager.revision)` at the
+    // window root, and the values resolve from the now-active theme.
+    private static var activeTheme: Theme { ThemeManager.shared.activeTheme }
+
+    static var windowBackground: Color { activeTheme.background.color }
+    static var panelFill: Color { activeTheme.surface.color }
+    static var contentFill: Color { activeTheme.surface.color }
+    static var textContentFill: Color { activeTheme.background.color }
+    static var contentStroke: Color { activeTheme.stroke.color.opacity(0.55) }
+    static var hairlineStroke: Color { activeTheme.stroke.color.opacity(0.38) }
+    static var contentSubtleFill: Color { activeTheme.surface.lightened(by: 0.12).color }
     static let selectionFill = Color.primary.opacity(0.055)
     static var selectionStroke: Color { brandAccent.opacity(0.24) }
     static let selectionGlow = Color.clear
@@ -188,11 +194,11 @@ enum AppTheme {
     }
 
     @available(*, deprecated, message: "Use semantic content, panel, or control surface helpers based on role.")
-    static let cardFill = contentFill
+    static var cardFill: Color { contentFill }
     @available(*, deprecated, message: "Use contentStroke or selectionStroke based on role.")
-    static let cardStroke = contentStroke
+    static var cardStroke: Color { contentStroke }
     @available(*, deprecated, message: "Use contentSubtleFill or semantic surface helpers based on role.")
-    static let subtleFill = contentSubtleFill
+    static var subtleFill: Color { contentSubtleFill }
 }
 
 extension View {

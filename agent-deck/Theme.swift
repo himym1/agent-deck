@@ -92,6 +92,13 @@ struct Theme: Codable, Hashable, Identifiable {
     var sourceBuiltin: ThemeColor   // bundled / package-shipped
     var sourceLibrary: ThemeColor   // user's library (cross-project)
     var sourceProject: ThemeColor   // project-scoped / assigned
+    // Canvas tokens — the theme drives the neutral surfaces, not just accents, so
+    // each theme has its own background personality instead of one shared gray-black.
+    // These are dark-family values (the app forces a dark appearance, so foreground
+    // text/icons stay light); a full light theme would also need themed foregrounds.
+    var background: ThemeColor      // window / app canvas
+    var surface: ThemeColor         // panels, cards, sidebar, list rows
+    var stroke: ThemeColor          // borders / separators (opacity applied by AppTheme)
 
     init(
         id: UUID = UUID(),
@@ -106,7 +113,10 @@ struct Theme: Codable, Hashable, Identifiable {
         diffAdded: ThemeColor,
         sourceBuiltin: ThemeColor,
         sourceLibrary: ThemeColor,
-        sourceProject: ThemeColor
+        sourceProject: ThemeColor,
+        background: ThemeColor = ThemeColor(30, 30, 32),
+        surface: ThemeColor = ThemeColor(40, 40, 43),
+        stroke: ThemeColor = ThemeColor(92, 92, 99)
     ) {
         self.id = id
         self.name = name
@@ -121,11 +131,15 @@ struct Theme: Codable, Hashable, Identifiable {
         self.sourceBuiltin = sourceBuiltin
         self.sourceLibrary = sourceLibrary
         self.sourceProject = sourceProject
+        self.background = background
+        self.surface = surface
+        self.stroke = stroke
     }
 
     enum CodingKeys: String, CodingKey {
         case id, name, isBuiltIn, accent, assistant, thinking, tool, error, stderr, diffAdded
         case sourceBuiltin, sourceLibrary, sourceProject
+        case background, surface, stroke
     }
 
     /// Per-field decode-if-present so a custom theme stored by an older build
@@ -146,6 +160,9 @@ struct Theme: Codable, Hashable, Identifiable {
         sourceBuiltin = try container.decodeIfPresent(ThemeColor.self, forKey: .sourceBuiltin) ?? fallback.sourceBuiltin
         sourceLibrary = try container.decodeIfPresent(ThemeColor.self, forKey: .sourceLibrary) ?? fallback.sourceLibrary
         sourceProject = try container.decodeIfPresent(ThemeColor.self, forKey: .sourceProject) ?? fallback.sourceProject
+        background = try container.decodeIfPresent(ThemeColor.self, forKey: .background) ?? fallback.background
+        surface = try container.decodeIfPresent(ThemeColor.self, forKey: .surface) ?? fallback.surface
+        stroke = try container.decodeIfPresent(ThemeColor.self, forKey: .stroke) ?? fallback.stroke
     }
 }
 
@@ -166,7 +183,10 @@ extension Theme {
         diffAdded: ThemeColor(86, 201, 138),
         sourceBuiltin: ThemeColor(240, 165, 90),
         sourceLibrary: ThemeColor(190, 130, 235),
-        sourceProject: ThemeColor(100, 200, 130)
+        sourceProject: ThemeColor(100, 200, 130),
+        background: ThemeColor(30, 30, 32),
+        surface: ThemeColor(40, 40, 43),
+        stroke: ThemeColor(92, 92, 99)
     )
 
     static let ember = Theme(
@@ -182,7 +202,10 @@ extension Theme {
         diffAdded: ThemeColor(120, 198, 128),
         sourceBuiltin: ThemeColor(240, 160, 80),
         sourceLibrary: ThemeColor(190, 140, 220),
-        sourceProject: ThemeColor(130, 195, 130)
+        sourceProject: ThemeColor(130, 195, 130),
+        background: ThemeColor(33, 29, 27),
+        surface: ThemeColor(45, 39, 36),
+        stroke: ThemeColor(106, 94, 86)
     )
 
     static let forest = Theme(
@@ -198,7 +221,10 @@ extension Theme {
         diffAdded: ThemeColor(96, 205, 130),
         sourceBuiltin: ThemeColor(220, 175, 95),
         sourceLibrary: ThemeColor(175, 145, 220),
-        sourceProject: ThemeColor(100, 205, 135)
+        sourceProject: ThemeColor(100, 205, 135),
+        background: ThemeColor(25, 32, 28),
+        surface: ThemeColor(35, 44, 39),
+        stroke: ThemeColor(86, 104, 92)
     )
 
     static let violet = Theme(
@@ -214,7 +240,10 @@ extension Theme {
         diffAdded: ThemeColor(110, 200, 150),
         sourceBuiltin: ThemeColor(225, 165, 95),
         sourceLibrary: ThemeColor(190, 130, 240),
-        sourceProject: ThemeColor(115, 200, 145)
+        sourceProject: ThemeColor(115, 200, 145),
+        background: ThemeColor(30, 26, 37),
+        surface: ThemeColor(41, 35, 51),
+        stroke: ThemeColor(102, 90, 120)
     )
 
     static let monoSlate = Theme(
@@ -230,7 +259,10 @@ extension Theme {
         diffAdded: ThemeColor(140, 180, 150),
         sourceBuiltin: ThemeColor(195, 165, 130),
         sourceLibrary: ThemeColor(165, 145, 180),
-        sourceProject: ThemeColor(145, 180, 150)
+        sourceProject: ThemeColor(145, 180, 150),
+        background: ThemeColor(29, 31, 34),
+        surface: ThemeColor(40, 43, 48),
+        stroke: ThemeColor(98, 103, 112)
     )
 
     static let tokyoNight = Theme(
@@ -246,7 +278,10 @@ extension Theme {
         diffAdded: ThemeColor(115, 218, 202),
         sourceBuiltin: ThemeColor(224, 175, 104),
         sourceLibrary: ThemeColor(187, 154, 247),
-        sourceProject: ThemeColor(115, 218, 202)
+        sourceProject: ThemeColor(115, 218, 202),
+        background: ThemeColor(26, 27, 38),
+        surface: ThemeColor(36, 40, 59),
+        stroke: ThemeColor(65, 72, 104)
     )
 
     static let nord = Theme(
@@ -262,7 +297,10 @@ extension Theme {
         diffAdded: ThemeColor(163, 190, 140),
         sourceBuiltin: ThemeColor(235, 203, 139),
         sourceLibrary: ThemeColor(180, 142, 173),
-        sourceProject: ThemeColor(163, 190, 140)
+        sourceProject: ThemeColor(163, 190, 140),
+        background: ThemeColor(46, 52, 64),
+        surface: ThemeColor(59, 66, 82),
+        stroke: ThemeColor(76, 86, 106)
     )
 
     static let catppuccinMocha = Theme(
@@ -278,7 +316,10 @@ extension Theme {
         diffAdded: ThemeColor(166, 227, 161),
         sourceBuiltin: ThemeColor(249, 226, 175),
         sourceLibrary: ThemeColor(203, 166, 247),
-        sourceProject: ThemeColor(166, 227, 161)
+        sourceProject: ThemeColor(166, 227, 161),
+        background: ThemeColor(30, 30, 46),
+        surface: ThemeColor(49, 50, 68),
+        stroke: ThemeColor(69, 71, 90)
     )
 
     /// Default first — the rest are presented as presets in Settings.
