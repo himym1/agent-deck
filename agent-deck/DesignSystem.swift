@@ -901,7 +901,7 @@ struct AppPage<Content: View>: View {
     }
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
+        ScrollView {
             if lazy {
                 LazyVStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
                     content
@@ -916,6 +916,12 @@ struct AppPage<Content: View>: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        // `.never`, not the deprecated `showsIndicators: false` (≈ `.hidden`):
+        // `.hidden` still lets AppKit briefly *flash* the overlay scroller when the
+        // content size changes — which a tall page (e.g. a skill's markdown body)
+        // hits as its lazy content grows the height on appear. Short pages that
+        // don't overflow never showed it, which is why only some pages flashed.
+        .scrollIndicators(.never)
     }
 }
 

@@ -186,6 +186,13 @@ struct AppInitialLoadWindowCover: NSViewRepresentable {
         /// splash for at least `minimumOnScreen` before it fades.
         private var shownAt: Date?
         private let minimumOnScreen: TimeInterval = 1.0
+        /// Failsafe: the cover blocks the *entire* window — toolbar and the
+        /// traffic-light close/minimize buttons included. If the initial refresh
+        /// never reports complete (an unforeseen hang or error path that skips
+        /// `hasCompletedInitialRefresh`), force the splash away anyway so the user
+        /// is never locked out of their own window. A loading splash must never be
+        /// able to trap the UI.
+        private let maximumOnScreen: TimeInterval = 12.0
 
         func sync(active: Bool, anchor: NSView, retries: Int = 12) {
             guard let frameView = anchor.window?.contentView?.superview,
@@ -208,6 +215,10 @@ struct AppInitialLoadWindowCover: NSViewRepresentable {
                 frameView.addSubview(host) // last subview → above the toolbar
                 cover = host
                 shownAt = Date()
+                // Hard ceiling — dismiss no matter what `active` ever reports.
+                DispatchQueue.main.asyncAfter(deadline: .now() + maximumOnScreen) { [weak self] in
+                    self?.dismiss()
+                }
             } else if cover != nil {
                 // Keep the splash up for its minimum, then fade. Re-dispatch rather
                 // than dismiss now if the refresh beat the floor.

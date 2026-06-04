@@ -78,6 +78,7 @@ struct AgentsScreen: View {
 
                 if !viewModel.hasCompletedInitialRefresh {
                     AppLoadingView("Loading agent details…")
+                        .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
                         .appDebugLayout("Agents.detailLoading", logger: Self.layoutLog)
                 } else if let agent = viewModel.selectedAgent {
                     AgentDetailView(
@@ -124,6 +125,11 @@ struct AgentsScreen: View {
                         autoGenerateAvatarPrompts: viewModel.appSettings.autoGenerateAgentAvatarPrompts,
                         generateAvatarPrompt: { try await viewModel.generateAgentAvatarPrompt(for: $0) }
                     )
+                    // idealWidth pins the HSplitView divider seed so it resolves in one
+                    // pass instead of hunting (a ScrollView reports its content's variable
+                    // ideal width); AgentDetailView's AppPage uses lazy:true to bound the
+                    // build cost. See SkillsScreen for the full rationale.
+                    .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
                     .appDebugLayout("Agents.detail selected=\(agent.name)", logger: Self.layoutLog)
                 } else {
                     ContentUnavailableView("No Agent Selected", systemImage: "sparkles.rectangle.stack")

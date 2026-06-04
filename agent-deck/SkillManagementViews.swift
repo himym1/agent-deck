@@ -195,15 +195,20 @@ struct SkillsScreen: View {
             }
 
             if viewModel.hasCompletedInitialRefresh {
-                // `lazy: true` is load-bearing for layout, not just perf. AppPage
-                // wraps its cards in a vertical ScrollView, which passes its content's
-                // *horizontal* ideal width straight through. With a plain VStack
-                // (lazy: false) every card is measured up front, so a wide one reports
-                // a huge ideal width that balloons this pane; the enclosing HSplitView
-                // then sizes to that oversized fitting width and centers it, sliding
-                // the library pane under the sidebar. A LazyVStack reports a bounded
-                // ideal, keeping the split's fitting width under the available width so
-                // it fills exactly. AgentDetailView uses lazy: true for the same reason.
+                // Two complementary contracts, both load-bearing for layout:
+                //
+                // • `lazy: true` — AppPage wraps cards in a vertical ScrollView; a
+                //   plain VStack measures every card up front, so a wide one reports
+                //   a ~1500pt ideal width that balloons this pane. A LazyVStack only
+                //   sums on-screen cards, bounding that ideal.
+                //
+                // • `.frame(idealWidth:)` — HSplitView seeds its divider from each
+                //   pane's nil-proposal ideal. A ScrollView answers that with its
+                //   content's ideal width, which (even lazy) *varies* as rows realize,
+                //   so the divider hunts and re-runs a full markdown layout per step
+                //   (the width-oscillation hang). An explicit idealWidth pins the seed
+                //   to a constant so the divider resolves in one pass; maxWidth:.infinity
+                //   still fills the real space at runtime.
                 AppPage(
                     selectedWarning?.title ?? skillDetailTitle,
                     subtitle: selectedWarning?.subtitle ?? skillDetailSubtitle,
@@ -211,9 +216,11 @@ struct SkillsScreen: View {
                 ) {
                     skillDetailContent
                 }
+                .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
                 .appDebugLayout("Skills.detail selected=\(selectedSkill?.name ?? selectedWarning?.title ?? "nil")", logger: Self.layoutLog)
             } else {
                 AppLoadingView("Loading skill details…")
+                    .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
                     .appDebugLayout("Skills.detailLoading", logger: Self.layoutLog)
             }
         }

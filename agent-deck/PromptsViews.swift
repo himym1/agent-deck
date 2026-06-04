@@ -44,9 +44,15 @@ struct PromptsScreen: View {
 
             if !viewModel.hasCompletedInitialRefresh {
                 AppLoadingView("Loading prompt details…")
+                    .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
                     .appDebugLayout("Prompts.detailLoading", logger: Self.layoutLog)
             } else if let prompt = viewModel.selectedPromptTemplate {
+                // idealWidth pins the HSplitView divider seed so it resolves in one
+                // pass instead of hunting (a ScrollView reports its content's variable
+                // ideal width). lazy:true on the AppPage bounds the build cost. See
+                // SkillsScreen for the full rationale.
                 promptDetail(prompt)
+                    .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
                     .appDebugLayout("Prompts.detail selected=\(prompt.name) source=\(prompt.source.kind.rawValue)", logger: Self.layoutLog)
             } else {
                 ContentUnavailableView("No Prompt Selected", systemImage: "doc.text")
