@@ -201,6 +201,8 @@ struct AgentAvatarView: View {
 
             if let nsImage = AgentImageLoader.image(at: imageURL) {
                 Image(nsImage: nsImage)
+                    .interpolation(.high)
+                    .antialiased(true)
                     .resizable()
                     .scaledToFill()
                     .clipShape(Circle())
