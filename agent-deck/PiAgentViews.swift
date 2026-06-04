@@ -329,15 +329,10 @@ private struct PiAgentTranscriptTimelineSnapshot {
     let recentWindowArchive: (hiddenCount: Int, limit: Int)?
 }
 
-/// How a transcript row is rendered. Rows are migrating from SwiftUI hosted in
-/// an `NSHostingView` to fully native AppKit views; during the migration both
-/// coexist. `.hosted` is the legacy path (a SwiftUI `AnyView`); native cases are
-/// added per block type and carry typed payloads the cell renders directly.
+/// How a transcript row is rendered. Every row is now fully native AppKit (no
+/// per-row SwiftUI / `NSHostingView`); the spec knows how to build/configure/
+/// measure the concrete view.
 enum PiAgentTranscriptCellKind {
-    /// Legacy: render this SwiftUI view inside the cell's `NSHostingView`.
-    case hosted(AnyView)
-    /// Native: a row drawn fully in AppKit (no SwiftUI). The spec knows how to
-    /// build/configure/measure the concrete view.
     case native(NativeRowSpec)
 }
 
@@ -367,15 +362,6 @@ private struct PiAgentAppKitTranscriptItem {
     /// Includes the row insets so the estimate matches the measured height.
     let estimatedHeight: (CGFloat) -> CGFloat
 
-    /// The SwiftUI content for a hosted row, or nil for a native row. Bridges
-    /// the legacy host path while native cases are still being introduced.
-    var hostedView: AnyView? {
-        switch kind {
-        case .hosted(let view): return view
-        case .native: return nil
-        }
-    }
-
     init(
         id: String,
         kind: PiAgentTranscriptCellKind,
@@ -390,25 +376,6 @@ private struct PiAgentAppKitTranscriptItem {
         self.topInset = topInset
         self.bottomInset = bottomInset
         self.estimatedHeight = estimatedHeight
-    }
-
-    /// Convenience for the legacy hosted path: wraps a SwiftUI view as `.hosted`.
-    init(
-        id: String,
-        view: AnyView,
-        contentRevision: Int = 0,
-        topInset: CGFloat = 0,
-        bottomInset: CGFloat = 0,
-        estimatedHeight: @escaping (CGFloat) -> CGFloat = { _ in 120 }
-    ) {
-        self.init(
-            id: id,
-            kind: .hosted(view),
-            contentRevision: contentRevision,
-            topInset: topInset,
-            bottomInset: bottomInset,
-            estimatedHeight: estimatedHeight
-        )
     }
 }
 
@@ -1609,12 +1576,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
     final class TranscriptTableCellView: NSTableCellView {
         static let reuseIdentifier = NSUserInterfaceItemIdentifier("PiAgentTranscriptTableCell")
-        fileprivate var hostingView: NSHostingView<AnyView>?
-        // Native render path (no SwiftUI). Mutually exclusive with `hostingView`
-        // for a given configuration; switching modes tears down the other.
-        // `nativeRow` is the concrete view; `nativeRowTypeID`/`nativeRowSpec`
-        // track which kind it is so a recycled cell reuses a same-typed view and
-        // can read the row height through the spec's measure closure.
+        // Native render path (no SwiftUI / NSHostingView). `nativeRow` is the
+        // concrete view; `nativeRowTypeID`/`nativeRowSpec` track which kind it is
+        // so a recycled cell reuses a same-typed view and reads the row height
+        // through the spec's measure closure.
         fileprivate var nativeRow: NSView?
         private var nativeRowTypeID: ObjectIdentifier?
         private var nativeRowSpec: NativeRowSpec?
@@ -1642,76 +1607,16 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
         required init?(coder: NSCoder) { fatalError() }
 
-        /// Builds the SwiftUI root for an item at a width. Row spacing is baked
-        /// in as padding here — the card view itself stays byte-identical, and
-        /// `fittingSize` picks the inset up so `heightOfRow` stays consistent.
-        /// Shared by the live host cache and the offscreen measurement path.
-        static func makeRoot(item: PiAgentAppKitTranscriptItem, width: CGFloat) -> AnyView {
-            AnyView(
-                (item.hostedView ?? AnyView(EmptyView()))
-                    .frame(width: width, alignment: .topLeading)
-                    .padding(.top, item.topInset)
-                    .padding(.bottom, item.bottomInset)
-                    .environment(\.transcriptContentWidth, width)
-            )
-        }
-
-        private func pinToEdges(_ host: NSHostingView<AnyView>) {
-            host.translatesAutoresizingMaskIntoConstraints = false
-            host.setContentHuggingPriority(.defaultLow, for: .horizontal)
-            host.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            addSubview(host)
-            NSLayoutConstraint.activate([
-                host.leadingAnchor.constraint(equalTo: leadingAnchor),
-                host.trailingAnchor.constraint(equalTo: trailingAnchor),
-                host.topAnchor.constraint(equalTo: topAnchor),
-                host.bottomAnchor.constraint(equalTo: bottomAnchor)
-            ])
-        }
-
-        /// Per-cell host ownership. Each cell creates an NSHostingView the
-        /// first time it's configured and keeps that same host for its entire
-        /// lifetime; recycling for a new item just swaps the host's rootView.
-        /// No host is ever shared across cells, so two visible cells can't
-        /// contend for it (the previous shared-host LRU left a stolen-from
-        /// cell visibly empty — the transparent-block bug).
+        /// Configure the cell for an item. Every row is native; the spec's view is
+        /// built/reused and pinned to the cell with the row insets.
         func installRootView(item: PiAgentAppKitTranscriptItem, width: CGFloat, profiler: TranscriptScrollProfiler? = nil) {
             self.profiler = profiler
-            if case .native(let spec) = item.kind {
-                installNativeRow(spec: spec, item: item, width: width)
-                return
-            }
-            // Hosted (SwiftUI) path. Tear down any native body if the recycled
-            // cell is switching modes.
-            teardownNativeRow()
-            let newRoot = TranscriptTableCellView.makeRoot(item: item, width: width)
-            if let host = hostingView {
-                let revisionChanged = configuredItemID != item.id || configuredRevision != item.contentRevision
-                let widthChanged = abs(configuredWidth - width) > 0.5
-                if revisionChanged || widthChanged {
-                    let apply = {
-                        host.rootView = newRoot
-                        self.lastIntrinsicHeight = -1
-                        if revisionChanged {
-                            host.invalidateIntrinsicContentSize()
-                        }
-                    }
-                    if let profiler { profiler.measureRootSwap(apply) } else { apply() }
-                }
-            } else {
-                let host: NSHostingView<AnyView> = profiler?.measureHostCreate { NSHostingView(rootView: newRoot) }
-                    ?? NSHostingView(rootView: newRoot)
-                pinToEdges(host)
-                hostingView = host
-                lastIntrinsicHeight = -1
-            }
-            configuredItemID = item.id
-            configuredRevision = item.contentRevision
-            configuredWidth = width
+            guard case .native(let spec) = item.kind else { return }
+            installNativeRow(spec: spec, item: item, width: width)
         }
 
-        /// Tear down the native row view (when switching a recycled cell back to
-        /// the hosted path, or to a different native view type).
+        /// Tear down the native row view (when a recycled cell switches to a
+        /// different native view type).
         private func teardownNativeRow() {
             guard let row = nativeRow else { return }
             nativeRowSpec?.reset(row)
@@ -1725,14 +1630,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         }
 
         /// Native render path: build/configure the spec's view pinned to the cell
-        /// with the row insets, tearing down any hosted view (or a native view of
-        /// a different type) first.
+        /// with the row insets, rebuilding if the recycled cell held a different
+        /// view type.
         private func installNativeRow(spec: NativeRowSpec, item: PiAgentAppKitTranscriptItem, width: CGFloat) {
-            if let host = hostingView {
-                host.removeFromSuperview()
-                hostingView = nil
-                lastIntrinsicHeight = -1
-            }
             // A recycled cell holding a different native view type must rebuild it.
             if let existingType = nativeRowTypeID, existingType != spec.typeID {
                 teardownNativeRow()
@@ -1788,56 +1688,35 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             configuredBottomInset = item.bottomInset
         }
 
-        /// AppKit's per-pass layout hook — also where the row reports its
-        /// height. The cell already laid out to display, so reading the hosted
-        /// content's intrinsic size costs nothing extra; whenever it drifts we
-        /// hand the coordinator the new height and it re-tiles the row. This is
-        /// the only measurement path — there is no separate offscreen render.
+        /// AppKit's per-pass layout hook — also where the row reports its height.
+        /// The cell already laid out to display, so reading the native row's
+        /// measured size costs nothing extra; whenever it drifts we hand the
+        /// coordinator the new height and it re-tiles the row.
         override func layout() {
             if let profiler {
                 profiler.measureCellLayout { super.layout() }
             } else {
                 super.layout()
             }
-            if let row = nativeRow, let spec = nativeRowSpec, let itemID = configuredItemID, configuredWidth > 1 {
-                let h = configuredTopInset + spec.measure(row, configuredWidth) + configuredBottomInset
-                guard h > 0, h.isFinite, abs(h - lastIntrinsicHeight) > 0.5 else { return }
-                lastIntrinsicHeight = h
-                onMeasuredHeight?(itemID, h)
-                return
-            }
-            guard let itemID = configuredItemID,
-                  let hostingView,
-                  configuredWidth > 1 else { return }
-            let intrinsic = hostingView.intrinsicContentSize.height
-            guard intrinsic > 0, intrinsic.isFinite,
-                  abs(intrinsic - lastIntrinsicHeight) > 0.5 else { return }
-            lastIntrinsicHeight = intrinsic
-            onMeasuredHeight?(itemID, intrinsic)
+            guard let row = nativeRow, let spec = nativeRowSpec, let itemID = configuredItemID, configuredWidth > 1 else { return }
+            let h = configuredTopInset + spec.measure(row, configuredWidth) + configuredBottomInset
+            guard h > 0, h.isFinite, abs(h - lastIntrinsicHeight) > 0.5 else { return }
+            lastIntrinsicHeight = h
+            onMeasuredHeight?(itemID, h)
         }
 
-        /// Force the hosted SwiftUI content to lay out *now* and return its
-        /// intrinsic height, instead of waiting for AppKit's async `layout()`
-        /// pass to report it. Used right after installing new streaming content
-        /// so the coordinator can re-tile the row in the same pass — closing the
-        /// window where the row is still tiled at the old (shorter) height while
-        /// the host, pinned to the cell, squishes the new taller content into it.
-        /// Records `lastIntrinsicHeight` so the subsequent async `layout()` sees
-        /// no change and doesn't redundantly re-report.
+        /// Force the native row to lay out *now* and return its height, instead of
+        /// waiting for AppKit's async `layout()` pass to report it. Used right after
+        /// installing new streaming content so the coordinator can re-tile the row
+        /// in the same pass. Records `lastIntrinsicHeight` so the subsequent async
+        /// `layout()` sees no change and doesn't redundantly re-report.
         func forcedIntrinsicHeight() -> CGFloat {
-            if let row = nativeRow, let spec = nativeRowSpec, configuredWidth > 1 {
-                row.layoutSubtreeIfNeeded()
-                let h = configuredTopInset + spec.measure(row, configuredWidth) + configuredBottomInset
-                guard h > 0, h.isFinite else { return -1 }
-                lastIntrinsicHeight = h
-                return h
-            }
-            guard let hostingView, configuredWidth > 1 else { return -1 }
-            hostingView.layoutSubtreeIfNeeded()
-            let intrinsic = hostingView.intrinsicContentSize.height
-            guard intrinsic > 0, intrinsic.isFinite else { return -1 }
-            lastIntrinsicHeight = intrinsic
-            return intrinsic
+            guard let row = nativeRow, let spec = nativeRowSpec, configuredWidth > 1 else { return -1 }
+            row.layoutSubtreeIfNeeded()
+            let h = configuredTopInset + spec.measure(row, configuredWidth) + configuredBottomInset
+            guard h > 0, h.isFinite else { return -1 }
+            lastIntrinsicHeight = h
+            return h
         }
     }
 }
@@ -2575,13 +2454,8 @@ struct PiAgentScreen: View {
                             commandSlashNames: commandSlashNames, subagentRuns: subagentRuns)
                         descriptors.append(PiAgentTranscriptBlockDescriptor(
                             id: child.id,
-                            view: nativeKind == nil ? AnyView(threadBlockCard(
-                                thread: thread, visibility: visibility, skills: skills,
-                                commandSlashNames: commandSlashNames,
-                                projectPath: projectPath, subagentRuns: subagentRuns,
-                                renderMode: .child(child), blockID: child.id
-                            )) : nil,
-                            kind: nativeKind,
+                            view: nil,
+                            kind: nativeKind ?? Self.nativeEmptyKind,
                             baseRevision: appKitChildBlockRevision(child, contextRevision: contextRevision),
                             estimatedContentHeight: { Self.estimatedChildHeight(child, width: $0) },
                             threadID: item.id,
@@ -2643,7 +2517,7 @@ struct PiAgentScreen: View {
             let topInset = descriptor.topInset
             let bottomInset = descriptor.bottomInset
             let contentEstimate = descriptor.estimatedContentHeight
-            let kind = descriptor.kind ?? .hosted(descriptor.view ?? AnyView(EmptyView()))
+            let kind = descriptor.kind ?? Self.nativeEmptyKind
             return PiAgentAppKitTranscriptItem(
                 id: descriptor.id,
                 kind: kind,
@@ -2755,6 +2629,11 @@ struct PiAgentScreen: View {
     /// Native render kind for a thread child, or nil to fall back to the hosted
     /// SwiftUI path. Tool groups and subagent/memory status cards stay hosted
     /// (later stages); everything else renders natively.
+    /// A native 0-height empty row — the safety fallback now that every descriptor
+    /// is native (no `.hosted` path remains).
+    private static let nativeEmptyKind: PiAgentTranscriptCellKind =
+        .native(.of(PiAgentNativeSpacerView.self) { view, _ in view.spacerHeight = 0 })
+
     private func nativeChildKind(
         for child: PiAgentThreadChild,
         visibility: PiAgentTranscriptVisibilitySettings,
@@ -2854,7 +2733,10 @@ struct PiAgentScreen: View {
         case .toolGroup(let group):
             guard let model = NativeToolGroupModel.make(
                 group: group, visibility: visibility, projectPath: store.selectedSession.map { $0.worktreePath ?? $0.projectPath }
-            ) else { return nil }
+            ) else {
+                // Tool sections all hidden by visibility → an empty 0-height row.
+                return .native(.of(PiAgentNativeSpacerView.self) { view, _ in view.spacerHeight = 0 })
+            }
             return .native(.of(PiAgentNativeToolGroupView.self) { view, width in
                 view.configure(model: model, width: width)
             })
