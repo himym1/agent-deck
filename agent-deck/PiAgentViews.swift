@@ -1767,14 +1767,26 @@ private struct SessionListContent: View, Equatable {
     let onDelete: (UUID) -> Void
 
     static func == (lhs: SessionListContent, rhs: SessionListContent) -> Bool {
-        lhs.visibleSessions == rhs.visibleSessions
-            && lhs.selectedSessionIDs == rhs.selectedSessionIDs
-            && lhs.renamingSessionID == rhs.renamingSessionID
-            && lhs.workingSessionIDs == rhs.workingSessionIDs
-            && lhs.generatingTitleIDs == rhs.generatingTitleIDs
-            && lhs.activityByID == rhs.activityByID
-            && lhs.projectsByID == rhs.projectsByID
+        let diff: String?
+        if lhs.visibleSessions != rhs.visibleSessions { diff = "visibleSessions" }
+        else if lhs.selectedSessionIDs != rhs.selectedSessionIDs { diff = "selectedSessionIDs" }
+        else if lhs.renamingSessionID != rhs.renamingSessionID { diff = "renamingSessionID" }
+        else if lhs.workingSessionIDs != rhs.workingSessionIDs { diff = "workingSessionIDs" }
+        else if lhs.generatingTitleIDs != rhs.generatingTitleIDs { diff = "generatingTitleIDs" }
+        else if lhs.activityByID != rhs.activityByID { diff = "activityByID" }
+        else if lhs.projectsByID != rhs.projectsByID { diff = "projectsByID" }
+        else { diff = nil }
+#if DEBUG
+        if let diff {
+            SessionListContent.perfLog.error("SessionListContent re-eval — input changed: \(diff, privacy: .public)")
+        }
+#endif
+        return diff == nil
     }
+
+#if DEBUG
+    private static let perfLog = Logger(subsystem: "streetcoding.agent-deck", category: "SessionListPerf")
+#endif
 
     var body: some View {
         AppList(

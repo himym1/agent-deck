@@ -309,18 +309,21 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
     }
 
     override func layout() {
-        // Hugged question cards are right-aligned: derive the leading from the
-        // ACTUAL laid-out width, not the (possibly stale/zero) configured rowWidth,
-        // so a cell vended before its column width resolved still paints at the
-        // correct x instead of at 0 and snapping right on first hover. Set this
-        // BEFORE super.layout() so the new constant is applied in THIS pass — setting
-        // it afterward only dirties the next pass, which wouldn't run until a hover
-        // forced it (the original 0→x snap). Guarded so it converges in one pass.
-        if let payload, payload.isUserHugged, bounds.width > 1 {
-            let leading = max(0, bounds.width - cardWidthC.constant)
-            if abs(cardLeadingC.constant - leading) > 0.5 {
-                cardLeadingC.constant = leading
-            }
+        // Recompute the card geometry from the ACTUAL laid-out width every pass,
+        // BEFORE super.layout() (so the new constants apply in THIS pass — setting
+        // them afterward only dirties the next pass, which wouldn't run until a hover
+        // forced it: the 0→x snap the run logged). This covers two cases the
+        // configure-time values miss:
+        //   • a cell vended before its column width resolved (configured at width 0),
+        //   • a recycled cell whose constants still hold the PREVIOUS occupant's
+        //     geometry (e.g. a hugged user card reused for a trailing thinking card,
+        //     which otherwise paints at the old leading until a hover settles it).
+        // Both card width and leading are derived here so they can never go stale.
+        if let payload, bounds.width > 1 {
+            let cardW = cardWidth(forRowWidth: bounds.width)
+            let leading = payload.isUserHugged ? max(0, bounds.width - cardW) : 0
+            if abs(cardWidthC.constant - cardW) > 0.5 { cardWidthC.constant = cardW }
+            if abs(cardLeadingC.constant - leading) > 0.5 { cardLeadingC.constant = leading }
         }
         super.layout()
         // Numeric bottom-crop detector (debug-only; the re-measure is too costly
