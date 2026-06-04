@@ -240,7 +240,7 @@ private struct PiAgentProjectPickerPopover: View {
     }
 }
 
-struct PiAgentSessionRow: View {
+struct PiAgentSessionRow: View, Equatable {
     let session: PiAgentSessionRecord
     let project: DiscoveredProject?
     let isSelected: Bool
@@ -254,6 +254,23 @@ struct PiAgentSessionRow: View {
     let onRename: (String) -> Void
     let onTogglePinned: () -> Void
     let onDelete: () -> Void
+
+    // Equatable so `.equatable()` can short-circuit re-evaluation: the session list
+    // lives inside a body that re-runs at the streaming cadence (the transcript cache
+    // is an ObservableObject, so any of its published changes invalidates the whole
+    // body). Comparing the value inputs lets SwiftUI skip re-laying-out every row on
+    // those pulses, refreshing a row only when something it actually shows changes.
+    // Closures are intentionally excluded: when the value inputs match, the retained
+    // instance's closures captured the same session, so they stay correct.
+    static func == (lhs: PiAgentSessionRow, rhs: PiAgentSessionRow) -> Bool {
+        lhs.session == rhs.session
+            && lhs.project == rhs.project
+            && lhs.isSelected == rhs.isSelected
+            && lhs.isRunning == rhs.isRunning
+            && lhs.isRenaming == rhs.isRenaming
+            && lhs.isGeneratingTitle == rhs.isGeneratingTitle
+            && lhs.gitActivity == rhs.gitActivity
+    }
 
     @State private var draftTitle = ""
     @State private var isTitleHovered = false

@@ -2130,6 +2130,7 @@ struct PiAgentScreen: View {
                 )
             }
         )
+        .equatable()
         .contextMenu {
             Button {
                 viewModel.togglePiAgentSessionPinned(session.id)
