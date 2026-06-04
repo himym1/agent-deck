@@ -456,7 +456,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
     }
 
     private func buildDiffRow(_ row: PiAgentThreadDiffSummaryView.Row) -> NSView {
-        let inner = makeSubCard(cornerRadius: 10, fill: AppTheme.ns(AppTheme.textContentFill.opacity(0.75)), stroke: .clear)
+        let inner = makeSubCard(cornerRadius: AppTheme.Chat.subCardCornerRadius, fill: AppTheme.ns(AppTheme.textContentFill.opacity(0.75)), stroke: .clear)
         let stack = NSStackView()
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
@@ -523,7 +523,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         linesStack.alignment = .leading
         linesStack.spacing = 0
         linesStack.wantsLayer = true
-        linesStack.layer?.cornerRadius = 8
+        linesStack.layer?.cornerRadius = AppTheme.Chat.codeCornerRadius
         linesStack.layer?.masksToBounds = true
         for line in visible { linesStack.addArrangedSubview(buildDiffLineRow(line)) }
         container.addArrangedSubview(linesStack)

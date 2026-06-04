@@ -2407,7 +2407,8 @@ struct PiAgentScreen: View {
             if visibility.showShortcutsStrip {
                 descriptors.append(PiAgentTranscriptBlockDescriptor(
                     id: "shortcuts-strip-\(session.id.uuidString)",
-                    view: AnyView(PiAgentShortcutsStrip()),
+                    view: nil,
+                    kind: .native(.of(PiAgentNativeShortcutsStripView.self) { view, width in view.configure(width: width) }),
                     baseRevision: 0,
                     estimatedContentHeight: { _ in 40 },
                     threadID: nil,
@@ -2425,14 +2426,15 @@ struct PiAgentScreen: View {
                 hasher.combine(parentTitle)
                 hasher.combine(parentID)
                 hasher.combine(snapshot)
+                let forkPayload = NativeForkOriginPayload.make(
+                    parentTitle: parentTitle, parentSessionID: parentID,
+                    transcriptSnapshot: snapshot, onSelectParent: onSelect)
                 descriptors.append(PiAgentTranscriptBlockDescriptor(
                     id: "fork-origin-\(session.id.uuidString)",
-                    view: AnyView(PiAgentForkOriginCard(
-                        parentTitle: parentTitle,
-                        parentSessionID: parentID,
-                        transcriptSnapshot: snapshot,
-                        onSelectParent: onSelect
-                    )),
+                    view: nil,
+                    kind: .native(.of(PiAgentNativeForkOriginCardView.self) { view, width in
+                        view.configure(payload: forkPayload, width: width)
+                    }),
                     baseRevision: hasher.finalize(),
                     estimatedContentHeight: { _ in 70 },
                     threadID: nil,
@@ -2440,9 +2442,13 @@ struct PiAgentScreen: View {
                 ))
             }
             if let finalSystemPrompt = session.finalSystemPrompt {
+                let sysPromptPayload = NativeSystemPromptPayload.make(title: "Final System Prompt", subtitle: "", prompt: finalSystemPrompt)
                 descriptors.append(PiAgentTranscriptBlockDescriptor(
                     id: "system-prompt-\(session.id.uuidString)",
-                    view: AnyView(PiAgentSystemPromptAuditCard(title: "Final System Prompt", subtitle: "", prompt: finalSystemPrompt)),
+                    view: nil,
+                    kind: .native(.of(PiAgentNativeSystemPromptCardView.self) { view, width in
+                        view.configure(payload: sysPromptPayload, width: width)
+                    }),
                     baseRevision: finalSystemPrompt.hashValue,
                     estimatedContentHeight: { _ in 80 },
                     threadID: nil,
@@ -2469,9 +2475,17 @@ struct PiAgentScreen: View {
             var hasher = Hasher()
             hasher.combine(archive.hiddenCount)
             hasher.combine(archive.compactedAt)
+            let isShowing = showArchivedPreCompactionTranscript
+            let archivePayload = NativeArchiveNoticePayload.preCompaction(
+                hiddenCount: archive.hiddenCount, compactedAt: archive.compactedAt,
+                isShowing: isShowing, onToggle: { showArchivedPreCompactionTranscript.toggle() })
+            hasher.combine(isShowing)
             descriptors.append(PiAgentTranscriptBlockDescriptor(
                 id: "pre-compaction-archive",
-                view: AnyView(preCompactionArchiveCard(archive)),
+                view: nil,
+                kind: .native(.of(PiAgentNativeArchiveNoticeView.self) { view, width in
+                    view.configure(payload: archivePayload, width: width)
+                }),
                 baseRevision: hasher.finalize(),
                 estimatedContentHeight: { _ in 60 },
                 threadID: nil,
@@ -2482,9 +2496,15 @@ struct PiAgentScreen: View {
             var hasher = Hasher()
             hasher.combine(archive.hiddenCount)
             hasher.combine(archive.limit)
+            let recentPayload = NativeArchiveNoticePayload.recentWindow(
+                hiddenCount: archive.hiddenCount, limit: archive.limit,
+                onOpen: { isEarlierTranscriptSheetPresented = true })
             descriptors.append(PiAgentTranscriptBlockDescriptor(
                 id: "recent-window-archive",
-                view: AnyView(recentWindowArchiveCard(archive)),
+                view: nil,
+                kind: .native(.of(PiAgentNativeArchiveNoticeView.self) { view, width in
+                    view.configure(payload: recentPayload, width: width)
+                }),
                 baseRevision: hasher.finalize(),
                 estimatedContentHeight: { _ in 60 },
                 threadID: nil,
@@ -2496,7 +2516,10 @@ struct PiAgentScreen: View {
         if store.isSelectedTranscriptLoading && timelineItems.isEmpty {
             descriptors.append(PiAgentTranscriptBlockDescriptor(
                 id: "pi-agent-transcript-state-card",
-                view: AnyView(loadingTranscriptCard),
+                view: nil,
+                kind: .native(.of(PiAgentNativeStateCardView.self) { view, width in
+                    view.configure(payload: .loading(), width: width)
+                }),
                 baseRevision: chromeRevision,
                 estimatedContentHeight: { _ in 80 },
                 threadID: nil,
@@ -2505,7 +2528,10 @@ struct PiAgentScreen: View {
         } else if timelineItems.isEmpty && descriptors.isEmpty {
             descriptors.append(PiAgentTranscriptBlockDescriptor(
                 id: "pi-agent-transcript-state-card",
-                view: AnyView(emptyTranscriptCard),
+                view: nil,
+                kind: .native(.of(PiAgentNativeStateCardView.self) { view, width in
+                    view.configure(payload: .empty(), width: width)
+                }),
                 baseRevision: chromeRevision,
                 estimatedContentHeight: { _ in 120 },
                 threadID: nil,
@@ -2561,9 +2587,13 @@ struct PiAgentScreen: View {
                         ))
                     }
                 case let .plan(event):
+                    let planPayload = NativePlanCardPayload.make(event: event)
                     descriptors.append(PiAgentTranscriptBlockDescriptor(
                         id: item.id,
-                        view: AnyView(PiAgentCurrentPlanCard(event: event).id(item.id)),
+                        view: nil,
+                        kind: .native(.of(PiAgentNativePlanCardView.self) { view, width in
+                            view.configure(payload: planPayload, width: width)
+                        }),
                         baseRevision: appKitTranscriptContentRevision(for: item, snapshot: timelineSnapshot, contextRevision: contextRevision),
                         estimatedContentHeight: { _ in 120 },
                         threadID: nil,
@@ -2729,8 +2759,12 @@ struct PiAgentScreen: View {
                 isThreadChild: true
             ))
         case .status(let entry):
-            // Memory and prompt-audit statuses stay hosted.
-            if entry.agentMemoryEvent != nil { return nil }
+            if let memoryEvent = entry.agentMemoryEvent {
+                let payload = NativeMemoryCardPayload.make(event: memoryEvent)
+                return .native(.of(PiAgentNativeMemoryCardView.self) { view, width in
+                    view.configure(payload: payload, width: width)
+                })
+            }
             if let runID = entry.nativeSubagentRunID, let run = subagentRuns[runID] {
                 if NativeSubagentFactory.isParallel(run) {
                     let payload = NativeSubagentParallelPayload.make(
