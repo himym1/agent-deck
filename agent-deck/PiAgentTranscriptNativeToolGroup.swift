@@ -181,26 +181,6 @@ extension NativeToolGroupModel {
 
 // MARK: - Tool-group view
 
-/// A pill view whose corner radius always equals half its height — a true
-/// SwiftUI `Capsule()`. Used for the tool chips and their count badges.
-private final class CapsuleView: NSView {
-    var fillColor: NSColor = .clear { didSet { needsLayout = true } }
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.actions = ["bounds": NSNull(), "position": NSNull(), "cornerRadius": NSNull(), "backgroundColor": NSNull()]
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override var isFlipped: Bool { true }
-    override func layout() {
-        super.layout()
-        layer?.cornerRadius = bounds.height / 2
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = fillColor.cgColor
-        }
-    }
-}
-
 final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
     private let sections = NSStackView()
     private var sectionsWidthC: NSLayoutConstraint!
@@ -401,73 +381,45 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
     // MARK: Chips card
 
     private func buildChipsCard(_ chips: NativeToolGroupModel.Chips) -> NSView {
-        let card = makeSubCard()
+        // No card background, no per-tool icons — one leading wrench glyph + a
+        // single-line inline summary that truncates.
         let row = NSStackView()
         row.translatesAutoresizingMaskIntoConstraints = false
         row.orientation = .horizontal
-        row.spacing = 10
-        row.alignment = .centerY
+        row.spacing = 7
+        row.alignment = .firstBaseline
 
         let icon = NSImageView()
-        icon.image = NSImage(systemSymbolName: chips.hasErrors ? "exclamationmark.triangle" : "wrench.and.screwdriver", accessibilityDescription: nil)
+        icon.image = NSImage(systemSymbolName: chips.hasErrors ? "exclamationmark.triangle" : "wrench.and.screwdriver", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.captionSize, weight: .semibold))
         icon.contentTintColor = chips.hasErrors ? AppTheme.ns(AppTheme.roleError) : Self.muted
+        icon.setContentHuggingPriority(.required, for: .horizontal)
+        icon.setContentCompressionResistancePriority(.required, for: .horizontal)
         row.addArrangedSubview(icon)
-        row.addArrangedSubview(Self.label("Tools", font: Self.captionBold()))
-        row.addArrangedSubview(Self.label(chips.callCount, font: NativeTranscriptFont.caption(), color: Self.muted))
 
-        let chipRow = NSStackView()
-        chipRow.orientation = .horizontal
-        chipRow.spacing = 6
-        for chip in chips.items { chipRow.addArrangedSubview(buildChip(chip)) }
-        // Horizontal scroll for overflow, matching the SwiftUI ScrollView.
-        let scroll = NSScrollView()
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        scroll.drawsBackground = false
-        scroll.hasHorizontalScroller = false
-        scroll.hasVerticalScroller = false
-        scroll.documentView = chipRow
-        chipRow.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            chipRow.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
-            chipRow.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
-            chipRow.bottomAnchor.constraint(equalTo: scroll.contentView.bottomAnchor),
-            scroll.heightAnchor.constraint(equalTo: chipRow.heightAnchor)
-        ])
-        row.addArrangedSubview(scroll)
-
-        embed(row, in: card, hInset: 10, vInset: 7)
-        return card
+        let label = NSTextField(labelWithString: "")
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.attributedStringValue = chipsLine(chips)
+        label.lineBreakMode = .byTruncatingTail
+        label.maximumNumberOfLines = 1
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        label.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        row.addArrangedSubview(label)
+        return row
     }
 
-    private func buildChip(_ chip: NativeToolGroupModel.Chips.Chip) -> NSView {
-        let color = chip.isError ? AppTheme.ns(AppTheme.roleError) : Self.muted
-        // Outer capsule: (roleError | contentStroke).opacity(roleChipOpacity).
-        let capsule = CapsuleView()
-        capsule.fillColor = AppTheme.ns((chip.isError ? AppTheme.roleError : AppTheme.contentStroke).opacity(AppTheme.roleChipOpacity))
-
-        let stack = NSStackView()
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.orientation = .horizontal
-        stack.spacing = 5
-        stack.alignment = .centerY
-        let icon = NSImageView()
-        icon.image = NSImage(systemSymbolName: chip.icon, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.caption2Size, weight: .semibold))
-        icon.contentTintColor = color
-        stack.addArrangedSubview(icon)
-        stack.addArrangedSubview(Self.label(chip.name, font: NativeTranscriptFont.caption(), color: color))
-
-        // Count sits in its own inner capsule (contentStroke.opacity(0.55)).
-        let countBadge = CapsuleView()
-        countBadge.fillColor = AppTheme.ns(AppTheme.contentStroke.opacity(0.55))
-        let countLabel = Self.label("\(chip.count)",
-                                    font: .monospacedDigitSystemFont(ofSize: NativeTranscriptFont.caption2Size, weight: .bold),
-                                    color: color)
-        embed(countLabel, in: countBadge, hInset: 5, vInset: 1)
-        stack.addArrangedSubview(countBadge)
-
-        embed(stack, in: capsule, hInset: 7, vInset: 3)
-        return capsule
+    /// "Tools  ·  3 calls  ·  Shell ×2  ·  File read  ·  Edit" — one line.
+    private func chipsLine(_ chips: NativeToolGroupModel.Chips) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        result.append(NSAttributedString(string: "Tools", attributes: [.font: Self.captionBold(), .foregroundColor: NSColor.labelColor]))
+        result.append(NSAttributedString(string: "  ·  \(chips.callCount)", attributes: [.font: NativeTranscriptFont.caption(), .foregroundColor: Self.muted]))
+        for chip in chips.items {
+            let name = chip.count > 1 ? "\(chip.name) ×\(chip.count)" : chip.name
+            let color = chip.isError ? AppTheme.ns(AppTheme.roleError) : Self.muted
+            result.append(NSAttributedString(string: "  ·  ", attributes: [.font: NativeTranscriptFont.caption(), .foregroundColor: Self.muted]))
+            result.append(NSAttributedString(string: name, attributes: [.font: NativeTranscriptFont.caption(), .foregroundColor: color]))
+        }
+        return result
     }
 
     // MARK: Diff card
