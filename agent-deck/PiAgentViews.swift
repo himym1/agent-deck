@@ -2276,7 +2276,6 @@ struct PiAgentScreen: View {
         let commandSlashNames = Set((store.selectedSession?.commandInvocations ?? []).map { name in
             name.hasPrefix("/") ? String(name.dropFirst()) : name
         })
-        let projectPath = store.selectedSession.map { $0.worktreePath ?? $0.projectPath }
         let subagentRuns = nativeSubagentRunsByID
 
         var descriptors: [PiAgentTranscriptBlockDescriptor] = []
