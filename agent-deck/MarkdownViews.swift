@@ -447,30 +447,43 @@ final class NativeMarkdownTextContainer: NSView {
     }
 
     private func tryIncrementalUpdate(from previous: CachedMarkdownDocument, to next: CachedMarkdownDocument) -> Bool {
-        guard previous.frontmatter == next.frontmatter else { return false }
+        guard previous.frontmatter == next.frontmatter else { Self.logIncrementalBail("frontmatter"); return false }
         let oldBlocks = previous.blocks
         let newBlocks = next.blocks
         // Only handle non-shrinking growth — the streaming case. A shorter document
         // (rare: edit/merge) falls through to a full rebuild.
-        guard !oldBlocks.isEmpty, newBlocks.count >= oldBlocks.count else { return false }
+        guard !oldBlocks.isEmpty, newBlocks.count >= oldBlocks.count else {
+            Self.logIncrementalBail(oldBlocks.isEmpty ? "emptyOld" : "shrink(\(oldBlocks.count)->\(newBlocks.count))")
+            return false
+        }
 
         // All old blocks except the last must match the new prefix byte-for-byte.
         let lastIndex = oldBlocks.count - 1
         for i in 0..<lastIndex where oldBlocks[i] != newBlocks[i] {
+            Self.logIncrementalBail("prefix@\(i)/\(oldBlocks.count)")
             return false
         }
 
         let viewOffset = next.frontmatter != nil ? 1 : 0
         // The arranged subviews must line up with the old block count, or our indices
         // are wrong — bail to a full rebuild rather than corrupt the stack.
-        guard stackView.arrangedSubviews.count == viewOffset + oldBlocks.count else { return false }
+        guard stackView.arrangedSubviews.count == viewOffset + oldBlocks.count else {
+            Self.logIncrementalBail("viewCount(\(stackView.arrangedSubviews.count)!=\(viewOffset + oldBlocks.count))")
+            return false
+        }
 
         // The old last block may have grown (more text streamed into the same block).
         // Update it in place when only its text changed; a shape change forces rebuild.
         if oldBlocks[lastIndex] != newBlocks[lastIndex] {
-            guard Self.sameKindShape(oldBlocks[lastIndex].kind, newBlocks[lastIndex].kind) else { return false }
+            guard Self.sameKindShape(oldBlocks[lastIndex].kind, newBlocks[lastIndex].kind) else {
+                Self.logIncrementalBail("shape")
+                return false
+            }
             let viewIndex = viewOffset + lastIndex
-            guard let textView = Self.firstTextView(in: stackView.arrangedSubviews[viewIndex]) else { return false }
+            guard let textView = Self.firstTextView(in: stackView.arrangedSubviews[viewIndex]) else {
+                Self.logIncrementalBail("noTextView")
+                return false
+            }
             Self.updateTextView(textView, with: newBlocks[lastIndex].kind)
         }
 
@@ -485,6 +498,15 @@ final class NativeMarkdownTextContainer: NSView {
         }
         return true
     }
+
+#if DEBUG
+    private static let incrementalLog = Logger(subsystem: "streetcoding.agent-deck", category: "MarkdownIncremental")
+    private static func logIncrementalBail(_ reason: String) {
+        incrementalLog.error("markdown rebuild (incremental bail): \(reason, privacy: .public)")
+    }
+#else
+    private static func logIncrementalBail(_ reason: String) {}
+#endif
 
     // Two block kinds have the "same shape" if their layout chrome (paddedBlock, listRow
     // with marker, quote bar, code container) is identical and only the inner text
