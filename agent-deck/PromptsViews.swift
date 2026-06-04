@@ -29,22 +29,24 @@ struct PromptsScreen: View {
     ) = ([], [])
 
     var body: some View {
-        HSplitView {
-            if viewModel.hasCompletedInitialRefresh {
-                promptLibraryPane
-                    .frame(minWidth: 430, idealWidth: 520, maxWidth: 640)
-            } else {
-                AppLoadingView("Loading prompts…")
-                    .frame(minWidth: 430, idealWidth: 520, maxWidth: 640)
-            }
+        HStack(spacing: 0) {
+            HSplitView {
+                if viewModel.hasCompletedInitialRefresh {
+                    promptLibraryPane
+                        .frame(minWidth: 430, idealWidth: 520, maxWidth: 640)
+                } else {
+                    AppLoadingView("Loading prompts…")
+                        .frame(minWidth: 430, idealWidth: 520, maxWidth: 640)
+                }
 
-            if !viewModel.hasCompletedInitialRefresh {
-                AppLoadingView("Loading prompt details…")
-            } else if let prompt = viewModel.selectedPromptTemplate {
-                promptDetail(prompt)
-            } else {
-                ContentUnavailableView("No Prompt Selected", systemImage: "doc.text")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if !viewModel.hasCompletedInitialRefresh {
+                    AppLoadingView("Loading prompt details…")
+                } else if let prompt = viewModel.selectedPromptTemplate {
+                    promptDetail(prompt)
+                } else {
+                    ContentUnavailableView("No Prompt Selected", systemImage: "doc.text")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
         .sheet(item: $promptPendingRename) { prompt in
