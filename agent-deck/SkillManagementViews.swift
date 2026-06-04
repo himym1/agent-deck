@@ -194,23 +194,27 @@ struct SkillsScreen: View {
                     .appDebugLayout("Skills.libraryLoading", logger: Self.layoutLog)
             }
 
+            // The detail pane must carry an explicit width contract. An HSplitView
+            // sizes itself from its panes' fitting widths, and a pane's fitting
+            // width comes from its `idealWidth` (per SwiftUI `frame` semantics).
+            // Without it, the detail content's own ideal width leaks through
+            // AppPage's vertical ScrollView — a long path / wide markdown card can
+            // report a ~1500pt ideal — and the split balloons past the available
+            // width, then gets centered and slides the library pane under the
+            // sidebar. `idealWidth` clamps the fitting size; `maxWidth: .infinity`
+            // still fills the real space at runtime.
             if viewModel.hasCompletedInitialRefresh {
-                // `lazy: true` is load-bearing, not just a perf tweak: a non-lazy
-                // AppPage measures every card up front, so a wide card's horizontal
-                // ideal width leaks up through AppPage's vertical ScrollView and
-                // balloons this detail pane — the HSplitView then sizes to that
-                // oversized ideal and gets centered, sliding the library pane under
-                // the sidebar. The LazyVStack defers measuring off-screen cards.
                 AppPage(
                     selectedWarning?.title ?? skillDetailTitle,
-                    subtitle: selectedWarning?.subtitle ?? skillDetailSubtitle,
-                    lazy: true
+                    subtitle: selectedWarning?.subtitle ?? skillDetailSubtitle
                 ) {
                     skillDetailContent
                 }
+                .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
                 .appDebugLayout("Skills.detail selected=\(selectedSkill?.name ?? selectedWarning?.title ?? "nil")", logger: Self.layoutLog)
             } else {
                 AppLoadingView("Loading skill details…")
+                    .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
                     .appDebugLayout("Skills.detailLoading", logger: Self.layoutLog)
             }
         }

@@ -42,15 +42,26 @@ struct PromptsScreen: View {
                     .appDebugLayout("Prompts.libraryLoading", logger: Self.layoutLog)
             }
 
+            // The detail pane must carry an explicit width contract. An HSplitView
+            // sizes itself from its panes' fitting widths, and a pane's fitting
+            // width comes from its `idealWidth` (per SwiftUI `frame` semantics).
+            // Without it, the detail content's own ideal width leaks through
+            // AppPage's vertical ScrollView — a long path / wide markdown card can
+            // report a ~1500pt ideal — and the split balloons past the available
+            // width, then gets centered and slides the library pane under the
+            // sidebar. `idealWidth` clamps the fitting size; `maxWidth: .infinity`
+            // still fills the real space at runtime.
             if !viewModel.hasCompletedInitialRefresh {
                 AppLoadingView("Loading prompt details…")
+                    .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
                     .appDebugLayout("Prompts.detailLoading", logger: Self.layoutLog)
             } else if let prompt = viewModel.selectedPromptTemplate {
                 promptDetail(prompt)
+                    .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
                     .appDebugLayout("Prompts.detail selected=\(prompt.name) source=\(prompt.source.kind.rawValue)", logger: Self.layoutLog)
             } else {
                 ContentUnavailableView("No Prompt Selected", systemImage: "doc.text")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
                     .appDebugLayout("Prompts.detailEmpty", logger: Self.layoutLog)
             }
         }
@@ -477,13 +488,7 @@ struct PromptsScreen: View {
     }
 
     private func promptDetail(_ prompt: PromptTemplateRecord) -> some View {
-        // `lazy: true` is load-bearing, not just a perf tweak: a non-lazy AppPage
-        // is a VStack that measures every card up front, so the wide markdown card's
-        // horizontal ideal width leaks up through AppPage's vertical ScrollView and
-        // balloons this detail pane. The HSplitView then sizes to that oversized
-        // ideal and gets centered, sliding the library pane under the sidebar. The
-        // LazyVStack defers measuring off-screen cards, keeping the pane bounded.
-        AppPage(prompt.invocation, subtitle: prompt.description.isEmpty ? nil : prompt.description, lazy: true) {
+        AppPage(prompt.invocation, subtitle: prompt.description.isEmpty ? nil : prompt.description) {
             AppCard {
                 promptHeaderEditor(prompt)
 
