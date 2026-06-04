@@ -116,7 +116,11 @@ struct ReleaseService {
             minor = 9
             patch = 0
         }
-        return ("v\(major).\(minor).\(patch + 1)", "v\(major).\(minor + 1)", "v\(major + 1).0")
+        // Minor stays single-digit (vMAJOR.0 … vMAJOR.9); the bump after .9 rolls
+        // into the next major rather than producing v1.10. At that boundary
+        // nextMinor == nextMajor, and the UI collapses the redundant option.
+        let nextMinor = (minor + 1) <= 9 ? "v\(major).\(minor + 1)" : "v\(major + 1).0"
+        return ("v\(major).\(minor).\(patch + 1)", nextMinor, "v\(major + 1).0")
     }
 
     nonisolated static func parseVersion(_ tag: String) -> (major: Int, minor: Int, patch: Int)? {

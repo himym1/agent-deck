@@ -251,7 +251,7 @@ struct AppInitialLoadWindowCover: NSViewRepresentable {
 
         private func installFrameSync(parent: NSWindow, cover: NSWindow) {
             let center = NotificationCenter.default
-            let mirror: (Notification) -> Void = { [weak parent, weak cover] _ in
+            let mirror: @Sendable (Notification) -> Void = { [weak parent, weak cover] _ in
                 MainActor.assumeIsolated {
                     guard let parent, let cover else { return }
                     cover.setFrame(parent.frame, display: false)
