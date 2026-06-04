@@ -149,7 +149,7 @@ final class PiAgentNativeExpandableMarkdown: NSView {
         addSubview(wrapper)
 
         collapsedLabel.translatesAutoresizingMaskIntoConstraints = false
-        collapsedLabel.font = NSFont.preferredFont(forTextStyle: .body)
+        collapsedLabel.font = NativeTranscriptFont.body()
         collapsedLabel.textColor = .labelColor
         collapsedLabel.maximumNumberOfLines = collapsedLineLimit
         collapsedLabel.lineBreakMode = .byTruncatingTail
@@ -266,7 +266,7 @@ final class PiAgentNativeAgentBlockView: NSView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
-        nameLabel.font = NSFont.systemFont(ofSize: NSFont.preferredFont(forTextStyle: .body).pointSize, weight: .semibold)
+        nameLabel.font = NativeTranscriptFont.body(.semibold)
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
@@ -463,6 +463,9 @@ final class PiAgentNativeSubagentParallelCardView: NSView, PiAgentNativeRowConte
         surface.cardCornerRadius = 16
         addSubview(surface)
 
+        // Set the field's own font to the largest run so it sizes tall enough
+        // for the body-sized title (otherwise the ascenders clip).
+        headerLabel.font = NativeTranscriptFont.body(.semibold)
         headerLabel.lineBreakMode = .byTruncatingTail
         childStack.translatesAutoresizingMaskIntoConstraints = false
         childStack.orientation = .vertical
@@ -540,7 +543,7 @@ final class PiAgentNativeSubagentParallelCardView: NSView, PiAgentNativeRowConte
     private func headerLine(_ payload: NativeSubagentParallelPayload) -> NSAttributedString {
         let result = NSMutableAttributedString()
         result.append(NSAttributedString(string: payload.title, attributes: [
-            .font: NSFont.systemFont(ofSize: NSFont.preferredFont(forTextStyle: .body).pointSize, weight: .semibold),
+            .font: NativeTranscriptFont.body(.semibold),
             .foregroundColor: NSColor.labelColor
         ]))
         result.append(NSAttributedString(string: "  ·  \(payload.count)", attributes: [

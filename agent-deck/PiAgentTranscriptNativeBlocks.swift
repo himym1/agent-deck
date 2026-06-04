@@ -1,18 +1,22 @@
 import AppKit
 
-/// Fixed-size fonts matching the transcript's SwiftUI styling. The transcript
-/// uses fixed 11/10pt captions (AppTheme.Font.caption/caption2), and SwiftUI's
-/// `.weight(.semibold)` is the SF semibold face — NOT NSFontManager's
-/// `.boldFontMask` (which is heavier, `.bold`). Use these for parity.
+/// AppKit fonts for the native transcript rows, sized from the design-system
+/// tokens (`AppTheme.Font.*Size`) so every card follows one source of truth.
+/// SwiftUI's `.weight(.semibold)` is the SF semibold face — NOT NSFontManager's
+/// `.boldFontMask` (heavier, `.bold`); use these for parity.
 enum NativeTranscriptFont {
-    static let captionSize: CGFloat = 11
-    static let caption2Size: CGFloat = 10
+    static let bodySize = AppTheme.Font.bodySize
+    static let calloutSize = AppTheme.Font.calloutSize
+    static let footnoteSize = AppTheme.Font.footnoteSize
+    static let captionSize = AppTheme.Font.captionSize
+    static let caption2Size = AppTheme.Font.caption2Size
+
+    static func body(_ weight: NSFont.Weight = .regular) -> NSFont { .systemFont(ofSize: bodySize, weight: weight) }
+    static func callout(_ weight: NSFont.Weight = .regular) -> NSFont { .systemFont(ofSize: calloutSize, weight: weight) }
+    static func footnote(_ weight: NSFont.Weight = .regular) -> NSFont { .systemFont(ofSize: footnoteSize, weight: weight) }
     static func caption(_ weight: NSFont.Weight = .regular) -> NSFont { .systemFont(ofSize: captionSize, weight: weight) }
     static func caption2(_ weight: NSFont.Weight = .regular) -> NSFont { .systemFont(ofSize: caption2Size, weight: weight) }
     static func captionMono(_ weight: NSFont.Weight = .regular) -> NSFont { .monospacedSystemFont(ofSize: captionSize, weight: weight) }
-    static func callout(_ weight: NSFont.Weight = .regular) -> NSFont {
-        .systemFont(ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize, weight: weight)
-    }
 }
 
 // Native (pure AppKit) rendering for the non-bubble transcript rows — status,
