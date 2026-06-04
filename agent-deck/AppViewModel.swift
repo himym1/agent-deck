@@ -7275,6 +7275,34 @@ final class AppViewModel: NSObject {
             .filter { seenName.insert($0.name).inserted }
     }
 
+    /// Prompt-template analogue of `activeParentSkillNames`: the templates the
+    /// parent session is launched with (`parentPromptTemplateArguments`).
+    func activeParentPromptTemplateNames(forProjectPath projectPath: String?) -> Set<String> {
+        var names = appSettings.defaultPromptTemplateNames
+        if let path = projectPath ?? selectedProjectPath {
+            names.formUnion(projectPreference(for: path).assignedPromptTemplateNames)
+        }
+        return names
+    }
+
+    /// The resolved `PromptTemplateRecord`s actually available to the parent
+    /// session for `projectPath`, deduped by name. Shared by the `/` browser's
+    /// `isActive` flag and the session-resources popover.
+    func activeParentPromptTemplates(forProjectPath projectPath: String?) -> [PromptTemplateRecord] {
+        let scopedPath = projectPath ?? selectedProjectPath
+        let activeNames = activeParentPromptTemplateNames(forProjectPath: scopedPath)
+        let catalog: [PromptTemplateRecord]
+        if let path = scopedPath {
+            catalog = promptTemplateCatalog(forProjectPath: path)
+        } else {
+            catalog = allVisiblePromptTemplateRecords
+        }
+        var seenName = Set<String>()
+        return catalog
+            .filter { activeNames.contains($0.name) }
+            .filter { seenName.insert($0.name).inserted }
+    }
+
     /// Materializes the full universe of Skills, Prompts, and Commands the
     /// composer's `/` browser can show. Pure in-memory: walks already-cached
     /// scan snapshots + the command catalog. Build once when the panel opens
@@ -7317,10 +7345,7 @@ final class AppViewModel: NSObject {
         } else {
             promptRecords = allVisiblePromptTemplateRecords
         }
-        var activePromptNames = appSettings.defaultPromptTemplateNames
-        if let path = scopedPath {
-            activePromptNames.formUnion(projectPreference(for: path).assignedPromptTemplateNames)
-        }
+        let activePromptNames = activeParentPromptTemplateNames(forProjectPath: scopedPath)
         let disabledBundledPromptNames = appSettings.disabledBundledPromptNames
         var seenPromptName = Set<String>()
         let prompts = promptRecords

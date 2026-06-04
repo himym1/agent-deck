@@ -191,7 +191,9 @@ struct PiAgentStartupResourcesPopover: View {
     }
 
     private var promptItems: [PiStartupResourceItem] {
-        startupSnapshot.promptTemplates
+        // Only the prompt templates the parent session was launched with — not
+        // every template discovered on disk. Mirrors the skills treatment above.
+        viewModel.activeParentPromptTemplates(forProjectPath: session.projectPath)
             .map { PiStartupResourceItem(title: $0.invocation, detail: $0.description, kind: .prompt($0.id)) }
             .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
