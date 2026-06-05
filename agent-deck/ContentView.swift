@@ -288,20 +288,6 @@ struct AppInitialLoadWindowCover: NSViewRepresentable {
     }
 }
 
-/// SwiftUI wrapper around `PiAgentNativeTextPopoverController` so the System Prompt
-/// toolbar button shows the exact same title + scrollable monospaced text popover the
-/// old transcript "Final System Prompt" card's "View" button used.
-private struct PiAgentTextPopover: NSViewControllerRepresentable {
-    let title: String
-    let text: String
-
-    func makeNSViewController(context: Context) -> PiAgentNativeTextPopoverController {
-        PiAgentNativeTextPopoverController(title: title, text: text)
-    }
-
-    func updateNSViewController(_ controller: PiAgentNativeTextPopoverController, context: Context) {}
-}
-
 final class ScrollerHidingProbe: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -325,6 +311,9 @@ final class ScrollerHidingProbe: NSView {
 
     private func applySuppression() {
         guard let scrollView = targetScrollView() else { return }
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+        scrollView.scrollerInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
         scrollView.scrollerStyle = .overlay
         scrollView.autohidesScrollers = true
         if !(scrollView.verticalScroller is HiddenScroller) {
@@ -1246,11 +1235,9 @@ struct ContentView: View {
                 .toolbarNeutralChrome()
                 .help("View the final system prompt sent to the agent")
                 .disabled((viewModel.piAgentSessionStore.selectedSession?.finalSystemPrompt ?? "").isEmpty)
-                .popover(isPresented: $isPiAgentSystemPromptPresented, arrowEdge: .bottom) {
+                .sheet(isPresented: $isPiAgentSystemPromptPresented) {
                     if let prompt = viewModel.piAgentSessionStore.selectedSession?.finalSystemPrompt, !prompt.isEmpty {
-                        // Same text popover the old transcript card's "View" button used.
-                        PiAgentTextPopover(title: "Final System Prompt", text: prompt)
-                            .frame(width: 420, height: 300)
+                        PiAgentFinalSystemPromptSheet(text: prompt)
                     }
                 }
             }

@@ -195,20 +195,15 @@ struct SkillsScreen: View {
             }
 
             if viewModel.hasCompletedInitialRefresh {
-                // Two complementary contracts, both load-bearing for layout:
+                // Two layout contracts for this detail pane:
                 //
                 // • `lazy: true` — AppPage wraps cards in a vertical ScrollView; a
                 //   plain VStack measures every card up front, so a wide one reports
                 //   a ~1500pt ideal width that balloons this pane. A LazyVStack only
                 //   sums on-screen cards, bounding that ideal.
                 //
-                // • `.frame(idealWidth:)` — HSplitView seeds its divider from each
-                //   pane's nil-proposal ideal. A ScrollView answers that with its
-                //   content's ideal width, which (even lazy) *varies* as rows realize,
-                //   so the divider hunts and re-runs a full markdown layout per step
-                //   (the width-oscillation hang). An explicit idealWidth pins the seed
-                //   to a constant so the divider resolves in one pass; maxWidth:.infinity
-                //   still fills the real space at runtime.
+                // • No `idealWidth` on the detail frame — the library pane seeds the
+                //   divider; layout priority makes this pane consume the remaining slot.
                 AppPage(
                     selectedWarning?.title ?? skillDetailTitle,
                     subtitle: selectedWarning?.subtitle ?? skillDetailSubtitle,
@@ -216,11 +211,13 @@ struct SkillsScreen: View {
                 ) {
                     skillDetailContent
                 }
-                .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(1)
                 .appDebugLayout("Skills.detail selected=\(selectedSkill?.name ?? selectedWarning?.title ?? "nil")", logger: Self.layoutLog)
             } else {
                 AppLoadingView("Loading skill details…")
-                    .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(1)
                     .appDebugLayout("Skills.detailLoading", logger: Self.layoutLog)
             }
         }

@@ -164,8 +164,8 @@ final class PiAgentNativeForkOriginCardView: NSView, PiAgentNativeRowContent {
 
         surface.translatesAutoresizingMaskIntoConstraints = false
         surface.cardCornerRadius = ChromeLayout.cardCorner
-        surface.fillColor = AppTheme.ns(AppTheme.contentSubtleFill.opacity(0.8))
-        surface.strokeColor = AppTheme.ns(AppTheme.contentStroke)
+        surface.fillColor = AppTheme.ns(AppTheme.Chat.cardFill)
+        surface.strokeColor = AppTheme.ns(AppTheme.Chat.cardStroke)
         addSubview(surface)
 
         glyph.translatesAutoresizingMaskIntoConstraints = false
@@ -317,8 +317,8 @@ final class PiAgentNativeArchiveNoticeView: NSView, PiAgentNativeRowContent {
 
         surface.translatesAutoresizingMaskIntoConstraints = false
         surface.cardCornerRadius = ChromeLayout.cardCorner
-        surface.fillColor = AppTheme.ns(AppTheme.contentSubtleFill.opacity(0.8))
-        surface.strokeColor = AppTheme.ns(AppTheme.contentStroke)
+        surface.fillColor = AppTheme.ns(AppTheme.Chat.cardFill)
+        surface.strokeColor = AppTheme.ns(AppTheme.Chat.cardStroke)
         addSubview(surface)
 
         glyph.translatesAutoresizingMaskIntoConstraints = false
@@ -504,8 +504,8 @@ final class PiAgentNativeStateCardView: NSView, PiAgentNativeRowContent {
 
         surface.translatesAutoresizingMaskIntoConstraints = false
         surface.cardCornerRadius = ChromeLayout.cardCorner
-        surface.fillColor = AppTheme.ns(AppTheme.contentSubtleFill.opacity(0.8))
-        surface.strokeColor = AppTheme.ns(AppTheme.contentStroke)
+        surface.fillColor = AppTheme.ns(AppTheme.Chat.cardFill)
+        surface.strokeColor = AppTheme.ns(AppTheme.Chat.cardStroke)
         addSubview(surface)
 
         spinner.translatesAutoresizingMaskIntoConstraints = false

@@ -71,6 +71,14 @@ enum AppTheme {
         static let glassPanelCornerRadius: CGFloat = 22
         static let quoteBarCornerRadius: CGFloat = 1
 
+        // Neutral transcript-card surface (Memory, subagent, tool group, fork,
+        // state, archive, supervisor). A whisper of fill defined mostly by a crisp
+        // hairline edge — replaces the old muddy `contentSubtleFill` box. Both
+        // compute off the active theme via the shared neutral tokens, so they
+        // track the theme (and light/dark) automatically.
+        static var cardFill: Color { AppTheme.contentSubtleFill.opacity(0.18) }
+        static var cardStroke: Color { AppTheme.hairlineStroke }
+
         static let bubbleHPadding: CGFloat = 16
         static let bubbleVPadding: CGFloat = 12
         static let bubbleChildHPadding: CGFloat = 14
@@ -911,6 +919,12 @@ struct AppPage<Content: View>: View {
                 LazyVStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
                     content
                 }
+                // A `LazyVStack` sizes itself to its children's *ideal* (content) width
+                // rather than stretching to the proposed width like a plain `VStack`
+                // does, so its greedy cards end up narrower than the ScrollView and sit
+                // leading-aligned with trailing slack (reads as extra right padding).
+                // Pinning the stack to fill the width forces it to re-propose the full
+                // width down to the cards.
                 .padding(AppTheme.pagePadding)
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
@@ -926,7 +940,9 @@ struct AppPage<Content: View>: View {
         // content size changes — which a tall page (e.g. a skill's markdown body)
         // hits as its lazy content grows the height on appear. Short pages that
         // don't overflow never showed it, which is why only some pages flashed.
+        .contentMargins(.horizontal, 0, for: .scrollContent)
         .scrollIndicators(.never)
+        .hideNativeScrollers()
     }
 }
 
@@ -1005,6 +1021,7 @@ struct AppCard<Content: View, Trailing: View>: View {
             }
         }
         .padding(AppTheme.cardPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .appContentSurface()
     }
 }

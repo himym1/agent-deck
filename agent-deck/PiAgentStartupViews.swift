@@ -687,6 +687,7 @@ struct PiAgentAddAgentsSheet: View {
             }
             Spacer()
             Button("Cancel") { dismiss() }
+                .appSecondaryButton()
                 .keyboardShortcut(.cancelAction)
             Button(selected.isEmpty ? "Add" : "Add \(selected.count)") {
                 onAdd(selected)

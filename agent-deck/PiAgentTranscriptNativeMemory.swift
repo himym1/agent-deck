@@ -221,8 +221,8 @@ final class PiAgentNativeMemoryCardView: NSView, PiAgentNativeRowContent {
     }
 
     func configure(payload: NativeMemoryCardPayload, width rowWidth: CGFloat) {
-        surface.fillColor = AppTheme.ns(AppTheme.contentSubtleFill.opacity(0.55))
-        surface.strokeColor = AppTheme.ns(AppTheme.contentStroke)
+        surface.fillColor = AppTheme.ns(AppTheme.Chat.cardFill)
+        surface.strokeColor = AppTheme.ns(AppTheme.Chat.cardStroke)
         surfaceWidthC.constant = cardWidth(rowWidth)
 
         iconView.image = NativeTranscriptFont.headerIcon(payload.iconSymbol)
