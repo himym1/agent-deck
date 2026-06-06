@@ -1157,9 +1157,37 @@ struct PiAgentTranscriptThreadCard: View {
             case .error(let entry): return entry.isModelError || visibility.showErrors
             case .status(let entry):
                 return shouldShowStatusEntry(entry, visibility: visibility, nativeSubagentRunsByID: nativeSubagentRunsByID)
-            case .steering, .assistant, .toolGroup, .retry: return true
+            case .toolGroup(let group):
+                // A tool group whose every section is hidden must NOT stay in the
+                // list: it would still emit a 0-height row that the inter-row inset
+                // pass pads on both sides, leaving a phantom gap between turns.
+                return toolGroupHasVisibleContent(group, visibility: visibility)
+            case .steering, .assistant, .retry: return true
             }
         }
+    }
+
+    /// Whether a tool group would render at least one section under the current
+    /// visibility. Cheap (no diff parsing): a group shows the diff card only when
+    /// it has edit/write activities, the tool list when it has any non-web tool,
+    /// and the web card when it has web activities.
+    static func toolGroupHasVisibleContent(
+        _ group: PiAgentThreadToolGroup,
+        visibility: PiAgentTranscriptVisibilitySettings
+    ) -> Bool {
+        var hasTool = false, hasWeb = false, hasEditable = false
+        for activity in group.activities {
+            if activity.isWebActivity {
+                hasWeb = true
+            } else {
+                hasTool = true
+                let name = activity.name.lowercased()
+                if name == "edit" || name == "write" { hasEditable = true }
+            }
+        }
+        return (visibility.showToolCalls && hasTool)
+            || (visibility.showWebActivity && hasWeb)
+            || (visibility.showDiffs && hasEditable)
     }
 
     private static func shouldShowStatusEntry(

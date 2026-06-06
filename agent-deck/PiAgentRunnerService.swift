@@ -1274,6 +1274,11 @@ final class PiAgentRunnerService {
             return
         }
 
+        if event.command == "get_messages" {
+            rehydrateAssistantText(from: event, sessionID: sessionID)
+            return
+        }
+
         if event.command == "get_session_stats", let data = event.data {
             store.updateSession(sessionID) { record in
                 record.lastSummary = data.compactDescription
@@ -1636,9 +1641,17 @@ final class PiAgentRunnerService {
             thinkingEntryIDsBySessionID[sessionID] = nil
             thinkingTextBySessionID[sessionID] = nil
             let visibleText = extractAssistantText(from: message)
-            RPCDebugLog.log("  finalize assistant: entryID=\(assistantEntryID.uuidString.prefix(8)) visibleLen=\(visibleText.count) streamedLen=\(streamedText.count) dedup=\(visibleText.isEmpty ? false : recentAssistantEntryExists(with: visibleText, sessionID: sessionID)) recentAssistantCount=\(store.transcript(for: sessionID).suffix(8).filter { $0.role == .assistant }.count)")
+            RPCDebugLog.log("  finalize assistant: entryID=\(assistantEntryID.uuidString.prefix(8)) visibleLen=\(visibleText.count) streamedLen=\(streamedText.count) dedup=\(visibleText.isEmpty ? false : recentAssistantEntryExists(with: visibleText, sessionID: sessionID, excluding: assistantEntryID)) recentAssistantCount=\(store.transcript(for: sessionID).suffix(8).filter { $0.role == .assistant }.count)")
             if !visibleText.isEmpty {
-                guard !recentAssistantEntryExists(with: visibleText, sessionID: sessionID) else {
+                // Exclude the placeholder we're finalizing: streaming flushes already
+                // wrote the full text into that same entry id (persist:false, so it
+                // never reached disk). Without the exclusion the dedup matches the
+                // entry against itself and returns early, so the persist:true write
+                // below never runs and only the empty turn-start placeholder survives
+                // on disk — the response vanishes on reload. The dedup still catches
+                // duplicate finalizes (message_end + turn_end + agent_end), which
+                // arrive with a fresh entry id once this one is nilled out above.
+                guard !recentAssistantEntryExists(with: visibleText, sessionID: sessionID, excluding: assistantEntryID) else {
                     scheduleIdleConfirmation(sessionID: sessionID)
                     return
                 }
@@ -1696,11 +1709,11 @@ final class PiAgentRunnerService {
         }
     }
 
-    private func recentAssistantEntryExists(with text: String, sessionID: UUID) -> Bool {
+    private func recentAssistantEntryExists(with text: String, sessionID: UUID, excluding excludedID: UUID? = nil) -> Bool {
         store.transcript(for: sessionID)
             .reversed()
             .prefix(8)
-            .contains { $0.role == .assistant && $0.text == text }
+            .contains { $0.role == .assistant && $0.id != excludedID && $0.text == text }
     }
 
     private func recentErrorEntryExists(with text: String, sessionID: UUID) -> Bool {
@@ -1708,6 +1721,36 @@ final class PiAgentRunnerService {
             .reversed()
             .prefix(8)
             .contains { $0.role == .error && $0.text == text }
+    }
+
+    /// Pi's session file is the source of truth for a resumed session's history.
+    /// On reopen we fetch its messages (`get_messages`) and backfill any assistant
+    /// answer that was shown live but reached disk empty — e.g. the turn-start
+    /// placeholder was never filled because the process was closed before the turn
+    /// finalized. We only repair empty entries; non-empty ones, thinking, tools and
+    /// status cards (Memory Recalled, etc.) are left exactly as they are.
+    ///
+    /// Pi emits one assistant message per assistant turn and the runner creates one
+    /// assistant entry per turn, so the two lists align positionally. If the counts
+    /// differ (history trimmed by compaction/fork) we skip rather than risk writing
+    /// the wrong text onto an entry.
+    private func rehydrateAssistantText(from event: PiAgentRPCEvent, sessionID: UUID) {
+        let messages = event.messages?.arrayValue
+            ?? event.data?["messages"]?.arrayValue
+            ?? event.data?.arrayValue
+            ?? []
+        guard !messages.isEmpty else { return }
+        let piAssistants = messages.filter { ($0["role"]?.stringValue ?? "") == "assistant" }
+        let transcript = store.transcript(for: sessionID)
+        let assistantEntryIndices = transcript.indices.filter { transcript[$0].role == .assistant }
+        guard assistantEntryIndices.count == piAssistants.count else { return }
+        for (slot, entryIndex) in assistantEntryIndices.enumerated() {
+            let entry = transcript[entryIndex]
+            guard entry.text.isEmpty else { continue }
+            let recovered = extractAssistantText(from: piAssistants[slot])
+            guard !recovered.isEmpty else { continue }
+            store.updateEntry(entry.id, in: sessionID) { $0.text = recovered }
+        }
     }
 
     private func finalAssistantMessage(from event: PiAgentRPCEvent) -> JSONValue? {

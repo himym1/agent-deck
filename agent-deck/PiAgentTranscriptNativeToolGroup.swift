@@ -11,7 +11,7 @@ import SwiftUI
 
 struct NativeToolGroupModel {
     var web: Web?
-    var chips: Chips?
+    var calls: Calls?
     var diff: Diff?
 
     struct Web {
@@ -31,11 +31,18 @@ struct NativeToolGroupModel {
         struct Link { var title: String; var domain: String }
     }
 
-    struct Chips {
-        var callCount: String
-        var hasErrors: Bool
-        var items: [Chip]
-        struct Chip { var icon: String; var name: String; var count: Int; var isError: Bool }
+    /// A horizontal, wrapping list of tool calls grouped by tool — each item is
+    /// the tool's icon + name + a success count and (when non-zero) a red error
+    /// count. No card, no dot separators; wraps to a second line when there are
+    /// many distinct tools.
+    struct Calls {
+        var items: [Item]
+        struct Item {
+            var icon: String
+            var name: String
+            var successCount: Int
+            var errorCount: Int
+        }
     }
 
     struct Diff {
@@ -77,20 +84,17 @@ extension NativeToolGroupModel {
             )
         }
 
-        var chips: Chips?
+        var calls: Calls?
         if visibility.showToolCalls, !toolActivities.isEmpty {
-            chips = Chips(
-                callCount: callCountText(toolActivities),
-                hasErrors: toolActivities.contains(where: \.isError),
-                items: toolActivities.map { activity in
-                    Chips.Chip(
-                        icon: toolIcon(for: activity.name),
-                        name: toolDisplayName(for: activity.name, count: activity.count),
-                        count: activity.count,
-                        isError: activity.isError
-                    )
-                }
-            )
+            calls = Calls(items: toolActivities.map { activity in
+                let errors = activity.entries.filter { $0.role == .error }.count
+                return Calls.Item(
+                    icon: toolIcon(for: activity.name),
+                    name: toolVerb(for: activity.name),
+                    successCount: max(0, activity.count - errors),
+                    errorCount: errors
+                )
+            })
         }
 
         var diff: Diff?
@@ -102,8 +106,8 @@ extension NativeToolGroupModel {
             }
         }
 
-        guard web != nil || chips != nil || diff != nil else { return nil }
-        return NativeToolGroupModel(web: web, chips: chips, diff: diff)
+        guard web != nil || calls != nil || diff != nil else { return nil }
+        return NativeToolGroupModel(web: web, calls: calls, diff: diff)
     }
 
     private static func callCountText(_ activities: [PiAgentTranscriptActivity]) -> String {
@@ -143,17 +147,14 @@ extension NativeToolGroupModel {
         }
     }
 
-    private static func toolDisplayName(for name: String, count: Int) -> String {
+    private static func toolVerb(for name: String) -> String {
         switch name.lowercased() {
         case "bash": return "Shell"
-        case "read": return "File read"
+        case "read": return "Read"
         case "edit": return "Edit"
         case "write": return "Write"
-        case "set_session_plan": return "Plan"
-        case "update_session_plan": return "Plan update"
-        case "subagent": return count == 1 ? "Deck agent" : "Deck agents"
-        case "web_search": return "Web search"
-        case "fetch_content", "get_search_content", "web_fetch": return "Web content"
+        case "set_session_plan", "update_session_plan": return "Plan"
+        case "subagent": return "Agent"
         default:
             return name
                 .replacingOccurrences(of: "_", with: " ")
@@ -163,6 +164,7 @@ extension NativeToolGroupModel {
                 .joined(separator: " ")
         }
     }
+
 
     private static func toolIcon(for name: String) -> String {
         switch name.lowercased() {
@@ -238,7 +240,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         diffByPath.removeAll()
         guard let model else { return }
         if let web = model.web { sections.addArrangedSubview(buildWebCard(web)) }
-        if let chips = model.chips { sections.addArrangedSubview(buildChipsCard(chips)) }
+        if let calls = model.calls { sections.addArrangedSubview(buildCallsView(calls)) }
         if let diff = model.diff { sections.addArrangedSubview(buildDiffCard(diff)) }
         for view in sections.arrangedSubviews {
             view.widthAnchor.constraint(equalTo: sections.widthAnchor).isActive = true
@@ -375,48 +377,43 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         notifyContentHeightChanged()
     }
 
-    // MARK: Chips card
+    // MARK: Tool calls
 
-    private func buildChipsCard(_ chips: NativeToolGroupModel.Chips) -> NSView {
-        // No card background, no per-tool icons — one leading wrench glyph + a
-        // single-line inline summary that truncates.
-        let row = NSStackView()
-        row.translatesAutoresizingMaskIntoConstraints = false
-        row.orientation = .horizontal
-        row.spacing = 7
-        row.alignment = .firstBaseline
-
-        let icon = NSImageView()
-        icon.image = NSImage(systemSymbolName: chips.hasErrors ? "exclamationmark.triangle" : "wrench.and.screwdriver", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.captionSize, weight: .semibold))
-        icon.contentTintColor = chips.hasErrors ? AppTheme.ns(AppTheme.roleError) : Self.muted
-        icon.setContentHuggingPriority(.required, for: .horizontal)
-        icon.setContentCompressionResistancePriority(.required, for: .horizontal)
-        row.addArrangedSubview(icon)
-
-        let label = NSTextField(labelWithString: "")
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.attributedStringValue = chipsLine(chips)
-        label.lineBreakMode = .byTruncatingTail
-        label.maximumNumberOfLines = 1
-        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        label.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        row.addArrangedSubview(label)
-        return row
+    /// A horizontal, wrapping list of per-tool items (icon + name + success count
+    /// + red error count). No card, no separators; wraps to further lines only
+    /// when many distinct tools don't fit one line.
+    private func buildCallsView(_ calls: NativeToolGroupModel.Calls) -> NSView {
+        let flow = NativeFlowLayoutView()
+        flow.hSpacing = 16
+        flow.vSpacing = 6
+        flow.setItems(calls.items.map { buildCallItem($0) })
+        return flow
     }
 
-    /// "Tools  ·  3 calls  ·  Shell ×2  ·  File read  ·  Edit" — one line.
-    private func chipsLine(_ chips: NativeToolGroupModel.Chips) -> NSAttributedString {
-        let result = NSMutableAttributedString()
-        result.append(NSAttributedString(string: "Tools", attributes: [.font: Self.captionBold(), .foregroundColor: NSColor.labelColor]))
-        result.append(NSAttributedString(string: "  ·  \(chips.callCount)", attributes: [.font: NativeTranscriptFont.caption(), .foregroundColor: Self.muted]))
-        for chip in chips.items {
-            let name = chip.count > 1 ? "\(chip.name) ×\(chip.count)" : chip.name
-            let color = chip.isError ? AppTheme.ns(AppTheme.roleError) : Self.muted
-            result.append(NSAttributedString(string: "  ·  ", attributes: [.font: NativeTranscriptFont.caption(), .foregroundColor: Self.muted]))
-            result.append(NSAttributedString(string: name, attributes: [.font: NativeTranscriptFont.caption(), .foregroundColor: color]))
+    private func buildCallItem(_ item: NativeToolGroupModel.Calls.Item) -> NSView {
+        let h = NSStackView()
+        h.translatesAutoresizingMaskIntoConstraints = false
+        h.orientation = .horizontal
+        h.spacing = 5
+        h.alignment = .firstBaseline
+
+        let icon = NSImageView()
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.image = NSImage(systemSymbolName: item.icon, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.caption2Size, weight: .semibold))
+        icon.contentTintColor = item.errorCount > 0 ? AppTheme.ns(AppTheme.roleError) : Self.muted
+        icon.imageScaling = .scaleProportionallyDown
+        icon.widthAnchor.constraint(equalToConstant: 14).isActive = true
+        h.addArrangedSubview(icon)
+
+        h.addArrangedSubview(Self.label(item.name, font: Self.captionBold(), color: .labelColor))
+
+        let countFont = NSFont.monospacedDigitSystemFont(ofSize: NativeTranscriptFont.captionSize, weight: .semibold)
+        h.addArrangedSubview(Self.label("\(item.successCount)", font: countFont, color: Self.muted))
+        if item.errorCount > 0 {
+            h.addArrangedSubview(Self.label("\(item.errorCount)", font: countFont, color: AppTheme.ns(AppTheme.roleError)))
         }
-        return result
+        return h
     }
 
     // MARK: Diff card
@@ -662,5 +659,65 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         expandedWebRows.removeAll()
         expandedDiffRows.removeAll()
         diffByPath.removeAll()
+    }
+}
+
+// MARK: - Flow layout
+
+/// A minimal flow (wrapping) layout container: arranges its item views left to
+/// right, wrapping to the next line when the next item would overflow the
+/// available width. Items are framed manually; the view drives its own height
+/// via a constraint so it measures correctly inside the auto-laid-out tool-group
+/// sections stack. Used for the horizontal tool-call list, which wraps to a
+/// second line only when many distinct tools don't fit one line.
+final class NativeFlowLayoutView: NSView {
+    var hSpacing: CGFloat = 12
+    var vSpacing: CGFloat = 6
+    private var items: [NSView] = []
+    private var heightC: NSLayoutConstraint!
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        heightC = heightAnchor.constraint(equalToConstant: 0)
+        heightC.isActive = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var isFlipped: Bool { true }
+
+    func setItems(_ views: [NSView]) {
+        items.forEach { $0.removeFromSuperview() }
+        items = views
+        for view in views {
+            // We position items by frame, so opt them out of Auto Layout here
+            // (their own internal subviews still lay out automatically).
+            view.translatesAutoresizingMaskIntoConstraints = true
+            addSubview(view)
+        }
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        let maxWidth = bounds.width
+        guard maxWidth > 0 else { return }
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for view in items {
+            let size = view.fittingSize
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += rowHeight + vSpacing
+                rowHeight = 0
+            }
+            view.frame = CGRect(x: x, y: y, width: size.width, height: size.height)
+            x += size.width + hSpacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        let total = ceil(y + rowHeight)
+        if abs(heightC.constant - total) > 0.5 { heightC.constant = total }
     }
 }
