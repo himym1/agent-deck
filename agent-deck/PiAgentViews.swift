@@ -2140,7 +2140,14 @@ struct PiAgentScreen: View {
     }
 
     private func rebuildVisibleSessions() {
-        cachedVisibleSessions = computedVisibleSessions()
+        let next = computedVisibleSessions()
+        // Only write @State when the visible list actually changed. A bare
+        // `sessionListRevision` bump (e.g. a background re-sort/refresh while the
+        // user is just scrolling the transcript) otherwise re-evaluates the whole
+        // screen body and re-runs the transcript's updateNSView for nothing.
+        if !hasBuiltVisibleSessions || next != cachedVisibleSessions {
+            cachedVisibleSessions = next
+        }
         hasBuiltVisibleSessions = true
     }
 
@@ -4140,20 +4147,23 @@ struct PiAgentScreen: View {
     }
 
     private func syncMultiSelectionToSelectedSession() {
-        if let selectedID = store.selectedSession?.id {
-            selectedSessionIDs = [selectedID]
-        } else {
-            selectedSessionIDs = []
-        }
+        let next: Set<UUID> = store.selectedSession.map { [$0.id] } ?? []
+        // Only write @State when it actually changes — an unconditional assign
+        // re-evaluates the whole screen body (and re-runs the transcript's
+        // updateNSView) on every sidebar refresh, including streaming pulses.
+        if next != selectedSessionIDs { selectedSessionIDs = next }
         lastSelectedSessionID = store.selectedSession?.id
     }
 
     private func pruneMultiSelectionToVisibleSessions() {
         let visibleIDs = Set(visibleSessionIDs)
-        selectedSessionIDs.formIntersection(visibleIDs)
+        var next = selectedSessionIDs.intersection(visibleIDs)
         if let selectedID = store.selectedSession?.id, visibleIDs.contains(selectedID) {
-            selectedSessionIDs.insert(selectedID)
+            next.insert(selectedID)
         }
+        // Guard the @State write so a session-list reorder (e.g. streaming bumping
+        // a session's activity) doesn't pulse selection and storm the body.
+        if next != selectedSessionIDs { selectedSessionIDs = next }
         if let lastSelectedSessionID, !visibleIDs.contains(lastSelectedSessionID) {
             self.lastSelectedSessionID = store.selectedSession?.id
         }
