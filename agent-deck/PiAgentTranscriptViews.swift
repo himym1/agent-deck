@@ -732,7 +732,7 @@ enum ChipLabelWidth {
     static let chipChrome: CGFloat = 38
     /// Per-chip cap. Beyond this the chip middle-truncates inside itself instead of
     /// stretching the whole bubble.
-    static let perChipMax: CGFloat = 180
+    static let perChipMax: CGFloat = 130
     /// HStack inter-chip gap (matches the body HStack spacing).
     static let chipGap: CGFloat = 8
 

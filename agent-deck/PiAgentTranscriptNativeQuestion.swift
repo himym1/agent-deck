@@ -38,13 +38,11 @@ struct NativeQuestionChip {
     }
 
     var kind: Kind
-    /// SF Symbol for the leading glyph (ignored when `thumbnail` is set).
+    /// SF Symbol for the leading glyph (ignored when the chip renders a thumbnail).
     var systemImage: String
     var label: String
-    /// Image chips: a small thumbnail (already decoded). When set, the chip
-    /// renders the image instead of the glyph.
-    var thumbnail: NSImage?
-    /// Click-to-preview payload; `nil` for the overflow pill.
+    /// Click-to-preview payload; `nil` for the overflow pill. Image chips derive
+    /// their thumbnail lazily from this (decoded only when the cell is visible).
     var attachment: Attachment?
 }
 
@@ -64,6 +62,13 @@ struct NativeQuestionPayload {
     /// Pre-measured natural chip-row width (from `displayChipsNaturalWidth`) so
     /// the card can grow to fit wide pills within the cap, matching the bubble.
     var chipsNaturalWidth: CGFloat
+
+    /// Stable hash of everything the card renders. The items pass rebuilds this
+    /// payload on every streaming pulse (a question's revision folds in unrelated
+    /// context like subagent run ticks), so the view compares `identity` and
+    /// skips the full reconfigure when nothing it draws has changed — honoring
+    /// the cell contract that `configure` is a no-op when content is unchanged.
+    var identity: Int
 
     /// Visible attachment chips before the row collapses into a `+N more` pill.
     static let maxVisibleChips = 3
@@ -97,12 +102,25 @@ extension NativeQuestionPayload {
         // Hug width is derived from the chips actually shown (post-cap), not the
         // full set, so the card never reserves room for collapsed attachments.
         let chipsWidth = ChipLabelWidth.rowWidth(forLabels: chips.map(\.label))
+
+        // Identity over only what the card draws (entry + text + visible chips +
+        // fork presence). Stable across unrelated streaming pulses.
+        var hasher = Hasher()
+        hasher.combine(entry.id)
+        hasher.combine(text)
+        for chip in chips {
+            hasher.combine(chip.kind)
+            hasher.combine(chip.label)
+        }
+        hasher.combine(fork != nil)
+
         return NativeQuestionPayload(
             markdownSource: text,
             chips: chips,
             copyText: entry.text,
             fork: fork,
-            chipsNaturalWidth: chipsWidth
+            chipsNaturalWidth: chipsWidth,
+            identity: hasher.finalize()
         )
     }
 }
@@ -160,7 +178,7 @@ private enum QuestionChipExtractor {
         for image in imageAttachments.prefix(6) {
             chips.append(.init(
                 kind: .image, systemImage: "photo", label: image.name,
-                thumbnail: thumbnail(for: image), attachment: .image(image)
+                attachment: .image(image)
             ))
         }
         let legacyNames = legacyImageNames(in: entry.text).filter { name in
@@ -200,10 +218,6 @@ private enum QuestionChipExtractor {
         return try? jsonDecoder.decode(AttachmentPayload.self, from: data)
     }
 
-    private static func thumbnail(for image: PiAgentImageAttachment) -> NSImage? {
-        guard let data = Data(base64Encoded: image.data) else { return nil }
-        return NSImage(data: data)
-    }
 
     // MARK: Slash invocation (mirrors extractSlashInvocation, applied to the
     // tag/folder/paste-stripped base text).
@@ -395,6 +409,37 @@ private enum QuestionChipExtractor {
     }
 }
 
+// MARK: - Chip thumbnail cache
+
+/// Decodes an image attachment once into a small (chip-sized) thumbnail and
+/// caches it, keyed by content. Used only when a chip is actually displayed, so
+/// the items pass never pays for image decoding.
+@MainActor
+private enum PiAgentChipThumbnailCache {
+    private static let cache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 128
+        return cache
+    }()
+    private static let target = NSSize(width: 32, height: 32)
+
+    static func thumbnail(for image: PiAgentImageAttachment) -> NSImage? {
+        // Cheap content key — length + head + tail, never hashing megabytes.
+        let key = "\(image.data.count):\(image.data.prefix(64))\(image.data.suffix(64))" as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        guard let data = Data(base64Encoded: image.data), let full = NSImage(data: data) else { return nil }
+        let thumb = NSImage(size: target)
+        thumb.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .medium
+        full.draw(in: NSRect(origin: .zero, size: target),
+                  from: NSRect(origin: .zero, size: full.size),
+                  operation: .copy, fraction: 1)
+        thumb.unlockFocus()
+        cache.setObject(thumb, forKey: key)
+        return thumb
+    }
+}
+
 // MARK: - Chip pill view
 
 /// A single capsule chip: a rounded surface with a leading icon (or thumbnail)
@@ -524,8 +569,11 @@ private final class PiAgentNativeChipView: NSView {
         labelField.font = NativeTranscriptFont.caption2()
         labelField.textColor = .labelColor
         toolTip = "Preview \(chip.label)"
-        if let thumbnail = chip.thumbnail {
-            thumbView.image = thumbnail
+
+        // Image chips render a cached thumbnail (decoded lazily here, on the
+        // visible cell only); everything else shows its glyph.
+        if case .image(let image) = chip.attachment, let thumb = PiAgentChipThumbnailCache.thumbnail(for: image) {
+            thumbView.image = thumb
             thumbView.isHidden = false
             iconView.isHidden = true
             iconLeadingC.constant = Self.hInset
@@ -577,6 +625,8 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
     private let attachmentPopover = NSPopover()
     private weak var popoverChip: PiAgentNativeChipView?
     private let markdown = PiAgentNativeExpandableMarkdown()
+    /// Hairline separating the message from its attachment chips.
+    private let divider = NSView()
 
     // Hover-revealed copy (+ fork) glass buttons in the LEFT gutter.
     private let buttonStack = NSStackView()
@@ -595,17 +645,24 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
     private let headerSpacing: CGFloat = 8
     private let chipSpacing: CGFloat = 8
     private let chipToBody: CGFloat = 8
+    private let dividerSpacing: CGFloat = 8
     private let gutterGap: CGFloat = 10
+
+    /// Last-applied content identity + width; `configure` early-returns when both
+    /// match so streaming pulses that don't change the card cost nothing.
+    private var configuredIdentity: Int?
+    private var configuredWidth: CGFloat = -1
 
     private var cardWidthC: NSLayoutConstraint!
     private var cardLeadingC: NSLayoutConstraint!
     private var chipRowHeightC: NSLayoutConstraint!
-    // Vertical stack toggles — body sits under the header, chips under the body
-    // (or under the header when there is no body); the last present element pins
-    // to the card bottom.
+    // Vertical stack toggles — body under the header, an optional hairline divider
+    // under the body, chips under the divider; the last present element pins to
+    // the card bottom.
     private var bodyTopToHeaderC: NSLayoutConstraint!
-    private var chipsTopToHeaderC: NSLayoutConstraint!
-    private var chipsTopToBodyC: NSLayoutConstraint!
+    private var dividerTopToHeaderC: NSLayoutConstraint!
+    private var dividerTopToBodyC: NSLayoutConstraint!
+    private var chipsTopToDividerC: NSLayoutConstraint!
     private var bodyBottomC: NSLayoutConstraint!
     private var chipsBottomC: NSLayoutConstraint!
     private var buttonStackSideC: NSLayoutConstraint!
@@ -640,8 +697,14 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
         markdown.translatesAutoresizingMaskIntoConstraints = false
         markdown.onToggle = { [weak self] in self?.onIntrinsicHeightChange?() }
 
+        divider.translatesAutoresizingMaskIntoConstraints = false
+        divider.wantsLayer = true
+        divider.layer?.actions = ["bounds": NSNull(), "position": NSNull(), "backgroundColor": NSNull()]
+        divider.isHidden = true
+
         cardView.addSubview(iconView)
         cardView.addSubview(headerLabel)
+        cardView.addSubview(divider)
         cardView.addSubview(chipRow)
         cardView.addSubview(markdown)
 
@@ -667,8 +730,9 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
         // fixed card height; low-priority fallbacks keep a hidden/empty row from
         // becoming vertically ambiguous.
         bodyTopToHeaderC = markdown.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: headerSpacing)
-        chipsTopToHeaderC = chipRow.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: headerSpacing)
-        chipsTopToBodyC = chipRow.topAnchor.constraint(equalTo: markdown.bottomAnchor, constant: chipToBody)
+        dividerTopToHeaderC = divider.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: dividerSpacing)
+        dividerTopToBodyC = divider.topAnchor.constraint(equalTo: markdown.bottomAnchor, constant: dividerSpacing)
+        chipsTopToDividerC = chipRow.topAnchor.constraint(equalTo: divider.bottomAnchor, constant: dividerSpacing)
         bodyBottomC = markdown.bottomAnchor.constraint(equalTo: cardView.bottomAnchor, constant: -vPad)
         bodyBottomC.priority = NSLayoutConstraint.Priority(999)
         chipsBottomC = chipRow.bottomAnchor.constraint(equalTo: cardView.bottomAnchor, constant: -vPad)
@@ -678,6 +742,8 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
         bodyFallbackTop.priority = NSLayoutConstraint.Priority(1)
         let bodyFallbackHeight = markdown.heightAnchor.constraint(equalToConstant: 0)
         bodyFallbackHeight.priority = NSLayoutConstraint.Priority(1)
+        let dividerFallbackTop = divider.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: dividerSpacing)
+        dividerFallbackTop.priority = NSLayoutConstraint.Priority(1)
         let chipsFallbackTop = chipRow.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: headerSpacing)
         chipsFallbackTop.priority = NSLayoutConstraint.Priority(1)
 
@@ -695,6 +761,10 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
             headerLabel.centerYAnchor.constraint(equalTo: iconView.centerYAnchor),
             headerLabel.trailingAnchor.constraint(lessThanOrEqualTo: cardView.trailingAnchor, constant: -hPad),
 
+            divider.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: hPad),
+            divider.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -hPad),
+            divider.heightAnchor.constraint(equalToConstant: 1),
+
             chipRow.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: hPad),
             chipRow.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -hPad),
             chipRowHeightC,
@@ -702,13 +772,23 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
             markdown.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: hPad),
             markdown.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -hPad),
 
-            bodyFallbackTop, bodyFallbackHeight, chipsFallbackTop
+            bodyFallbackTop, bodyFallbackHeight, dividerFallbackTop, chipsFallbackTop
         ])
     }
 
     // MARK: Configure
 
     func configure(payload: NativeQuestionPayload, width rowWidth: CGFloat) {
+        // Streaming pulses re-run configure with content-identical payloads (the
+        // question's revision folds in unrelated context). Skip the whole rebuild
+        // when neither the drawn content nor the width changed.
+        if configuredIdentity == payload.identity, abs(configuredWidth - rowWidth) <= 0.5 {
+            self.payload = payload   // keep fork/copy closures current; cheap.
+            return
+        }
+        configuredIdentity = payload.identity
+        configuredWidth = rowWidth
+
         self.payload = payload
         cardView.layer?.removeAllAnimations()
 
@@ -725,30 +805,38 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
         markdown.isHidden = !hasBody
         if hasBody { markdown.configure(source: payload.markdownSource) }
 
-        // Stack order: header → body → chips. The chip row drops below the body
-        // (or directly below the header when there is no body); whichever element
-        // is last pins to the card bottom. Deactivate every toggle before
-        // re-activating to avoid a transient over-constrained solve.
+        // Stack order: header → body → divider → chips. The divider + chips drop
+        // below the body (or directly under the header when there is no body);
+        // whichever element is last pins to the card bottom. Deactivate every
+        // toggle before re-activating to avoid a transient over-constrained solve.
         let hasChips = !payload.chips.isEmpty
+        divider.isHidden = !hasChips
         bodyTopToHeaderC.isActive = false
-        chipsTopToHeaderC.isActive = false
-        chipsTopToBodyC.isActive = false
+        dividerTopToHeaderC.isActive = false
+        dividerTopToBodyC.isActive = false
+        chipsTopToDividerC.isActive = false
         bodyBottomC.isActive = false
         chipsBottomC.isActive = false
         if hasBody {
             bodyTopToHeaderC.isActive = true
             if hasChips {
-                chipsTopToBodyC.isActive = true
+                dividerTopToBodyC.isActive = true
+                chipsTopToDividerC.isActive = true
                 chipsBottomC.isActive = true
             } else {
                 bodyBottomC.isActive = true
             }
         } else if hasChips {
-            chipsTopToHeaderC.isActive = true
+            dividerTopToHeaderC.isActive = true
+            chipsTopToDividerC.isActive = true
             chipsBottomC.isActive = true
         } else {
             bodyBottomC.isActive = true
         }
+
+        // Size + position the pills now (from the deterministic card width) so the
+        // names are full on first paint, instead of waiting for a layout pass.
+        if !chipViews.isEmpty { layoutChipRow(innerWidth: chipInnerWidth(), apply: true) }
 
         forkGlass.isHidden = payload.fork == nil
         configureButtonStack(hasFork: payload.fork != nil)
@@ -758,16 +846,22 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
 
     private func rebuildChips(_ chips: [NativeQuestionChip]) {
         if attachmentPopover.isShown { attachmentPopover.performClose(nil) }
-        chipViews.forEach { $0.removeFromSuperview() }
-        chipViews = chips.map { chip in
+        // Reuse existing pills; only create/destroy the delta so we don't rebuild
+        // NSGlassEffectView instances on every real reconfigure.
+        while chipViews.count > chips.count {
+            chipViews.removeLast().removeFromSuperview()
+        }
+        while chipViews.count < chips.count {
             let view = PiAgentNativeChipView()
-            view.configure(chip)
             view.onActivate = { [weak self, weak view] in
                 guard let self, let view else { return }
                 self.presentAttachmentPopover(from: view)
             }
             chipRow.addSubview(view)
-            return view
+            chipViews.append(view)
+        }
+        for (view, chip) in zip(chipViews, chips) {
+            view.configure(chip)
         }
     }
 
@@ -824,10 +918,18 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
         return rowH * CGFloat(rowCount) + chipSpacing * CGFloat(rowCount - 1)
     }
 
+    /// Deterministic chip-row inner width, derived from the card-width constraint
+    /// (a required equality) rather than `chipRow.bounds.width`, which is
+    /// transiently 0 before constraints settle on first display — that window is
+    /// what left chips collapsed to their 40pt floor (icon only, name truncated)
+    /// until a later relayout (e.g. a click) corrected them.
+    private func chipInnerWidth() -> CGFloat {
+        max(1, cardWidthC.constant - hPad * 2)
+    }
+
     override func layout() {
         super.layout()
-        let inner = max(1, chipRow.bounds.width)
-        if !chipViews.isEmpty { layoutChipRow(innerWidth: inner, apply: true) }
+        if !chipViews.isEmpty { layoutChipRow(innerWidth: chipInnerWidth(), apply: true) }
     }
 
     override func viewWillDraw() {
@@ -860,7 +962,8 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
         if chipsH > 0 {
             // Set the live constraint so the chip row gets the height it needs.
             chipRowHeightC.constant = chipsH
-            h += (hasBody ? chipToBody : headerSpacing) + chipsH
+            // Leading gap → 1pt divider → trailing gap → chips.
+            h += dividerSpacing + 1 + dividerSpacing + chipsH
         } else {
             chipRowHeightC.constant = 0
         }
@@ -881,6 +984,7 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             cardView.layer?.backgroundColor = fill.cgColor
             cardView.layer?.borderColor = stroke.cgColor
+            divider.layer?.backgroundColor = base.withAlphaComponent(AppTheme.roleStrokeOpacity).cgColor
         }
         // The glyph takes the bubble's own color (the same `base` driving the
         // fill/stroke); the title text keeps its label color.

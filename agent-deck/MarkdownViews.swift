@@ -472,7 +472,7 @@ final class NativeMarkdownTextContainer: NSView {
             scheduleHeightMeasurement()
             return
         }
-        rebuild(document: document)
+        rebuild(from: previous, to: document)
         scheduleHeightMeasurement()
     }
 
@@ -582,12 +582,14 @@ final class NativeMarkdownTextContainer: NSView {
             let (font, color, parseInline) = textStyling(for: kind)
             attr = attributedString(bodyText(from: kind), font: font, color: color, parseInlineMarkdown: parseInline)
         }
-        if let storage = textView.textStorage {
+        if let autoSizing = textView as? AutoSizingMarkdownTextView {
+            autoSizing.applyContent(attr)
+        } else if let storage = textView.textStorage {
             storage.beginEditing()
             storage.setAttributedString(attr)
             storage.endEditing()
+            textView.invalidateIntrinsicContentSize()
         }
-        textView.invalidateIntrinsicContentSize()
     }
 
     private static func bodyText(from kind: MarkdownBlock.Kind) -> String {
@@ -734,11 +736,31 @@ final class NativeMarkdownTextContainer: NSView {
         return constraint
     }
 
-    private func rebuild(document: CachedMarkdownDocument) {
-        // Fresh views need the full invalidate-all + double pass on their first
-        // measure (they can report a stale-wide intrinsic), so drop the fast-path
-        // marker — only incremental edits at an unchanged width should skip it.
+    /// Apply a new document after the incremental (streaming-append) path bailed.
+    /// When the frontmatter is unchanged, reconcile the existing block views in
+    /// place — reusing a view (and only restyling its text) wherever the block at
+    /// that position kept the same kind shape — so a recycled cell scrolling onto
+    /// unrelated content reuses its NSTextViews instead of tearing the whole stack
+    /// down and rebuilding every block from scratch (the dominant scroll cost).
+    /// Frontmatter presence/content changes are rare, so those fall back to a full
+    /// teardown for simplicity.
+    private func rebuild(from previous: CachedMarkdownDocument?, to document: CachedMarkdownDocument) {
+        // Fresh/replaced views need the full invalidate-all + double pass on their
+        // first measure (they can report a stale-wide intrinsic), so drop the
+        // fast-path marker — only incremental edits at an unchanged width skip it.
         lastFullLayoutWidth = nil
+
+        guard let previous, previous.frontmatter == document.frontmatter else {
+            fullRebuild(document: document)
+            return
+        }
+        reconcileBlocks(old: previous.blocks, new: document.blocks,
+                        frontOffset: document.frontmatter == nil ? 0 : 1)
+    }
+
+    /// Teardown + fresh build of every block. Used for the first build and when
+    /// the frontmatter changed.
+    private func fullRebuild(document: CachedMarkdownDocument) {
         stackView.arrangedSubviews.forEach { view in
             stackView.removeArrangedSubview(view)
             view.removeFromSuperview()
@@ -760,6 +782,42 @@ final class NativeMarkdownTextContainer: NSView {
 
         for block in document.blocks {
             stackView.addArrangedSubview(Self.view(for: block))
+        }
+    }
+
+    /// Reconcile the arranged block views (after the optional frontmatter view) to
+    /// `new`, reusing position-matched views of the same kind shape. The invariant
+    /// (held by every code path here) is that `arrangedSubviews[frontOffset + i]`
+    /// renders `old[i]`, so we can compare kinds index-for-index.
+    private func reconcileBlocks(old: [MarkdownBlock], new: [MarkdownBlock], frontOffset: Int) {
+        for i in 0..<new.count {
+            let slot = frontOffset + i
+            let canReuse = i < old.count
+                && slot < stackView.arrangedSubviews.count
+                && Self.sameKindShape(old[i].kind, new[i].kind)
+            if canReuse {
+                // Same chrome — leave an identical block untouched, otherwise
+                // restyle the inner text view in place. If (unexpectedly) there's
+                // no text view to restyle, fall through to a fresh replacement.
+                if old[i] == new[i] { continue }
+                if let textView = Self.firstTextView(in: stackView.arrangedSubviews[slot]) {
+                    Self.updateTextView(textView, with: new[i].kind)
+                    continue
+                }
+            }
+            // Kind shape differs (or no view here) — swap in a fresh view.
+            let fresh = Self.view(for: new[i])
+            if slot < stackView.arrangedSubviews.count {
+                let existing = stackView.arrangedSubviews[slot]
+                stackView.insertArrangedSubview(fresh, at: slot)
+                existing.removeFromSuperview()
+            } else {
+                stackView.addArrangedSubview(fresh)
+            }
+        }
+        // Drop any blocks the new document no longer has.
+        while stackView.arrangedSubviews.count > frontOffset + new.count {
+            stackView.arrangedSubviews.last?.removeFromSuperview()
         }
     }
 
@@ -873,9 +931,7 @@ final class NativeMarkdownTextContainer: NSView {
         // text (headIndent), not under the marker. This is the standard TextKit list
         // layout and removes the baseline/constraint guesswork entirely.
         let tv = textView("", font: NSFont.preferredFont(forTextStyle: .body), color: .labelColor)
-        tv.textStorage?.setAttributedString(
-            listAttributedString(marker: marker, text: text, indentLevel: indentLevel, markerWidth: markerWidth)
-        )
+        tv.applyContent(listAttributedString(marker: marker, text: text, indentLevel: indentLevel, markerWidth: markerWidth))
         return tv
     }
 
@@ -995,7 +1051,7 @@ final class NativeMarkdownTextContainer: NSView {
         return container
     }
 
-    private static func textView(_ source: String, font: NSFont, color: NSColor, parseInlineMarkdown: Bool = true) -> NSTextView {
+    private static func textView(_ source: String, font: NSFont, color: NSColor, parseInlineMarkdown: Bool = true) -> AutoSizingMarkdownTextView {
         let textView = AutoSizingMarkdownTextView(frame: .zero)
         textView.translatesAutoresizingMaskIntoConstraints = false
         textView.isEditable = false
@@ -1023,7 +1079,7 @@ final class NativeMarkdownTextContainer: NSView {
         textView.isAutomaticDataDetectionEnabled = false
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         textView.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        textView.textStorage?.setAttributedString(attributedString(source, font: font, color: color, parseInlineMarkdown: parseInlineMarkdown))
+        textView.applyContent(attributedString(source, font: font, color: color, parseInlineMarkdown: parseInlineMarkdown))
         return textView
     }
 
@@ -1077,15 +1133,42 @@ final class NativeMarkdownTextContainer: NSView {
 }
 
 private final class AutoSizingMarkdownTextView: NSTextView {
+    /// Bumped only when the text content actually changes (`applyContent`), NOT on
+    /// layout. The intrinsic-size memo keys on it so a forced settle that re-queries
+    /// `intrinsicContentSize` at an unchanged width + content skips the TextKit
+    /// `ensureLayout`/`usedRect` pass entirely — the dominant per-vend scroll cost.
+    private var contentVersion = 0
+    private var cachedIntrinsic: (width: CGFloat, version: Int, height: CGFloat)?
+
+    /// Set the rendered text. Routes every content change through one place so the
+    /// memo is invalidated exactly when (and only when) the content changes.
+    func applyContent(_ attributed: NSAttributedString) {
+        contentVersion &+= 1
+        cachedIntrinsic = nil
+        if let storage = textStorage {
+            storage.beginEditing()
+            storage.setAttributedString(attributed)
+            storage.endEditing()
+        }
+        invalidateIntrinsicContentSize()
+    }
+
     override var intrinsicContentSize: NSSize {
         guard let layoutManager, let textContainer else {
             return NSSize(width: NSView.noIntrinsicMetric, height: 1)
         }
         let width = max(bounds.width, textContainer.containerSize.width, 1)
+        // Same width + same content as the last computed pass → reuse the height.
+        // Height depends only on (text, width, font); font is fixed per view and a
+        // dark/light flip doesn't change metrics, so this is exact, not approximate.
+        if let cached = cachedIntrinsic, cached.version == contentVersion, abs(cached.width - width) < 0.5 {
+            return NSSize(width: NSView.noIntrinsicMetric, height: cached.height)
+        }
         textContainer.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: textContainer)
-        let height = ceil(layoutManager.usedRect(for: textContainer).height) + textContainerInset.height * 2
-        return NSSize(width: NSView.noIntrinsicMetric, height: max(1, height))
+        let height = max(1, ceil(layoutManager.usedRect(for: textContainer).height) + textContainerInset.height * 2)
+        cachedIntrinsic = (width, contentVersion, height)
+        return NSSize(width: NSView.noIntrinsicMetric, height: height)
     }
 
     override func layout() {

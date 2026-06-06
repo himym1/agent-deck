@@ -2757,10 +2757,15 @@ struct PiAgentScreen: View {
         skills: [SkillRecord],
         commandSlashNames: Set<String>
     ) -> PiAgentTranscriptCellKind {
-        let payload = NativeQuestionPayload.make(
-            entry: question, skills: skills, commandSlashNames: commandSlashNames,
-            fork: questionForkModel(question))
+        // The ForkModel is cheap (it just wraps closures), so build it eagerly.
+        // The payload parse (message text + chip extraction regex + folder
+        // existence checks) is deferred into the configure closure so it runs only
+        // when a cell actually configures — i.e. for visible rows — instead of for
+        // every question on every `itemsBuild` pulse.
+        let fork = questionForkModel(question)
         return .native(.of(PiAgentNativeQuestionView.self) { view, width in
+            let payload = NativeQuestionPayload.make(
+                entry: question, skills: skills, commandSlashNames: commandSlashNames, fork: fork)
             view.configure(payload: payload, width: width)
         })
     }
