@@ -887,11 +887,29 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             let streamingUpdate = lastStreamingRevision != streamingRevision
             let explicitScroll = lastAutoScrollTurnRevision != autoScrollTurnRevision || lastBottomScrollRequest != bottomScrollRequest
 
+            let nextIDs = items.map(\.id)
+            let idsChanged = nextIDs != orderedIDs
+            // True iff some row's content revision moved (mirrors the `changedIDs`
+            // test below). Catches updates that don't bump renderRevision/
+            // streamingRevision — e.g. skill/visibility/subagent context folded
+            // into per-item revisions during itemsBuild.
+            let revisionChanged = items.contains { contentRevisionByID[$0.id] != $0.contentRevision }
+
+            // SwiftUI re-runs updateNSView on every screen-body re-evaluation,
+            // including ones driven by unrelated state (e.g. sidebar selection).
+            // When neither the rows, their revisions, nor any scroll/structural
+            // signal moved, there is nothing to do — bail before the O(N)
+            // dictionary rebuilds, snapshot diff, reconfigure, scroll handling, and
+            // column refit below. (Column width is handled separately in
+            // updateNSView via updateColumnWidthIfNeeded.)
+            if !isSessionSwitch && !idsChanged && !revisionChanged
+                && !structuralUpdate && !streamingUpdate && !explicitScroll {
+                return
+            }
+
             self.items = items
             itemByID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
-            let nextIDs = items.map(\.id)
             let nextRevisions = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.contentRevision) })
-            let idsChanged = nextIDs != orderedIDs
 
             if isSessionSwitch || idsChanged {
                 let anchor = (!isSessionSwitch && !explicitScroll && !wasFollowing) ? captureScrollAnchor() : nil
@@ -1472,6 +1490,21 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
         private func performScrollToBottom(_ scrollView: NSScrollView, animated: Bool) {
             guard let documentView = scrollView.documentView else { return }
+            // Cheap pre-check: when no height work is pending (so the content
+            // height is already settled) and the current bounds already place us at
+            // the bottom, skip the forced flush + full-document layout below. This
+            // is the common case for auto-follow glide ticks and bounds-callback
+            // re-checks — running `layoutSubtreeIfNeeded()` there cost a full layout
+            // pass (~50ms on large transcripts) just to confirm we hadn't moved.
+            if pendingHeightIDs.isEmpty {
+                let clipView = scrollView.contentView
+                let maxY = max(0, documentView.bounds.height - clipView.bounds.height)
+                if abs(clipView.bounds.origin.y - maxY) <= 1 {
+                    stopFollowGlide()
+                    publishPinnedState(true)
+                    return
+                }
+            }
             // Flush any debounced height work and force a layout pass so the documentView's
             // bounds reflect current row heights. Without this, the math below uses stale
             // heights and ends up scrolling short of the true bottom — which crops the last

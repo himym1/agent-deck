@@ -264,7 +264,14 @@ struct PiAgentSessionRow: View, Equatable {
     // instance's closures captured the same session, so they stay correct.
     static func == (lhs: PiAgentSessionRow, rhs: PiAgentSessionRow) -> Bool {
         lhs.session == rhs.session
-            && lhs.project == rhs.project
+            // Compare the project by ONLY what the row draws — its icon (identity
+            // + icon file). The full `DiscoveredProject ==` includes volatile
+            // fields (e.g. gitHubRemote resolving) that churn while an agent writes
+            // files; using it here made EVERY row re-render whenever the list
+            // re-evaluated for an unrelated reason (a session switch, selection
+            // change). Mirrors `SessionListContent.projectsVisuallyEqual`.
+            && lhs.project?.id == rhs.project?.id
+            && lhs.project?.iconFileURL == rhs.project?.iconFileURL
             && lhs.isSelected == rhs.isSelected
             && lhs.isRunning == rhs.isRunning
             && lhs.isRenaming == rhs.isRenaming
