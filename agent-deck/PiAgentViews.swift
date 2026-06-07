@@ -812,14 +812,17 @@ private struct JumpToLatestPill: View {
 
     var body: some View {
         Button(action: action) {
+            // Fill the full 32pt circle inside the button label so the whole pill
+            // is the hit target — not just the glyph. The frame/contentShape must
+            // live on the label (the button's interactive region), not outside it.
             Image(systemName: "chevron.down")
                 .font(AppTheme.Font.footnote.weight(.bold))
                 .offset(x: 0.5, y: 0.5)
+                .frame(width: 32, height: 32)
+                .contentShape(Circle())
         }
         .foregroundStyle(AppTheme.brandAccent)
-        .frame(width: 32, height: 32)
         .glassEffect(.regular.tint(AppTheme.brandAccent.opacity(0.16)), in: Circle())
-        .contentShape(Circle())
         .overlay {
             Circle()
                 .strokeBorder(.white.opacity(0.08), lineWidth: 1)
@@ -831,6 +834,33 @@ private struct JumpToLatestPill: View {
         .animation(.easeOut(duration: 0.12), value: isHovering)
         .help("Jump to latest")
         .accessibilityLabel("Jump to latest message")
+    }
+}
+
+/// Holds the transcript's pinned-to-bottom flag in a reference type so the screen
+/// can keep it in `@State` (which watches identity only). Scrolling flips this
+/// constantly; only `JumpToLatestOverlay` observes it, so flips don't invalidate
+/// the screen body or re-run the transcript items build.
+private final class TranscriptPinnedState: ObservableObject {
+    @Published var isPinned = true
+}
+
+/// The "jump to latest" pill, isolated so that toggling pinned-to-bottom on scroll
+/// re-renders only this small view — never the screen body / transcript host.
+private struct JumpToLatestOverlay: View {
+    @ObservedObject var pinnedState: TranscriptPinnedState
+    let onJump: () -> Void
+
+    var body: some View {
+        ZStack {
+            if !pinnedState.isPinned {
+                JumpToLatestPill(action: onJump)
+                    .padding(.trailing, 22)
+                    .padding(.bottom, 14)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: pinnedState.isPinned)
     }
 }
 
@@ -2205,9 +2235,12 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 teardownNativeRow()
             }
             let row: NSView
+            let createdNow: Bool
             if let existing = nativeRow {
                 row = existing
+                createdNow = false
             } else {
+                createdNow = true
                 row = spec.make()
                 row.translatesAutoresizingMaskIntoConstraints = false
                 addSubview(row)
@@ -2246,14 +2279,16 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 spec.configure(row, width)
                 lastIntrinsicHeight = -1
             }
-            // `settle` is the immediate 3× layout pass that stops a recycled cell's
-            // layer painting at a stale position. That matters when the cell takes on a
-            // different item, changes width, or changes inset — NOT on every streaming
-            // token append to the same already-settled visible row, where it was the
-            // dominant per-30Hz-tick cost. `forcedIntrinsicHeight` (height callback /
-            // synchronous measure) still forces one layout for measurement, so the row
-            // stays correctly sized; we only drop the extra settle pass on appends.
-            if itemChanged || widthChanged || insetChanged {
+            // `settle` is the immediate layout pass that stops a layer painting at a
+            // stale position. With per-item cells (one cell per id, never recycled to a
+            // different item) there is no stale recycled position to fix on a fresh
+            // build — and forcing the layout here would lay out rows that scroll past
+            // before they're ever displayed, the dominant cold-scroll cost. So skip it
+            // on first build (`createdNow`) and on streaming appends (same id/width),
+            // running it only when an already-displayed cell changes geometry (width or
+            // inset). The cell still lays out + reports its real height naturally via
+            // `layout()` when AppKit displays it.
+            if !createdNow && (widthChanged || insetChanged) {
                 spec.settle(row)
             }
             configuredItemID = item.id
@@ -2503,7 +2538,13 @@ struct PiAgentScreen: View {
     // observes — so dropping the subscription doesn't miss any update.
     @State private var transcriptCache = PiAgentTranscriptRenderCache()
     @State private var transcriptBottomScrollRequest = 0
-    @State private var transcriptIsPinnedToBottom = true
+    // Pinned-to-bottom lives in its own ObservableObject, held by `@State` so this
+    // screen's body watches only the reference identity — NOT `isPinned`. Scrolling
+    // flips `isPinned` ~constantly; if the screen body read it directly, every flip
+    // would re-evaluate the whole body and re-run the O(N) `appKitTranscriptItems`
+    // build (the `itemsBuild` scroll cost). Only `JumpToLatestOverlay` `@ObservedObject`s
+    // it, so a flip re-renders just the pill, leaving the transcript host untouched.
+    @State private var transcriptPinnedState = TranscriptPinnedState()
     @State private var showArchivedPreCompactionTranscript = false
     @State private var isEarlierTranscriptSheetPresented = false
     @State private var cachedVisibleSessions: [PiAgentSessionRecord] = []
@@ -2883,15 +2924,13 @@ struct PiAgentScreen: View {
                     .transcriptEdgeFade()
 
                 // Sits ON TOP of the edge fade (added after it) so the pill
-                // itself is never faded out.
-                if !transcriptIsPinnedToBottom {
-                    JumpToLatestPill { requestTranscriptBottomScroll() }
-                        .padding(.trailing, 22)
-                        .padding(.bottom, 14)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                // itself is never faded out. Isolated in its own view that observes
+                // `transcriptPinnedState` so toggling the pill never re-evaluates this
+                // screen's body (and never re-runs the transcript items build).
+                JumpToLatestOverlay(pinnedState: transcriptPinnedState) {
+                    requestTranscriptBottomScroll()
                 }
             }
-            .animation(.spring(response: 0.32, dampingFraction: 0.82), value: transcriptIsPinnedToBottom)
 
             PiAgentProcessingIndicatorBar(message: stabilizedProcessingMessage)
 
@@ -2984,14 +3023,14 @@ struct PiAgentScreen: View {
             bottomScrollRequest: transcriptBottomScrollRequest,
             makeItems: { appKitTranscriptItems },
             onPinnedToBottomChange: { isPinnedToBottom in
-                transcriptIsPinnedToBottom = isPinnedToBottom
+                transcriptPinnedState.isPinned = isPinnedToBottom
             },
             onBenchAdvanceSession: { viewModel.selectNextPiAgentSession() },
             benchSessionCount: { viewModel.scopedPiAgentSessionsInOrder().count }
         )
         .onChange(of: selectedSessionProcessingMessage) { _, message in
             updateStabilizedProcessingMessage(message)
-            guard message != nil, transcriptIsPinnedToBottom else { return }
+            guard message != nil, transcriptPinnedState.isPinned else { return }
             requestTranscriptBottomScroll()
         }
         .perfScene("PiAgentTranscript")
@@ -4071,7 +4110,7 @@ struct PiAgentScreen: View {
     }
 
     private func resetTranscriptAutoScroll() {
-        transcriptIsPinnedToBottom = true
+        transcriptPinnedState.isPinned = true
     }
 
     private func beginTranscriptAutoScrollTurn() {
