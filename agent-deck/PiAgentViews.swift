@@ -69,6 +69,15 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
     @Published private(set) var autoScrollTurnRevision = 0
     @Published private(set) var lastThreadID: UUID?
 
+    // Memo for `PiAgentScreen.appKitTranscriptItems` (the 20-37ms O(N) items build).
+    // Deliberately NOT @Published: written from the items getter during a body pass,
+    // and publishing it would re-invalidate the host on every build. Lives here only
+    // because this cache object is the screen's stable `@State` companion. Keyed by a
+    // signature of every input the build reads — `renderRevision`/`streamingRevision`
+    // cover all transcript content, the rest are settings/skills/subagent/session.
+    fileprivate var memoizedTranscriptItems: [PiAgentAppKitTranscriptItem] = []
+    fileprivate var memoizedTranscriptItemsSignature: Int?
+
     private var updateTask: Task<Void, Never>?
     private var lastSessionID: UUID?
     private var lastRevision = -1
@@ -3037,7 +3046,49 @@ struct PiAgentScreen: View {
     }
 
     private var appKitTranscriptItems: [PiAgentAppKitTranscriptItem] {
-        TranscriptScrollProfiler.measureBody("itemsBuild") { appKitTranscriptItemsBuild }
+        TranscriptScrollProfiler.measureBody("itemsBuild") {
+            // `makeItems` is re-run on every host body pass — cache pulses, but also
+            // scroll-time re-evaluations that don't change the transcript at all.
+            // Skip the O(N) rebuild when no input changed: compute a cheap signature
+            // and reuse the last array on a match. The signature reads every input the
+            // build does, so it can never serve stale content.
+            let signature = appKitTranscriptItemsSignature
+            if transcriptCache.memoizedTranscriptItemsSignature == signature {
+                return transcriptCache.memoizedTranscriptItems
+            }
+            let items = appKitTranscriptItemsBuild
+            transcriptCache.memoizedTranscriptItems = items
+            transcriptCache.memoizedTranscriptItemsSignature = signature
+            return items
+        }
+    }
+
+    /// COMPLETE signature of every input `appKitTranscriptItemsBuild` reads.
+    /// `renderRevision`/`streamingRevision` cover all transcript content (threads).
+    /// `appKitTranscript{Chrome,ThreadContext}Revision` are the SAME hashes the build
+    /// folds into each row's `contentRevision`, so reusing them here captures the
+    /// session-level inputs (status, worktree/project, loading, visibility, skills,
+    /// subagent summary) without re-listing them — and can't drift if those helpers
+    /// gain a read. The tail adds the few inputs those revisions don't cover.
+    private var appKitTranscriptItemsSignature: Int {
+        let snapshot = transcriptTimelineSnapshot
+        var hasher = Hasher()
+        hasher.combine(transcriptCache.renderRevision)
+        hasher.combine(transcriptCache.streamingRevision)
+        hasher.combine(appKitTranscriptChromeRevision(snapshot: snapshot))
+        hasher.combine(appKitTranscriptThreadContextRevision(snapshot: snapshot))
+        hasher.combine(showArchivedPreCompactionTranscript)
+        if let session = store.selectedSession {
+            hasher.combine(session.commandInvocations)         // slash-command chrome
+            hasher.combine(session.forkedFromParentTitle)      // fork-origin card
+            hasher.combine(session.forkedFromSessionID)
+            hasher.combine(session.forkedFromTranscriptSnapshot)
+            // Full run/request records (the chrome revisions only hash a summary):
+            // a card/notice reflects the whole record, so hash all of it.
+            for run in store.subagentRuns(for: session.id) { hasher.combine(run) }
+            for request in store.supervisorRequests(for: session.id) { hasher.combine(request) }
+        }
+        return hasher.finalize()
     }
 
     private var appKitTranscriptItemsBuild: [PiAgentAppKitTranscriptItem] {
