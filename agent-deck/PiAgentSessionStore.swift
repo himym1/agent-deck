@@ -248,6 +248,7 @@ final class PiAgentSessionStore {
             pendingSteeringMessages: [],
             pendingFollowUpMessages: [],
             subagentsEnabled: newSessionSubagentsEnabled,
+            injectedExtensions: nil,
             agentName: agentName,
             createdAt: now,
             updatedAt: now
@@ -339,6 +340,7 @@ final class PiAgentSessionStore {
             pendingFollowUpMessages: [],
             subagentsEnabled: parent.subagentsEnabled,
             agentSelection: parent.agentSelection,
+            injectedExtensions: parent.injectedExtensions,
             isCompacting: false,
             isTitleUserEdited: false,
             forkedFromSessionID: parent.id,
@@ -427,6 +429,7 @@ final class PiAgentSessionStore {
             pendingFollowUpMessages: [],
             subagentsEnabled: false,
             agentSelection: nil,
+            injectedExtensions: parent.injectedExtensions,
             agentName: agent.name,
             isCompacting: false,
             isTitleUserEdited: false,

@@ -246,6 +246,30 @@ struct DoctorScreen: View {
     @State private var webFetchInstallMessage: String?
     @State private var isRefreshingPiRuntime = false
     @State private var envDraft: EnvEditorDraft?
+    @State private var loginService = PiProviderLoginService()
+    @State private var isConnectProviderPresented = false
+
+    /// Demo only: forced install states. When set, the Doctor runs the real
+    /// `SetupDependencyService` against these (1:1 with reality) and shows the
+    /// runtime/GitHub/Web sections as not-installed.
+    private let demoSimulation: SetupSimulation?
+    private var isDemo: Bool { demoSimulation != nil }
+
+    init(viewModel: AppViewModel) {
+        self.viewModel = viewModel
+        self.demoSimulation = nil
+    }
+
+    #if DEBUG
+    /// Preview seam: render the Doctor for a forced simulation (e.g. nothing
+    /// installed) using the same checks the real screen runs.
+    init(viewModel: AppViewModel, simulation: SetupSimulation) {
+        self.viewModel = viewModel
+        self.demoSimulation = simulation
+    }
+    #endif
+
+    private var skipLiveChecksForPreview: Bool { isDemo }
 
     private var snapshot: ScanSnapshot {
         viewModel.snapshot
@@ -263,12 +287,31 @@ struct DoctorScreen: View {
             foundationModelSection
         }
         .task {
+            if let demoSimulation {
+                setupItems = await SetupDependencyService().loadItems(
+                    projectRootPaths: viewModel.configuredProjectsRootPaths,
+                    githubAccount: viewModel.currentGitHubAccount,
+                    selectedProjectPath: viewModel.selectedProjectPath,
+                    hasConfirmedProjectsRootPaths: viewModel.hasConfirmedProjectsRootPaths,
+                    suggestedProjectsRootPath: viewModel.suggestedProjectsRootPath,
+                    simulation: demoSimulation
+                )
+                piRuntimeStatus = demoSimulation.piInstalled == true ? nil : .missing
+                webFetchStatus = WebFetchDependencyService.Status(
+                    installDirectory: webFetchStatus.installDirectory,
+                    installedPackages: [],
+                    missingPackages: WebFetchDependencyService.packages
+                )
+                isRefreshingSetup = false
+                return
+            }
             if setupItems.isEmpty {
                 await refreshSetupChecks()
             }
             refreshWebFetchStatus()
         }
         .onChange(of: scenePhase) { _, newPhase in
+            if skipLiveChecksForPreview { return }
             // Re-check the Pi version when the app regains focus so that an
             // in-terminal `pi update pi` is reflected without a manual refresh click.
             // We only re-run the cheap Pi status fetch here; the broader Setup Checks
@@ -289,6 +332,12 @@ struct DoctorScreen: View {
                     Task { await refreshSetupChecks() }
                 }
             )
+        }
+        .sheet(isPresented: $isConnectProviderPresented) {
+            AddProviderFlowSheet(viewModel: viewModel, loginService: loginService)
+        }
+        .onChange(of: isConnectProviderPresented) { _, presented in
+            if !presented, !skipLiveChecksForPreview { Task { await refreshSetupChecks() } }
         }
     }
 
@@ -372,23 +421,19 @@ struct DoctorScreen: View {
 
     private func piCommandChip(_ command: String, buttonLabel: String = "Run in Terminal", action: (() -> Void)? = nil) -> some View {
         HStack(spacing: 8) {
-            HStack(spacing: 6) {
-                Text(command)
-                    .font(.footnote.monospaced())
-                    .textSelection(.enabled)
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(command, forType: .string)
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(.caption)
-                }
-                .buttonStyle(.borderless)
-                .help("Copy command")
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .appGlassCapsule()
+            // Command is a read-only code snippet (subtle fill, not a button
+            // shape) so it doesn't read as tappable.
+            Text(command)
+                .font(.footnote.monospaced())
+                .textSelection(.enabled)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(AppTheme.contentSubtleFill)
+                )
+
+            AppCopyIconButton(text: command, help: "Copy command")
 
             if let action {
                 Button(buttonLabel, action: action)
@@ -546,9 +591,7 @@ struct DoctorScreen: View {
                         .font(.caption.monospaced())
                         .foregroundStyle(AppTheme.mutedText)
                         .textSelection(.enabled)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .appGlassCapsule()
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if item.status != .passed, item.action != nil || item.secondaryAction != nil {
@@ -562,7 +605,6 @@ struct DoctorScreen: View {
                                 .appSecondaryButton()
                         }
                     }
-                    .controlSize(.small)
                 }
             }
 
@@ -578,10 +620,17 @@ struct DoctorScreen: View {
         switch action {
         case .chooseProjectRoot:
             viewModel.chooseProjectsRootDirectory(replacingExisting: replacing)
+            Task { await refreshSetupChecks() }
         case .useSuggestedProjectRoot:
             viewModel.useSuggestedProjectsRootDirectory(replacingExisting: replacing)
+            Task { await refreshSetupChecks() }
+        case .installPi:
+            viewModel.openPiInstallInTerminal()
+        case .connectProvider:
+            isConnectProviderPresented = true // re-checks on sheet dismiss
+        case .setupGitHub:
+            viewModel.openGitHubSetupInTerminal()
         }
-        Task { await refreshSetupChecks() }
     }
 
     @MainActor
@@ -609,7 +658,7 @@ struct DoctorScreen: View {
                     .resizable()
                     .renderingMode(.template)
                     .scaledToFit()
-                    .foregroundStyle(viewModel.currentGitHubAccount == nil ? AppTheme.mutedText : .green)
+                    .foregroundStyle(effectiveGitHubAccount == nil ? AppTheme.mutedText : .green)
                     .frame(width: 24, height: 24)
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -622,28 +671,43 @@ struct DoctorScreen: View {
                         .foregroundStyle(AppTheme.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    if viewModel.currentGitHubAccount == nil {
-                        Button("Connect GitHub") {
-                            viewModel.connectGitHubUsingCLI()
+                    if effectiveGitHubAccount == nil {
+                        if isDemo {
+                            Button("Set up GitHub") {
+                                viewModel.openGitHubSetupInTerminal()
+                            }
+                            .appPrimaryButton()
+                        } else {
+                            Button("Connect GitHub") {
+                                viewModel.connectGitHubUsingCLI()
+                            }
+                            .appPrimaryButton()
                         }
-                        .appPrimaryButton()
-                        .controlSize(.small)
                     }
                 }
 
                 Spacer(minLength: 8)
                 AppLabelTag(
-                    text: viewModel.currentGitHubAccount == nil ? "Optional" : "Ready",
-                    color: viewModel.currentGitHubAccount == nil ? .secondary : .green
+                    text: effectiveGitHubAccount == nil ? "Optional" : "Ready",
+                    color: effectiveGitHubAccount == nil ? .secondary : .green
                 )
             }
             .padding(.vertical, 12)
         }
     }
 
+    /// GitHub account, forced to `nil` in the preview/demo so the row reads as
+    /// disconnected even on a machine where `gh` is signed in.
+    private var effectiveGitHubAccount: GitHubHostAccount? {
+        skipLiveChecksForPreview ? nil : viewModel.currentGitHubAccount
+    }
+
     private var githubAccessDetail: String {
-        if let account = viewModel.currentGitHubAccount {
+        if let account = effectiveGitHubAccount {
             return "Connected as \(account.login) on \(account.host). Enables issue, comment, commit, and push workflows."
+        }
+        if isDemo {
+            return "Optional. Install the GitHub CLI and sign in to enable issue, comment, commit, and push workflows."
         }
         return "Optional. Connect GitHub CLI to enable issue, comment, commit, and push workflows."
     }
@@ -704,7 +768,6 @@ struct DoctorScreen: View {
                         envDraft = viewModel.makeNewEnvDraft(scope: .global, prefilledKey: "EXA_API_KEY")
                     }
                     .appPrimaryButton()
-                    .controlSize(.small)
                 }
             }
 
@@ -800,7 +863,8 @@ struct DoctorScreen: View {
     }
 
     private var hasExaAPIKey: Bool {
-        snapshot.envKeys.contains {
+        if skipLiveChecksForPreview { return false }
+        return snapshot.envKeys.contains {
             $0.key == "EXA_API_KEY" && ($0.value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
         }
     }

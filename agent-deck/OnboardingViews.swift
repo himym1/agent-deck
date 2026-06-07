@@ -41,6 +41,11 @@ private enum WelcomeTourContent {
 struct WelcomeOnboardingSheet: View {
     var viewModel: AppViewModel
     let onFinish: (SidebarItem?) -> Void
+    #if DEBUG
+    /// Debug demo: seed the Setup step with the canned "nothing installed" rows
+    /// instead of probing the real machine.
+    var forceNothingInstalledForDebug = false
+    #endif
     @State private var phase: Phase = .tour
     @State private var setupItemsTask: Task<[SetupCheckItem], Never>?
     @State private var setupItems: [SetupCheckItem] = []
@@ -49,6 +54,7 @@ struct WelcomeOnboardingSheet: View {
         case tour
         case setup
         case preferences
+        case finalInfo
     }
 
     var body: some View {
@@ -59,7 +65,8 @@ struct WelcomeOnboardingSheet: View {
             case .setup:
                 SetupChecklistView(
                     viewModel: viewModel,
-                    preloadedItems: setupItemsTask,
+                    preloadedItems: setupSimulation.isActive ? nil : setupItemsTask,
+                    simulation: setupSimulation,
                     onBack: { phase = .tour },
                     onContinue: { items in
                         setupItems = items
@@ -71,7 +78,13 @@ struct WelcomeOnboardingSheet: View {
                     viewModel: viewModel,
                     setupItems: setupItems,
                     onBack: { phase = .setup },
-                    onFinish: onFinish
+                    onFinish: { _ in phase = .finalInfo }
+                )
+            case .finalInfo:
+                OnboardingFinalView(
+                    setupItems: setupItems,
+                    onBack: { phase = .preferences },
+                    onFinish: { target in onFinish(target) }
                 )
             }
         }
@@ -86,14 +99,26 @@ struct WelcomeOnboardingSheet: View {
             width: 660,
             continueButtonTitle: "Continue",
             finishButtonTitle: "Check Setup",
-            onFinish: { phase = .setup },
+            onFinish: {
+                setupItemsTask = nil
+                phase = .setup
+            },
             onClose: { onFinish(nil) }
         )
         .frame(width: 660)
     }
 
+    /// `.nothingInstalled` in the debug demo so the Setup step runs the real
+    /// service against forced states (1:1 with real); `.init()` otherwise.
+    private var setupSimulation: SetupSimulation {
+        #if DEBUG
+        if forceNothingInstalledForDebug { return .nothingInstalled }
+        #endif
+        return .init()
+    }
+
     private func preloadSetupChecksIfNeeded() {
-        guard setupItemsTask == nil else { return }
+        guard setupItemsTask == nil, !setupSimulation.isActive else { return }
         let projectRootPaths = viewModel.configuredProjectsRootPaths
         let githubAccount = viewModel.currentGitHubAccount
         let selectedProjectPath = viewModel.selectedProjectPath
@@ -111,6 +136,135 @@ struct WelcomeOnboardingSheet: View {
     }
 }
 
+/// Closing onboarding screen: points the user at the three hubs they'll use,
+/// highlights where the Coding Agent lives in the sidebar, and smart-routes the
+/// primary action to Doctor (if anything is broken) or Pi Agent (if ready to code).
+struct OnboardingFinalView: View {
+    let setupItems: [SetupCheckItem]
+    let onBack: () -> Void
+    let onFinish: (SidebarItem?) -> Void
+
+    private var canStartCoding: Bool {
+        piPassed && modelsPassed && projectPassed
+    }
+
+    private var needsDoctor: Bool {
+        setupItems.contains { $0.status == .failed }
+    }
+
+    private var piPassed: Bool {
+        setupItems.first { $0.id == "pi-cli" }?.status == .passed
+    }
+
+    private var modelsPassed: Bool {
+        setupItems.first { $0.id == "pi-models" }?.status == .passed
+    }
+
+    private var projectPassed: Bool {
+        setupItems.first { $0.id == "project-root" }?.status == .passed
+    }
+
+    private var primaryTarget: SidebarItem {
+        if canStartCoding { return .agent }
+        if needsDoctor { return .doctor }
+        return .doctor
+    }
+
+    private var primaryButtonTitle: String {
+        if canStartCoding { return "Start Coding" }
+        if needsDoctor { return "Review Setup" }
+        return "Open Doctor"
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(canStartCoding ? "You're ready to code" : "You're set up")
+                    .font(.title2.bold())
+                    .fontWidth(.expanded)
+                Text("Three places you'll use in \(AppBrand.displayName).")
+                    .foregroundStyle(AppTheme.mutedText)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.top, 22)
+            .padding(.bottom, 16)
+
+            Divider()
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 14) {
+                    infoCard(
+                        icon: "stethoscope",
+                        title: "Doctor",
+                        detail: "Check runtime health and install or fix anything that's missing — Pi, models, project folders, and GitHub."
+                    )
+                    infoCard(
+                        icon: "cpu",
+                        title: "Models",
+                        detail: "Connect providers and choose which models are available. Add a provider any time with the + button in Models."
+                    )
+                    infoCard(
+                        icon: "sparkles.rectangle.stack",
+                        title: "Coding Agent",
+                        detail: "Start coding sessions with Pi Agent. You'll find this chip at the bottom of your sidebar — tap it any time to jump back in.",
+                        usePiSymbol: true
+                    )
+                }
+                .padding(24)
+            }
+            .background(AppTheme.windowBackground)
+
+            Divider()
+            HStack {
+                Button("Back") { onBack() }
+                    .appSecondaryButton()
+                Spacer()
+                Button(primaryButtonTitle) {
+                    onFinish(primaryTarget)
+                }
+                .appPrimaryButton()
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
+        }
+        .frame(width: 660, height: 560)
+        .background(AppTheme.windowBackground)
+    }
+
+    private func infoCard(icon: String, title: String, detail: String, usePiSymbol: Bool = false) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            if usePiSymbol {
+                Image("pi")
+                    .imageScale(.large)
+                    .foregroundStyle(AppTheme.brandAccent)
+            } else {
+                Image(systemName: icon)
+                    .imageScale(.large)
+                    .foregroundStyle(AppTheme.brandAccent)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.body.weight(.semibold))
+                    .fontWidth(.expanded)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.contentFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(AppTheme.contentStroke, lineWidth: 1)
+        )
+    }
+}
+
 struct SetupChecklistView: View {
     var viewModel: AppViewModel
     fileprivate let preloadedItems: Task<[SetupCheckItem], Never>?
@@ -118,20 +272,56 @@ struct SetupChecklistView: View {
     let onContinue: ([SetupCheckItem]) -> Void
     @State private var items: [SetupCheckItem] = []
     @State private var isRefreshing = true
+    @State private var loginService = PiProviderLoginService()
+    @State private var showingConnectProvider = false
+    /// Demo only: when active, the checks run against forced install states
+    /// (so the demo is 1:1 with the real service code). `.init()` = real checks.
+    @State private var simulation: SetupSimulation
+    @Environment(\.scenePhase) private var scenePhase
 
     fileprivate init(
         viewModel: AppViewModel,
         preloadedItems: Task<[SetupCheckItem], Never>? = nil,
+        simulation: SetupSimulation = .init(),
         onBack: @escaping () -> Void,
         onContinue: @escaping ([SetupCheckItem]) -> Void
     ) {
         self.viewModel = viewModel
         self.preloadedItems = preloadedItems
+        _simulation = State(initialValue: simulation)
         self.onBack = onBack
         self.onContinue = onContinue
     }
 
     var body: some View {
+        Group {
+            if showingConnectProvider {
+                AddProviderFlowSheet(
+                    viewModel: viewModel,
+                    loginService: loginService,
+                    onClose: {
+                        showingConnectProvider = false
+                        Task { await refresh() }
+                    }
+                )
+            } else {
+                checklist
+            }
+        }
+        .frame(width: 660, height: 560)
+        .background(AppTheme.windowBackground)
+        .task {
+            if items.isEmpty {
+                await loadInitialItems()
+            }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            Task { await refresh() }
+        }
+    }
+
+    private var checklist: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -201,13 +391,6 @@ struct SetupChecklistView: View {
             .padding(.horizontal, 24)
             .padding(.vertical, 16)
         }
-        .frame(width: 660, height: 560)
-        .background(AppTheme.windowBackground)
-        .task {
-            if items.isEmpty {
-                await loadInitialItems()
-            }
-        }
     }
 
     private var loadingRow: some View {
@@ -232,7 +415,9 @@ struct SetupChecklistView: View {
     @MainActor
     private func loadInitialItems() async {
         isRefreshing = true
-        if let preloadedItems {
+        // The demo (simulation active) always runs the real service with forced
+        // states — never the preloaded real-machine task.
+        if !simulation.isActive, let preloadedItems {
             items = await preloadedItems.value
             isRefreshing = false
             return
@@ -251,16 +436,14 @@ struct SetupChecklistView: View {
             githubAccount: githubAccount,
             selectedProjectPath: viewModel.selectedProjectPath,
             hasConfirmedProjectsRootPaths: viewModel.hasConfirmedProjectsRootPaths,
-            suggestedProjectsRootPath: viewModel.suggestedProjectsRootPath
+            suggestedProjectsRootPath: viewModel.suggestedProjectsRootPath,
+            simulation: simulation
         )
     }
 
     private func setupRow(_ item: SetupCheckItem) -> some View {
         HStack(alignment: .center, spacing: 14) {
-            Image(systemName: item.status.systemImage)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(item.status.color)
-                .frame(width: 28)
+            statusIcon(for: item)
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(item.title)
@@ -305,6 +488,48 @@ struct SetupChecklistView: View {
         .padding(.vertical, 14)
     }
 
+    private var statusIconImage: (SetupCheckItem) -> AnyView {
+        { item in
+            AnyView(
+                Image(systemName: item.status.systemImage)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(item.status.color)
+                    .frame(width: 28)
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func statusIcon(for item: SetupCheckItem) -> some View {
+        #if DEBUG
+        // Debug-only: tap the status icon to flip a row missing↔ready so the
+        // dependent UI (e.g. a "ready" Pi Models row, connected GitHub) can be
+        // previewed without the real dependency installed.
+        Button { debugToggleStatus(item) } label: { statusIconImage(item) }
+            .buttonStyle(.plain)
+            .help("Debug: toggle this check's status")
+        #else
+        statusIconImage(item)
+        #endif
+    }
+
+    #if DEBUG
+    /// Flips the simulated install state for this check and re-runs the *real*
+    /// service, so dependent rows recompute correctly (e.g. toggling Pi to Ready
+    /// makes Pi Models offer "Connect a provider" via the real gating).
+    private func debugToggleStatus(_ item: SetupCheckItem) {
+        let nowReady = item.status != .passed
+        switch item.id {
+        case "pi-cli": simulation.piInstalled = nowReady
+        case "pi-models": simulation.modelsAvailable = nowReady
+        case "project-root": simulation.projectsConfigured = nowReady
+        case "github": simulation.githubConnected = nowReady
+        default: break
+        }
+        Task { await refresh() }
+    }
+    #endif
+
     private func perform(_ action: SetupCheckAction) {
         // First-run setup: replace the auto-seeded default rather than
         // appending, so picking a custom folder yields a single-entry list
@@ -313,10 +538,17 @@ struct SetupChecklistView: View {
         switch action {
         case .chooseProjectRoot:
             viewModel.chooseProjectsRootDirectory(replacingExisting: replacing)
+            Task { await refresh() }
         case .useSuggestedProjectRoot:
             viewModel.useSuggestedProjectsRootDirectory(replacingExisting: replacing)
+            Task { await refresh() }
+        case .installPi:
+            viewModel.openPiInstallInTerminal()
+        case .connectProvider:
+            showingConnectProvider = true // in-place; back returns to the checklist
+        case .setupGitHub:
+            viewModel.openGitHubSetupInTerminal()
         }
-        Task { await refresh() }
     }
 }
 
@@ -351,11 +583,17 @@ struct SetupCheckItem: Identifiable, Hashable {
 enum SetupCheckAction: Hashable {
     case chooseProjectRoot
     case useSuggestedProjectRoot
+    case installPi
+    case connectProvider
+    case setupGitHub
 
     var buttonTitle: String {
         switch self {
         case .chooseProjectRoot: "Choose Folder…"
         case .useSuggestedProjectRoot: "Use Suggested Folder"
+        case .installPi: "Install in Terminal"
+        case .connectProvider: "Connect a provider"
+        case .setupGitHub: "Set up GitHub"
         }
     }
 }
@@ -390,6 +628,27 @@ enum SetupCheckStatus: Hashable {
     }
 }
 
+/// Forces specific install/auth states for previews & the debug demos. `nil`
+/// fields fall back to the real machine check, so the demo runs the *same*
+/// `SetupDependencyService` code as the real onboarding — guaranteeing 1:1.
+struct SetupSimulation: Equatable {
+    var piInstalled: Bool?
+    var modelsAvailable: Bool?
+    var projectsConfigured: Bool?
+    var githubConnected: Bool?
+    var ghInstalled: Bool?
+
+    var isActive: Bool {
+        piInstalled != nil || modelsAvailable != nil || projectsConfigured != nil
+            || githubConnected != nil || ghInstalled != nil
+    }
+
+    static let nothingInstalled = SetupSimulation(
+        piInstalled: false, modelsAvailable: false, projectsConfigured: false,
+        githubConnected: false, ghInstalled: false
+    )
+}
+
 struct SetupDependencyService {
     private let commandRunner = CommandRunner()
     private let piResolver = PiExecutableResolver()
@@ -399,204 +658,143 @@ struct SetupDependencyService {
         githubAccount: GitHubHostAccount?,
         selectedProjectPath: String?,
         hasConfirmedProjectsRootPaths: Bool = true,
-        suggestedProjectsRootPath: String? = nil
+        suggestedProjectsRootPath: String? = nil,
+        simulation: SetupSimulation = .init()
     ) async -> [SetupCheckItem] {
-        async let pi = piCheck()
-        async let models = modelCheck()
-        let github = await githubCheck(account: githubAccount)
-        let project = projectRootCheck(paths: projectRootPaths, isConfirmed: hasConfirmedProjectsRootPaths, suggestedPath: suggestedProjectsRootPath)
-        let primaryRootPath = projectRootPaths.first
-        let web = webAccessCheck(projectRootPath: selectedProjectPath ?? primaryRootPath)
+        async let pi = piCheck(simulation)
+        async let models = modelCheck(simulation)
+        let github = await githubCheck(account: githubAccount, simulation: simulation)
+        let project = projectRootCheck(paths: projectRootPaths, isConfirmed: hasConfirmedProjectsRootPaths, suggestedPath: suggestedProjectsRootPath, simulation: simulation)
 
-        return await [pi, models, project, github, web]
+        // Web Access (optional Exa/URL-fetch fallback) lives in Doctor, not in
+        // the first-run Setup Check — it's noise for onboarding.
+        return await [pi, models, project, github]
     }
 
-    private func piCheck() async -> SetupCheckItem {
-        let piCommand = piResolver.resolve()?.path ?? "pi"
+    // MARK: Pi
 
-        do {
-            let result = try await commandRunner.run(piCommand, arguments: ["--help"], timeout: 6)
-            return SetupCheckItem(
-                id: "pi-cli",
-                title: "Pi",
-                detail: result.exitCode == 0
-                    ? "Pi is installed and available to \(AppBrand.displayName)."
-                    : "`pi --help` exited with code \(result.exitCode).",
-                status: result.exitCode == 0 ? .passed : .failed,
-                recovery: result.exitCode == 0 ? nil : "Install Pi, then verify `pi --help` works in Terminal."
-            )
-        } catch {
-            return SetupCheckItem(
-                id: "pi-cli",
-                title: "Pi",
-                detail: "Install Pi and make sure `pi` is available from your login shell.",
-                status: .failed,
-                recovery: "Install Pi, then verify `pi --help` works in Terminal."
-            )
-        }
-    }
-
-    private func modelCheck() async -> SetupCheckItem {
-        let models = await PiModelDiscoveryService(commandRunner: commandRunner, piResolver: piResolver).loadAvailableModels()
-        if !models.isEmpty {
-            return SetupCheckItem(
-                id: "pi-models",
-                title: "Pi Models",
-                detail: "\(models.count) models are available to \(AppBrand.displayName).",
-                status: .passed,
-                recovery: nil
-            )
-        }
-
-        do {
+    private func piCheck(_ simulation: SetupSimulation) async -> SetupCheckItem {
+        let installed: Bool
+        if let forced = simulation.piInstalled {
+            installed = forced
+        } else {
             let piCommand = piResolver.resolve()?.path ?? "pi"
-            let result = try await commandRunner.run(piCommand, arguments: ["--list-models"], timeout: 20)
-            let listOutput = result.stdout.isEmpty ? result.stderr : result.stdout
-            let modelRowCount = Self.modelRowCount(fromPiListOutput: listOutput)
-            if result.exitCode == 0, modelRowCount > 0 {
-                return SetupCheckItem(
-                    id: "pi-models",
-                    title: "Pi Models",
-                    detail: "\(modelRowCount) models available.",
-                    status: .passed,
-                    recovery: nil
-                )
-            }
-            let rawPreview = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            let preview = rawPreview.isEmpty ? (result.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "(no output)" : "stderr: \(result.stderr.prefix(200))") : String(rawPreview.prefix(200))
-            return SetupCheckItem(
-                id: "pi-models",
-                title: "Pi Models",
-                detail: "`pi --list-models` exited with code \(result.exitCode) and did not return usable models. Output: \(preview)",
-                status: .failed,
-                recovery: "Run `pi --list-models` in Terminal and complete any provider/model setup Pi reports."
-            )
-        } catch {
-            return SetupCheckItem(
-                id: "pi-models",
-                title: "Pi Models",
-                detail: "`pi --list-models` did not return any usable models.",
-                status: .failed,
-                recovery: "Run `pi --list-models` in Terminal and complete any provider/model setup Pi reports."
-            )
+            installed = ((try? await commandRunner.run(piCommand, arguments: ["--help"], timeout: 6))?.exitCode == 0)
         }
+        return piItem(installed: installed)
     }
 
-    private func projectRootCheck(paths: [String], isConfirmed: Bool, suggestedPath: String?) -> SetupCheckItem {
+    private func piItem(installed: Bool) -> SetupCheckItem {
+        installed
+            ? SetupCheckItem(id: "pi-cli", title: "Pi", detail: "Pi is installed and available to \(AppBrand.displayName).", status: .passed, recovery: nil)
+            : SetupCheckItem(id: "pi-cli", title: "Pi", detail: "Install Pi and make sure `pi` is available from your login shell.", status: .failed, recovery: "After installing, verify `pi --help` works in Terminal.", action: .installPi)
+    }
+
+    // MARK: Models
+
+    private func modelCheck(_ simulation: SetupSimulation) async -> SetupCheckItem {
+        // Connect-a-provider only makes sense once pi exists, so gate on pi.
+        let piInstalled = simulation.piInstalled ?? (piResolver.resolve() != nil)
+        if let forced = simulation.modelsAvailable {
+            return modelsItem(available: forced, count: forced ? 12 : 0, piInstalled: piInstalled)
+        }
+        let models = await PiModelDiscoveryService(commandRunner: commandRunner, piResolver: piResolver).loadAvailableModels()
+        return modelsItem(available: !models.isEmpty, count: models.count, piInstalled: piInstalled)
+    }
+
+    private func modelsItem(available: Bool, count: Int, piInstalled: Bool) -> SetupCheckItem {
+        if available {
+            return SetupCheckItem(id: "pi-models", title: "Pi Models", detail: "\(count) models are available to \(AppBrand.displayName).", status: .passed, recovery: nil)
+        }
+        return SetupCheckItem(
+            id: "pi-models",
+            title: "Pi Models",
+            detail: "`pi --list-models` did not return any usable models.",
+            status: .failed,
+            recovery: piInstalled ? "Connect a model provider to load its models." : "Install Pi first (above), then connect a model provider.",
+            action: piInstalled ? .connectProvider : nil
+        )
+    }
+
+    // MARK: Projects
+
+    private func projectRootCheck(paths: [String], isConfirmed: Bool, suggestedPath: String?, simulation: SetupSimulation) -> SetupCheckItem {
+        if let forced = simulation.projectsConfigured {
+            return projectItem(configured: forced, detail: forced ? (suggestedPath ?? "Projects folder configured.") : nil, suggestedPath: suggestedPath)
+        }
+
         let resolvedPaths = paths.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         let existingPaths = resolvedPaths.filter { path in
             (try? URL(fileURLWithPath: path).resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
         }
         let hasAnyConfigured = !resolvedPaths.isEmpty
         let hasAnyExisting = !existingPaths.isEmpty
-        let hasSuggestedDirectory = suggestedPath?.isEmpty == false
 
         if !isConfirmed || !hasAnyConfigured {
-            return SetupCheckItem(
-                id: "project-root",
-                title: "Projects Folders",
-                detail: hasSuggestedDirectory
-                    ? "Choose at least one parent folder that contains your projects. Suggested: \(suggestedPath!)"
-                    : "Choose at least one parent folder that contains your projects.",
-                status: .failed,
-                recovery: nil,
-                action: hasSuggestedDirectory ? .useSuggestedProjectRoot : .chooseProjectRoot,
-                secondaryAction: hasSuggestedDirectory ? .chooseProjectRoot : nil
-            )
+            return projectItem(configured: false, detail: nil, suggestedPath: suggestedPath)
         }
-
-        // Confirmed and at least one path is on disk → pass; otherwise prompt
-        // the user to pick one (every configured entry has disappeared).
         let detail: String
         if hasAnyExisting {
-            detail = existingPaths.count == 1
-                ? existingPaths[0]
-                : "\(existingPaths.count) folders configured: \(existingPaths.joined(separator: ", "))"
+            detail = existingPaths.count == 1 ? existingPaths[0] : "\(existingPaths.count) folders configured: \(existingPaths.joined(separator: ", "))"
         } else {
             detail = "None of the configured folders exist anymore. Choose a parent folder that contains your projects."
         }
-
         return SetupCheckItem(
-            id: "project-root",
-            title: "Projects Folders",
-            detail: detail,
+            id: "project-root", title: "Projects Folders", detail: detail,
             status: hasAnyExisting ? .passed : .failed,
             recovery: hasAnyExisting ? nil : "Choose an existing parent folder for your projects.",
             action: hasAnyExisting ? nil : .chooseProjectRoot
         )
     }
 
-    private func webAccessCheck(projectRootPath: String?) -> SetupCheckItem {
-        let projectRoot = projectRootPath.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
-        let environment = EnvRuntimeEnvironment().environment(projectRoot: projectRoot)
-        let hasKey = environment["EXA_API_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        let fallbackInstalled = WebFetchDependencyService().status().isInstalled
-
-        if hasKey {
-            return SetupCheckItem(
-                id: "web-access",
-                title: "Web Access",
-                detail: "EXA_API_KEY is configured. Exa web tools are available to new Pi sessions.",
-                status: .passed,
-                recovery: nil
-            )
+    private func projectItem(configured: Bool, detail: String?, suggestedPath: String?) -> SetupCheckItem {
+        if configured {
+            return SetupCheckItem(id: "project-root", title: "Projects Folders", detail: detail ?? "Projects folder configured.", status: .passed, recovery: nil)
         }
-
-        if fallbackInstalled {
-            return SetupCheckItem(
-                id: "web-access",
-                title: "Web Access",
-                detail: "Optional. URL fetch fallback dependencies are installed. Configure Exa search later in Doctor if you want web search.",
-                status: .warning,
-                recovery: nil
-            )
-        }
-
+        let hasSuggested = suggestedPath?.isEmpty == false
         return SetupCheckItem(
-            id: "web-access",
-            title: "Web Access",
-            detail: "Optional. Configure Exa search or install the URL fetch fallback later in Doctor.",
-            status: .warning,
-            recovery: nil
+            id: "project-root", title: "Projects Folders",
+            detail: hasSuggested ? "Choose at least one parent folder that contains your projects. Suggested: \(suggestedPath!)" : "Choose at least one parent folder that contains your projects.",
+            status: .failed, recovery: nil,
+            action: hasSuggested ? .useSuggestedProjectRoot : .chooseProjectRoot,
+            secondaryAction: hasSuggested ? .chooseProjectRoot : nil
         )
     }
 
-    private func githubCheck(account: GitHubHostAccount?) async -> SetupCheckItem {
+    // MARK: GitHub
+
+    private func githubCheck(account: GitHubHostAccount?, simulation: SetupSimulation) async -> SetupCheckItem {
         let resolvedAccount: GitHubHostAccount?
-        if let account {
+        if let connected = simulation.githubConnected {
+            resolvedAccount = connected
+                ? (account ?? GitHubHostAccount(host: "github.com", login: "octocat", scopes: [], gitProtocol: nil, tokenSource: nil, isActive: true))
+                : nil
+        } else if let account {
             resolvedAccount = account
         } else {
             resolvedAccount = await GitHubCLIAuthService(commandRunner: commandRunner).loadStatus().account
         }
 
         if let resolvedAccount {
-            return SetupCheckItem(
-                id: "github",
-                title: "GitHub",
-                detail: "Connected as \(resolvedAccount.login) on \(resolvedAccount.host).",
-                status: .passed,
-                recovery: nil
-            )
+            return SetupCheckItem(id: "github", title: "GitHub", detail: "Connected as \(resolvedAccount.login) on \(resolvedAccount.host).", status: .passed, recovery: nil)
         }
 
+        let ghInstalled: Bool
+        if let forced = simulation.ghInstalled {
+            ghInstalled = forced
+        } else {
+            ghInstalled = (try? await commandRunner.run("gh", arguments: ["--version"], timeout: 5))?.exitCode == 0
+        }
         return SetupCheckItem(
             id: "github",
             title: "GitHub",
-            detail: "Optional. Install GitHub CLI and run `gh auth login` for issue, comment, commit, and push workflows.",
+            detail: ghInstalled
+                ? "Optional. Sign in to GitHub for issue, comment, commit, and push workflows."
+                : "Optional. Install the GitHub CLI and sign in for issue, comment, commit, and push workflows.",
             status: .warning,
-            recovery: "Install GitHub CLI, run `gh auth login`, then refresh this check."
+            recovery: nil,
+            action: .setupGitHub
         )
-    }
-
-    private static func modelRowCount(fromPiListOutput text: String) -> Int {
-        text
-            .split(whereSeparator: \.isNewline)
-            .dropFirst()
-            .filter { line in
-                let parts = line.split(whereSeparator: \.isWhitespace)
-                return parts.count >= 2
-            }
-            .count
     }
 }
 
@@ -949,3 +1147,4 @@ private struct OnboardingPreferenceRow<Control: View>: View {
         .padding(.vertical, 14)
     }
 }
+

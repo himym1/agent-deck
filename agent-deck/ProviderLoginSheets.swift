@@ -76,6 +76,16 @@ struct AddProviderFlowSheet: View {
 
     let viewModel: AppViewModel
     let loginService: PiProviderLoginService
+    /// When set, the flow is embedded in another view (e.g. onboarding) and
+    /// closing routes back via this callback instead of dismissing a sheet; the
+    /// frame also flexes to fill its container rather than the fixed sheet width.
+    var onClose: (() -> Void)? = nil
+
+    private var isEmbedded: Bool { onClose != nil }
+
+    private func close() {
+        if let onClose { onClose() } else { dismiss() }
+    }
 
     enum Step: Equatable {
         case picker
@@ -111,10 +121,11 @@ struct AddProviderFlowSheet: View {
             Divider()
             footer
         }
-        .frame(width: 520)
+        .frame(maxWidth: isEmbedded ? .infinity : nil, maxHeight: isEmbedded ? .infinity : nil)
+        .frame(width: isEmbedded ? nil : 520)
         .onChange(of: oauthSucceeded) { _, success in
             guard success else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { dismiss() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { close() }
         }
     }
 
@@ -322,13 +333,13 @@ struct AddProviderFlowSheet: View {
             Spacer(minLength: 0)
             switch step {
             case .picker:
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { close() }
                     .appSecondaryButton()
             case .method:
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { close() }
                     .appSecondaryButton()
             case let .apiKey(provider):
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { close() }
                     .appSecondaryButton()
                 Button("Save") { saveAPIKey(provider) }
                     .appPrimaryButton()
@@ -337,7 +348,7 @@ struct AddProviderFlowSheet: View {
             case .oauth:
                 Button(oauthIsTerminal ? "Close" : "Cancel") {
                     if !oauthIsTerminal { loginService.cancel() }
-                    dismiss()
+                    close()
                 }
                 .appSecondaryButton()
             }
@@ -370,7 +381,7 @@ struct AddProviderFlowSheet: View {
         guard !trimmed.isEmpty else { return }
         do {
             try viewModel.signInWithAPIKey(trimmed, provider: provider)
-            dismiss()
+            close()
         } catch {
             errorMessage = error.localizedDescription
         }

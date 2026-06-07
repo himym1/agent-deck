@@ -100,8 +100,6 @@ nonisolated struct PiExtensionDiscoveryService: @unchecked Sendable {
         }
 
         return dedupe(candidates).sorted { lhs, rhs in
-            let rankOrder = scopeRank(lhs.source.kind) - scopeRank(rhs.source.kind)
-            if rankOrder != 0 { return rankOrder < 0 }
             let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
             if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
             return lhs.launchSource < rhs.launchSource
@@ -341,14 +339,6 @@ nonisolated struct PiExtensionDiscoveryService: @unchecked Sendable {
         return result
     }
 
-    private func scopeRank(_ scope: ResourceScopeKind) -> Int {
-        switch scope {
-        case .global: return 0
-        case .project, .legacyProject: return 1
-        case .package: return 2
-        default: return 3
-        }
-    }
 }
 
 /// Scans a Pi extension's TypeScript source for tool name registrations that

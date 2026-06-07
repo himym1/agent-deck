@@ -1585,6 +1585,13 @@ struct ContentView: View {
             ExtensionsScreen(viewModel: viewModel)
         case .doctor:
             DoctorScreen(viewModel: viewModel)
+        #if DEBUG
+        case .debugOnboarding:
+            WelcomeOnboardingSheet(viewModel: viewModel, onFinish: { _ in }, forceNothingInstalledForDebug: true)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .debugDoctorEmpty:
+            DoctorScreen(viewModel: viewModel, simulation: .nothingInstalled)
+        #endif
         }
     }
 

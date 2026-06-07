@@ -734,6 +734,12 @@ final class PiAgentRunnerService {
                 settings: launchSettings,
                 projectURL: projectURL
             ))
+            var injectedExtensionPaths: [String] = []
+            for i in 0..<(extraArguments.count - 1) {
+                if extraArguments[i] == "--extension" {
+                    injectedExtensionPaths.append(extraArguments[i + 1])
+                }
+            }
             let client = try PiRPCClient(
                 cwd: projectURL,
                 sessionFile: resumeExisting ? session.piSessionFile : nil,
@@ -767,6 +773,7 @@ final class PiAgentRunnerService {
             store.updateSession(session.id) { record in
                 record.launchCommand = client.launchCommand
                 record.status = .running
+                record.injectedExtensions = injectedExtensionPaths.isEmpty ? nil : injectedExtensionPaths
             }
             client.getState()
             client.getCommands()

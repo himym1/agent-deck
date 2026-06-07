@@ -324,6 +324,12 @@ final class AppViewModel: NSObject {
 
         appSettings = appSettingsController.settings
         ThemeManager.shared.apply(appSettingsController.resolvedActiveTheme)
+        #if DEBUG
+        // Xcode Previews: stop here so preview view models stay empty (no models,
+        // no projects, no GitHub) and never spawn pi/gh subprocesses — giving a
+        // deterministic "nothing installed" state for the onboarding/Doctor previews.
+        if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" { return }
+        #endif
         selectedProjectPath = UserDefaults.standard.string(forKey: lastSelectedProjectDefaultsKey)
         if let selectedProjectPath {
             projectRootURL = URL(fileURLWithPath: selectedProjectPath, isDirectory: true).standardizedFileURL
@@ -2662,6 +2668,50 @@ final class AppViewModel: NSObject {
         } catch {
 #if DEBUG
             NSLog("Failed to create Pi install terminal script: \(error.localizedDescription)")
+#endif
+        }
+    }
+
+    /// Installs the GitHub CLI if needed, then runs `gh auth login` — one
+    /// "Set up GitHub" action covering both steps in a single Terminal session.
+    func openGitHubSetupInTerminal() {
+        let body = """
+        if ! command -v gh >/dev/null 2>&1; then
+          if command -v brew >/dev/null 2>&1; then
+            brew install gh
+          else
+            echo "Homebrew not found. Install it from https://brew.sh or the GitHub CLI from https://cli.github.com."
+          fi
+        fi
+        if command -v gh >/dev/null 2>&1; then
+          gh auth login
+        fi
+        echo ""
+        echo "Press any key to close."
+        read -k 1
+        """
+        runShellScriptInTerminal(named: "gh-setup", body: body)
+    }
+
+    /// Writes a one-shot `.command` script and opens it in Terminal. Shared by
+    /// the GitHub install/login helpers (mirrors `openPiInstallInTerminal`).
+    private func runShellScriptInTerminal(named: String, body: String) {
+        let operationID = UUID()
+        let scriptURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent-deck-\(named)-\(operationID.uuidString)")
+            .appendingPathExtension("command")
+        let script = """
+        #!/bin/zsh
+        \(augmentedShellPATHExport())
+        \(body)
+        """
+        do {
+            try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+            openTerminalScript(scriptURL, for: operationID)
+        } catch {
+#if DEBUG
+            NSLog("Failed to create \(named) terminal script: \(error.localizedDescription)")
 #endif
         }
     }

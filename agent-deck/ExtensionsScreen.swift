@@ -12,8 +12,6 @@ struct ExtensionsScreen: View {
     @State private var candidates: [PiExtensionCandidate] = []
     /// Bridge tool-name overlaps per candidate id, computed off-main.
     @State private var conflictsByID: [String: [String]] = [:]
-    /// Short description per candidate id (extension's leading comment), computed off-main.
-    @State private var descriptionsByID: [String: String] = [:]
     @State private var isDiscovering = false
     /// Whether the local web-fetch fallback dependency is installed (filesystem
     /// check, refreshed off the render path). Drives the "Web fetch" bridge state.
@@ -37,7 +35,7 @@ struct ExtensionsScreen: View {
         .task(id: "\(viewModel.projectRootURL?.path ?? "")#\(viewModel.piExtensionsRefreshToken)") {
             await discoverCandidates()
         }
-        // Re-scan conflicts + descriptions whenever the candidate set changes. Off-main.
+        // Re-scan conflicts whenever the candidate set changes. Off-main.
         .task(id: candidates.map(\.id).joined()) {
             await loadRowMetadata()
         }
@@ -155,7 +153,6 @@ struct ExtensionsScreen: View {
                                 get: { !viewModel.appSettings.disabledPiExtensionIDs.contains(candidate.id) },
                                 set: { viewModel.setPiExtension(candidate, enabled: $0) }
                             ),
-                            description: descriptionsByID[candidate.id],
                             conflictingToolNames: conflictsByID[candidate.id] ?? []
                         )
                         if index < candidates.count - 1 {
@@ -212,20 +209,15 @@ struct ExtensionsScreen: View {
 
     private func loadRowMetadata() async {
         let snapshot = candidates
-        let meta = await Task.detached(priority: .utility) { () -> (conflicts: [String: [String]], descriptions: [String: String]) in
-            var conflicts: [String: [String]] = [:]
-            var descriptions: [String: String] = [:]
+        let conflicts = await Task.detached(priority: .utility) { () -> [String: [String]] in
+            var result: [String: [String]] = [:]
             for candidate in snapshot {
                 let found = PiExtensionConflictDetector.conflictingBridgeToolNames(for: candidate)
-                if !found.isEmpty { conflicts[candidate.id] = found }
-                if let description = PiExtensionDescriptionReader.leadingDescription(forFile: candidate.launchSource) {
-                    descriptions[candidate.id] = description
-                }
+                if !found.isEmpty { result[candidate.id] = found }
             }
-            return (conflicts, descriptions)
+            return result
         }.value
-        conflictsByID = meta.conflicts
-        descriptionsByID = meta.descriptions
+        conflictsByID = conflicts
     }
 }
 
@@ -234,8 +226,6 @@ struct ExtensionsScreen: View {
 private struct PiExtensionSelectionRow: View {
     let candidate: PiExtensionCandidate
     @Binding var isEnabled: Bool
-    /// Short description from the extension's leading comment, if any.
-    var description: String?
     /// Bridge tool names detected in this extension's source that overlap with
     /// Agent Deck's built-in bridges. Empty means no detected conflict.
     var conflictingToolNames: [String] = []
@@ -243,21 +233,20 @@ private struct PiExtensionSelectionRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Toggle(isOn: $isEnabled) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(candidate.name)
-                        .font(.body.weight(.semibold))
-                        .fontWidth(.expanded)
-                        .lineLimit(1)
-                    if let description, !description.isEmpty {
-                        Text(description)
-                            .font(.caption)
-                            .foregroundStyle(AppTheme.mutedText)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
+                Text(candidate.name)
+                    .font(.body.weight(.semibold))
+                    .fontWidth(.expanded)
+                    .lineLimit(1)
             }
             .appCheckbox()
+            .opacity(!conflictingToolNames.isEmpty ? 0.6 : 1.0)
+
+            Text(candidate.launchSource)
+                .font(.caption)
+                .foregroundStyle(AppTheme.mutedText)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.leading, 22)
 
             if isEnabled && !conflictingToolNames.isEmpty {
                 HStack(alignment: .top, spacing: 6) {
@@ -267,6 +256,7 @@ private struct PiExtensionSelectionRow: View {
                     Text(conflictWarningText)
                         .font(.caption)
                         .foregroundStyle(.orange)
+                        .fontWidth(.condensed)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.leading, 22)

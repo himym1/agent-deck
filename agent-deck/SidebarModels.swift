@@ -18,6 +18,10 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     case environment = "Environment"
     case extensions = "Extensions"
     case doctor = "Doctor"
+    #if DEBUG
+    case debugOnboarding = "Onboarding (Demo)"
+    case debugDoctorEmpty = "Doctor (Empty)"
+    #endif
 
     var id: String { rawValue }
 
@@ -36,6 +40,10 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .environment: return "key"
         case .extensions: return "puzzlepiece.extension"
         case .doctor: return "stethoscope"
+        #if DEBUG
+        case .debugOnboarding: return "sparkles"
+        case .debugDoctorEmpty: return "stethoscope.circle"
+        #endif
         }
     }
 
@@ -52,6 +60,9 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     case workspace = "Workspace"
     case piResources = "Resources"
     case runtime = "Runtime"
+    #if DEBUG
+    case debug = "Debug"
+    #endif
 
     var id: String { rawValue }
 
@@ -67,6 +78,10 @@ enum SidebarSection: String, CaseIterable, Identifiable {
             return [.agents, .skills, .prompts]
         case .runtime:
             return [.models, .environment, .extensions, .doctor]
+        #if DEBUG
+        case .debug:
+            return [.debugOnboarding, .debugDoctorEmpty]
+        #endif
         }
     }
 }

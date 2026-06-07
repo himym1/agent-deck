@@ -130,6 +130,7 @@ final class PiAgentContextEstimateBuilderTests: XCTestCase {
             pendingSteeringMessages: [],
             pendingFollowUpMessages: [],
             subagentsEnabled: true,
+            injectedExtensions: nil,
             createdAt: Date(),
             updatedAt: Date()
         )

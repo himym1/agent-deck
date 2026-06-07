@@ -89,6 +89,7 @@ enum PiTestSupport {
             pendingSteeringMessages: [],
             pendingFollowUpMessages: [],
             subagentsEnabled: subagentsEnabled,
+            injectedExtensions: nil,
             createdAt: Date(),
             updatedAt: Date()
         )
