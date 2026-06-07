@@ -87,6 +87,17 @@ final class ThemeTests: XCTestCase {
         let settings = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
         XCTAssertEqual(settings.selectedThemeID, Theme.defaultTheme.id)
         XCTAssertTrue(settings.customThemes.isEmpty)
+        XCTAssertTrue(settings.piAgentMarkdownHighlightingEnabled)
+    }
+
+    func testAppSettingsRoundTripsDisabledMarkdownHighlighting() throws {
+        var settings = AppSettings()
+        settings.piAgentMarkdownHighlightingEnabled = false
+
+        let encoded = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: encoded)
+
+        XCTAssertFalse(decoded.piAgentMarkdownHighlightingEnabled)
     }
 
     func testNativeSubagentDelegationPolicyDefaultsToBalancedForLegacySettings() throws {

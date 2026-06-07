@@ -974,6 +974,14 @@ final class AppSettingsController {
     }
 
     @discardableResult
+    func setPiAgentMarkdownHighlightingEnabled(_ isEnabled: Bool) -> Bool {
+        guard settings.piAgentMarkdownHighlightingEnabled != isEnabled else { return false }
+        settings.piAgentMarkdownHighlightingEnabled = isEnabled
+        persist()
+        return true
+    }
+
+    @discardableResult
     func selectTheme(id: UUID) -> Bool {
         let target = allThemes.contains(where: { $0.id == id }) ? id : Theme.defaultTheme.id
         guard settings.selectedThemeID != target else { return false }

@@ -3,6 +3,42 @@ import SwiftUI
 import WebKit
 import os
 
+private enum MarkdownSemanticStyler {
+    private static let presentationIntentKey = NSAttributedString.Key("NSInlinePresentationIntent")
+    private static let emphasis = 1
+    private static let strong = 2
+    private static let code = 4
+
+    static var headingColor: NSColor {
+        ThemeManager.shared.markdownHighlightingEnabled ? AppTheme.ns(AppTheme.markdownHeading) : .labelColor
+    }
+
+    static var listMarkerColor: NSColor {
+        ThemeManager.shared.markdownHighlightingEnabled ? AppTheme.ns(AppTheme.markdownListMarker) : .secondaryLabelColor
+    }
+
+    static func applyInlineColors(to attributed: NSMutableAttributedString) {
+        guard ThemeManager.shared.markdownHighlightingEnabled, attributed.length > 0 else { return }
+        let fullRange = NSRange(location: 0, length: attributed.length)
+        var updates: [(NSRange, NSColor)] = []
+        attributed.enumerateAttributes(in: fullRange) { attributes, range, _ in
+            let intent = (attributes[presentationIntentKey] as? NSNumber)?.intValue ?? 0
+            if intent & code != 0 {
+                updates.append((range, AppTheme.ns(AppTheme.markdownCode)))
+            } else if intent & strong != 0 {
+                updates.append((range, AppTheme.ns(AppTheme.markdownStrong)))
+            } else if intent & emphasis != 0 {
+                updates.append((range, AppTheme.ns(AppTheme.markdownHeading)))
+            } else if attributes[.link] != nil {
+                updates.append((range, AppTheme.ns(AppTheme.markdownLink)))
+            }
+        }
+        for (range, color) in updates {
+            attributed.addAttribute(.foregroundColor, value: color, range: range)
+        }
+    }
+}
+
 struct MarkdownDocumentView: View {
     let source: String
     var minimumHeight: CGFloat = 24
@@ -389,6 +425,7 @@ final class MarkdownSourceApplier {
 final class NativeMarkdownTextContainer: NSView {
     private let stackView = NSStackView()
     private var lastDocument: CachedMarkdownDocument?
+    private var lastStyleRevision = -1
     /// Whether a document has ever been applied. Lets the representable parse
     /// the first appearance synchronously (no blank flash) and reserve the
     /// off-main path for an already-displayed block growing during streaming.
@@ -451,12 +488,15 @@ final class NativeMarkdownTextContainer: NSView {
 
     fileprivate func configure(document: CachedMarkdownDocument) {
         isDismantled = false
-        guard document != lastDocument else {
+        let styleRevision = ThemeManager.shared.revision
+        let styleChanged = styleRevision != lastStyleRevision
+        guard document != lastDocument || styleChanged else {
             scheduleHeightMeasurement()
             return
         }
         let previous = lastDocument
         lastDocument = document
+        lastStyleRevision = styleRevision
         // The document changed (the unchanged case returned at the guard above),
         // so any cached height is now stale. `measureHeight(forWidth:)` repopulates,
         // and the settle loop re-measures fresh for a few runloops until the new
@@ -468,11 +508,11 @@ final class NativeMarkdownTextContainer: NSView {
         // instead of rebuilding the whole NSStackView. This is the hot path for every
         // assistant/thinking flush — without it each token costs a full per-block view
         // tear-down + recreation.
-        if let previous, tryIncrementalUpdate(from: previous, to: document) {
+        if !styleChanged, let previous, tryIncrementalUpdate(from: previous, to: document) {
             scheduleHeightMeasurement()
             return
         }
-        rebuild(from: previous, to: document)
+        rebuild(from: styleChanged ? nil : previous, to: document)
         scheduleHeightMeasurement()
     }
 
@@ -608,9 +648,9 @@ final class NativeMarkdownTextContainer: NSView {
         case let .heading(level, _):
             if level <= 1 {
                 let title3 = NSFont.preferredFont(forTextStyle: .title3)
-                return (NSFontManager.shared.convert(title3, toHaveTrait: .boldFontMask), .labelColor, true)
+                return (NSFontManager.shared.convert(title3, toHaveTrait: .boldFontMask), MarkdownSemanticStyler.headingColor, true)
             } else {
-                return (NSFont.preferredFont(forTextStyle: .headline), .labelColor, true)
+                return (NSFont.preferredFont(forTextStyle: .headline), MarkdownSemanticStyler.headingColor, true)
             }
         case .paragraph, .bullet, .numbered:
             return (NSFont.preferredFont(forTextStyle: .body), .labelColor, true)
@@ -892,7 +932,7 @@ final class NativeMarkdownTextContainer: NSView {
                 // `.headline` on macOS is semibold by default — same as SwiftUI's `.headline.weight(.semibold)`.
                 baseFont = NSFont.preferredFont(forTextStyle: .headline)
             }
-            let view = textView(text, font: baseFont, color: .labelColor)
+            let view = textView(text, font: baseFont, color: MarkdownSemanticStyler.headingColor)
             view.setContentHuggingPriority(.required, for: .vertical)
             return paddedBlock(view, padding: NSEdgeInsets(top: level <= 2 ? 4 : 2, left: 0, bottom: 0, right: 0))
         case let .paragraph(text):
@@ -948,7 +988,7 @@ final class NativeMarkdownTextContainer: NSView {
 
         let result = NSMutableAttributedString(
             string: marker,
-            attributes: [.font: markerFont, .foregroundColor: NSColor.secondaryLabelColor]
+            attributes: [.font: markerFont, .foregroundColor: MarkdownSemanticStyler.listMarkerColor]
         )
         result.append(NSAttributedString(string: "\t", attributes: [.font: bodyFont]))
         result.append(attributedString(text, font: bodyFont, color: .labelColor, parseInlineMarkdown: true))
@@ -1102,6 +1142,7 @@ final class NativeMarkdownTextContainer: NSView {
         mutable.addAttribute(.foregroundColor, value: color, range: fullRange)
         mutable.addAttribute(.paragraphStyle, value: paragraph, range: fullRange)
         applyBaseFont(font, preservingInlineTraitsIn: mutable)
+        MarkdownSemanticStyler.applyInlineColors(to: mutable)
         return mutable
     }
 
@@ -2063,6 +2104,7 @@ private enum TranscriptAttributedStringCache {
     private static func cacheKey(for source: String) -> String {
         var hasher = Hasher()
         hasher.combine(source)
+        hasher.combine(ThemeManager.shared.revision)
         return "\(source.count):\(hasher.finalize())"
     }
 
@@ -2127,7 +2169,7 @@ private enum TranscriptAttributedStringCache {
         paragraph.paragraphSpacing = 0
         return inlineAttributedString(for: text, baseAttributes: [
             .font: baseFont,
-            .foregroundColor: NSColor.labelColor,
+            .foregroundColor: MarkdownSemanticStyler.headingColor,
             .paragraphStyle: paragraph
         ])
     }
@@ -2159,7 +2201,7 @@ private enum TranscriptAttributedStringCache {
         let baseFont = NSFont.preferredFont(forTextStyle: .body)
         let markerAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask),
-            .foregroundColor: NSColor.secondaryLabelColor,
+            .foregroundColor: MarkdownSemanticStyler.listMarkerColor,
             .paragraphStyle: paragraph
         ]
         let bodyAttrs: [NSAttributedString.Key: Any] = [
@@ -2189,7 +2231,7 @@ private enum TranscriptAttributedStringCache {
         let monoNumberFont = NSFont.monospacedDigitSystemFont(ofSize: baseFont.pointSize, weight: .semibold)
         let numberAttrs: [NSAttributedString.Key: Any] = [
             .font: monoNumberFont,
-            .foregroundColor: NSColor.secondaryLabelColor,
+            .foregroundColor: MarkdownSemanticStyler.listMarkerColor,
             .paragraphStyle: paragraph
         ]
         let bodyAttrs: [NSAttributedString.Key: Any] = [
@@ -2250,6 +2292,7 @@ private enum TranscriptAttributedStringCache {
         if let baseFont = baseAttributes[.font] as? NSFont {
             applyBaseFontPreservingInlineTraits(baseFont, in: mutable)
         }
+        MarkdownSemanticStyler.applyInlineColors(to: mutable)
         return mutable
     }
 

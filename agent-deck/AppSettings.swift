@@ -197,6 +197,9 @@ struct AppSettings: Codable, Hashable {
     var didMigrateAgentAssignmentsFromDiscoveredFiles: Bool = false
     var selectedThemeID: UUID = Theme.defaultTheme.id
     var customThemes: [Theme] = []
+    /// Semantic theme colors for Markdown in Pi Agent replies. Off preserves the
+    /// neutral transcript rendering used before this preference existed.
+    var piAgentMarkdownHighlightingEnabled: Bool = true
     /// Asset-catalog name of the user-chosen Dock icon. `nil` = bundle default.
     var selectedAppIconName: String?
 
@@ -246,6 +249,7 @@ struct AppSettings: Codable, Hashable {
         case didMigrateAgentAssignmentsFromDiscoveredFiles
         case selectedThemeID
         case customThemes
+        case piAgentMarkdownHighlightingEnabled
         case selectedAppIconName
     }
 
@@ -303,6 +307,7 @@ struct AppSettings: Codable, Hashable {
         didMigrateAgentAssignmentsFromDiscoveredFiles = try container.decodeIfPresent(Bool.self, forKey: .didMigrateAgentAssignmentsFromDiscoveredFiles) ?? false
         selectedThemeID = try container.decodeIfPresent(UUID.self, forKey: .selectedThemeID) ?? Theme.defaultTheme.id
         customThemes = try container.decodeIfPresent([Theme].self, forKey: .customThemes) ?? []
+        piAgentMarkdownHighlightingEnabled = try container.decodeIfPresent(Bool.self, forKey: .piAgentMarkdownHighlightingEnabled) ?? true
         selectedAppIconName = try container.decodeIfPresent(String.self, forKey: .selectedAppIconName)
     }
 }

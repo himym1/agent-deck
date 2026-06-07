@@ -530,6 +530,7 @@ private struct AppearanceSettingsTab: View {
             } else {
                 presetNoteSection
             }
+            markdownSection
             previewSection
             appIconSection
         }
@@ -564,6 +565,23 @@ private struct AppearanceSettingsTab: View {
     /// The live draft while editing a custom theme, otherwise the selected preset.
     private var previewTheme: Theme {
         isEditingCustomTheme ? draft : selectedTheme
+    }
+
+    // MARK: Chat text
+
+    private var markdownSection: some View {
+        SettingsSection {
+            groupHeader("Chat")
+            SettingsToggleRow(
+                title: "Markdown:",
+                label: "Use theme colors in Pi Agent replies",
+                note: "On uses the active theme for Markdown headings, emphasis, inline code, links, and list markers. Off keeps the current neutral rendering.",
+                isOn: Binding(
+                    get: { viewModel.appSettings.piAgentMarkdownHighlightingEnabled },
+                    set: { viewModel.setPiAgentMarkdownHighlightingEnabled($0) }
+                )
+            )
+        }
     }
 
     // MARK: Theme picker

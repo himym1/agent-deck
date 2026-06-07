@@ -5,6 +5,70 @@ import XCTest
 
 @MainActor
 final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
+    func testMarkdownHighlightingUsesThemeColorsAndToggleOnlyChangesAttributes() {
+        let manager = ThemeManager.shared
+        let previousTheme = manager.activeTheme
+        let previousHighlighting = manager.markdownHighlightingEnabled
+        defer {
+            manager.apply(previousTheme)
+            manager.setMarkdownHighlightingEnabled(previousHighlighting)
+        }
+
+        manager.apply(.defaultTheme)
+        manager.setMarkdownHighlightingEnabled(true)
+        let source = """
+        ## Heading
+
+        **Strong** and `code` with [link](https://example.com).
+
+        - Item
+        """
+        let highlighted = TranscriptAttributedStringBuilder.attributedString(for: source)
+
+        assertColor(
+            highlighted,
+            substring: "Heading",
+            equals: AppTheme.ns(AppTheme.markdownHeading)
+        )
+        assertColor(
+            highlighted,
+            substring: "Strong",
+            equals: AppTheme.ns(AppTheme.markdownStrong)
+        )
+        assertColor(
+            highlighted,
+            substring: "code",
+            equals: AppTheme.ns(AppTheme.markdownCode)
+        )
+        assertColor(
+            highlighted,
+            substring: "link",
+            equals: AppTheme.ns(AppTheme.markdownLink)
+        )
+        assertColor(
+            highlighted,
+            substring: "•",
+            equals: AppTheme.ns(AppTheme.markdownListMarker)
+        )
+
+        manager.setMarkdownHighlightingEnabled(false)
+        let neutral = TranscriptAttributedStringBuilder.attributedString(for: source)
+
+        XCTAssertEqual(neutral.string, highlighted.string)
+        XCTAssertFalse(colorsMatch(
+            color(in: neutral, substring: "Heading"),
+            AppTheme.ns(AppTheme.markdownHeading)
+        ))
+        XCTAssertFalse(colorsMatch(
+            color(in: neutral, substring: "Strong"),
+            AppTheme.ns(AppTheme.markdownStrong)
+        ))
+        XCTAssertFalse(colorsMatch(
+            color(in: neutral, substring: "code"),
+            AppTheme.ns(AppTheme.markdownCode)
+        ))
+    }
+
     func testSingleLineMarkdownBlockquoteDoesNotExpandVertically() throws {
         let source = """
         The `slkiser/opencode-quota` project supports OpenCode Go, but importantly its README says:
@@ -113,6 +177,36 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
             }
         }
         return count
+    }
+
+    private func assertColor(
+        _ attributed: NSAttributedString,
+        substring: String,
+        equals expected: NSColor,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(
+            colorsMatch(color(in: attributed, substring: substring), expected),
+            "Expected \(substring) to use \(expected).",
+            file: file,
+            line: line
+        )
+    }
+
+    private func color(in attributed: NSAttributedString, substring: String) -> NSColor? {
+        let range = (attributed.string as NSString).range(of: substring)
+        guard range.location != NSNotFound else { return nil }
+        return attributed.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? NSColor
+    }
+
+    private func colorsMatch(_ lhs: NSColor?, _ rhs: NSColor) -> Bool {
+        guard let lhs = lhs?.usingColorSpace(.sRGB),
+              let rhs = rhs.usingColorSpace(.sRGB) else { return false }
+        return abs(lhs.redComponent - rhs.redComponent) < 0.01
+            && abs(lhs.greenComponent - rhs.greenComponent) < 0.01
+            && abs(lhs.blueComponent - rhs.blueComponent) < 0.01
+            && abs(lhs.alphaComponent - rhs.alphaComponent) < 0.01
     }
 }
 

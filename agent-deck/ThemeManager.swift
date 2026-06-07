@@ -20,6 +20,7 @@ final class ThemeManager {
     private(set) var accentBright: ThemeColor
     private(set) var accentDeep: ThemeColor
     private(set) var accentShadow: ThemeColor
+    private(set) var markdownHighlightingEnabled = true
 
     /// Bumped on every change. `agent_deckApp` keys the window content on this so
     /// a theme switch forces a uniform repaint of every view that reads `AppTheme`.
@@ -38,6 +39,12 @@ final class ThemeManager {
         accentBright = theme.accentBright
         accentDeep = theme.accentDeep
         accentShadow = theme.accentShadow
+        revision += 1
+    }
+
+    func setMarkdownHighlightingEnabled(_ isEnabled: Bool) {
+        guard markdownHighlightingEnabled != isEnabled else { return }
+        markdownHighlightingEnabled = isEnabled
         revision += 1
     }
 }

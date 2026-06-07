@@ -324,6 +324,7 @@ final class AppViewModel: NSObject {
 
         appSettings = appSettingsController.settings
         ThemeManager.shared.apply(appSettingsController.resolvedActiveTheme)
+        ThemeManager.shared.setMarkdownHighlightingEnabled(appSettingsController.settings.piAgentMarkdownHighlightingEnabled)
         #if DEBUG
         // Xcode Previews: stop here so preview view models stay empty (no models,
         // no projects, no GitHub) and never spawn pi/gh subprocesses — giving a
@@ -4697,6 +4698,12 @@ final class AppViewModel: NSObject {
         guard appSettingsController.selectTheme(id: id) else { return }
         syncAppSettings()
         ThemeManager.shared.apply(appSettingsController.resolvedActiveTheme)
+    }
+
+    func setPiAgentMarkdownHighlightingEnabled(_ isEnabled: Bool) {
+        guard appSettingsController.setPiAgentMarkdownHighlightingEnabled(isEnabled) else { return }
+        syncAppSettings()
+        ThemeManager.shared.setMarkdownHighlightingEnabled(isEnabled)
     }
 
     func addCustomTheme(_ theme: Theme) {

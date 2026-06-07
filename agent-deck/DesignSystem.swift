@@ -155,6 +155,13 @@ enum AppTheme {
     static var roleError: Color { ThemeManager.shared.activeTheme.error.color }
     static var roleStderr: Color { ThemeManager.shared.activeTheme.stderr.color }
     static let roleStatus = mutedText
+    // Markdown semantic colors derive from existing theme tokens so built-in and
+    // custom themes gain highlighting without adding more persisted color fields.
+    static var markdownHeading: Color { assistantAccent }
+    static var markdownStrong: Color { roleTool }
+    static var markdownCode: Color { diffAdded }
+    static var markdownListMarker: Color { brandAccent }
+    static var markdownLink: Color { brandAccent }
     // Diff line accents.
     static var diffAdded: Color { ThemeManager.shared.activeTheme.diffAdded.color }
     static var diffRemoved: Color { roleError }
