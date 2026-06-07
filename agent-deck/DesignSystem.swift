@@ -159,9 +159,14 @@ enum AppTheme {
     // custom themes gain highlighting without adding more persisted color fields.
     static var markdownHeading: Color { assistantAccent }
     static var markdownStrong: Color { roleTool }
+    static var markdownEmphasis: Color { ThemeManager.shared.activeTheme.tool.lightened(by: 0.16).color }
     static var markdownCode: Color { diffAdded }
     static var markdownListMarker: Color { brandAccent }
+    static var markdownListEnumeration: Color { assistantAccent }
+    static var markdownQuote: Color { roleTool }
+    static var markdownQuoteBar: Color { roleTool }
     static var markdownLink: Color { brandAccent }
+    static var markdownLinkText: Color { assistantAccent }
     // Diff line accents.
     static var diffAdded: Color { ThemeManager.shared.activeTheme.diffAdded.color }
     static var diffRemoved: Color { roleError }

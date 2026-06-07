@@ -1151,7 +1151,7 @@ struct PiAgentTranscriptThreadCard: View {
         visibility: PiAgentTranscriptVisibilitySettings,
         nativeSubagentRunsByID: [UUID: PiSubagentRunRecord]
     ) -> [PiAgentThreadChild] {
-        thread.children.filter { child in
+        let filtered = thread.children.filter { child in
             switch child {
             case .thinking: return visibility.showThinking
             case .error(let entry): return entry.isModelError || visibility.showErrors
@@ -1165,6 +1165,55 @@ struct PiAgentTranscriptThreadCard: View {
             case .steering, .assistant, .retry: return true
             }
         }
+        return coalesceAdjacentToolGroups(filtered)
+    }
+
+    /// Re-merge tool groups that became adjacent only because the child between them
+    /// was filtered out (a hidden thinking block, a hidden status, a read-only tool
+    /// group with its sections off, …). The build-time splitter in
+    /// `chronologicalChildren` flushes a group on every thinking/status/etc. arrival
+    /// without knowing visibility, so a hidden separator would otherwise leave two
+    /// "Changes" diff cards split by an invisible gap. A *visible* separator keeps the
+    /// groups non-adjacent here, so they correctly stay split.
+    ///
+    /// A merged run rebuilds its activities via `PiAgentTranscriptActivity.make` over the
+    /// combined entries (NOT a plain `activities` concat): two adjacent groups can each
+    /// hold an `edit` activity, and only `make` re-folds them into one `edit ×N` so the
+    /// tool-call chips and web cards match what an unsplit burst shows. Cost stays off the
+    /// common path — `make` runs once per *merged* run (2+ groups), and a lone group is
+    /// passed through untouched. For code tools `make` is just string/dictionary grouping
+    /// (web link/detail parsing is skipped for non-web tools).
+    private static func coalesceAdjacentToolGroups(
+        _ children: [PiAgentThreadChild]
+    ) -> [PiAgentThreadChild] {
+        var result: [PiAgentThreadChild] = []
+        var run: [PiAgentThreadToolGroup] = []
+
+        func flushRun() {
+            guard let first = run.first else { return }
+            if run.count == 1 {
+                result.append(.toolGroup(first))                   // untouched, zero cost
+            } else {
+                let entries = run.flatMap(\.entries)
+                result.append(.toolGroup(PiAgentThreadToolGroup(
+                    id: first.id,                                  // stable descriptor id
+                    entries: entries,
+                    activities: PiAgentTranscriptActivity.make(from: entries)
+                )))
+            }
+            run = []
+        }
+
+        for child in children {
+            if case .toolGroup(let group) = child {
+                run.append(group)
+            } else {
+                flushRun()
+                result.append(child)
+            }
+        }
+        flushRun()
+        return result
     }
 
     /// Whether a tool group would render at least one section under the current

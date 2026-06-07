@@ -17,11 +17,18 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
         manager.apply(.defaultTheme)
         manager.setMarkdownHighlightingEnabled(true)
         let source = """
-        ## Heading
+        # Heading
 
-        **Strong** and `code` with [link](https://example.com).
+        **Strong**, *emphasis*, and `code` with [link](https://example.com).
 
         - Item
+        1. Ordered
+
+        > Quote
+
+        ```swift
+        let value = 1
+        ```
         """
         let highlighted = TranscriptAttributedStringBuilder.attributedString(for: source)
 
@@ -37,18 +44,44 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
         )
         assertColor(
             highlighted,
+            substring: "emphasis",
+            equals: AppTheme.ns(AppTheme.markdownEmphasis)
+        )
+        assertColor(
+            highlighted,
             substring: "code",
             equals: AppTheme.ns(AppTheme.markdownCode)
         )
         assertColor(
             highlighted,
             substring: "link",
-            equals: AppTheme.ns(AppTheme.markdownLink)
+            equals: AppTheme.ns(AppTheme.markdownLinkText)
         )
         assertColor(
             highlighted,
             substring: "•",
             equals: AppTheme.ns(AppTheme.markdownListMarker)
+        )
+        assertColor(
+            highlighted,
+            substring: "1.",
+            equals: AppTheme.ns(AppTheme.markdownListEnumeration)
+        )
+        assertColor(
+            highlighted,
+            substring: "Quote",
+            equals: AppTheme.ns(AppTheme.markdownQuote)
+        )
+        XCTAssertTrue(font(in: highlighted, substring: "Quote")?.fontDescriptor.symbolicTraits.contains(.italic) == true)
+        assertColor(
+            highlighted,
+            substring: "let value = 1",
+            equals: AppTheme.ns(AppTheme.markdownCode)
+        )
+        let headingRange = (highlighted.string as NSString).range(of: "Heading")
+        XCTAssertEqual(
+            highlighted.attribute(.underlineStyle, at: headingRange.location, effectiveRange: nil) as? Int,
+            NSUnderlineStyle.single.rawValue
         )
 
         manager.setMarkdownHighlightingEnabled(false)
@@ -67,6 +100,7 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
             color(in: neutral, substring: "code"),
             AppTheme.ns(AppTheme.markdownCode)
         ))
+        XCTAssertFalse(font(in: neutral, substring: "Quote")?.fontDescriptor.symbolicTraits.contains(.italic) == true)
     }
 
     func testSingleLineMarkdownBlockquoteDoesNotExpandVertically() throws {
@@ -153,6 +187,58 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
         )
     }
 
+    func testHiddenThinkingMergesAdjacentDiffCardsButVisibleThinkingKeepsThemSplit() {
+        let sessionID = UUID()
+        func editGroup(file: String) -> PiAgentThreadToolGroup {
+            let entry = PiAgentTranscriptEntry(
+                sessionID: sessionID, role: .tool, title: "Tool: edit", text: file
+            )
+            let activity = PiAgentTranscriptActivity(
+                id: entry.id, name: "edit", entries: [entry], isError: false,
+                compactDetail: nil, webLinks: [], subagentSummary: nil
+            )
+            return PiAgentThreadToolGroup(id: entry.id, entries: [entry], activities: [activity])
+        }
+        let thinking = PiAgentTranscriptEntry(
+            sessionID: sessionID, role: .thinking, title: "Thinking", text: "Reasoning about the edit"
+        )
+        let g1 = editGroup(file: "A.swift")
+        let g2 = editGroup(file: "B.swift")
+        let thread = PiAgentTranscriptThread(
+            id: UUID(), question: nil, steeringMessages: [], thinkingParts: [thinking],
+            assistantMessages: [], activities: g1.activities + g2.activities,
+            statuses: [], errors: [],
+            children: [.toolGroup(g1), .thinking(thinking), .toolGroup(g2)]
+        )
+
+        // Thinking hidden: the two edit groups become adjacent and re-merge into one card.
+        var hidden = PiAgentTranscriptVisibilitySettings()
+        hidden.showThinking = false
+        let merged = PiAgentTranscriptThreadCard.visibleChildren(
+            of: thread, visibility: hidden, nativeSubagentRunsByID: [:]
+        )
+        XCTAssertEqual(merged.count, 1, "Hidden thinking must not fragment the diff cards.")
+        guard case .toolGroup(let group)? = merged.first else {
+            return XCTFail("Expected a single merged tool group.")
+        }
+        XCTAssertEqual(group.entries.count, 2)
+        // Both edits re-fold into ONE `edit` activity (count 2) — as if the model had
+        // made the burst without pausing — so the tool-call chips read "edit ×2", not
+        // two separate "edit" chips.
+        XCTAssertEqual(group.activities.count, 1)
+        XCTAssertEqual(group.activities.first?.name, "edit")
+        XCTAssertEqual(group.activities.first?.count, 2)
+        XCTAssertEqual(group.id, g1.id, "Merged group keeps the first group's id for a stable row.")
+
+        // Thinking visible: the separator stays, so the groups remain split.
+        var shown = PiAgentTranscriptVisibilitySettings()
+        shown.showThinking = true
+        let split = PiAgentTranscriptThreadCard.visibleChildren(
+            of: thread, visibility: shown, nativeSubagentRunsByID: [:]
+        )
+        XCTAssertEqual(split.count, 3, "A visible thinking block must keep the diff cards separate.")
+    }
+
     private func runMainLoop(iterations: Int, delay: TimeInterval) {
         for _ in 0..<iterations {
             RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(delay))
@@ -198,6 +284,12 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
         let range = (attributed.string as NSString).range(of: substring)
         guard range.location != NSNotFound else { return nil }
         return attributed.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? NSColor
+    }
+
+    private func font(in attributed: NSAttributedString, substring: String) -> NSFont? {
+        let range = (attributed.string as NSString).range(of: substring)
+        guard range.location != NSNotFound else { return nil }
+        return attributed.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont
     }
 
     private func colorsMatch(_ lhs: NSColor?, _ rhs: NSColor) -> Bool {

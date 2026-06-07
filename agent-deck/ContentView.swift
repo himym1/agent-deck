@@ -1586,11 +1586,9 @@ struct ContentView: View {
         case .doctor:
             DoctorScreen(viewModel: viewModel)
         #if DEBUG
-        case .debugOnboarding:
-            WelcomeOnboardingSheet(viewModel: viewModel, onFinish: { _ in }, forceNothingInstalledForDebug: true)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        case .debugDoctorEmpty:
-            DoctorScreen(viewModel: viewModel, simulation: .nothingInstalled)
+        case .debugTranscript:
+            TranscriptDebugScreen()
+                .environment(viewModel)
         #endif
         }
     }

@@ -735,7 +735,6 @@ struct PiAgentTypingIndicator: View {
                     .fill(Color.secondary.opacity(isActive ? 0.78 : 0.22))
                     .frame(width: 5, height: 5)
                     .scaleEffect(reduceMotion ? 1 : (isActive ? 1.18 : 0.86))
-                    .offset(y: reduceMotion ? 0 : (isActive ? -2 : 0))
             }
         }
         .padding(.vertical, 5)

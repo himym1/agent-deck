@@ -692,7 +692,16 @@ final class NativeFlowLayoutView: NSView {
         items = views
         for view in views {
             // We position items by frame, so opt them out of Auto Layout here
-            // (their own internal subviews still lay out automatically).
+            // (their own internal subviews still lay out automatically). Seed the
+            // frame to the item's content fitting size *before* flipping
+            // `translatesAutoresizingMaskIntoConstraints`: flipping it while the
+            // frame is still `.zero` generates `width == 0` / `height == 0`
+            // autoresizing constraints that conflict with the item's own content
+            // min-width (icon + labels), which AppKit logs-and-breaks on every
+            // layout pass — the scroll-time constraint storm. A content-sized seed
+            // makes the autoresizing constraints agree with the content.
+            view.translatesAutoresizingMaskIntoConstraints = false
+            view.frame = CGRect(origin: .zero, size: view.fittingSize)
             view.translatesAutoresizingMaskIntoConstraints = true
             addSubview(view)
         }

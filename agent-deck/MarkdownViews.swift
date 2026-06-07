@@ -17,24 +17,49 @@ private enum MarkdownSemanticStyler {
         ThemeManager.shared.markdownHighlightingEnabled ? AppTheme.ns(AppTheme.markdownListMarker) : .secondaryLabelColor
     }
 
+    static var listEnumerationColor: NSColor {
+        ThemeManager.shared.markdownHighlightingEnabled ? AppTheme.ns(AppTheme.markdownListEnumeration) : .secondaryLabelColor
+    }
+
+    static var quoteColor: NSColor {
+        ThemeManager.shared.markdownHighlightingEnabled ? AppTheme.ns(AppTheme.markdownQuote) : .secondaryLabelColor
+    }
+
+    static var quoteBarColor: NSColor {
+        ThemeManager.shared.markdownHighlightingEnabled ? AppTheme.ns(AppTheme.markdownQuoteBar) : AppTheme.nsQuoteBarFill
+    }
+
+    static var codeBlockColor: NSColor {
+        ThemeManager.shared.markdownHighlightingEnabled ? AppTheme.ns(AppTheme.markdownCode) : .labelColor
+    }
+
+    static var quoteFont: NSFont {
+        let body = NSFont.preferredFont(forTextStyle: .body)
+        guard ThemeManager.shared.markdownHighlightingEnabled else { return body }
+        return NSFontManager.shared.convert(body, toHaveTrait: .italicFontMask)
+    }
+
     static func applyInlineColors(to attributed: NSMutableAttributedString) {
         guard ThemeManager.shared.markdownHighlightingEnabled, attributed.length > 0 else { return }
         let fullRange = NSRange(location: 0, length: attributed.length)
-        var updates: [(NSRange, NSColor)] = []
+        var updates: [(NSRange, NSColor, Bool)] = []
         attributed.enumerateAttributes(in: fullRange) { attributes, range, _ in
             let intent = (attributes[presentationIntentKey] as? NSNumber)?.intValue ?? 0
             if intent & code != 0 {
-                updates.append((range, AppTheme.ns(AppTheme.markdownCode)))
+                updates.append((range, AppTheme.ns(AppTheme.markdownCode), false))
             } else if intent & strong != 0 {
-                updates.append((range, AppTheme.ns(AppTheme.markdownStrong)))
+                updates.append((range, AppTheme.ns(AppTheme.markdownStrong), false))
             } else if intent & emphasis != 0 {
-                updates.append((range, AppTheme.ns(AppTheme.markdownHeading)))
+                updates.append((range, AppTheme.ns(AppTheme.markdownEmphasis), false))
             } else if attributes[.link] != nil {
-                updates.append((range, AppTheme.ns(AppTheme.markdownLink)))
+                updates.append((range, AppTheme.ns(AppTheme.markdownLinkText), true))
             }
         }
-        for (range, color) in updates {
+        for (range, color, underline) in updates {
             attributed.addAttribute(.foregroundColor, value: color, range: range)
+            if underline {
+                attributed.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range)
+            }
         }
     }
 }
@@ -503,70 +528,34 @@ final class NativeMarkdownTextContainer: NSView {
         // height stabilizes (covers a too-short first measure after a rebuild).
         heightCache = nil
         settleMeasurementsRemaining = Self.settleMeasurementBudget
-        // Try the cheap streaming-friendly path first: when only the last block's text
-        // changed (and its kind stayed the same), update that block's text view in place
-        // instead of rebuilding the whole NSStackView. This is the hot path for every
-        // assistant/thinking flush — without it each token costs a full per-block view
-        // tear-down + recreation.
-        if !styleChanged, let previous, tryIncrementalUpdate(from: previous, to: document) {
+        // Streaming hot path: when the frontmatter is unchanged and our block views
+        // still line up with the previous document, reconcile in place — reuse every
+        // same-shape block view, restyle only the blocks whose text changed, and
+        // append/drop the churning tail (the StreamingMarkdownBalancer strips and
+        // re-adds half-typed trailing markers every flush, which `reconcileBlocks`
+        // absorbs as a trailing add/drop). Crucially this does NOT reset
+        // `lastFullLayoutWidth`, so the per-tick `measureHeight` stays on the cheap
+        // single pass: a full `rebuild` resets it and forces the cold double pass
+        // every tick, which both costs more AND can report a slightly different
+        // height each pass — the visible streaming "wobble".
+        let viewOffset = document.frontmatter == nil ? 0 : 1
+        if !styleChanged, let previous,
+           previous.frontmatter == document.frontmatter,
+           stackView.arrangedSubviews.count == viewOffset + previous.blocks.count {
+            reconcileBlocks(old: previous.blocks, new: document.blocks, frontOffset: viewOffset)
             scheduleHeightMeasurement()
             return
         }
+        // Only the genuinely unexpected case is worth a diagnostic: we had a
+        // previous document at the same style revision (so a reconcile *should*
+        // have been possible) but the frontmatter or arranged-view invariant
+        // didn't hold. A `styleChanged` rebuild (theme/highlight toggle) and a
+        // first build (fresh recycled container) are expected and stay silent.
+        if !styleChanged, previous != nil {
+            Self.logIncrementalBail("frontmatterOrViewCount")
+        }
         rebuild(from: styleChanged ? nil : previous, to: document)
         scheduleHeightMeasurement()
-    }
-
-    private func tryIncrementalUpdate(from previous: CachedMarkdownDocument, to next: CachedMarkdownDocument) -> Bool {
-        guard previous.frontmatter == next.frontmatter else { Self.logIncrementalBail("frontmatter"); return false }
-        let oldBlocks = previous.blocks
-        let newBlocks = next.blocks
-        // Only handle non-shrinking growth — the streaming case. A shorter document
-        // (rare: edit/merge) falls through to a full rebuild.
-        guard !oldBlocks.isEmpty, newBlocks.count >= oldBlocks.count else {
-            Self.logIncrementalBail(oldBlocks.isEmpty ? "emptyOld" : "shrink(\(oldBlocks.count)->\(newBlocks.count))")
-            return false
-        }
-
-        // All old blocks except the last must match the new prefix byte-for-byte.
-        let lastIndex = oldBlocks.count - 1
-        for i in 0..<lastIndex where oldBlocks[i] != newBlocks[i] {
-            Self.logIncrementalBail("prefix@\(i)/\(oldBlocks.count)")
-            return false
-        }
-
-        let viewOffset = next.frontmatter != nil ? 1 : 0
-        // The arranged subviews must line up with the old block count, or our indices
-        // are wrong — bail to a full rebuild rather than corrupt the stack.
-        guard stackView.arrangedSubviews.count == viewOffset + oldBlocks.count else {
-            Self.logIncrementalBail("viewCount(\(stackView.arrangedSubviews.count)!=\(viewOffset + oldBlocks.count))")
-            return false
-        }
-
-        // The old last block may have grown (more text streamed into the same block).
-        // Update it in place when only its text changed; a shape change forces rebuild.
-        if oldBlocks[lastIndex] != newBlocks[lastIndex] {
-            guard Self.sameKindShape(oldBlocks[lastIndex].kind, newBlocks[lastIndex].kind) else {
-                Self.logIncrementalBail("shape")
-                return false
-            }
-            let viewIndex = viewOffset + lastIndex
-            guard let textView = Self.firstTextView(in: stackView.arrangedSubviews[viewIndex]) else {
-                Self.logIncrementalBail("noTextView")
-                return false
-            }
-            Self.updateTextView(textView, with: newBlocks[lastIndex].kind)
-        }
-
-        // Append views for brand-new trailing blocks — a new paragraph / list item /
-        // code line appearing as the stream continues. This is what turns a long
-        // streaming message from O(N) view tear-down per new block into O(1): the
-        // existing block views are left untouched and only the new ones are built.
-        if newBlocks.count > oldBlocks.count {
-            for i in oldBlocks.count..<newBlocks.count {
-                stackView.addArrangedSubview(Self.view(for: newBlocks[i]))
-            }
-        }
-        return true
     }
 
 #if DEBUG
@@ -617,16 +606,32 @@ final class NativeMarkdownTextContainer: NSView {
             // view, so rebuild the full line (not just the body) on reuse/streaming.
             attr = listAttributedString(marker: bulletMarker(for: indentLevel), text: text, indentLevel: indentLevel, markerWidth: 18)
         case let .numbered(number, text, indentLevel):
-            attr = listAttributedString(marker: "\(number).", text: text, indentLevel: indentLevel, markerWidth: 22)
+            attr = listAttributedString(
+                marker: "\(number).",
+                text: text,
+                indentLevel: indentLevel,
+                markerWidth: 22,
+                markerColor: MarkdownSemanticStyler.listEnumerationColor
+            )
         default:
             let (font, color, parseInline) = textStyling(for: kind)
             attr = attributedString(bodyText(from: kind), font: font, color: color, parseInlineMarkdown: parseInline)
         }
+        let decorated = NSMutableAttributedString(attributedString: attr)
+        if case .heading(level: 1, _) = kind,
+           ThemeManager.shared.markdownHighlightingEnabled,
+           decorated.length > 0 {
+            decorated.addAttribute(
+                .underlineStyle,
+                value: NSUnderlineStyle.single.rawValue,
+                range: NSRange(location: 0, length: decorated.length)
+            )
+        }
         if let autoSizing = textView as? AutoSizingMarkdownTextView {
-            autoSizing.applyContent(attr)
+            autoSizing.applyContent(decorated)
         } else if let storage = textView.textStorage {
             storage.beginEditing()
-            storage.setAttributedString(attr)
+            storage.setAttributedString(decorated)
             storage.endEditing()
             textView.invalidateIntrinsicContentSize()
         }
@@ -655,11 +660,11 @@ final class NativeMarkdownTextContainer: NSView {
         case .paragraph, .bullet, .numbered:
             return (NSFont.preferredFont(forTextStyle: .body), .labelColor, true)
         case .quote:
-            return (NSFont.preferredFont(forTextStyle: .body), .secondaryLabelColor, true)
+            return (MarkdownSemanticStyler.quoteFont, MarkdownSemanticStyler.quoteColor, true)
         case .code:
             // Keep in sync with the code font in `view(for:)` — one style below body.
             let size = NSFont.preferredFont(forTextStyle: .callout).pointSize
-            return (.monospacedSystemFont(ofSize: size, weight: .regular), .labelColor, false)
+            return (.monospacedSystemFont(ofSize: size, weight: .regular), MarkdownSemanticStyler.codeBlockColor, false)
         }
     }
 
@@ -933,6 +938,13 @@ final class NativeMarkdownTextContainer: NSView {
                 baseFont = NSFont.preferredFont(forTextStyle: .headline)
             }
             let view = textView(text, font: baseFont, color: MarkdownSemanticStyler.headingColor)
+            if level == 1, ThemeManager.shared.markdownHighlightingEnabled, let storage = view.textStorage {
+                storage.addAttribute(
+                    .underlineStyle,
+                    value: NSUnderlineStyle.single.rawValue,
+                    range: NSRange(location: 0, length: storage.length)
+                )
+            }
             view.setContentHuggingPriority(.required, for: .vertical)
             return paddedBlock(view, padding: NSEdgeInsets(top: level <= 2 ? 4 : 2, left: 0, bottom: 0, right: 0))
         case let .paragraph(text):
@@ -940,7 +952,13 @@ final class NativeMarkdownTextContainer: NSView {
         case let .bullet(text, indentLevel):
             return listRow(marker: bulletMarker(for: indentLevel), text: text, indentLevel: indentLevel, markerWidth: 18)
         case let .numbered(number, text, indentLevel):
-            return listRow(marker: "\(number).", text: text, indentLevel: indentLevel, markerWidth: 22)
+            return listRow(
+                marker: "\(number).",
+                text: text,
+                indentLevel: indentLevel,
+                markerWidth: 22,
+                markerColor: MarkdownSemanticStyler.listEnumerationColor
+            )
         case let .quote(text):
             return quoteBlock(text)
         case let .code(text):
@@ -949,7 +967,7 @@ final class NativeMarkdownTextContainer: NSView {
                 // Code renders one text style below body — the GitHub/Notion
                 // convention. Reads as code and fits more per line (fewer wraps).
                 font: .monospacedSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize, weight: .regular),
-                color: .labelColor,
+                color: MarkdownSemanticStyler.codeBlockColor,
                 fill: AppTheme.nsCodeBlockFill,
                 border: AppTheme.nsCodeBlockBorder,
                 cornerRadius: AppTheme.Chat.subCardCornerRadius,
@@ -963,7 +981,13 @@ final class NativeMarkdownTextContainer: NSView {
     // Each nesting level shifts the whole item right by this much.
     private static let listIndentPerLevel: CGFloat = 22
 
-    private static func listRow(marker: String, text: String, indentLevel: Int, markerWidth: CGFloat) -> NSView {
+    private static func listRow(
+        marker: String,
+        text: String,
+        indentLevel: Int,
+        markerWidth: CGFloat,
+        markerColor: NSColor = MarkdownSemanticStyler.listMarkerColor
+    ) -> NSView {
         // A list item is a SINGLE text view: `marker` + tab + body in one attributed
         // string with a hanging-indent paragraph style. Because the marker and the
         // text are one text run on one line, they share a baseline structurally —
@@ -971,14 +995,28 @@ final class NativeMarkdownTextContainer: NSView {
         // text (headIndent), not under the marker. This is the standard TextKit list
         // layout and removes the baseline/constraint guesswork entirely.
         let tv = textView("", font: NSFont.preferredFont(forTextStyle: .body), color: .labelColor)
-        tv.applyContent(listAttributedString(marker: marker, text: text, indentLevel: indentLevel, markerWidth: markerWidth))
+        tv.applyContent(
+            listAttributedString(
+                marker: marker,
+                text: text,
+                indentLevel: indentLevel,
+                markerWidth: markerWidth,
+                markerColor: markerColor
+            )
+        )
         return tv
     }
 
     /// Build `marker` + tab + body as one attributed string with a hanging indent so
     /// the marker sits at `indentLevel * listIndentPerLevel` and the text (and any
     /// wrapped lines) align at `+ markerWidth + gap`.
-    private static func listAttributedString(marker: String, text: String, indentLevel: Int, markerWidth: CGFloat) -> NSAttributedString {
+    private static func listAttributedString(
+        marker: String,
+        text: String,
+        indentLevel: Int,
+        markerWidth: CGFloat,
+        markerColor: NSColor = MarkdownSemanticStyler.listMarkerColor
+    ) -> NSAttributedString {
         let bodyFont = NSFont.preferredFont(forTextStyle: .body)
         // Numbered lists use monospaced digits in SwiftUI (`.body.monospacedDigit().weight(.semibold)`).
         let isNumberedMarker = marker.last == "." && marker.dropLast().allSatisfy(\.isNumber)
@@ -988,7 +1026,7 @@ final class NativeMarkdownTextContainer: NSView {
 
         let result = NSMutableAttributedString(
             string: marker,
-            attributes: [.font: markerFont, .foregroundColor: MarkdownSemanticStyler.listMarkerColor]
+            attributes: [.font: markerFont, .foregroundColor: markerColor]
         )
         result.append(NSAttributedString(string: "\t", attributes: [.font: bodyFont]))
         result.append(attributedString(text, font: bodyFont, color: .labelColor, parseInlineMarkdown: true))
@@ -1013,11 +1051,15 @@ final class NativeMarkdownTextContainer: NSView {
         // between the bar and the body. Native: 3 pt bar + 9 pt spacing = 12 pt total.
         row.spacing = 9
 
-        let bar = DynamicFillView(fill: AppTheme.nsQuoteBarFill)
+        let bar = DynamicFillView(fill: MarkdownSemanticStyler.quoteBarColor)
         bar.layer?.cornerRadius = AppTheme.Chat.quoteBarCornerRadius
         bar.widthAnchor.constraint(equalToConstant: 3).isActive = true
 
-        let body = textView(text, font: NSFont.preferredFont(forTextStyle: .body), color: .secondaryLabelColor)
+        let body = textView(
+            text,
+            font: MarkdownSemanticStyler.quoteFont,
+            color: MarkdownSemanticStyler.quoteColor
+        )
         row.addArrangedSubview(bar)
         row.addArrangedSubview(body)
         return row
@@ -1123,7 +1165,32 @@ final class NativeMarkdownTextContainer: NSView {
         return textView
     }
 
+    // Parsed-block memo. Building an attributed block runs `AttributedString(markdown:)`
+    // + base-font enumeration + `MarkdownSemanticStyler.applyInlineColors` (the cost the
+    // Appearance "markdown highlighting" setting amplifies). The result is a pure function
+    // of (source, font, color, parseInline, theme revision), so identical blocks — a
+    // recycled cell scrolling back over a message, a static doc re-rendered in
+    // issues/memory/subagent — reuse the parse instead of redoing it. Returned values are
+    // immutable and every caller copies before mutating, so sharing is safe. Keyed on the
+    // theme revision so toggling highlighting / switching theme never serves stale colors.
+    private static var attributedStringCache: [String: NSAttributedString] = [:]
+    private static var attributedStringCacheOrder: [String] = []
+    private static let attributedStringCacheLimit = 512
+
     private static func attributedString(_ source: String, font: NSFont, color: NSColor, parseInlineMarkdown: Bool) -> NSAttributedString {
+        let key = "\(ThemeManager.shared.revision)|\(parseInlineMarkdown ? 1 : 0)|\(font.fontName):\(font.pointSize)|\(color.description)|\(source)"
+        if let cached = attributedStringCache[key] { return cached }
+        let result = buildAttributedString(source, font: font, color: color, parseInlineMarkdown: parseInlineMarkdown)
+        attributedStringCache[key] = result
+        attributedStringCacheOrder.append(key)
+        if attributedStringCacheOrder.count > attributedStringCacheLimit {
+            let evict = attributedStringCacheOrder.removeFirst()
+            attributedStringCache.removeValue(forKey: evict)
+        }
+        return result
+    }
+
+    private static func buildAttributedString(_ source: String, font: NSFont, color: NSColor, parseInlineMarkdown: Bool) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         let base: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color, .paragraphStyle: paragraph]
         guard parseInlineMarkdown,
@@ -1767,13 +1834,33 @@ private struct MarkdownWebView: NSViewRepresentable {
         }
     }
 
-    /// Markdown links pick up the active theme accent. The rest of the palette
-    /// mirrors the non-themed native code/quote surfaces and stays fixed.
+    /// The base stylesheet is the pre-highlighting appearance. Enabling Markdown
+    /// highlighting appends semantic overrides derived from the active app theme.
     private static var css: String {
-        cssTemplate.replacingOccurrences(
+        let base = cssTemplate.replacingOccurrences(
             of: "__ACCENT_HEX__",
             with: ThemeManager.shared.activeTheme.accent.hexString
         )
+        guard ThemeManager.shared.markdownHighlightingEnabled else { return base }
+        let theme = ThemeManager.shared.activeTheme
+        return base + """
+
+        h1, h2, h3, h4, h5, h6 { color: \(theme.assistant.hexString); }
+        h1 { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.14em; }
+        strong, b { color: \(theme.tool.hexString); }
+        em, i { color: \(theme.tool.lightened(by: 0.16).hexString); }
+        a, a:hover { color: \(theme.assistant.hexString); text-decoration: underline; }
+        code { color: \(theme.diffAdded.hexString) !important; }
+        pre code { color: \(theme.diffAdded.hexString) !important; }
+        blockquote {
+            color: \(theme.tool.hexString);
+            border-left-color: \(theme.tool.hexString);
+        }
+        ul li::marker { color: \(theme.accent.hexString); }
+        ol li::marker { color: \(theme.assistant.hexString); font-weight: 600; }
+        hr { border-color: \(theme.stroke.hexString); }
+        figcaption { color: \(theme.assistant.hexString); }
+        """
     }
 
     private static let cssTemplate = """
@@ -2167,11 +2254,19 @@ private enum TranscriptAttributedStringCache {
         // contributes the inter-block gap; the heading itself adds this extra top.
         paragraph.paragraphSpacingBefore = isFirst ? 0 : (level <= 2 ? 4 : 2)
         paragraph.paragraphSpacing = 0
-        return inlineAttributedString(for: text, baseAttributes: [
+        let result = NSMutableAttributedString(attributedString: inlineAttributedString(for: text, baseAttributes: [
             .font: baseFont,
             .foregroundColor: MarkdownSemanticStyler.headingColor,
             .paragraphStyle: paragraph
-        ])
+        ]))
+        if level == 1, ThemeManager.shared.markdownHighlightingEnabled, result.length > 0 {
+            result.addAttribute(
+                .underlineStyle,
+                value: NSUnderlineStyle.single.rawValue,
+                range: NSRange(location: 0, length: result.length)
+            )
+        }
+        return result
     }
 
     private static func paragraphString(_ text: String) -> NSAttributedString {
@@ -2231,7 +2326,7 @@ private enum TranscriptAttributedStringCache {
         let monoNumberFont = NSFont.monospacedDigitSystemFont(ofSize: baseFont.pointSize, weight: .semibold)
         let numberAttrs: [NSAttributedString.Key: Any] = [
             .font: monoNumberFont,
-            .foregroundColor: MarkdownSemanticStyler.listMarkerColor,
+            .foregroundColor: MarkdownSemanticStyler.listEnumerationColor,
             .paragraphStyle: paragraph
         ]
         let bodyAttrs: [NSAttributedString.Key: Any] = [
@@ -2247,14 +2342,14 @@ private enum TranscriptAttributedStringCache {
 
     private static func quoteString(_ text: String) -> NSAttributedString {
         // The cell adds the leading 3 pt vertical bar overlay; the body itself is
-        // muted-colour text with 12 pt of leading text padding to clear the bar.
+        // themed italic text with 12 pt of leading text padding to clear the bar.
         let paragraph = NSMutableParagraphStyle()
         paragraph.firstLineHeadIndent = 0
         paragraph.headIndent = 0
         paragraph.paragraphSpacing = 0
         return inlineAttributedString(for: text, baseAttributes: [
-            .font: NSFont.preferredFont(forTextStyle: .body),
-            .foregroundColor: NSColor.secondaryLabelColor,
+            .font: MarkdownSemanticStyler.quoteFont,
+            .foregroundColor: MarkdownSemanticStyler.quoteColor,
             .paragraphStyle: paragraph
         ])
     }
@@ -2269,7 +2364,7 @@ private enum TranscriptAttributedStringCache {
         let bodyFontSize = NSFont.preferredFont(forTextStyle: .body).pointSize
         return NSAttributedString(string: text, attributes: [
             .font: NSFont.monospacedSystemFont(ofSize: bodyFontSize, weight: .regular),
-            .foregroundColor: NSColor.labelColor,
+            .foregroundColor: MarkdownSemanticStyler.codeBlockColor,
             .paragraphStyle: paragraph
         ])
     }
