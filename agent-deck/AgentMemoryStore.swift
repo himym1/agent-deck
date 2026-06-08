@@ -26,11 +26,24 @@ final class AgentMemoryStore: ObservableObject {
     /// cache derived layouts (e.g. `MemoryScreen.cachedFiltered`) — comparing
     /// the full `records` array would diff every record on every change.
     @Published private(set) var revision: Int = 0
+    /// Live status of the on-device recall model, for the Memory view. Driven by
+    /// `resolveEmbedder()` on launch prewarm, on enable, and on first recall.
+    @Published private(set) var embeddingStatus: AgentMemoryEmbeddingStatus = .unknown
 
     private let fileManager: FileManager
     private let rootURL: URL
     private let scanner = AgentMemorySecretScanner()
-    private let searchIndex: AgentMemorySQLiteSearchIndex
+
+    /// Per-project semantic vectors, treated as a rebuildable cache. Loaded from the
+    /// project's `embeddings.json` on first recall and refreshed in place as records
+    /// change (staleness detected by content hash, not timestamp).
+    private var embeddingCache: [String: ProjectEmbeddingIndex] = [:]
+
+    /// Cosine-similarity floor for recall. Vectors are L2-normalized, so this is a
+    /// dot product in [-1, 1]; below it a memory is treated as unrelated and not
+    /// injected — this is the "abstain when nothing fits" behavior that replaces the
+    /// old keyword floor. Tune against the real corpus.
+    static let similarityThreshold: Float = 0.30
 
     init(rootURL: URL? = nil, fileManager: FileManager = .default) {
         self.fileManager = fileManager
@@ -42,7 +55,6 @@ final class AgentMemoryStore: ObservableObject {
                 .appendingPathComponent(AppBrand.displayName, isDirectory: true)
                 .appendingPathComponent("Memory", isDirectory: true)
         }
-        searchIndex = AgentMemorySQLiteSearchIndex(fileManager: fileManager)
         // Async load so AppViewModel.init returns immediately. Views observe
         // `records` and animate the empty→filled transition on .onChange.
         let rootURL = self.rootURL
@@ -115,7 +127,6 @@ final class AgentMemoryStore: ObservableObject {
         records.insert(record, at: 0)
         sortRecords()
         saveManifest(for: projectPath)
-        rebuildIndexInBackground(for: projectPath)
         return record
     }
 
@@ -134,7 +145,6 @@ final class AgentMemoryStore: ObservableObject {
         sortRecords()
         if let projectPath = record.projectPath {
             saveManifest(for: projectPath)
-            rebuildIndexInBackground(for: projectPath)
         }
     }
 
@@ -144,7 +154,6 @@ final class AgentMemoryStore: ObservableObject {
         records[index].updatedAt = Date()
         if let projectPath = records[index].projectPath {
             saveManifest(for: projectPath)
-            rebuildIndexInBackground(for: projectPath)
         }
     }
 
@@ -154,7 +163,6 @@ final class AgentMemoryStore: ObservableObject {
         try? fileManager.removeItem(at: URL(fileURLWithPath: record.filePath))
         if let projectPath = record.projectPath {
             saveManifest(for: projectPath)
-            rebuildIndexInBackground(for: projectPath)
         }
     }
 
@@ -165,29 +173,100 @@ final class AgentMemoryStore: ObservableObject {
 
     func retrieve(projectPath: String?, query: String, maxItems: Int = 5, maxCharacters: Int = 6_000) async -> AgentMemoryRetrieval? {
         guard let projectPath else { return nil }
-        let projectRecords = records(projectPath: projectPath).filter(\.isInjectable)
-        guard !projectRecords.isEmpty else { return nil }
+        let injectable = records(projectPath: projectPath).filter(\.isInjectable)
+        guard !injectable.isEmpty else { return nil }
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty else { return nil }
 
-        let projectURL = projectDirectoryURL(projectPath: projectPath)
-        let searchIndex = self.searchIndex
-        let searchOutcome = await Task.detached(priority: .userInitiated) {
-            searchIndex.searchIDs(projectDirectoryURL: projectURL, query: query, limit: maxItems)
-        }.value
-        if let error = searchOutcome.error { lastError = error }
+        // No fallback: if the on-device model isn't ready (first run still fetching
+        // the asset, or offline before it is cached) recall stays empty this turn.
+        guard case .ready(let model) = await resolveEmbedder() else { return nil }
 
-        let candidates: [AgentMemoryRecord]
-        if let ids = searchOutcome.ids, !ids.isEmpty {
-            let byID = Dictionary(uniqueKeysWithValues: projectRecords.map { ($0.id, $0) })
-            candidates = ids.compactMap { byID[$0] }
-        } else {
-            // Fire-and-forget rebuild so the next retrieve sees the latest docs;
-            // the keyword fallback below covers this call.
-            rebuildIndexInBackground(for: projectPath)
-            candidates = keywordCandidates(projectRecords: projectRecords, query: query, maxItems: maxItems)
+        // Reuse persisted vectors when the model matches; the embedder recomputes any
+        // whose content hash changed and prunes ids that are gone, so this is also the
+        // backfill path.
+        let existing = await loadedEmbeddingIndex(for: projectPath)
+        let cached = (existing?.model == model) ? (existing?.vectors ?? [:]) : [:]
+        let inputs = injectable.map { record -> EmbeddingInput in
+            let text = record.title + "\n" + record.summary
+            return EmbeddingInput(id: record.id, text: text, hash: Self.contentHash(text))
         }
+        guard let result = await AgentMemoryEmbedder.shared.reconcileAndScore(
+            query: trimmedQuery,
+            inputs: inputs,
+            cached: cached,
+            threshold: Self.similarityThreshold
+        ) else { return nil }
 
-        guard !candidates.isEmpty else { return nil }
-        return AgentMemoryRetrieval(records: candidates, prompt: memoryContextPrompt(for: candidates, maxCharacters: maxCharacters))
+        embeddingCache[projectPath] = ProjectEmbeddingIndex(model: model, vectors: result.vectors)
+        persistEmbeddingIndex(embeddingCache[projectPath]!, projectPath: projectPath)
+
+        let ranked = injectable
+            .filter { result.scores[$0.id] != nil }
+            .sorted { lhs, rhs in
+                let lScore = result.scores[lhs.id] ?? 0, rScore = result.scores[rhs.id] ?? 0
+                if lScore != rScore { return lScore > rScore }
+                if lhs.status != rhs.status { return lhs.status == .pinned }
+                return lhs.updatedAt > rhs.updatedAt
+            }
+            .prefix(maxItems)
+        guard !ranked.isEmpty else { return nil }
+        let top = Array(ranked)
+        return AgentMemoryRetrieval(records: top, prompt: memoryContextPrompt(for: top, maxCharacters: maxCharacters))
+    }
+
+    /// Eagerly loads the on-device model (downloading the asset if needed) so the
+    /// first recall isn't empty, and reflects progress in `embeddingStatus`. Called
+    /// from launch prewarm and when memory is switched on; idempotent.
+    func warmEmbedder() {
+        Task { await resolveEmbedder() }
+    }
+
+    /// Resolves model readiness and mirrors it onto the published `embeddingStatus`.
+    /// Sets `.preparing` before awaiting so the Memory view shows a spinner while the
+    /// asset downloads.
+    @discardableResult
+    private func resolveEmbedder() async -> EmbeddingReadiness {
+        let readiness = await AgentMemoryEmbedder.shared.ensureReady()
+        switch readiness {
+        case .ready: embeddingStatus = .ready
+        case .unavailable: embeddingStatus = .unavailable
+        case .unsupported: embeddingStatus = .unsupported
+        }
+        return readiness
+    }
+
+    /// Loads a project's persisted vectors (once) into the in-memory cache.
+    private func loadedEmbeddingIndex(for projectPath: String) async -> ProjectEmbeddingIndex? {
+        if let cached = embeddingCache[projectPath] { return cached }
+        let url = projectDirectoryURL(projectPath: projectPath).appendingPathComponent("embeddings.json")
+        let loaded = await Task.detached(priority: .userInitiated) {
+            (try? Data(contentsOf: url)).flatMap { try? Self.decoder.decode(ProjectEmbeddingIndex.self, from: $0) }
+        }.value
+        if let loaded { embeddingCache[projectPath] = loaded }
+        return loaded
+    }
+
+    /// Persists the vector cache off-main. Derived data: safe to delete, rebuilt on
+    /// the next recall.
+    private func persistEmbeddingIndex(_ index: ProjectEmbeddingIndex, projectPath: String) {
+        let url = projectDirectoryURL(projectPath: projectPath).appendingPathComponent("embeddings.json")
+        let directory = url.deletingLastPathComponent()
+        Task.detached(priority: .utility) {
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            if let data = try? Self.encoder.encode(index) {
+                try? data.write(to: url, options: .atomic)
+            }
+        }
+    }
+
+    /// Stable (run-independent) FNV-1a hash of a memory's embed text, so a cached
+    /// vector can be matched to its source and recomputed only when the text changes.
+    nonisolated static func contentHash(_ text: String) -> String {
+        let value = Data(text.utf8).reduce(UInt64(1469598103934665603)) { hash, byte in
+            (hash ^ UInt64(byte)) &* 1099511628211
+        }
+        return String(value, radix: 16)
     }
 
     /// Renders the fenced `<memory-context>` block for a set of records. Shared by
@@ -266,26 +345,6 @@ final class AgentMemoryStore: ObservableObject {
         // cached-layout consumers (MemoryScreen) get a single .onChange tick
         // per logical write rather than diffing the full records array.
         revision &+= 1
-    }
-
-    /// Rebuilds the FTS index off the main thread so mutating callers
-    /// (`createMemory`, `updateMemory`, `setStatus`, `deleteMemory`, the
-    /// retrieve fallback) don't block on `sqlite3`. The mutator has already
-    /// updated the in-memory `records`, so consumers see the new state
-    /// immediately; the rebuild just keeps the FTS index in sync for the
-    /// next `retrieve(...)`.
-    private func rebuildIndexInBackground(for projectPath: String) {
-        let projectURL = projectDirectoryURL(projectPath: projectPath)
-        let docs = records(projectPath: projectPath).map { record in
-            AgentMemorySearchIndexDocument(record: record, body: document(for: record).body)
-        }
-        let searchIndex = self.searchIndex
-        Task.detached(priority: .utility) { [weak self] in
-            let outcome = searchIndex.rebuild(projectDirectoryURL: projectURL, documents: docs)
-            if let error = outcome.error {
-                await MainActor.run { [weak self] in self?.lastError = error }
-            }
-        }
     }
 
     private func write(document: AgentMemoryDocument, to url: URL) throws {
@@ -371,39 +430,6 @@ final class AgentMemoryStore: ObservableObject {
         }
     }
 
-    private func keywordCandidates(projectRecords: [AgentMemoryRecord], query: String, maxItems: Int) -> [AgentMemoryRecord] {
-        let terms = searchTerms(in: query)
-        return projectRecords
-            .map { record -> (AgentMemoryRecord, Int) in
-                let document = self.document(for: record)
-                return (record, score(record: record, body: document.body, terms: terms))
-            }
-            .filter { $0.1 > 0 || $0.0.status == .pinned }
-            .sorted { lhs, rhs in
-                if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
-                if lhs.0.status != rhs.0.status { return lhs.0.status == .pinned }
-                return lhs.0.updatedAt > rhs.0.updatedAt
-            }
-            .prefix(maxItems)
-            .map(\.0)
-    }
-
-    private func searchTerms(in query: String) -> [String] {
-        query.lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { $0.count >= 3 }
-    }
-
-    private func score(record: AgentMemoryRecord, body: String, terms: [String]) -> Int {
-        let haystack = ([record.title, record.summary, record.kind.displayName] + record.tags + [body])
-            .joined(separator: " ")
-            .lowercased()
-        guard !terms.isEmpty else { return record.status == .pinned ? 2 : 1 }
-        return terms.reduce(0) { partial, term in
-            partial + (haystack.contains(term) ? 1 : 0)
-        }
-    }
-
     static func projectID(for path: String) -> String {
         let data = Data(path.standardizedFilePath.utf8)
         let value = data.reduce(UInt64(1469598103934665603)) { hash, byte in
@@ -448,137 +474,12 @@ final class AgentMemoryStore: ObservableObject {
     }()
 }
 
-struct AgentMemorySearchIndexDocument: Sendable {
-    var record: AgentMemoryRecord
-    var body: String
-}
-
-/// Wraps the `sqlite3` CLI subprocess for the per-project FTS5 index.
-/// `@unchecked Sendable` is safe here because the only stored state is a
-/// `FileManager` (whose accessor methods are thread-safe) and a constant
-/// path string; methods are pure given their inputs. All errors are reported
-/// via the outcome structs, so there is no shared mutable state.
-nonisolated final class AgentMemorySQLiteSearchIndex: @unchecked Sendable {
-    private let fileManager: FileManager
-    private let sqlitePath = "/usr/bin/sqlite3"
-
-    struct SearchOutcome: Sendable {
-        let ids: [String]?
-        let error: String?
-    }
-
-    struct RebuildOutcome: Sendable {
-        let success: Bool
-        let error: String?
-    }
-
-    init(fileManager: FileManager = .default) {
-        self.fileManager = fileManager
-    }
-
-    func rebuild(projectDirectoryURL: URL, documents: [AgentMemorySearchIndexDocument]) -> RebuildOutcome {
-        guard fileManager.isExecutableFile(atPath: sqlitePath) else {
-            return RebuildOutcome(success: false, error: "sqlite3 was not found at \(sqlitePath).")
-        }
-        do {
-            try fileManager.createDirectory(at: projectDirectoryURL, withIntermediateDirectories: true)
-        } catch {
-            return RebuildOutcome(success: false, error: error.localizedDescription)
-        }
-        var sql = """
-        CREATE TABLE IF NOT EXISTS memories(id TEXT PRIMARY KEY, status TEXT NOT NULL, updatedAt TEXT NOT NULL);
-        CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(id UNINDEXED, title, summary, body, tags, kind, tokenize='unicode61');
-        DELETE FROM memories;
-        DELETE FROM memory_fts;
-
-        """
-        for document in documents {
-            let record = document.record
-            sql += """
-            INSERT INTO memories(id, status, updatedAt) VALUES ('\(escapeSQL(record.id))', '\(escapeSQL(record.status.rawValue))', '\(escapeSQL(Self.isoDate.string(from: record.updatedAt)))');
-            INSERT INTO memory_fts(id, title, summary, body, tags, kind) VALUES ('\(escapeSQL(record.id))', '\(escapeSQL(record.title))', '\(escapeSQL(record.summary))', '\(escapeSQL(document.body))', '\(escapeSQL(record.tags.joined(separator: " ")))', '\(escapeSQL(record.kind.displayName))');
-
-            """
-        }
-        let outcome = run(sql: sql, databaseURL: databaseURL(projectDirectoryURL: projectDirectoryURL))
-        return RebuildOutcome(success: outcome.output != nil, error: outcome.error)
-    }
-
-    func searchIDs(projectDirectoryURL: URL, query: String, limit: Int) -> SearchOutcome {
-        guard fileManager.isExecutableFile(atPath: sqlitePath) else {
-            return SearchOutcome(ids: nil, error: nil)
-        }
-        let dbURL = databaseURL(projectDirectoryURL: projectDirectoryURL)
-        guard fileManager.fileExists(atPath: dbURL.path) else {
-            return SearchOutcome(ids: nil, error: nil)
-        }
-        let terms = query.lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { $0.count >= 3 }
-            .prefix(8)
-        let sql: String
-        if terms.isEmpty {
-            sql = """
-            SELECT id FROM memories WHERE status IN ('active', 'pinned') ORDER BY CASE status WHEN 'pinned' THEN 0 ELSE 1 END, updatedAt DESC LIMIT \(max(limit, 1));
-            """
-        } else {
-            let matchQuery = terms.map { "\"\(escapeFTS(String($0)))\"" }.joined(separator: " OR ")
-            sql = """
-            SELECT memory_fts.id FROM memory_fts JOIN memories ON memories.id = memory_fts.id
-            WHERE memories.status IN ('active', 'pinned') AND memory_fts MATCH '\(escapeSQL(matchQuery))'
-            ORDER BY CASE memories.status WHEN 'pinned' THEN 0 ELSE 1 END, bm25(memory_fts), memories.updatedAt DESC
-            LIMIT \(max(limit, 1));
-            """
-        }
-        let outcome = run(sql: sql, databaseURL: dbURL)
-        let ids = outcome.output?.split(separator: "\n").map(String.init)
-        return SearchOutcome(ids: ids, error: outcome.error)
-    }
-
-    private func databaseURL(projectDirectoryURL: URL) -> URL {
-        projectDirectoryURL.appendingPathComponent("index.sqlite")
-    }
-
-    private func run(sql: String, databaseURL: URL) -> (output: String?, error: String?) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: sqlitePath)
-        process.arguments = [databaseURL.path]
-        let input = Pipe()
-        let output = Pipe()
-        let error = Pipe()
-        process.standardInput = input
-        process.standardOutput = output
-        process.standardError = error
-        do {
-            try process.run()
-            if let data = sql.data(using: .utf8) {
-                input.fileHandleForWriting.write(data)
-            }
-            input.fileHandleForWriting.closeFile()
-            process.waitUntilExit()
-            let errorText = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            guard process.terminationStatus == 0 else {
-                return (nil, errorText.trimmingCharacters(in: .whitespacesAndNewlines))
-            }
-            let out = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return (out, nil)
-        } catch {
-            return (nil, error.localizedDescription)
-        }
-    }
-
-    private func escapeSQL(_ value: String) -> String {
-        value.replacingOccurrences(of: "'", with: "''")
-    }
-
-    private func escapeFTS(_ value: String) -> String {
-        value.replacingOccurrences(of: "\"", with: "\"\"")
-    }
-
-    // ISO8601DateFormatter is documented thread-safe; the `nonisolated(unsafe)`
-    // is just to silence Swift 6's blanket Sendable check on static storage.
-    private nonisolated(unsafe) static let isoDate: ISO8601DateFormatter = ISO8601DateFormatter()
+/// A project's persisted semantic vectors plus the identifier of the model that
+/// produced them. Derived data: if `model` no longer matches the loaded embedding
+/// model (e.g. the OS shipped a new one), the cache is discarded and rebuilt.
+nonisolated struct ProjectEmbeddingIndex: Codable, Sendable {
+    var model: String
+    var vectors: [String: MemoryVectorEntry]
 }
 
 struct AgentMemorySecretScanner {

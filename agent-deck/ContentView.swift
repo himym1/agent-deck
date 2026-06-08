@@ -2,6 +2,13 @@ import AppKit
 import SwiftUI
 
 
+/// Shared animation for the sidebar's Resources ↔ Coding Agent push. A gentle
+/// spring (slightly over-damped so it settles without overshoot) reads as a
+/// crisp navigation push rather than a flat cross-fade.
+enum SidebarTransition {
+    static let curve: Animation = .spring(response: 0.34, dampingFraction: 0.86)
+}
+
 extension View {
     func bottomEdgeFade(height: CGFloat = 36) -> some View {
         mask {
@@ -516,63 +523,34 @@ struct ContentView: View {
     @ViewBuilder
     private var mainContent: some View {
         let warnings = sidebarWarningSnapshot
+        let isAgentSidebar = viewModel.selectedSidebarItem == .agent
         NavigationSplitView(columnVisibility: $navigationColumnVisibility) {
-            VStack(spacing: 0) {
-                HStack(alignment: .center, spacing: 12) {
-                    ForEach(AppBrand.titleWords, id: \.self) { word in
-                        Text(word)
-                            .font(AppFonts.kemcoPixelBold(size: 18))
-                            .foregroundStyle(.primary)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 18)
+            // Both sidebars stay permanently mounted in a ZStack so switching is a
+            // pure opacity/offset animation over already-laid-out trees — no
+            // teardown/rebuild (which re-ran the session caches' onAppear mid-
+            // animation) and no cross-fade rendering two heavy trees from scratch.
+            // The hidden layer doesn't re-layout (SessionListContent is .equatable).
+            ZStack(alignment: .topLeading) {
+                resourcesSidebar(warnings: warnings)
+                    .opacity(isAgentSidebar ? 0 : 1)
+                    // Eases out to the left as the agent sessions push in.
+                    .offset(x: isAgentSidebar ? -32 : 0)
+                    .allowsHitTesting(!isAgentSidebar)
 
-                sidebarSectionsList(warnings: warnings)
-
-                Spacer(minLength: 0)
-
-                SidebarProjectGitHubCard(
+                PiAgentSidebarSessionsView(
                     viewModel: viewModel,
-                    projects: filteredProjects,
-                    selectedProject: selectedProject,
-                    selectedProjectPath: viewModel.selectedProjectPath,
-                    filterText: $projectFilterText,
-                    isSearchDebouncing: projectFilterText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != debouncedProjectFilterText,
-                    onSelectProject: { viewModel.setSelectedProject($0?.url) },
-                    onChooseProject: { viewModel.chooseProjectRoot() }
+                    store: viewModel.piAgentSessionStore,
+                    sessionSearchText: $piAgentSessionSearchText,
+                    isActive: isAgentSidebar,
+                    onBackToResources: { viewModel.selectedSidebarItem = .projects }
                 )
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-
-                VStack(spacing: 0) {
-                    Divider()
-                        .opacity(0.7)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 10)
-
-                    SidebarBottomBar(viewModel: viewModel)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 10)
-                        .padding(.bottom, 14)
-                }
-                .background {
-                    LinearGradient(
-                        stops: [
-                            .init(color: .clear, location: 0),
-                            .init(color: AppTheme.brandAccent.opacity(0.22), location: 1)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .opacity(viewModel.selectedSidebarItem == .agent ? 1 : 0)
-                    .allowsHitTesting(false)
-                    .animation(.easeInOut(duration: 0.25), value: viewModel.selectedSidebarItem)
-                }
+                .opacity(isAgentSidebar ? 1 : 0)
+                // Sits just off the trailing edge when inactive, slides home on enter.
+                .offset(x: isAgentSidebar ? 0 : 32)
+                .allowsHitTesting(isAgentSidebar)
             }
-            .frame(minWidth: 240)
+            .animation(SidebarTransition.curve, value: isAgentSidebar)
+            .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.clear, ignoresSafeAreaEdges: .all)
             .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 320)
             .perfScene("Sidebar")
@@ -580,7 +558,7 @@ struct ContentView: View {
             detailSplitView
                 .perfScene("Detail")
         }
-        .frame(minWidth: 1180, minHeight: 700)
+        .frame(minWidth: 900, minHeight: 640)
         .navigationTitle(toolbarTitle)
         // Theme the window canvas itself — the transcript and detail scroll views are
         // transparent, so without this they'd show the system (gray) window background
@@ -683,6 +661,56 @@ struct ContentView: View {
                 }
             )
         }
+    }
+
+    /// The default ("Resources") sidebar: brand title, section list, project
+    /// picker and bottom bar. Extracted so it can live as a permanently-mounted
+    /// ZStack layer alongside the agent sessions sidebar (see `mainContent`).
+    @ViewBuilder
+    private func resourcesSidebar(warnings: [SidebarItem: Bool]) -> some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                ForEach(AppBrand.titleWords, id: \.self) { word in
+                    Text(word)
+                        .font(AppFonts.kemcoPixelBold(size: 18))
+                        .foregroundStyle(.primary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 18)
+
+            sidebarSectionsList(warnings: warnings)
+
+            Spacer(minLength: 0)
+
+            SidebarProjectGitHubCard(
+                viewModel: viewModel,
+                projects: filteredProjects,
+                selectedProject: selectedProject,
+                selectedProjectPath: viewModel.selectedProjectPath,
+                filterText: $projectFilterText,
+                isSearchDebouncing: projectFilterText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != debouncedProjectFilterText,
+                onSelectProject: { viewModel.setSelectedProject($0?.url) },
+                onChooseProject: { viewModel.chooseProjectRoot() }
+            )
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+
+            VStack(spacing: 0) {
+                Divider()
+                    .opacity(0.7)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+
+                SidebarBottomBar(viewModel: viewModel)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .padding(.bottom, 14)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private func completeOnboarding() {
@@ -913,7 +941,9 @@ struct ContentView: View {
                     guard let newID,
                           let item = SidebarItem.allCases.first(where: { $0.id == newID })
                     else { return }
-                    viewModel.selectedSidebarItem = item
+                    withAnimation(SidebarTransition.curve) {
+                        viewModel.selectedSidebarItem = item
+                    }
                 }
             )),
             isDisabled: { item in
@@ -1539,6 +1569,31 @@ struct ContentView: View {
 
     @ViewBuilder
     private var detailView: some View {
+        // The Coding Agent screen owns a heavy AppKit transcript table. A plain
+        // `switch` gives each branch a distinct view identity, so leaving `.agent`
+        // and returning would destroy and rebuild the whole NSTableView + every row
+        // (a 150ms+ hang on every entry). Instead it stays permanently mounted in
+        // this ZStack and is just shown/hidden — re-entry is instant. The other
+        // screens are lightweight SwiftUI and build on demand as before.
+        ZStack {
+            if viewModel.selectedSidebarItem != .agent {
+                otherDetailScreens
+            }
+
+            PiAgentScreen(
+                viewModel: viewModel,
+                store: viewModel.piAgentSessionStore,
+                sessionSearchText: $piAgentSessionSearchText,
+                showsSessionsColumn: false,
+                isActive: viewModel.selectedSidebarItem == .agent
+            )
+            .opacity(viewModel.selectedSidebarItem == .agent ? 1 : 0)
+            .allowsHitTesting(viewModel.selectedSidebarItem == .agent)
+        }
+    }
+
+    @ViewBuilder
+    private var otherDetailScreens: some View {
         switch viewModel.selectedSidebarItem {
         case .projects:
             ProjectsScreen(viewModel: viewModel, searchText: $projectSearchText)
@@ -1561,11 +1616,8 @@ struct ContentView: View {
         case .prompts:
             PromptsScreen(viewModel: viewModel, searchText: $promptSearchText)
         case .agent:
-            PiAgentScreen(
-                viewModel: viewModel,
-                store: viewModel.piAgentSessionStore,
-                sessionSearchText: $piAgentSessionSearchText
-            )
+            // Handled by the always-mounted layer above.
+            EmptyView()
         case .models:
             ModelsScreen(viewModel: viewModel)
         case .subagents:

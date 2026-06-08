@@ -98,7 +98,7 @@ struct agent_deckApp: App {
                 // Re-keying on the theme revision forces a uniform repaint.
                 .id(themeManager.revision)
         }
-        .defaultSize(width: 1180, height: 760)
+        .defaultSize(width: 900, height: 640)
         .windowToolbarStyle(.unified)
         .windowResizability(.contentMinSize)
         Settings {

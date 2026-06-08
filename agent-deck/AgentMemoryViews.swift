@@ -91,16 +91,51 @@ struct MemoryScreen: View {
 
     private var overviewCard: some View {
         AppCard(title: "Project Memory", trailing: {
-            Toggle("Memory", isOn: Binding(
+            Toggle("", isOn: Binding(
                 get: { viewModel.appSettings.agentMemoryEnabled },
                 set: { viewModel.setAgentMemoryEnabled($0) }
             ))
+            .labelsHidden()
             .appSwitch()
         }) {
-            Text("Durable project context that agents can recall: architecture notes, decisions, preferences, runbooks, and recurring failures.")
-                .foregroundStyle(AppTheme.mutedText)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Durable project context that agents can recall: architecture notes, decisions, preferences, runbooks, and recurring failures.")
+                    .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if viewModel.appSettings.agentMemoryEnabled {
+                    embeddingStatusRow
+                }
+            }
         }
+        .task {
+            if viewModel.appSettings.agentMemoryEnabled { memoryStore.warmEmbedder() }
+        }
+    }
+
+    /// Recall is semantic, on-device, and fallback-free, so it fails silently when
+    /// the model can't run. This surfaces a line only in those problem states; when
+    /// recall is working there's nothing to show (the model ships with macOS and is
+    /// effectively always ready).
+    @ViewBuilder
+    private var embeddingStatusRow: some View {
+        switch memoryStore.embeddingStatus {
+        case .unavailable:
+            statusLine("exclamationmark.triangle.fill", .orange, "Recall model unavailable (offline?). It will retry automatically.")
+        case .unsupported:
+            statusLine("xmark.circle", .secondary, "On-device recall isn't supported on this Mac.")
+        case .unknown, .ready:
+            EmptyView()
+        }
+    }
+
+    private func statusLine(_ systemImage: String, _ tint: Color, _ text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage).foregroundStyle(tint)
+            Text(text)
+        }
+        .font(.callout)
+        .foregroundStyle(AppTheme.mutedText)
     }
 
     private var libraryCard: some View {

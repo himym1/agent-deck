@@ -148,6 +148,11 @@ private final class PiAgentNativeSupervisorField: NSView {
     private let inputInset: CGFloat = 6
     private let minInputHeight: CGFloat = 76
     private var inputHeightC: NSLayoutConstraint!
+    // Bottom pins linking the visible control to the field's own bottom so the
+    // field height is deterministic (= its content). Without one the field is
+    // vertically ambiguous and the input box overflows under the button row.
+    private var inputBottomC: NSLayoutConstraint!
+    private var infoBottomC: NSLayoutConstraint!
 
     init() {
         super.init(frame: .zero)
@@ -189,6 +194,11 @@ private final class PiAgentNativeSupervisorField: NSView {
         inputSurface.addSubview(scroll)
 
         inputHeightC = inputSurface.heightAnchor.constraint(equalToConstant: minInputHeight)
+        inputBottomC = inputSurface.bottomAnchor.constraint(equalTo: bottomAnchor)
+        infoBottomC = infoField.bottomAnchor.constraint(equalTo: bottomAnchor)
+        // Freeform default: the input box owns the field bottom. `configure`
+        // swaps to `infoBottomC` for read-only info rows.
+        inputBottomC.isActive = true
 
         NSLayoutConstraint.activate([
             labelField.topAnchor.constraint(equalTo: topAnchor),
@@ -225,17 +235,23 @@ private final class PiAgentNativeSupervisorField: NSView {
             labelField.isHidden = true
         }
 
+        // Swap the field's bottom pin to whichever control is visible, so the
+        // field height stays deterministic in both shapes.
+        inputBottomC.isActive = false
+        infoBottomC.isActive = false
         if field.isInfo {
             infoField.stringValue = field.placeholder ?? "No response required."
             infoField.isHidden = false
             inputSurface.isHidden = true
             scroll.isHidden = true
+            infoBottomC.isActive = true
         } else {
             infoField.isHidden = true
             inputSurface.isHidden = false
             scroll.isHidden = false
             textView.string = ""
             (textView.textStorage)?.font = NativeTranscriptFont.callout()
+            inputBottomC.isActive = true
         }
     }
 

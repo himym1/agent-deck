@@ -183,7 +183,7 @@ struct AgentImageLoader {
     /// that showed up as a launch-time CPU storm in prewarm. Reads are inline
     /// (loading a tiny pre-sized PNG is cheaper than today's full-source decode);
     /// the write is dispatched off-thread so it never lands on a caller's path.
-    nonisolated(unsafe) private static let thumbnailCacheDirectory: URL? = {
+    nonisolated private static let thumbnailCacheDirectory: URL? = {
         let fileManager = FileManager.default
         guard let caches = try? fileManager.url(
             for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true

@@ -1,6 +1,6 @@
 # Agent Deck Memory
 
-Agent Deck Memory is the app-owned memory system for parent Pi Agent sessions and native subagent runs. It keeps durable project knowledge in readable Markdown files, indexes it locally with SQLite FTS/BM25, injects compact relevant recall at launch, and lets agents write or stale memories through explicit tools.
+Agent Deck Memory is the app-owned memory system for parent Pi Agent sessions and native subagent runs. It keeps durable project knowledge in readable Markdown files, retrieves it locally with on-device semantic embeddings, injects compact relevant recall at launch, and lets agents write or stale memories through explicit tools.
 
 It is inspired by `pi-memctx`, `pi-hermes-memory`, `pi-total-recall`, `pi-memory`, `pi-memory-md`, and `unipi`, but Agent Deck owns the storage, prompt injection, tools, UI, and safety checks.
 
@@ -9,7 +9,7 @@ It is inspired by `pi-memctx`, `pi-hermes-memory`, `pi-total-recall`, `pi-memory
 - Reduce repeated project rediscovery across sessions.
 - Keep memory project-scoped so one repository cannot pollute another.
 - Keep Markdown files as the durable, inspectable source of truth.
-- Use SQLite search as a derived local index for stronger recall than simple string matching.
+- Use on-device semantic embeddings so recall matches meaning, not shared keywords.
 - Let agents write durable facts automatically without a manual approval queue.
 - Let agents mark outdated memory stale automatically.
 - Show memory activity in the chat transcript.
@@ -26,10 +26,10 @@ The current implementation includes:
 - Secret scanning before writes.
 - Parent-session memory recall at launch.
 - Native subagent memory recall at launch.
-- SQLite FTS/BM25 project indexes, with a keyword fallback if the local index is unavailable.
+- On-device semantic recall via `NLContextualEmbedding` (Natural Language framework), with a per-project vector cache.
 - Native chat cards for recalled, stored, edited, stale, archived, and blocked memory events.
 
-Memory is not learned by silently scraping every conversation. Agents receive explicit memory tools and a memory policy. When an agent identifies durable project knowledge, it calls the write tool; Agent Deck scans the content, saves the Markdown file, updates the project manifest, rebuilds the SQLite index, and records a transcript card.
+Memory is not learned by silently scraping every conversation. Agents receive explicit memory tools and a memory policy. When an agent identifies durable project knowledge, it calls the write tool; Agent Deck scans the content, saves the Markdown file, updates the project manifest, and records a transcript card. The vector cache is refreshed lazily on the next recall (staleness is detected by content hash), so writes never block on embedding.
 
 ## Storage
 
@@ -40,7 +40,7 @@ By default memory is stored under:
   projects/
     <project-id>/
       manifest.json
-      index.sqlite
+      embeddings.json
       context/
       decisions/
       runbooks/
@@ -48,7 +48,7 @@ By default memory is stored under:
       preferences/
 ```
 
-`<project-id>` is a stable hash of the standardized project path. Markdown files are the durable source of truth. `manifest.json` is fast metadata for the UI. `index.sqlite` is a derived search cache and can be rebuilt from the Markdown records.
+`<project-id>` is a stable hash of the standardized project path. Markdown files are the durable source of truth. `manifest.json` is fast metadata for the UI. `embeddings.json` is a derived vector cache (one entry per memory, tagged with a content hash and the embedding model's identifier) and can be deleted at any time; it is rebuilt on the next recall.
 
 There is no global memory. If no project path is available, memory recall returns nothing and memory writes are rejected.
 
@@ -131,8 +131,8 @@ model can pull more memory mid-conversation on demand via `agent_deck_memory_sea
 For a parent session, the first launch:
 
 1. Builds a retrieval query from the initial prompt, session title, and repository.
-2. Searches active and pinned memories for the current project with SQLite FTS/BM25.
-3. Falls back to local keyword scoring if the SQLite index is unavailable.
+2. Embeds the query on-device and ranks active and pinned memories for the current project by cosine similarity, keeping only those above the similarity threshold (so it injects nothing when nothing is relevant).
+3. If the embedding model is not yet available (first run still fetching the asset, or offline before it is cached), recall is empty for that session — there is no keyword fallback.
 4. Builds a compact memory prompt.
 5. Appends the memory policy and recalled memory through the parent append-prompt path.
 6. Marks recalled memories as used.
@@ -223,13 +223,13 @@ Typical stale triggers:
 
 Stale memories remain visible in the Memory sidebar but are no longer automatically injected.
 
-## SQLite Search
+## Semantic Search
 
-Agent Deck stores Markdown first, then rebuilds a project-local `index.sqlite` cache. Recall uses SQLite FTS/BM25 to rank matching memory IDs and then reads the Markdown bodies for prompt construction.
+Agent Deck stores Markdown first, then ranks recall by on-device semantic similarity. Each memory's title and summary are embedded with `NLContextualEmbedding` (a BERT-class contextual model in the Natural Language framework, macOS 14+), mean-pooled and L2-normalized into one vector. Recall embeds the query the same way and ranks memories by cosine similarity, keeping only those above a similarity threshold; pinned status and recency are tiebreakers, not overrides. The matched records' Markdown bodies are then read for prompt construction.
 
-The app currently uses the macOS `/usr/bin/sqlite3` tool. If SQLite is unavailable or an index query fails, recall falls back to the in-process keyword scorer so memory still works, just with weaker ranking. A future Memory diagnostics view can surface SQLite status the same way environment/dependency checks are surfaced elsewhere.
+Embedding runs entirely on-device through an `actor` (`AgentMemoryEmbedder`): no network at inference, no API cost, and nothing leaves the machine. The model asset downloads once via the OS the first time it is requested. Vectors are cached per project in `embeddings.json`, keyed by a content hash so a vector is recomputed only when its source text changes, and tagged with the model identifier so a new OS model invalidates the cache. There is no lexical fallback: if the model is unavailable, recall is simply empty until the asset is ready.
 
-Vector search is intentionally deferred. It would require embeddings, provider/model choices, reindexing, invalidation, and dependency/setup UX. SQLite gives a local, simple, inspectable first upgrade.
+Because similarity is semantic rather than lexical, filler words self-discount and a query finds related memories even with no shared keywords — which is why the system needs no stopword list or keyword-overlap floor.
 
 ## Secret Scanning
 
@@ -273,10 +273,11 @@ The Memory sidebar and Pi agent composer footer expose the main memory enabled t
 
 Likely next steps:
 
-- Add an explicit `agent_deck_memory_search` tool for on-demand recall inside long sessions.
-- Add a Memory diagnostics row for SQLite availability/index health.
+- Add a Memory diagnostics row for embedding-model availability (asset downloaded / loading / unavailable).
+- Tune the cosine similarity threshold against a real corpus, and consider per-kind thresholds.
 - Add optional background memory review after rich turns, implemented as a non-blocking side flow similar to title generation.
-- Add optional vector search only if the setup and dependency story are clear.
+- Add consolidation/dedup (exact + similarity-based) so looser save criteria don't accumulate overlapping memories.
+- Warm the vector cache in the background on write so the first recall after a busy session is instant.
 
 ## Credits
 

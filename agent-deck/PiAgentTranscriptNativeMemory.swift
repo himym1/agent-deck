@@ -212,8 +212,12 @@ final class PiAgentNativeMemoryCardView: NSView, PiAgentNativeRowContent {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override var isFlipped: Bool { true }
 
-    // Full-width chrome card (not reply-capped).
-    private func cardWidth(_ rowWidth: CGFloat) -> CGFloat { max(1, rowWidth) }
+    // Capped to the assistant-reply width and left-aligned (the surface pins its
+    // leading edge): memory activity belongs to the LLM's actions, so it sits in
+    // the reply column rather than spanning the full transcript width.
+    private func cardWidth(_ rowWidth: CGFloat) -> CGFloat {
+        max(1, PiAgentBubbleWidth.replyCap(for: rowWidth))
+    }
 
     /// Inner width available to the text column (card minus padding, icon, gap).
     private func textWidth(_ rowWidth: CGFloat) -> CGFloat {

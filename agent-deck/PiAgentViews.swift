@@ -1996,11 +1996,17 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         }
 
         private func handleScrollAfterUpdate(isSessionSwitch: Bool, explicitScroll: Bool, wasFollowing: Bool) {
-            guard scrollView != nil else { return }
-            if isSessionSwitch || explicitScroll {
-                // An explicit request (send, jump-to-latest) or a session
-                // switch always wins — the user isn't fighting it. Re-arm
-                // follow intent so streaming after the jump keeps tracking.
+            guard let scrollView else { return }
+            if isSessionSwitch {
+                // Session selection should open already pinned to the latest row,
+                // not visibly animate from the top after the table appears.
+                isAutoFollowing = true
+                pendingScrollWork?.cancel()
+                pendingScrollWork = nil
+                pendingScrollSettle = false
+                performScrollToBottom(scrollView, animated: false)
+            } else if explicitScroll {
+                // User-requested jumps (send, jump-to-latest) re-arm follow intent.
                 isAutoFollowing = true
                 scrollToBottom(settle: true)
             } else if wasFollowing && !isUserScrollingRecently {
@@ -2496,7 +2502,7 @@ private struct SessionListContent: View, Equatable {
     private static func projectsVisuallyEqual(_ lhs: [UUID: DiscoveredProject?], _ rhs: [UUID: DiscoveredProject?]) -> Bool {
         guard lhs.count == rhs.count else { return false }
         for (id, lProject) in lhs {
-            guard let rProject = rhs[id] else { return false }
+            let rProject = rhs[id] ?? nil
             if lProject?.id != rProject?.id || lProject?.iconFileURL != rProject?.iconFileURL {
                 return false
             }
@@ -2556,10 +2562,299 @@ private struct SessionListContent: View, Equatable {
     }
 }
 
+struct PiAgentSidebarSessionsView: View {
+    let viewModel: AppViewModel
+    let store: PiAgentSessionStore
+    @Binding var sessionSearchText: String
+    /// True only while this sidebar is the visible one. Both sidebars are kept
+    /// permanently mounted (ZStack in `mainContent`) so the push transition is a
+    /// cheap opacity/offset animation rather than a teardown/rebuild — but that
+    /// means this view also stays alive while the Resources sidebar is showing.
+    /// `isActive` gates the only per-streaming-tick work (the git-activity parse)
+    /// so the hidden sidebar costs nothing during a streaming run.
+    let isActive: Bool
+    let onBackToResources: () -> Void
+
+    @State private var cachedVisibleSessions: [PiAgentSessionRecord] = []
+    @State private var hasBuiltVisibleSessions = false
+    // Cached so `body` never reads `store.sessions` directly: `touchSession`
+    // mutates that array many times per second during streaming, and a live read
+    // here would re-evaluate the whole body at ~30Hz (visible or not). Recomputed
+    // only on the non-streaming triggers that actually change the list.
+    @State private var hasAnyScopedSessions = false
+    @State private var selectedSessionIDs: Set<UUID> = []
+    @State private var lastSelectedSessionID: UUID?
+    @State private var renamingSessionID: UUID?
+    @State private var pendingDeleteSessionIDs: Set<UUID> = []
+    @State private var isDeleteSessionsAlertPresented = false
+    @State private var sessionActivityCache: [UUID: PiAgentSessionGitActivity] = [:]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+                .padding(.horizontal, 14)
+                .padding(.top, 10)
+                .padding(.bottom, 12)
+
+            if !hasAnyScopedSessions {
+                AppEmptyState("No sessions yet", systemImage: "square.and.pencil", description: emptySessionsMessage, layout: .fill)
+            } else if visibleSessions.isEmpty {
+                AppEmptyState("No sessions found", systemImage: "magnifyingglass", description: "Try another search.", layout: .fill)
+            } else {
+                SessionListContent(
+                    visibleSessions: visibleSessions,
+                    selectedSessionIDs: selectedSessionIDs,
+                    renamingSessionID: renamingSessionID,
+                    workingSessionIDs: workingVisibleSessionIDs,
+                    generatingTitleIDs: viewModel.piAgentTitleGeneratingSessionIDs,
+                    activityByID: visibleSessionActivityByID,
+                    projectsByID: visibleSessionProjectsByID,
+                    selection: $selectedSessionIDs,
+                    onSelect: { session in
+                        renamingSessionID = nil
+                        selectSessionFromList(session)
+                    },
+                    onBeginRename: { session in
+                        selectSessionFromList(session, forceSingle: true)
+                        renamingSessionID = session.id
+                    },
+                    onEndRename: { renamingSessionID = nil },
+                    onRename: { viewModel.renamePiAgentSession($0, title: $1) },
+                    onTogglePinned: { viewModel.togglePiAgentSessionPinned($0) },
+                    onDelete: { id in requestDeleteSessions(selectedSessionIDs.contains(id) && selectedSessionIDs.count > 1 ? selectedSessionIDs : [id]) }
+                )
+                .equatable()
+            }
+        }
+        .background(Color.clear)
+        .onAppear {
+            rebuildVisibleSessions()
+            syncVisibleSessionSelection()
+            syncMultiSelectionToSelectedSession()
+            rebuildSessionActivityCache()
+        }
+        .onChange(of: store.sessionListRevision) { _, _ in rebuildVisibleSessions() }
+        .onChange(of: sessionSearchText) { _, _ in rebuildVisibleSessions() }
+        .onChange(of: viewModel.showPiAgentAttentionOnly) { _, _ in rebuildVisibleSessions() }
+        .onChange(of: viewModel.selectedProjectPath) { _, _ in
+            rebuildVisibleSessions()
+            syncVisibleSessionSelection()
+        }
+        .onChange(of: store.selectedSession?.id) { _, _ in syncMultiSelectionToSelectedSession() }
+        .onChange(of: visibleSessionIDs) { _, _ in
+            syncVisibleSessionSelection()
+            pruneMultiSelectionToVisibleSessions()
+            rebuildSessionActivityCache()
+        }
+        // While hidden, `activityRevisionToken` is a constant, so this never fires
+        // and the parse never runs. On activation the token flips to the live
+        // revision, firing exactly one refresh — no separate activation handler
+        // or dirty flag needed.
+        .onChange(of: activityRevisionToken) { _, _ in rebuildSessionActivityCache() }
+        .alert(deleteSessionsAlertTitle, isPresented: $isDeleteSessionsAlertPresented) {
+            Button("Delete", role: .destructive) {
+                viewModel.deletePiAgentSessions(pendingDeleteSessionIDs)
+                pendingDeleteSessionIDs = []
+            }
+            Button("Cancel", role: .cancel) { pendingDeleteSessionIDs = [] }
+        } message: {
+            Text(deleteSessionsAlertMessage)
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Button(action: onBackToResources) {
+                    Image(systemName: "chevron.left")
+                        .font(AppTheme.Font.body.weight(.semibold))
+                        .foregroundStyle(AppTheme.mutedText)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("Resources")
+                .accessibilityLabel("Show resources")
+
+                Text("Coding Agent")
+                    .font(.title2.bold())
+                    .fontWidth(.expanded)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                if selectedSessionIDs.count > 1 {
+                    Button(role: .destructive) { requestDeleteSessions(selectedSessionIDs) } label: {
+                        Image(systemName: "trash.fill")
+                            .font(AppTheme.Font.body.weight(.semibold))
+                            .foregroundStyle(Color.red)
+                            .frame(width: 30, height: 30)
+                            .background(Circle().fill(Color.red.opacity(0.12)))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Delete selected sessions")
+                }
+                if viewModel.appSettings.nativeSubagentsEnabledForNewSessions {
+                    PiAgentChatWithAgentButton(viewModel: viewModel)
+                }
+                if viewModel.selectedDiscoveredProject == nil {
+                    PiAgentAddSessionMenuButton(
+                        projects: piAgentNewSessionProjects,
+                        selectedProject: viewModel.selectedDiscoveredProject,
+                        action: { viewModel.createPiAgentDraftForSelectedProject() },
+                        onSelectProject: { viewModel.createPiAgentDraft(for: $0) }
+                    )
+                } else {
+                    PiAgentAddSessionButton(action: { viewModel.createPiAgentDraftForSelectedProject() })
+                }
+            }
+        }
+    }
+
+    private var piAgentNewSessionProjects: [DiscoveredProject] {
+        viewModel.enabledProjects.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var scopedSessions: [PiAgentSessionRecord] {
+        guard let path = viewModel.selectedProjectPath else { return store.sessions }
+        return store.sessions.filter { $0.projectPath == path }
+    }
+
+    private var visibleSessions: [PiAgentSessionRecord] {
+        hasBuiltVisibleSessions ? cachedVisibleSessions : computedVisibleSessions()
+    }
+
+    private var visibleSessionIDs: [UUID] { visibleSessions.map(\.id) }
+
+    /// Drives the git-activity refresh. `gitActivityRevision` only bumps when a
+    /// commit/push/merge entry lands (not per streaming token), so the visible
+    /// sidebar's body no longer re-evaluates ~30Hz during a run. Gated on
+    /// `isActive` so the hidden sidebar reads a constant and registers no store
+    /// dependency at all; the drain in `.onChange(of: isActive)` catches up any
+    /// events that landed while hidden.
+    private var activityRevisionToken: Int {
+        isActive ? store.gitActivityRevision : -1
+    }
+
+    private func rebuildVisibleSessions() {
+        let scoped = scopedSessions
+        if hasAnyScopedSessions != !scoped.isEmpty { hasAnyScopedSessions = !scoped.isEmpty }
+        let next = computedVisibleSessions(from: scoped)
+        if !hasBuiltVisibleSessions || next != cachedVisibleSessions {
+            cachedVisibleSessions = next
+        }
+        hasBuiltVisibleSessions = true
+    }
+
+    private func computedVisibleSessions(from scoped: [PiAgentSessionRecord]? = nil) -> [PiAgentSessionRecord] {
+        let query = sessionSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scopedSource = scoped ?? scopedSessions
+        let source = viewModel.showPiAgentAttentionOnly ? scopedSource.filter(\.needsAttention) : scopedSource
+        let filtered = query.isEmpty ? source : source.filter { session in
+            [
+                session.title,
+                session.projectName,
+                session.projectPath,
+                session.repository ?? "",
+                session.issueNumber.map(String.init) ?? "",
+                session.lastSummary ?? ""
+            ]
+            .joined(separator: " ")
+            .localizedCaseInsensitiveContains(query)
+        }
+        return filtered.sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
+    }
+
+    private var workingVisibleSessionIDs: Set<UUID> {
+        Set(visibleSessions.filter { viewModel.piAgentSessionIsWorking($0) }.map(\.id))
+    }
+
+    private var visibleSessionActivityByID: [UUID: PiAgentSessionGitActivity] {
+        Dictionary(uniqueKeysWithValues: visibleSessions.compactMap { session in
+            sessionActivityCache[session.id].map { (session.id, $0) }
+        })
+    }
+
+    private var visibleSessionProjectsByID: [UUID: DiscoveredProject?] {
+        Dictionary(uniqueKeysWithValues: visibleSessions.map { ($0.id, viewModel.projectByPath[$0.projectPath]) })
+    }
+
+    private var emptySessionsMessage: String {
+        if let project = viewModel.selectedDiscoveredProject {
+            return "Use + to create a draft for \(project.name), or open from a GitHub issue."
+        }
+        return "Use + to create a draft, or select a project to narrow the list."
+    }
+
+    private var deleteSessionsAlertTitle: String {
+        pendingDeleteSessionIDs.count == 1 ? "Delete Pi Agent session?" : "Delete \(pendingDeleteSessionIDs.count) Pi Agent sessions?"
+    }
+
+    private var deleteSessionsAlertMessage: String {
+        pendingDeleteSessionIDs.count == 1
+            ? "This removes the selected Pi Agent session and its local transcript from \(AppBrand.displayName)."
+            : "This removes the selected Pi Agent sessions and their local transcripts from \(AppBrand.displayName)."
+    }
+
+    private func requestDeleteSessions(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        pendingDeleteSessionIDs = ids
+        isDeleteSessionsAlertPresented = true
+    }
+
+    private func syncVisibleSessionSelection() {
+        if let selectedID = store.selectedSession?.id, visibleSessions.contains(where: { $0.id == selectedID }) { return }
+        if let first = visibleSessions.first { store.select(first.id) } else { store.clearSelection() }
+    }
+
+    private func syncMultiSelectionToSelectedSession() {
+        let next: Set<UUID> = store.selectedSession.map { [$0.id] } ?? []
+        if next != selectedSessionIDs { selectedSessionIDs = next }
+        lastSelectedSessionID = store.selectedSession?.id
+    }
+
+    private func pruneMultiSelectionToVisibleSessions() {
+        let visibleIDs = Set(visibleSessionIDs)
+        var next = selectedSessionIDs.intersection(visibleIDs)
+        if let selectedID = store.selectedSession?.id, visibleIDs.contains(selectedID) { next.insert(selectedID) }
+        if next != selectedSessionIDs { selectedSessionIDs = next }
+    }
+
+    private func selectSessionFromList(_ session: PiAgentSessionRecord, forceSingle: Bool = false) {
+        let modifiers = NSEvent.modifierFlags.intersection([.command, .shift])
+        if forceSingle || modifiers.isEmpty {
+            selectedSessionIDs = [session.id]
+        } else if modifiers.contains(.shift), let anchorID = lastSelectedSessionID, let anchorIndex = visibleSessionIDs.firstIndex(of: anchorID), let targetIndex = visibleSessionIDs.firstIndex(of: session.id) {
+            selectedSessionIDs.formUnion(visibleSessionIDs[min(anchorIndex, targetIndex)...max(anchorIndex, targetIndex)])
+        } else if modifiers.contains(.command) {
+            if selectedSessionIDs.contains(session.id), selectedSessionIDs.count > 1 { selectedSessionIDs.remove(session.id) }
+            else { selectedSessionIDs.insert(session.id) }
+        }
+        lastSelectedSessionID = session.id
+        viewModel.selectPiAgentSession(session.id)
+    }
+
+    private func rebuildSessionActivityCache() {
+        // Only ever called while visible: `activityRevisionToken` is constant while
+        // hidden so the driving `.onChange` doesn't fire. The guard is belt-and-
+        // suspenders against the `visibleSessionIDs` trigger firing while hidden.
+        guard isActive else { return }
+        var fresh: [UUID: PiAgentSessionGitActivity] = [:]
+        for session in visibleSessions {
+            let activity = piAgentSessionGitActivity(from: store.transcriptsBySessionID[session.id] ?? [])
+            if activity.hasCommit || activity.hasPush || activity.hasMerge { fresh[session.id] = activity }
+        }
+        if fresh != sessionActivityCache { sessionActivityCache = fresh }
+    }
+}
+
 struct PiAgentScreen: View {
     var viewModel: AppViewModel
     var store: PiAgentSessionStore
     @Binding var sessionSearchText: String
+    var showsSessionsColumn = true
+    /// False when this screen is kept mounted but hidden (the user is on another
+    /// sidebar tab). While inactive the transcript stops rebuilding its rows on
+    /// streaming pulses — see `appKitTranscriptItems`.
+    var isActive = true
     @State private var composerText = ""
     @State private var composerSuggestionIndex = 0
     @State private var composerSuggestionsDismissed = false
@@ -2634,10 +2929,15 @@ struct PiAgentScreen: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            HSplitView {
-                sessionsColumn
-                    .frame(minWidth: 190, idealWidth: 250, maxWidth: 360)
+            if showsSessionsColumn {
+                HSplitView {
+                    sessionsColumn
+                        .frame(minWidth: 190, idealWidth: 250, maxWidth: 360)
 
+                    activeSessionColumn
+                        .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else {
                 activeSessionColumn
                     .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -3107,7 +3407,12 @@ struct PiAgentScreen: View {
     }
 
     private var appKitTranscriptItems: [PiAgentAppKitTranscriptItem] {
-        TranscriptScrollProfiler.measureBody("itemsBuild") {
+        // Hidden tab: don't rebuild on streaming pulses. The screen stays mounted
+        // (so the table is never torn down), but returning the last-built rows means
+        // a backgrounded streaming session does no per-tick transcript work. The
+        // next pulse after becoming active rebuilds to current content.
+        if !isActive { return transcriptCache.memoizedTranscriptItems }
+        return TranscriptScrollProfiler.measureBody("itemsBuild") {
             // `makeItems` is re-run on every host body pass — cache pulses, but also
             // scroll-time re-evaluations that don't change the transcript at all.
             // Skip the O(N) rebuild when no input changed: compute a cheap signature

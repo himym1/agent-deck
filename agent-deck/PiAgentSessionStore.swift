@@ -21,6 +21,13 @@ final class PiAgentSessionStore {
     private(set) var transcriptsBySessionID: [UUID: [PiAgentTranscriptEntry]] = [:]
     private(set) var transcriptLoadingSessionIDs: Set<UUID> = []
     private(set) var transcriptRevisionsBySessionID: [UUID: Int] = [:]
+    /// Coarse "a git event (commit / push / merge) landed in some transcript"
+    /// signal. `transcriptRevisionsBySessionID` pulses ~30Hz during streaming, but
+    /// the session list's git-activity badges only ever change when one of these
+    /// discrete status entries is appended. Badge consumers `.onChange(of:)` this
+    /// counter instead, so a streaming run no longer re-evaluates their body per
+    /// token — only when the badges could actually have changed.
+    private(set) var gitActivityRevision: Int = 0
     private(set) var uiRequestsBySessionID: [UUID: PiAgentUIRequest] = [:]
     private(set) var subagentRunsBySessionID: [UUID: [PiSubagentRunRecord]] = [:] {
         didSet { subagentRunsRevision &+= 1 }
@@ -868,6 +875,7 @@ final class PiAgentSessionStore {
         markTranscriptSessionUsed(entry.sessionID)
         evictTranscriptsIfNeeded()
         bumpTranscriptRevision(entry.sessionID)
+        bumpGitActivityRevisionIfNeeded(for: entry)
         touchSession(entry.sessionID, bumpUpdatedAt: true)
     }
 
@@ -889,6 +897,7 @@ final class PiAgentSessionStore {
         markTranscriptSessionUsed(entry.sessionID)
         isNewEntry = insertedEntry
         bumpTranscriptRevision(entry.sessionID)
+        bumpGitActivityRevisionIfNeeded(for: entry)
         guard persist else { return }
         persistTranscript(entry.sessionID)
         evictTranscriptsIfNeeded()
@@ -1182,6 +1191,14 @@ final class PiAgentSessionStore {
         // `isSelectedTranscriptLoading` is already true by the time the view
         // first renders — otherwise the transcript area is briefly blank.
         if let id = selectedSessionID { requestTranscriptLoad(for: id) }
+    }
+
+    /// Bump the coarse git-activity signal iff this entry is one the activity
+    /// badges read (a `.status` row whose title is a commit/push/merge event).
+    /// Mirrors the predicate in `piAgentSessionGitActivity` so the two never drift.
+    private func bumpGitActivityRevisionIfNeeded(for entry: PiAgentTranscriptEntry) {
+        guard entry.role == .status, PiAgentGitEventKind.from(title: entry.title) != nil else { return }
+        gitActivityRevision &+= 1
     }
 
     private func bumpTranscriptRevision(_ sessionID: UUID) {
