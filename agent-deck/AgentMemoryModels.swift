@@ -94,6 +94,7 @@ struct AgentMemoryRetrieval: Hashable {
 
 enum AgentMemoryEventKind: String, Codable, Hashable {
     case recalled
+    case searched
     case stored
     case edited
     case archived
@@ -103,6 +104,7 @@ enum AgentMemoryEventKind: String, Codable, Hashable {
     var displayTitle: String {
         switch self {
         case .recalled: return "Memory Recalled"
+        case .searched: return "Memory Searched"
         case .stored: return "Memory Stored"
         case .edited: return "Memory Edited"
         case .archived: return "Memory Archived"
@@ -114,6 +116,7 @@ enum AgentMemoryEventKind: String, Codable, Hashable {
     var systemImage: String {
         switch self {
         case .recalled: return "brain"
+        case .searched: return "text.magnifyingglass"
         case .stored: return "tray.and.arrow.down"
         case .edited: return "pencil"
         case .archived: return "archivebox"
@@ -161,4 +164,9 @@ struct AgentMemoryStaleBridgeRequest: Codable, Hashable {
     var memoryIDs: [String]?
     var query: String?
     var reason: String?
+}
+
+struct AgentMemorySearchBridgeRequest: Codable, Hashable {
+    var query: String
+    var limit: Int?
 }

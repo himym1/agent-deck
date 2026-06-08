@@ -835,6 +835,25 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
     var forkedFromParentTitle: String?
     var forkedFromUserMessageText: String?
     var forkedFromTranscriptSnapshot: String?
+    /// Snapshot of the memory-context block recalled at this conversation's first
+    /// launch. Replayed verbatim through `--append-system-prompt` on every later
+    /// process relaunch of the SAME conversation (idle-park wake, model/thinking
+    /// change, manual resume, recovery) so resumes restore the *same* system-prompt
+    /// memory instead of re-running retrieval. A fork is a distinct session record,
+    /// so it does not inherit this snapshot and recalls fresh as a new conversation.
+    /// Pi's session file persists the conversation but not the system
+    /// prompt, so the block must be re-supplied — but it must be the original bytes,
+    /// not a fresh recall. See `memoryRecallCompleted`.
+    var recalledMemoryPrompt: String?
+    /// IDs of the memories in `recalledMemoryPrompt`, plus any pulled later via
+    /// on-demand `agent_deck_memory_search`. Used to dedupe search results so the
+    /// agent isn't handed memories it already has in context.
+    var recalledMemoryIDs: [String]?
+    /// True once launch-time recall has run for this logical conversation (even when
+    /// it found nothing). Gates re-retrieval: a relaunch replays the snapshot rather
+    /// than recalling again, which keeps the system prompt stable across the
+    /// conversation and avoids duplicate "Memory Recalled" cards.
+    var memoryRecallCompleted: Bool
     var createdAt: Date
     var updatedAt: Date
 
@@ -863,6 +882,7 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
         case finalSystemPrompt, finalSystemPromptCapturedAt
         case pendingSteeringMessages, pendingFollowUpMessages, subagentsEnabled, agentSelection, injectedExtensions, agentName, isCompacting, isTitleUserEdited, createdAt, updatedAt
         case forkedFromSessionID, forkedFromParentTitle, forkedFromUserMessageText, forkedFromTranscriptSnapshot
+        case recalledMemoryPrompt, recalledMemoryIDs, memoryRecallCompleted
     }
 
     init(
@@ -918,6 +938,9 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
         forkedFromParentTitle: String? = nil,
         forkedFromUserMessageText: String? = nil,
         forkedFromTranscriptSnapshot: String? = nil,
+        recalledMemoryPrompt: String? = nil,
+        recalledMemoryIDs: [String]? = nil,
+        memoryRecallCompleted: Bool = false,
         createdAt: Date,
         updatedAt: Date
     ) {
@@ -973,6 +996,9 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
         self.forkedFromParentTitle = forkedFromParentTitle
         self.forkedFromUserMessageText = forkedFromUserMessageText
         self.forkedFromTranscriptSnapshot = forkedFromTranscriptSnapshot
+        self.recalledMemoryPrompt = recalledMemoryPrompt
+        self.recalledMemoryIDs = recalledMemoryIDs
+        self.memoryRecallCompleted = memoryRecallCompleted
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -1032,6 +1058,9 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
             forkedFromParentTitle: try container.decodeIfPresent(String.self, forKey: .forkedFromParentTitle),
             forkedFromUserMessageText: try container.decodeIfPresent(String.self, forKey: .forkedFromUserMessageText),
             forkedFromTranscriptSnapshot: try container.decodeIfPresent(String.self, forKey: .forkedFromTranscriptSnapshot),
+            recalledMemoryPrompt: try container.decodeIfPresent(String.self, forKey: .recalledMemoryPrompt),
+            recalledMemoryIDs: try container.decodeIfPresent([String].self, forKey: .recalledMemoryIDs),
+            memoryRecallCompleted: try container.decodeIfPresent(Bool.self, forKey: .memoryRecallCompleted) ?? false,
             createdAt: try container.decode(Date.self, forKey: .createdAt),
             updatedAt: try container.decode(Date.self, forKey: .updatedAt)
         )

@@ -187,9 +187,16 @@ final class AgentMemoryStore: ObservableObject {
         }
 
         guard !candidates.isEmpty else { return nil }
-        let chunks = candidates.map { record in
+        return AgentMemoryRetrieval(records: candidates, prompt: memoryContextPrompt(for: candidates, maxCharacters: maxCharacters))
+    }
+
+    /// Renders the fenced `<memory-context>` block for a set of records. Shared by
+    /// launch-time recall and the on-demand `agent_deck_memory_search` tool so both
+    /// produce identically-formatted memory the model can trust.
+    func memoryContextPrompt(for records: [AgentMemoryRecord], maxCharacters: Int = 6_000) -> String {
+        let chunks = records.map { record in
             let body = document(for: record).body.trimmingCharacters(in: .whitespacesAndNewlines)
-            let trimmedBody = String(body.prefix(max(400, maxCharacters / max(candidates.count, 1))))
+            let trimmedBody = String(body.prefix(max(400, maxCharacters / max(records.count, 1))))
             return """
             - [\(record.kind.displayName)] \(record.title) (\(record.id), updated \(Self.dateFormatter.string(from: record.updatedAt)))
               \(trimmedBody)
@@ -202,7 +209,7 @@ final class AgentMemoryStore: ObservableObject {
         \(chunks.joined(separator: "\n\n"))
         </memory-context>
         """
-        return AgentMemoryRetrieval(records: candidates, prompt: String(prompt.prefix(maxCharacters)))
+        return String(prompt.prefix(maxCharacters))
     }
 
     func markUsed(_ memoryIDs: [String]) {

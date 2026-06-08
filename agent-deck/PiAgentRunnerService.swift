@@ -144,6 +144,7 @@ final class PiAgentRunnerService {
     var boundAgentSkillArgumentsProvider: ((EffectiveAgentRecord) throws -> [String])?
     var onMemoryWrite: ((UUID, AgentMemoryWriteBridgeRequest) -> String)?
     var onMemoryMarkStale: ((UUID, AgentMemoryStaleBridgeRequest) async -> String)?
+    var onMemorySearch: ((UUID, AgentMemorySearchBridgeRequest) async -> String)?
 
     init(store: PiAgentSessionStore) {
         self.store = store
@@ -2046,6 +2047,8 @@ final class PiAgentRunnerService {
                 handleMemoryWriteBridgeRequest(event, requestID: requestID, rawLine: rawLine, sessionID: sessionID)
             case "memory_mark_stale":
                 handleMemoryMarkStaleBridgeRequest(event, requestID: requestID, rawLine: rawLine, sessionID: sessionID)
+            case "memory_search":
+                handleMemorySearchBridgeRequest(event, requestID: requestID, rawLine: rawLine, sessionID: sessionID)
             default:
                 clientsBySessionID[sessionID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) does not support bridge request \(bridgeName).")
                 store.append(.init(sessionID: sessionID, role: .error, title: "\(AppBrand.displayName) Bridge Error", text: "Unsupported bridge request \(bridgeName).", rawJSON: rawLine))
@@ -2093,6 +2096,21 @@ final class PiAgentRunnerService {
         Task { @MainActor [weak self] in
             guard let self else { return }
             let result = await self.onMemoryMarkStale?(sessionID, request) ?? "\(AppBrand.displayName) memory is not available."
+            self.clientsBySessionID[sessionID]?.respondToExtensionUI(id: requestID, value: result)
+        }
+    }
+
+    private func handleMemorySearchBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, sessionID: UUID) {
+        guard let payload = bridgePayload(from: event),
+              let data = payload.data(using: .utf8),
+              let request = try? JSONDecoder().decode(AgentMemorySearchBridgeRequest.self, from: data) else {
+            clientsBySessionID[sessionID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) could not parse the memory search request.")
+            store.append(.init(sessionID: sessionID, role: .error, title: "\(AppBrand.displayName) Bridge Error", text: "Could not parse memory search request.", rawJSON: rawLine))
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let result = await self.onMemorySearch?(sessionID, request) ?? "\(AppBrand.displayName) memory is not available."
             self.clientsBySessionID[sessionID]?.respondToExtensionUI(id: requestID, value: result)
         }
     }

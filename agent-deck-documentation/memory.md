@@ -101,6 +101,7 @@ When memory is enabled, Agent Deck loads a native Pi extension for both parent s
 
 - `agent_deck_memory_write`: writes durable project memory.
 - `agent_deck_memory_mark_stale`: marks outdated project memory stale so it stops being injected.
+- `agent_deck_memory_search`: pulls additional relevant project memory on demand, mid-conversation, when the thread moves past what launch-time recall covered. Results are deduped against the memory already in context and surfaced as a `Memory Searched` card.
 
 Agents learn about these tools in two ways:
 
@@ -117,15 +118,17 @@ When memory is enabled, Agent Deck appends a policy that tells agents to:
 - store project architecture, important files, commands, tests, CI, deployment, conventions, decisions, recurring failures, runbooks, and project-specific preferences;
 - avoid temporary task state, speculative facts, raw logs, customer data, secrets, tokens, passwords, and private keys;
 - mark recalled memory stale when the current repository or user correction proves it wrong;
+- call `agent_deck_memory_search` when the conversation moves to a topic the launch-time recall does not cover, before exploring from scratch;
 - treat memory as context, not as newer user instructions.
 
 Parent sessions receive the policy through Agent Deck's controlled parent `--append-system-prompt` path. Native subagents receive it through direct child `--append-system-prompt` arguments.
 
 ## Recall Timing
 
-Automatic recall happens at launch, not every turn.
+Automatic recall happens once per conversation, at launch — not every turn. The
+model can pull more memory mid-conversation on demand via `agent_deck_memory_search`.
 
-For a parent session, Agent Deck:
+For a parent session, the first launch:
 
 1. Builds a retrieval query from the initial prompt, session title, and repository.
 2. Searches active and pinned memories for the current project with SQLite FTS/BM25.
@@ -134,6 +137,24 @@ For a parent session, Agent Deck:
 5. Appends the memory policy and recalled memory through the parent append-prompt path.
 6. Marks recalled memories as used.
 7. Adds a `Memory Recalled` activity card to the chat.
+8. Snapshots the rendered memory block and its memory ids on the session record
+   (`recalledMemoryPrompt` / `recalledMemoryIDs`) and sets `memoryRecallCompleted`.
+
+### Recall vs. restoration
+
+Memory is injected through `--append-system-prompt`, so it lives in the system
+prompt, not the conversation. Pi's session file restores the conversation but not the
+system prompt, so the memory block must be re-supplied whenever a new Pi process
+takes over the same conversation — idle-parking wake-ups, model or thinking-level
+changes, manual resume, recovery. (A fork creates a distinct session, so it recalls
+fresh rather than replaying the snapshot.)
+
+These relaunches are **context restoration, not new recall**. Agent Deck replays the
+stored snapshot verbatim: no new retrieval, no usage increment, and no second
+`Memory Recalled` card. This keeps the system prompt stable across the conversation
+(so later turns reason under the same memory as earlier ones) and keeps process
+management invisible in the transcript. Fresh retrieval only runs when a new logical
+conversation starts.
 
 The injected block is fenced:
 
@@ -145,15 +166,40 @@ Prefer current repository contents over memory.
 </memory-context>
 ```
 
+### Compaction
+
+Memory needs no special handling at compaction. Pi's compaction summarizes the
+*conversation messages*; the recalled memory lives in the *system prompt*, which
+compaction does not touch — so memory survives compaction automatically and is still
+present on every post-compaction turn.
+
+Agent Deck deliberately does **not** inject memory instructions into compaction:
+
+- Pi compaction is a summarize-only model call with no tools, so it cannot call
+  `agent_deck_memory_write` — a "persist durable facts" nudge at compaction time would
+  not fire.
+- Auto-compaction (triggered by Pi when context fills) runs with no custom
+  instructions and exposes no setting to supply a default, so Agent Deck cannot reach
+  the common case anyway.
+
+Durable knowledge is instead persisted during normal turns via `agent_deck_memory_write`
+(the agent can call tools on ordinary turns), and topic drift is handled by
+`agent_deck_memory_search`. If guarding auto-compaction ever becomes necessary, the
+viable mechanism is a `contextPercent`-threshold nudge that steers the live agent to
+persist durable facts *before* Pi compacts — a separate, opt-in feature, not part of
+the recall lifecycle.
+
 ## Subagents
 
 When memory and subagent memory are enabled, native subagent launches receive:
 
 - the memory policy;
 - relevant project memories for the assigned task, selected from the agent name, agent description, and task text;
-- the same write and stale-marking tools as the parent.
+- the same write, stale-marking, and search tools as the parent.
 
 Subagent recall appends only memory-specific prompt blocks. It does not re-resolve project/global `APPEND_SYSTEM.md`, so enabling memory does not otherwise change child prompt composition.
+
+A subagent's `agent_deck_memory_search` results surface as a `Memory Searched` card on the parent transcript (matching subagent writes). Subagents have no persistent recall snapshot of their own, so their searches are not deduped against — and do not modify — the parent session's snapshot. The recall-snapshot replay described under [Recall vs. restoration](#recall-vs-restoration) applies to parent sessions; each subagent run is a fresh, task-scoped launch.
 
 ## Writes and Stale Marking
 
@@ -201,6 +247,7 @@ Blocked writes produce a `Memory Blocked` transcript card when transcript cards 
 Memory activity is visible in the Pi Agent transcript:
 
 - `Memory Recalled`
+- `Memory Searched`
 - `Memory Stored`
 - `Memory Edited`
 - `Memory Archived`
