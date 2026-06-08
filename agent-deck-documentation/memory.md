@@ -211,7 +211,8 @@ Typical write triggers:
 - a durable architecture or file-layout fact;
 - a project decision and rationale;
 - a repeated failure or user correction;
-- a project-specific preference.
+- a project-specific preference;
+- a hard-won outcome that took several corrections or retries to settle (store what worked and what failed).
 
 Typical stale triggers:
 

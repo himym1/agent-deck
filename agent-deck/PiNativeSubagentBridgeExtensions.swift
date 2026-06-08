@@ -660,6 +660,7 @@ struct PiNativeSubagentBridgeExtensions {
                 promptSnippet: "agent_deck_memory_write(title, summary, body, kind?, tags?, reason?): store durable Agent Deck project memory.",
                 promptGuidelines: [
                     "Use this after discovering durable project knowledge: architecture, important files, commands, CI, deployment, conventions, decisions, recurring failures, runbooks, or project-specific preferences.",
+                    "When a task takes several corrections or retries to get right, store the settled outcome and the approaches that failed once confirmed, so the next run skips the dead ends.",
                     "Do not store temporary session state, raw logs, credentials, tokens, private keys, customer data, or speculative facts.",
                     "Deck agent findings should be stored as normal project memory."
                 ],
