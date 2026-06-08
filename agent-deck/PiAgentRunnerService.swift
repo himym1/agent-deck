@@ -117,6 +117,10 @@ final class PiAgentRunnerService {
     private var pendingConfigurationChangeSummariesBySessionID: [UUID: String] = [:]
     private var streamFlushTasksBySessionID: [UUID: Task<Void, Never>] = [:]
     private var pendingIdleTasksBySessionID: [UUID: Task<Void, Never>] = [:]
+    /// Sessions for which Pi has emitted `agent_start` (or at least `turn_start`) but
+    /// not the authoritative `agent_end`. `isStreaming` can be false between turns,
+    /// after tool use, compaction, or retries, so it is not by itself a turn-finished signal.
+    private var activeAgentRunSessionIDs: Set<UUID> = []
     private var idleParkingTasksBySessionID: [UUID: Task<Void, Never>] = [:]
     private var idleParkingTimeout: TimeInterval?
     private let idleConfirmationDelay: Duration = .milliseconds(900)
@@ -864,7 +868,8 @@ final class PiAgentRunnerService {
 
     private func confirmIdleIfStillEligible(sessionID: UUID) {
         pendingIdleTasksBySessionID[sessionID] = nil
-        guard let session = store.sessions.first(where: { $0.id == sessionID }),
+        guard !activeAgentRunSessionIDs.contains(sessionID),
+              let session = store.sessions.first(where: { $0.id == sessionID }),
               session.status.isActive,
               store.uiRequestsBySessionID[sessionID] == nil,
               assistantEntryIDsBySessionID[sessionID] == nil,
@@ -1141,6 +1146,7 @@ final class PiAgentRunnerService {
         case "response":
             handleResponse(event, rawLine: rawLine, sessionID: sessionID)
         case "agent_start", "turn_start":
+            activeAgentRunSessionIDs.insert(sessionID)
             cancelPendingIdle(for: sessionID)
             cancelIdleParking(for: sessionID)
             mark(sessionID, status: .running, error: nil)
@@ -1154,20 +1160,28 @@ final class PiAgentRunnerService {
                 store.setProcessingActivity(.preparing, for: sessionID)
             }
         case "agent_end", "turn_end":
+            if event.type == "agent_end" {
+                activeAgentRunSessionIDs.remove(sessionID)
+            }
             // Some Pi RPC streams include the final assistant message on turn_end/agent_end
             // without a separate message_end. Finalize it here so stale streaming buffers
             // do not keep the session card stuck in the active/running state.
             if let message = finalAssistantMessage(from: event) {
                 finalizeCompletedMessage(message, rawLine: rawLine, sessionID: sessionID)
             }
-            scheduleIdleConfirmation(sessionID: sessionID)
+            if event.type == "agent_end" {
+                scheduleIdleConfirmation(sessionID: sessionID)
+            }
             clientsBySessionID[sessionID]?.getState()
             clientsBySessionID[sessionID]?.getSessionStats()
         case "message_update":
+            cancelPendingIdle(for: sessionID)
             handleMessageUpdate(event, rawLine: rawLine, sessionID: sessionID)
         case "message_end":
             handleMessageEnd(event, rawLine: rawLine, sessionID: sessionID)
         case "tool_execution_start", "tool_execution_update", "tool_execution_end":
+            cancelPendingIdle(for: sessionID)
+            mark(sessionID, status: .running, error: nil)
             handleToolExecution(event, rawLine: rawLine, sessionID: sessionID)
         case "extension_ui_request":
             handleExtensionUIRequest(event, rawLine: rawLine, sessionID: sessionID)
@@ -1485,7 +1499,7 @@ final class PiAgentRunnerService {
                 cancelPendingIdle(for: sessionID)
                 cancelIdleParking(for: sessionID)
                 record.status = .running
-            } else if record.status.isActive {
+            } else if record.status.isActive, !activeAgentRunSessionIDs.contains(sessionID) {
                 scheduleIdleConfirmation(sessionID: sessionID)
             } else if record.status == .idle {
                 shouldScheduleIdleParking = true
@@ -1636,6 +1650,7 @@ final class PiAgentRunnerService {
         thinkingTextBySessionID[sessionID] = nil
         pendingFreeformResponsesBySessionID[sessionID] = nil
         pendingThinkingLevelsBySessionID[sessionID] = nil
+        activeAgentRunSessionIDs.remove(sessionID)
         let keyPrefix = "\(sessionID.uuidString):"
         toolEntryIDsByCallID = toolEntryIDsByCallID.filter { !$0.key.hasPrefix(keyPrefix) }
     }
@@ -1674,7 +1689,9 @@ final class PiAgentRunnerService {
                 // duplicate finalizes (message_end + turn_end + agent_end), which
                 // arrive with a fresh entry id once this one is nilled out above.
                 guard !recentAssistantEntryExists(with: visibleText, sessionID: sessionID, excluding: assistantEntryID) else {
-                    scheduleIdleConfirmation(sessionID: sessionID)
+                    if !activeAgentRunSessionIDs.contains(sessionID) {
+                        scheduleIdleConfirmation(sessionID: sessionID)
+                    }
                     return
                 }
                 store.upsert(.init(id: assistantEntryID, sessionID: sessionID, role: .assistant, title: "Assistant", text: visibleText, rawJSON: nil))
@@ -1700,7 +1717,9 @@ final class PiAgentRunnerService {
                 // agent_end; the first run nils out the assistant entry id, so without
                 // this dedup each subsequent run appends another identical error row.
                 guard !recentErrorEntryExists(with: errorText, sessionID: sessionID) else {
-                    scheduleIdleConfirmation(sessionID: sessionID)
+                    if !activeAgentRunSessionIDs.contains(sessionID) {
+                        scheduleIdleConfirmation(sessionID: sessionID)
+                    }
                     return
                 }
                 store.upsert(.init(id: assistantEntryID, sessionID: sessionID, role: .error, title: "Model Error", text: errorText, rawJSON: rawLine))
@@ -1710,11 +1729,9 @@ final class PiAgentRunnerService {
                     store.upsert(.init(id: thinkingEntryID, sessionID: sessionID, role: .thinking, title: "Thinking", text: thinkingText, rawJSON: nil), before: thinkingBeforeID)
                 }
             }
-            // Some Pi RPC builds finish a turn with the final assistant message but
-            // do not emit a separate turn_end/agent_end event. Treat the completed
-            // assistant message as an idle candidate; the delayed confirmation is
-            // harmless if a later turn_end arrives or another event reactivates work.
-            scheduleIdleConfirmation(sessionID: sessionID)
+            // `message_end` only completes one message. Pi may still continue the same
+            // run with tools, compaction, retries, follow-ups, or another turn. Wait for
+            // `agent_end` (or a non-active get_state outside an agent run) before idling.
         } else if role == "user" {
             // Pi echoes user messages back over RPC. The app already records the submitted prompt.
             return
@@ -1722,10 +1739,8 @@ final class PiAgentRunnerService {
             if !text.isEmpty {
                 store.append(.init(sessionID: sessionID, role: .raw, title: role, text: text, rawJSON: rawLine))
             }
-            // Some Pi RPC streams stop after the final tool result without a
-            // following assistant/turn_end event. Treat that as an idle candidate;
-            // any subsequent assistant/tool event will keep or restore activity.
-            scheduleIdleConfirmation(sessionID: sessionID)
+            // A tool result ends only the tool message; the agent may still perform a
+            // follow-up model turn. `agent_end` is the authoritative completion signal.
         } else if !text.isEmpty {
             store.append(.init(sessionID: sessionID, role: .raw, title: role, text: text, rawJSON: rawLine))
         }

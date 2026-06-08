@@ -281,17 +281,10 @@ struct PiAgentTranscriptDisplayOptionsPopover: View {
         // Plain dividered rows, matching the native Session resources popover —
         // no per-row themed card surface.
         VStack(alignment: .leading, spacing: 0) {
-            Label("Transcript display", systemImage: "eye")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(AppTheme.mutedText)
-                .padding(.bottom, 10)
-
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
-                    optionRow(option)
-                    if index < options.count - 1 {
-                        Divider()
-                    }
+            ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                optionRow(option)
+                if index < options.count - 1 {
+                    Divider()
                 }
             }
         }
@@ -300,32 +293,32 @@ struct PiAgentTranscriptDisplayOptionsPopover: View {
     }
 
     private func optionRow(_ option: Option) -> some View {
-        let isOn = visibility[keyPath: option.keyPath]
-        return Button {
-            viewModel.setPiAgentTranscriptVisibility(option.keyPath, to: !isOn)
-        } label: {
-            HStack(alignment: .top, spacing: 9) {
-                Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(isOn ? AppTheme.brandAccent : AppTheme.mutedText)
-                    .frame(width: 17)
-                Image(systemName: option.systemImage)
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: option.systemImage)
+                .foregroundStyle(AppTheme.mutedText)
+                .frame(width: 17)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(option.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(option.subtitle)
+                    .font(.caption2)
+                    .fontWidth(.condensed)
                     .foregroundStyle(AppTheme.mutedText)
-                    .frame(width: 17)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(option.title)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Text(option.subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(AppTheme.mutedText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
+            Spacer(minLength: 8)
+            Toggle(isOn: Binding(
+                get: { visibility[keyPath: option.keyPath] },
+                set: { viewModel.setPiAgentTranscriptVisibility(option.keyPath, to: $0) }
+            )) {
+                EmptyView()
+            }
+            .toggleStyle(.switch)
+            .labelsHidden()
+            .controlSize(.small)
         }
-        .buttonStyle(.plain)
+        .padding(.vertical, 8)
     }
 }
 
