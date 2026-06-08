@@ -2256,6 +2256,16 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 // Full-width row; the view sizes/positions its own content.
                 let top = row.topAnchor.constraint(equalTo: topAnchor, constant: item.topInset)
                 let bottom = row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -item.bottomInset)
+                // During a diffable `apply`, AppKit briefly sets each row to its
+                // default 17pt height (its `NSView-Encapsulated-Layout-Height`)
+                // before it consults `heightOfRow`. A row whose content has firm
+                // internal pins — e.g. a tool-group card pinned top+bottom — can't
+                // fit 17pt, so a REQUIRED bottom pin makes AppKit break-and-log a
+                // constraint every apply. Drop the bottom pin just below required so
+                // it silently yields during that transient and is satisfied exactly
+                // once the real row height lands (measurement is unaffected — height
+                // comes from `spec.measure`, not these pins).
+                bottom.priority = .required - 1
                 NSLayoutConstraint.activate([
                     row.leadingAnchor.constraint(equalTo: leadingAnchor),
                     row.trailingAnchor.constraint(equalTo: trailingAnchor),
