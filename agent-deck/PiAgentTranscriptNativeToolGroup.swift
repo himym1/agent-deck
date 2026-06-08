@@ -3,15 +3,16 @@ import SwiftUI
 
 // Native (pure AppKit) tool-group row. Mirrors `PiAgentTranscriptThreadCard`'s
 // `toolGroupView`: a reply-column container (no outer card chrome, hover copy in
-// the gutter) stacking up to three subtle-filled sub-cards — web activity, tool
-// chips, and a file-changes/diff summary. The display models are computed in the
-// items pass (see `NativeToolGroupModel.make`) so this view is a dumb renderer.
+// the gutter) stacking up to two subtle-filled sub-cards — web activity and a
+// file-changes/diff summary. (Per-tool call counts are not shown inline; they are
+// recapped in the Session resources popover via `toolCallRecap`.) The display
+// models are computed in the items pass (see `NativeToolGroupModel.make`) so this
+// view is a dumb renderer.
 
 // MARK: - Display models
 
 struct NativeToolGroupModel {
     var web: Web?
-    var calls: Calls?
     var diff: Diff?
 
     struct Web {
@@ -29,20 +30,6 @@ struct NativeToolGroupModel {
             var links: [Link]
         }
         struct Link { var title: String; var domain: String }
-    }
-
-    /// A horizontal, wrapping list of tool calls grouped by tool — each item is
-    /// the tool's icon + name + a success count and (when non-zero) a red error
-    /// count. No card, no dot separators; wraps to a second line when there are
-    /// many distinct tools.
-    struct Calls {
-        var items: [Item]
-        struct Item {
-            var icon: String
-            var name: String
-            var successCount: Int
-            var errorCount: Int
-        }
     }
 
     struct Diff {
@@ -84,19 +71,6 @@ extension NativeToolGroupModel {
             )
         }
 
-        var calls: Calls?
-        if visibility.showToolCalls, !toolActivities.isEmpty {
-            calls = Calls(items: toolActivities.map { activity in
-                let errors = activity.entries.filter { $0.role == .error }.count
-                return Calls.Item(
-                    icon: toolIcon(for: activity.name),
-                    name: toolVerb(for: activity.name),
-                    successCount: max(0, activity.count - errors),
-                    errorCount: errors
-                )
-            })
-        }
-
         var diff: Diff?
         if visibility.showDiffs {
             let rows = PiAgentThreadDiffSummaryView.diffRows(from: toolActivities)
@@ -106,8 +80,8 @@ extension NativeToolGroupModel {
             }
         }
 
-        guard web != nil || calls != nil || diff != nil else { return nil }
-        return NativeToolGroupModel(web: web, calls: calls, diff: diff)
+        guard web != nil || diff != nil else { return nil }
+        return NativeToolGroupModel(web: web, diff: diff)
     }
 
     private static func callCountText(_ activities: [PiAgentTranscriptActivity]) -> String {
@@ -177,6 +151,47 @@ extension NativeToolGroupModel {
         default: return "wrench.and.screwdriver"
         }
     }
+
+    /// Session-wide per-tool recap (non-web tool calls only), surfaced in the
+    /// Session resources popover rather than inline in the transcript. Groups every
+    /// tool/error entry by display verb, summing successes and errors across the
+    /// whole conversation. Tool errors carry a `Tool: ` title prefix, so model
+    /// errors (and other `.error` rows) are excluded.
+    @MainActor
+    static func toolCallRecap(from entries: [PiAgentTranscriptEntry]) -> [PiAgentToolCallRecapItem] {
+        let relevant = entries.filter { $0.role == .tool || ($0.role == .error && $0.title.hasPrefix("Tool: ")) }
+        var order: [String] = []
+        var byVerb: [String: PiAgentToolCallRecapItem] = [:]
+        for activity in PiAgentTranscriptActivity.make(from: relevant) where !activity.isWebActivity {
+            let verb = toolVerb(for: activity.name)
+            let errors = activity.entries.filter { $0.role == .error }.count
+            let success = max(0, activity.count - errors)
+            if var existing = byVerb[verb] {
+                existing.successCount += success
+                existing.errorCount += errors
+                byVerb[verb] = existing
+            } else {
+                order.append(verb)
+                byVerb[verb] = PiAgentToolCallRecapItem(
+                    icon: toolIcon(for: activity.name),
+                    name: verb,
+                    successCount: success,
+                    errorCount: errors
+                )
+            }
+        }
+        return order.compactMap { byVerb[$0] }
+    }
+}
+
+/// One row in the Session resources "Tool calls" recap: a tool's display verb,
+/// its icon, and aggregate success/error counts across the session.
+struct PiAgentToolCallRecapItem: Identifiable {
+    var id: String { name }
+    var icon: String
+    var name: String
+    var successCount: Int
+    var errorCount: Int
 }
 
 // MARK: - Tool-group view
@@ -240,7 +255,6 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         diffByPath.removeAll()
         guard let model else { return }
         if let web = model.web { sections.addArrangedSubview(buildWebCard(web)) }
-        if let calls = model.calls { sections.addArrangedSubview(buildCallsView(calls)) }
         if let diff = model.diff { sections.addArrangedSubview(buildDiffCard(diff)) }
         for view in sections.arrangedSubviews {
             view.widthAnchor.constraint(equalTo: sections.widthAnchor).isActive = true
@@ -375,45 +389,6 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         if expandedWebRows.contains(id) { expandedWebRows.remove(id) } else { expandedWebRows.insert(id) }
         rebuildSections()
         notifyContentHeightChanged()
-    }
-
-    // MARK: Tool calls
-
-    /// A horizontal, wrapping list of per-tool items (icon + name + success count
-    /// + red error count). No card, no separators; wraps to further lines only
-    /// when many distinct tools don't fit one line.
-    private func buildCallsView(_ calls: NativeToolGroupModel.Calls) -> NSView {
-        let flow = NativeFlowLayoutView()
-        flow.hSpacing = 16
-        flow.vSpacing = 6
-        flow.setItems(calls.items.map { buildCallItem($0) })
-        return flow
-    }
-
-    private func buildCallItem(_ item: NativeToolGroupModel.Calls.Item) -> NSView {
-        let h = NSStackView()
-        h.translatesAutoresizingMaskIntoConstraints = false
-        h.orientation = .horizontal
-        h.spacing = 5
-        h.alignment = .firstBaseline
-
-        let icon = NSImageView()
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.image = NSImage(systemSymbolName: item.icon, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.caption2Size, weight: .semibold))
-        icon.contentTintColor = item.errorCount > 0 ? AppTheme.ns(AppTheme.roleError) : Self.muted
-        icon.imageScaling = .scaleProportionallyDown
-        icon.widthAnchor.constraint(equalToConstant: 14).isActive = true
-        h.addArrangedSubview(icon)
-
-        h.addArrangedSubview(Self.label(item.name, font: Self.captionBold(), color: .labelColor))
-
-        let countFont = NSFont.monospacedDigitSystemFont(ofSize: NativeTranscriptFont.captionSize, weight: .semibold)
-        h.addArrangedSubview(Self.label("\(item.successCount)", font: countFont, color: Self.muted))
-        if item.errorCount > 0 {
-            h.addArrangedSubview(Self.label("\(item.errorCount)", font: countFont, color: AppTheme.ns(AppTheme.roleError)))
-        }
-        return h
     }
 
     // MARK: Diff card

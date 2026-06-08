@@ -78,6 +78,10 @@ struct PiAgentStartupResourcesPopover: View {
     var viewModel: AppViewModel
     let session: PiAgentSessionRecord
 
+    // Snapshotted once on appear (not read in body) so an open popover doesn't
+    // recompute the recap on every streaming pulse.
+    @State private var toolRecap: [PiAgentToolCallRecapItem] = []
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
@@ -101,6 +105,7 @@ struct PiAgentStartupResourcesPopover: View {
                 VStack(alignment: .leading, spacing: 14) {
                     resourceSection("Runtime", icon: "cpu", color: AppTheme.piLogo, items: runtimeItems, columns: 1, showsDetails: true)
                     resourceSection("Extensions", icon: "puzzlepiece.extension", color: .orange, items: extensionItems, columns: 1, showsDetails: true)
+                    toolCallSection
 
                     if isEmpty {
                         Text("No agents, skills, prompts, or environment overrides were discovered for this session.")
@@ -120,6 +125,58 @@ struct PiAgentStartupResourcesPopover: View {
             }
         }
         .frame(width: 460, height: 480)
+        .onAppear { toolRecap = viewModel.toolCallRecap(forSessionID: session.id) }
+    }
+
+    @ViewBuilder
+    private var toolCallSection: some View {
+        if !toolRecap.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "wrench.and.screwdriver")
+                        .foregroundStyle(.purple)
+                        .frame(width: 18)
+                    Text("Tool calls")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(toolRecap) { item in
+                        toolCallRow(item)
+                        if item.id != toolRecap.last?.id {
+                            Divider()
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func toolCallRow(_ item: PiAgentToolCallRecapItem) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: item.icon)
+                .foregroundStyle(item.errorCount > 0 ? AppTheme.roleError : AppTheme.mutedText)
+                .frame(width: 17)
+            Text(item.name)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.primary)
+            Spacer(minLength: 8)
+            Text("\(item.successCount)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(AppTheme.mutedText)
+            if item.errorCount > 0 {
+                Text("\(item.errorCount)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(AppTheme.roleError)
+            }
+        }
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help("\(item.name): \(item.successCount) ok\(item.errorCount > 0 ? ", \(item.errorCount) failed" : "")")
     }
 
     private var isEmpty: Bool {

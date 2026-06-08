@@ -686,14 +686,6 @@ struct TranscriptDebugScreen: View {
                 ],
                 hiddenCount: 1
             ),
-            calls: .init(items: [
-                .init(icon: "terminal", name: "Shell", successCount: 3, errorCount: 1),
-                .init(icon: "doc.text.magnifyingglass", name: "Read", successCount: 4, errorCount: 0),
-                .init(icon: "pencil.and.outline", name: "Edit", successCount: 2, errorCount: 0),
-                .init(icon: "pencil.and.outline", name: "Write", successCount: 1, errorCount: 0),
-                .init(icon: "checklist", name: "Plan", successCount: 2, errorCount: 0),
-                .init(icon: "wrench.and.screwdriver", name: "Custom Tool", successCount: 1, errorCount: 0)
-            ]),
             diff: .init(fileCount: 2, rows: [
                 .init(path: "agent-deck/PiAgentViews.swift", diff: """
                 + struct TranscriptDebugScreen: View {

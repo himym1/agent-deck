@@ -964,9 +964,12 @@ struct PiNativeSubagentTranscriptSheet: View {
         let displayEntries = [taskEntry] + entries.filter { entry in
             switch entry.role {
             case .tool:
-                return isWebActivity(entry) ? visibility.showWebActivity : visibility.showToolCalls
+                // Non-web tool calls are no longer surfaced in transcripts (recapped
+                // in the Session resources popover instead); web activity still honors
+                // its own toggle.
+                return isWebActivity(entry) ? visibility.showWebActivity : false
             case .status, .raw:
-                return visibility.showToolCalls
+                return false
             case .error, .stderr: return visibility.showErrors
             case .thinking: return visibility.showThinking
             case .assistant: return true

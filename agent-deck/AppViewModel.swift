@@ -4051,6 +4051,14 @@ final class AppViewModel: NSObject {
     /// passed to the runner as a sanity check against Pi's get_fork_messages
     /// reply. Only user-role entries are forkable — the UI gates this — but
     /// guard here anyway so non-UI callers can't misuse it.
+    /// Session-wide per-tool call recap (non-web), for the Session resources
+    /// popover. Computed on demand from the session's transcript — call it once on
+    /// popover appear (not in a SwiftUI body) to avoid recomputing on every
+    /// streaming pulse.
+    func toolCallRecap(forSessionID sessionID: UUID) -> [PiAgentToolCallRecapItem] {
+        NativeToolGroupModel.toolCallRecap(from: piAgentSessionStore.transcript(for: sessionID))
+    }
+
     func forkPiAgentSession(from entry: PiAgentTranscriptEntry) {
         guard entry.role == .user else { return }
         let transcript = piAgentSessionStore.transcript(for: entry.sessionID)

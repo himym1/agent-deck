@@ -271,7 +271,6 @@ struct PiAgentTranscriptDisplayOptionsPopover: View {
         .init(title: "Keyboard shortcuts", subtitle: "Show the shortcut strip at the top of the transcript", systemImage: "keyboard", keyPath: \.showShortcutsStrip),
         .init(title: "Thinking", subtitle: "Show Pi reasoning blocks", systemImage: "brain.head.profile", keyPath: \.showThinking),
         .init(title: "Web activity", subtitle: "Show searches and fetched/read links", systemImage: "globe", keyPath: \.showWebActivity),
-        .init(title: "Tool calls", subtitle: "Show non-web tool call summaries", systemImage: "wrench.and.screwdriver", keyPath: \.showToolCalls),
         .init(title: "Errors", subtitle: "Show error rows in the transcript", systemImage: "exclamationmark.triangle", keyPath: \.showErrors),
         .init(title: "Final system prompt", subtitle: "Show Pi's captured final system prompt card", systemImage: "doc.text", keyPath: \.showFinalSystemPrompt),
         .init(title: "Diffs", subtitle: "Show compact file changes in chat", systemImage: "doc.text.magnifyingglass", keyPath: \.showDiffs),

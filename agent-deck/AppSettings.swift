@@ -4,7 +4,6 @@ struct PiAgentTranscriptVisibilitySettings: Codable, Hashable {
     var showShortcutsStrip: Bool = true
     var showThinking: Bool = true
     var showWebActivity: Bool = true
-    var showToolCalls: Bool = false
     var showErrors: Bool = true
     var showFinalSystemPrompt: Bool = true
     var showPlans: Bool = true
@@ -15,7 +14,6 @@ struct PiAgentTranscriptVisibilitySettings: Codable, Hashable {
         case showShortcutsStrip
         case showThinking
         case showWebActivity
-        case showToolCalls
         case showErrors
         case showFinalSystemPrompt
         case showPlans
@@ -30,7 +28,6 @@ struct PiAgentTranscriptVisibilitySettings: Codable, Hashable {
         showShortcutsStrip = try container.decodeIfPresent(Bool.self, forKey: .showShortcutsStrip) ?? true
         showThinking = try container.decodeIfPresent(Bool.self, forKey: .showThinking) ?? true
         showWebActivity = try container.decodeIfPresent(Bool.self, forKey: .showWebActivity) ?? true
-        showToolCalls = try container.decodeIfPresent(Bool.self, forKey: .showToolCalls) ?? false
         showErrors = try container.decodeIfPresent(Bool.self, forKey: .showErrors) ?? true
         showFinalSystemPrompt = try container.decodeIfPresent(Bool.self, forKey: .showFinalSystemPrompt) ?? true
         showPlans = try container.decodeIfPresent(Bool.self, forKey: .showPlans) ?? true

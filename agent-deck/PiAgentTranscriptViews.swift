@@ -1082,9 +1082,6 @@ struct PiAgentTranscriptThreadCard: View {
             if visibility.showWebActivity, !webActivities.isEmpty {
                 PiAgentWebActivitySummaryView(activities: webActivities)
             }
-            if visibility.showToolCalls, !toolActivities.isEmpty {
-                PiAgentActivitySummaryView(activities: toolActivities)
-            }
             if visibility.showDiffs {
                 PiAgentThreadDiffSummaryView(activities: toolActivities, projectPath: projectPath)
             }
@@ -1218,24 +1215,23 @@ struct PiAgentTranscriptThreadCard: View {
 
     /// Whether a tool group would render at least one section under the current
     /// visibility. Cheap (no diff parsing): a group shows the diff card only when
-    /// it has edit/write activities, the tool list when it has any non-web tool,
-    /// and the web card when it has web activities.
+    /// it has edit/write activities, and the web card when it has web activities.
+    /// (Per-tool call counts are no longer shown inline — they are recapped in the
+    /// Session resources popover — so a tool-only group renders nothing.)
     static func toolGroupHasVisibleContent(
         _ group: PiAgentThreadToolGroup,
         visibility: PiAgentTranscriptVisibilitySettings
     ) -> Bool {
-        var hasTool = false, hasWeb = false, hasEditable = false
+        var hasWeb = false, hasEditable = false
         for activity in group.activities {
             if activity.isWebActivity {
                 hasWeb = true
             } else {
-                hasTool = true
                 let name = activity.name.lowercased()
                 if name == "edit" || name == "write" { hasEditable = true }
             }
         }
-        return (visibility.showToolCalls && hasTool)
-            || (visibility.showWebActivity && hasWeb)
+        return (visibility.showWebActivity && hasWeb)
             || (visibility.showDiffs && hasEditable)
     }
 
@@ -1978,96 +1974,6 @@ struct PiAgentWebActivitySummaryView: View {
             case "fetch_content", "get_search_content", "web_fetch": return "doc.text.magnifyingglass"
             default: return "globe"
             }
-        }
-    }
-}
-
-struct PiAgentActivitySummaryView: View {
-    let activities: [PiAgentTranscriptActivity]
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: hasErrors ? "exclamationmark.triangle" : "wrench.and.screwdriver")
-                .font(AppTheme.Font.caption.weight(.semibold))
-                .foregroundStyle(hasErrors ? AppTheme.roleError : AppTheme.mutedText)
-            Text("Tools")
-                .font(AppTheme.Font.caption.weight(.semibold))
-            Text(callCountText)
-                .font(AppTheme.Font.caption)
-                .foregroundStyle(AppTheme.mutedText)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(activities) { activity in
-                        activityChip(activity)
-                    }
-                }
-            }
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.horizontal, AppTheme.Chat.cardHPadding)
-        .padding(.vertical, AppTheme.Chat.cardVPadding)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.65)).stroke(AppTheme.contentStroke, lineWidth: 1))
-    }
-
-    private var hasErrors: Bool {
-        activities.contains(where: \.isError)
-    }
-
-    private var callCountText: String {
-        let count = activities.reduce(0) { $0 + $1.count }
-        return count == 1 ? "1 call" : "\(count) calls"
-    }
-
-    private func activityChip(_ activity: PiAgentTranscriptActivity) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: icon(for: activity.name))
-                .font(AppTheme.Font.caption2.weight(.semibold))
-            Text(displayName(for: activity.name, count: activity.count))
-                .font(AppTheme.Font.caption)
-            Text("\(activity.count)")
-                .font(AppTheme.Font.caption2.weight(.bold))
-                .monospacedDigit()
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
-                .background(Capsule(style: .continuous).fill(AppTheme.contentStroke.opacity(0.55)))
-        }
-        .foregroundStyle(activity.isError ? AppTheme.roleError : AppTheme.mutedText)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(Capsule(style: .continuous).fill((activity.isError ? AppTheme.roleError : AppTheme.contentStroke).opacity(AppTheme.roleChipOpacity)))
-    }
-
-    private func displayName(for name: String, count: Int) -> String {
-        switch name.lowercased() {
-        case "bash": return "Shell"
-        case "read": return "File read"
-        case "edit": return "Edit"
-        case "write": return "Write"
-        case "set_session_plan": return "Plan"
-        case "update_session_plan": return "Plan update"
-        case "subagent": return count == 1 ? "Deck agent" : "Deck agents"
-        case "web_search": return "Web search"
-        case "fetch_content", "get_search_content", "web_fetch": return "Web content"
-        default:
-            return name
-                .replacingOccurrences(of: "_", with: " ")
-                .replacingOccurrences(of: "-", with: " ")
-                .split(separator: " ")
-                .map { $0.prefix(1).uppercased() + $0.dropFirst() }
-                .joined(separator: " ")
-        }
-    }
-
-    private func icon(for name: String) -> String {
-        switch name.lowercased() {
-        case "bash": return "terminal"
-        case "read": return "doc.text.magnifyingglass"
-        case "edit", "write": return "pencil.and.outline"
-        case "set_session_plan", "update_session_plan": return "checklist"
-        case "subagent": return "person.2.wave.2"
-        case "web_search", "fetch_content", "get_search_content", "web_fetch": return "globe"
-        default: return "wrench.and.screwdriver"
         }
     }
 }
