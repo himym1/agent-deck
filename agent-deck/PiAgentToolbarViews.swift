@@ -288,8 +288,8 @@ struct PiAgentTranscriptDisplayOptionsPopover: View {
                 }
             }
         }
-        .padding(12)
-        .frame(width: 280)
+        .padding(14)
+        .frame(width: 340)
     }
 
     private func optionRow(_ option: Option) -> some View {
@@ -300,9 +300,10 @@ struct PiAgentTranscriptDisplayOptionsPopover: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(option.title)
                     .font(.caption.weight(.semibold))
+                    .fontWidth(.expanded)
                     .foregroundStyle(.primary)
                 Text(option.subtitle)
-                    .font(.caption2)
+                    .font(.caption)
                     .fontWidth(.condensed)
                     .foregroundStyle(AppTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)

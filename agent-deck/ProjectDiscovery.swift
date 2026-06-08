@@ -72,7 +72,20 @@ nonisolated struct ProjectDiscovery {
             var cachedHasXcodeProject: Bool?
             func hasXcodeProject() -> Bool {
                 if let cachedHasXcodeProject { return cachedHasXcodeProject }
-                let result = containsDescendant(withExtensions: ["xcodeproj", "xcworkspace"], in: standardizedURL, maxDepth: 2)
+                // Skip the recursive descendant walk when the candidate's own
+                // contents are unchanged since a prior scan. The walk is the
+                // single largest cost of discovery and otherwise re-runs every
+                // refresh — sampling caught it starving the UI for ~270ms while
+                // a session streamed. Keyed on the candidate directory's
+                // content-modification date, which moves whenever a top-level
+                // `.xcodeproj`/`.xcworkspace` is added or removed.
+                let modified = (try? standardizedURL.resourceValues(
+                    forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                let result = XcodeDescendantWalkCache.shared.contains(
+                    directory: standardizedURL.path, modified: modified
+                ) {
+                    containsDescendant(withExtensions: ["xcodeproj", "xcworkspace"], in: standardizedURL, maxDepth: 2)
+                }
                 cachedHasXcodeProject = result
                 return result
             }
@@ -340,5 +353,40 @@ nonisolated struct ProjectDiscovery {
     private static func directoryExists(_ url: URL, fileManager: FileManager) -> Bool {
         var isDirectory: ObjCBool = false
         return fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+}
+
+/// Process-wide memo for the depth-2 `.xcodeproj`/`.xcworkspace` descendant
+/// walk in `ProjectDiscovery`, the dominant cost of a project scan. Scans
+/// re-run often (file-watch events, project switches, every catalog edit), and
+/// each previously re-walked every candidate's subtree from scratch. The result
+/// only changes when the candidate directory's own contents change, so it is
+/// cached against that directory's content-modification date and the walk is
+/// skipped while the date is unchanged. Reached from background scan tasks that
+/// can briefly overlap (a new refresh starts before the cancelled one unwinds),
+/// so access is lock-guarded.
+nonisolated private final class XcodeDescendantWalkCache: @unchecked Sendable {
+    static let shared = XcodeDescendantWalkCache()
+    private let lock = NSLock()
+    private var entries: [String: (modified: Date, contains: Bool)] = [:]
+
+    /// Returns the cached answer when `modified` matches the stored stamp;
+    /// otherwise runs `walk`, stores its result, and returns it. A nil
+    /// `modified` (e.g. the directory vanished mid-scan) always recomputes and
+    /// is not cached.
+    func contains(directory path: String, modified: Date?, walk: () -> Bool) -> Bool {
+        if let modified {
+            lock.lock()
+            let hit = entries[path]
+            lock.unlock()
+            if let hit, hit.modified == modified { return hit.contains }
+        }
+        let result = walk()
+        if let modified {
+            lock.lock()
+            entries[path] = (modified, result)
+            lock.unlock()
+        }
+        return result
     }
 }

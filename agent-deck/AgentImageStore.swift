@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import CryptoKit
 import Foundation
 import ImageIO
 
@@ -175,7 +176,51 @@ struct AgentImageLoader {
     /// scroll cost — a small thumbnail is crisp at every avatar size and far lighter.
     nonisolated private static let maxPixelSize = 192
 
+    /// On-disk store of already-downsampled 192px thumbnails. Agent avatars are
+    /// immutable per URL (UUID-named, see `cache` above), so a thumbnail decoded
+    /// once can be reloaded on every later launch instead of re-running a
+    /// CGImageSource thumbnail pass over the full 512-1024px source — the decode
+    /// that showed up as a launch-time CPU storm in prewarm. Reads are inline
+    /// (loading a tiny pre-sized PNG is cheaper than today's full-source decode);
+    /// the write is dispatched off-thread so it never lands on a caller's path.
+    nonisolated(unsafe) private static let thumbnailCacheDirectory: URL? = {
+        let fileManager = FileManager.default
+        guard let caches = try? fileManager.url(
+            for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true
+        ) else { return nil }
+        let directory = caches.appendingPathComponent("AgentAvatarThumbnails", isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }()
+
+    nonisolated private static func thumbnailCacheURL(for sourceURL: URL) -> URL? {
+        guard let directory = thumbnailCacheDirectory else { return nil }
+        // Stable across launches (unlike `Hasher`, which is seeded per-process).
+        let digest = SHA256.hash(data: Data(sourceURL.path.utf8))
+        let name = digest.map { String(format: "%02x", $0) }.joined()
+        return directory.appendingPathComponent(name).appendingPathExtension("png")
+    }
+
+    nonisolated private static func writeThumbnail(_ image: NSImage, to url: URL) {
+        guard let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else { return }
+        try? png.write(to: url, options: .atomic)
+    }
+
     nonisolated private static func downsampledImage(at url: URL) -> NSImage? {
+        if let cacheURL = thumbnailCacheURL(for: url),
+           let cached = NSImage(contentsOf: cacheURL) {
+            return cached
+        }
+        guard let image = decodeDownsampledImage(at: url) else { return nil }
+        if let cacheURL = thumbnailCacheURL(for: url) {
+            DispatchQueue.global(qos: .utility).async { writeThumbnail(image, to: cacheURL) }
+        }
+        return image
+    }
+
+    nonisolated private static func decodeDownsampledImage(at url: URL) -> NSImage? {
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
             return NSImage(contentsOf: url)

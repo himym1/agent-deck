@@ -97,6 +97,37 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
         return revision
     }
 
+    // Per-block cached render kind, keyed by the block's `baseRevision` — the
+    // exact value the cell-reconfigure path treats as authoritative. During
+    // streaming the whole items array rebuilds ~30Hz, but only the streaming
+    // tail's revision changes; every stable row reuses its cached kind instead
+    // of re-running the payload build (chip/skill matching, native-kind
+    // assembly). Safe by construction: a freshly built kind is only ever
+    // consumed when a cell reconfigures, which happens only on a revision change
+    // (a cache miss → fresh build), so a revision-match reuse is byte-identical.
+    private var blockKindCache: [String: (revision: Int, kind: PiAgentTranscriptCellKind)] = [:]
+
+    func cachedBlockKind(
+        id: String,
+        revision: Int,
+        make: () -> PiAgentTranscriptCellKind
+    ) -> PiAgentTranscriptCellKind {
+        if let cached = blockKindCache[id], cached.revision == revision {
+            return cached.kind
+        }
+        let kind = make()
+        blockKindCache[id] = (revision, kind)
+        return kind
+    }
+
+    /// Drop cached kinds for blocks no longer present (session switch, compaction,
+    /// thread removal) so the cache stays bounded to the visible transcript.
+    func pruneBlockKindCache(keeping ids: Set<String>) {
+        if blockKindCache.count > ids.count {
+            blockKindCache = blockKindCache.filter { ids.contains($0.key) }
+        }
+    }
+
     func scheduleUpdate(sessionID: UUID?, revision: Int, rawEntries: [PiAgentTranscriptEntry]) {
         guard let sessionID else {
             updateTask?.cancel()
@@ -2011,6 +2042,14 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
         private func performScrollToBottom(_ scrollView: NSScrollView, animated: Bool) {
             guard let documentView = scrollView.documentView else { return }
+            // An auto-follow glide already eases toward the (growing) bottom every
+            // frame and re-reads the document height as it goes, so re-running the
+            // synchronous height flush + full-document `layoutSubtreeIfNeeded` here
+            // on every streaming re-tile is wasted work (this was the steady ~33ms
+            // streaming hitch). Skip it while a glide is in flight; `stepFollowGlide`
+            // forces an authoritative layout before it ever stops, so the glide
+            // cannot settle above the true bottom even if these ticks are skipped.
+            if animated, followGlideTimer != nil { return }
             // Cheap pre-check: when no height work is pending (so the content
             // height is already settled) and the current bounds already place us at
             // the bottom, skip the forced flush + full-document layout below. This
@@ -2082,14 +2121,34 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 return
             }
             let clipView = scrollView.contentView
+            // Cheap path: ease using the current (possibly slightly stale during a
+            // streaming re-tile) document height. The authoritative confirm below
+            // only runs once, at the moment the glide believes it has arrived.
             let maxY = max(0, documentView.bounds.height - clipView.bounds.height)
             let current = clipView.bounds.origin.y
             let gap = maxY - current
-            // Within a frame's worth of the bottom — land exactly and stop.
-            guard abs(gap) > 0.5 else {
-                if abs(gap) > 0.01 {
+            if abs(gap) > 0.5 {
+                let nextY = current + gap * followGlideFactor
+                isProgrammaticScroll = true
+                clipView.scroll(to: NSPoint(x: 0, y: nextY))
+                scrollView.reflectScrolledClipView(clipView)
+                isProgrammaticScroll = false
+                return
+            }
+            // Looks settled — but the height may be stale if a streaming re-tile has
+            // not laid out yet. Force the pending height work + a layout once here
+            // (cheap: only at the landing, not per tick) to confirm the TRUE bottom
+            // before stopping. If content grew under us, keep gliding toward it; this
+            // is what guarantees the glide never settles above the last line, even
+            // though `performScrollToBottom` skips its layout while we run.
+            flushPendingHeightWorkSynchronously()
+            documentView.layoutSubtreeIfNeeded()
+            let trueMaxY = max(0, documentView.bounds.height - clipView.bounds.height)
+            let trueGap = trueMaxY - clipView.bounds.origin.y
+            guard abs(trueGap) > 0.5 else {
+                if abs(trueGap) > 0.01 {
                     isProgrammaticScroll = true
-                    clipView.scroll(to: NSPoint(x: 0, y: maxY))
+                    clipView.scroll(to: NSPoint(x: 0, y: trueMaxY))
                     scrollView.reflectScrolledClipView(clipView)
                     isProgrammaticScroll = false
                 }
@@ -2097,7 +2156,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 publishPinnedState(true)
                 return
             }
-            let nextY = current + gap * followGlideFactor
+            let nextY = clipView.bounds.origin.y + trueGap * followGlideFactor
             isProgrammaticScroll = true
             clipView.scroll(to: NSPoint(x: 0, y: nextY))
             scrollView.reflectScrolledClipView(clipView)
@@ -3106,6 +3165,9 @@ struct PiAgentScreen: View {
         let subagentRuns = nativeSubagentRunsByID
 
         var descriptors: [PiAgentTranscriptBlockDescriptor] = []
+        // Block ids whose render kind we memoize this pass (the per-N timeline
+        // rows). Used to prune the kind cache to the visible transcript below.
+        var memoizedBlockIDs: Set<String> = []
 
         // --- Chrome rows (each its own revision) ---
         if let session = store.selectedSession {
@@ -3241,19 +3303,23 @@ struct PiAgentScreen: View {
                 case let .thread(thread):
                     if let question = thread.question {
                         let blockID = "q-\(item.id)"
+                        let revision = appKitQuestionBlockRevision(question, contextRevision: contextRevision)
+                        memoizedBlockIDs.insert(blockID)
                         // Native fast path for plain-text questions (no attachment
                         // Chip-bearing questions use the dedicated chip-aware card;
                         // plain questions use the lighter bubble.
-                        let hasChips = PiAgentUserMessageContent.displayChipsNaturalWidth(
-                            for: question, skills: skills, commandSlashNames: commandSlashNames) > 0
-                        let questionKind = hasChips
-                            ? nativeChipQuestionKind(question, skills: skills, commandSlashNames: commandSlashNames)
-                            : nativeQuestionKind(question, skills: skills, commandSlashNames: commandSlashNames)
+                        let questionKind = transcriptCache.cachedBlockKind(id: blockID, revision: revision) {
+                            let hasChips = PiAgentUserMessageContent.displayChipsNaturalWidth(
+                                for: question, skills: skills, commandSlashNames: commandSlashNames) > 0
+                            return hasChips
+                                ? nativeChipQuestionKind(question, skills: skills, commandSlashNames: commandSlashNames)
+                                : nativeQuestionKind(question, skills: skills, commandSlashNames: commandSlashNames)
+                        }
                         descriptors.append(PiAgentTranscriptBlockDescriptor(
                             id: blockID,
                             view: nil,
                             kind: questionKind,
-                            baseRevision: appKitQuestionBlockRevision(question, contextRevision: contextRevision),
+                            baseRevision: revision,
                             estimatedContentHeight: { Self.estimatedQuestionHeight(question, width: $0) },
                             threadID: item.id,
                             isThreadQuestion: true
@@ -3264,14 +3330,18 @@ struct PiAgentScreen: View {
                     ) {
                         // Native rendering for the supported child types; the
                         // rest (tool groups, subagent/memory cards) still hosted.
-                        let nativeKind = nativeChildKind(
-                            for: child, visibility: visibility, skills: skills,
-                            commandSlashNames: commandSlashNames, subagentRuns: subagentRuns)
+                        let revision = appKitChildBlockRevision(child, contextRevision: contextRevision)
+                        memoizedBlockIDs.insert(child.id)
+                        let nativeKind = transcriptCache.cachedBlockKind(id: child.id, revision: revision) {
+                            nativeChildKind(
+                                for: child, visibility: visibility, skills: skills,
+                                commandSlashNames: commandSlashNames, subagentRuns: subagentRuns) ?? Self.nativeEmptyKind
+                        }
                         descriptors.append(PiAgentTranscriptBlockDescriptor(
                             id: child.id,
                             view: nil,
-                            kind: nativeKind ?? Self.nativeEmptyKind,
-                            baseRevision: appKitChildBlockRevision(child, contextRevision: contextRevision),
+                            kind: nativeKind,
+                            baseRevision: revision,
                             estimatedContentHeight: { Self.estimatedChildHeight(child, width: $0) },
                             threadID: item.id,
                             isThreadQuestion: false
@@ -3322,6 +3392,8 @@ struct PiAgentScreen: View {
             threadID: nil,
             isThreadQuestion: false
         ), at: 0)
+
+        transcriptCache.pruneBlockKindCache(keeping: memoizedBlockIDs)
 
         // --- Materialize: fold insets into the revision (so an inset change
         // re-tiles the row) and into the height estimate. ---
