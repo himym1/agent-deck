@@ -272,7 +272,25 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         return card
     }
 
-    private static func captionBold() -> NSFont { NativeTranscriptFont.caption(.semibold) }
+    /// The "+N −M" change count with the additions tinted green and deletions red
+    /// (design-system diff colors); "modified" stays muted.
+    private static func diffCountLabel(_ text: String) -> NSTextField {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: NativeTranscriptFont.calloutSize, weight: .semibold)
+        guard text.hasPrefix("+") || text.hasPrefix("−") else {
+            return label(text, font: font, color: muted)
+        }
+        let added = AppTheme.ns(AppTheme.diffAdded)
+        let removed = AppTheme.ns(AppTheme.diffRemoved)
+        let attr = NSMutableAttributedString()
+        for (i, part) in text.split(separator: " ").enumerated() {
+            if i > 0 { attr.append(NSAttributedString(string: "  ")) }
+            let color = part.hasPrefix("+") ? added : removed
+            attr.append(NSAttributedString(string: String(part), attributes: [.font: font, .foregroundColor: color]))
+        }
+        let field = NSTextField(labelWithAttributedString: attr)
+        field.translatesAutoresizingMaskIntoConstraints = false
+        return field
+    }
 
     /// A sub-card header glyph on the shared transcript header scale (16pt box,
     /// `headerIcon`), so "Web"/"Changes" titles read at the same size as the
@@ -318,10 +336,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         let globe = Self.headerGlyph("globe", tint: web.hasErrors ? AppTheme.ns(AppTheme.roleError) : Self.muted)
         header.addArrangedSubview(globe)
         header.addArrangedSubview(Self.label(web.title, font: NativeTranscriptFont.header))
-        header.addArrangedSubview(NSView())   // flexible spacer pushes the count right
-        header.addArrangedSubview(Self.label(web.callCount, font: NativeTranscriptFont.caption(), color: Self.muted))
         stack.addArrangedSubview(header)
-        header.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         for row in web.rows {
             let rowView = buildWebRow(row)
@@ -331,7 +346,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         if web.hiddenCount > 0 {
             let suffix = web.hiddenCount == 1 ? "" : "s"
             stack.addArrangedSubview(Self.label("\(web.hiddenCount) older web update\(suffix) hidden",
-                                                font: NativeTranscriptFont.caption(), color: Self.muted))
+                                                font: NativeTranscriptFont.callout(), color: Self.muted))
         }
 
         embed(stack, in: card, hInset: AppTheme.Chat.cardHPadding, vInset: AppTheme.Chat.cardVPadding)
@@ -340,7 +355,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
 
     /// 14pt icon column + 7pt gap, so the indented source rows (which carry the
     /// same 21pt leading inset) line up under the query title.
-    private static let webRowIndent: CGFloat = 21
+    private static let webRowIndent: CGFloat = 23
 
     private func buildWebRow(_ row: NativeToolGroupModel.Web.Row) -> NSView {
         let rowStack = NSStackView()
@@ -361,20 +376,20 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         let icon = NSImageView()
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.image = NSImage(systemSymbolName: row.icon, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.caption2Size, weight: .semibold))
+            .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.captionSize, weight: .semibold))
         icon.contentTintColor = row.isError ? AppTheme.ns(AppTheme.roleError) : Self.muted
         icon.imageScaling = .scaleProportionallyDown
-        icon.widthAnchor.constraint(equalToConstant: 14).isActive = true
+        icon.widthAnchor.constraint(equalToConstant: 16).isActive = true
         titleRow.addArrangedSubview(icon)
         if hasLinks {
             let query = (row.detail?.isEmpty == false) ? row.detail! : row.title
-            let p = Self.label(query, font: Self.captionBold())
+            let p = Self.label(query, font: NativeTranscriptFont.callout(.semibold))
             p.lineBreakMode = .byTruncatingTail
             titleRow.addArrangedSubview(p)
         } else {
-            titleRow.addArrangedSubview(Self.label(row.title, font: Self.captionBold()))
+            titleRow.addArrangedSubview(Self.label(row.title, font: NativeTranscriptFont.callout(.semibold)))
             if let detail = row.detail, !detail.isEmpty {
-                let d = Self.label(detail, font: NativeTranscriptFont.caption(), color: Self.muted)
+                let d = Self.label(detail, font: NativeTranscriptFont.callout(), color: Self.muted)
                 d.lineBreakMode = .byTruncatingMiddle
                 titleRow.addArrangedSubview(d)
             }
@@ -402,7 +417,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
                                     target: self, action: #selector(toggleWebRow(_:)))
                 more.isBordered = false
                 more.bezelStyle = .inline
-                more.font = NativeTranscriptFont.caption(.semibold)
+                more.font = NativeTranscriptFont.callout(.semibold)
                 more.contentTintColor = AppTheme.ns(AppTheme.brandAccent)
                 more.identifier = NSUserInterfaceItemIdentifier(row.id.uuidString)
                 let wrap = NSStackView(views: [more])
@@ -438,17 +453,13 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         header.alignment = .centerY
         header.addArrangedSubview(Self.headerGlyph("plusminus", tint: Self.muted))
         header.addArrangedSubview(Self.label("Changes", font: NativeTranscriptFont.header))
-        header.addArrangedSubview(NSView())   // flexible spacer pushes the count right
-        header.addArrangedSubview(Self.label(diff.fileCount == 1 ? "1 file" : "\(diff.fileCount) files",
-                                             font: NativeTranscriptFont.caption(), color: Self.muted))
         stack.addArrangedSubview(header)
-        header.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         for row in diff.rows { stack.addArrangedSubview(buildDiffRow(row)) }
         let hidden = diff.rows.count > 4 ? diff.rows.count - 4 : 0
         if hidden > 0 {
             stack.addArrangedSubview(Self.label("\(hidden) more changed file\(hidden == 1 ? "" : "s") hidden",
-                                                font: NativeTranscriptFont.caption(), color: Self.muted))
+                                                font: NativeTranscriptFont.callout(), color: Self.muted))
         }
 
         embed(stack, in: card, hInset: AppTheme.Chat.cardHPadding, vInset: AppTheme.Chat.cardVPadding)
@@ -466,13 +477,11 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         let head = NSStackView()
         head.orientation = .horizontal
         head.spacing = 8
-        head.alignment = .firstBaseline
-        let pathLabel = Self.label(row.path.truncatedMiddle(max: 54), font: Self.captionBold())
+        head.alignment = .centerY
+        let pathLabel = Self.label(row.path.truncatedMiddle(max: 54), font: NativeTranscriptFont.callout(.semibold))
         pathLabel.lineBreakMode = .byTruncatingMiddle
         head.addArrangedSubview(pathLabel)
-        head.addArrangedSubview(Self.label(row.changeCountText,
-                                           font: .monospacedDigitSystemFont(ofSize: NativeTranscriptFont.captionSize, weight: .semibold),
-                                           color: Self.muted))
+        head.addArrangedSubview(Self.diffCountLabel(row.changeCountText))
         head.addArrangedSubview(NSView())  // spacer
         let openBtn = NSButton(title: "Open", target: self, action: #selector(openDiff(_:)))
         openBtn.bezelStyle = .rounded
@@ -534,7 +543,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
             let more = NSButton(title: " " + title, target: self, action: #selector(toggleDiffRow(_:)))
             more.isBordered = false
             more.bezelStyle = .inline
-            more.font = NativeTranscriptFont.caption()
+            more.font = NativeTranscriptFont.callout()
             more.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
             more.imagePosition = .imageLeading
             more.contentTintColor = Self.muted
@@ -552,8 +561,8 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         bg.wantsLayer = true
         bg.layer?.backgroundColor = line.background.cgColor
 
-        let mono = NSFont.monospacedSystemFont(ofSize: NativeTranscriptFont.captionSize, weight: .regular)
-        let monoBold = NSFont.monospacedSystemFont(ofSize: NativeTranscriptFont.captionSize, weight: .semibold)
+        let mono = NSFont.monospacedSystemFont(ofSize: NativeTranscriptFont.calloutSize, weight: .regular)
+        let monoBold = NSFont.monospacedSystemFont(ofSize: NativeTranscriptFont.calloutSize, weight: .semibold)
 
         let gutter = Self.label(line.gutter, font: monoBold, color: line.color)
         gutter.alignment = .right
@@ -688,9 +697,9 @@ private final class PiAgentNativeWebSourceRow: NSView {
         layer?.actions = ["backgroundColor": NSNull(), "bounds": NSNull(), "position": NSNull()]
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        // Caption (11) — the design-system content floor for chrome cards, matching
-        // the memory card's tappable link rows. caption2 (10) read too small.
-        titleLabel.font = NativeTranscriptFont.caption(.medium)
+        // Callout (13) — card content reads at the message scale, matching the Pi
+        // response body rather than a smaller competing size.
+        titleLabel.font = NativeTranscriptFont.callout()
         titleLabel.textColor = .labelColor
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.maximumNumberOfLines = 1
@@ -699,7 +708,7 @@ private final class PiAgentNativeWebSourceRow: NSView {
         addSubview(titleLabel)
 
         domainLabel.translatesAutoresizingMaskIntoConstraints = false
-        domainLabel.font = NativeTranscriptFont.caption()
+        domainLabel.font = NativeTranscriptFont.callout()
         domainLabel.textColor = Self.muted
         domainLabel.lineBreakMode = .byTruncatingMiddle
         domainLabel.maximumNumberOfLines = 1
@@ -708,7 +717,7 @@ private final class PiAgentNativeWebSourceRow: NSView {
 
         chevron.translatesAutoresizingMaskIntoConstraints = false
         chevron.image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.captionSize, weight: .semibold))
+            .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.calloutSize, weight: .semibold))
         chevron.contentTintColor = Self.muted
         chevron.imageScaling = .scaleNone
         chevron.setContentHuggingPriority(.required, for: .horizontal)

@@ -725,12 +725,10 @@ struct TranscriptDebugScreen: View {
             avatarURL: nil,
             outcomePill: "Artifact",
             task: "Implement the complete transcript component gallery using production renderers.",
-            metrics: [
-                .init(icon: "timer", text: "42s"),
-                .init(icon: "tugriksign.circle", text: "2.4k"),
-                .init(icon: "wrench.and.screwdriver", text: "7"),
-                .init(icon: "cpu", text: "claude-sonnet")
-            ],
+            durationText: "42s",
+            modelText: "claude-sonnet",
+            tokensText: "2.4k tokens",
+            thinkingText: "high thinking",
             actions: [
                 .init(symbol: "info.circle", help: "Run details") { _ in },
                 .init(symbol: "text.bubble", help: "Open transcript") { _ in },
@@ -755,7 +753,10 @@ struct TranscriptDebugScreen: View {
                     avatarURL: nil,
                     outcomePill: "Report",
                     task: "Inventory every production transcript row.",
-                    metrics: [.init(icon: "timer", text: "18s"), .init(icon: "wrench.and.screwdriver", text: "5")],
+                    durationText: "18s",
+                    modelText: "claude-sonnet",
+                    tokensText: nil,
+                    thinkingText: "medium thinking",
                     actions: [.init(symbol: "text.bubble", help: "Open transcript") { _ in }]
                 ),
                 NativeAgentBlockPayload(
@@ -766,7 +767,10 @@ struct TranscriptDebugScreen: View {
                     avatarURL: nil,
                     outcomePill: "Review",
                     task: "Review visual coverage and identify missing states.",
-                    metrics: [.init(icon: "timer", text: "11s")],
+                    durationText: "11s",
+                    modelText: nil,
+                    tokensText: nil,
+                    thinkingText: nil,
                     actions: [.init(symbol: "text.bubble", help: "Open transcript") { _ in }]
                 )
             ]

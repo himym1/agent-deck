@@ -22,10 +22,17 @@ struct NativeAgentBlockPayload {
     var avatarURL: URL?
     var outcomePill: String?
     var task: String
-    var metrics: [Metric]
+    /// Elapsed time, shown on the status line next to the status word.
+    var durationText: String?
+    /// Model name, shown in a monospace capsule pill beside the agent name
+    /// (matching the plan-id pill) so it never truncates.
+    var modelText: String?
+    /// Token count, shown as muted text beside the model pill.
+    var tokensText: String?
+    /// Reasoning effort (e.g. "high thinking"), shown as muted text.
+    var thinkingText: String?
     var actions: [Action]
 
-    struct Metric { var icon: String; var text: String }
     struct Action {
         var symbol: String
         var help: String
@@ -273,6 +280,10 @@ final class PiAgentNativeExpandableMarkdown: NSView {
 final class PiAgentNativeAgentBlockView: NSView {
     private let glyph = PiAgentNativeSubagentGlyph()
     private let nameLabel = NSTextField(labelWithString: "")
+    private let modelPill = NativeCardSurface()
+    private let modelLabel = NSTextField(labelWithString: "")
+    private let tokensLabel = NSTextField(labelWithString: "")
+    private let thinkingLabel = NSTextField(labelWithString: "")
     private let outcomePill = NSTextField(labelWithString: "")
     private let outcomeCapsule = NativeCardSurface()
     private let metaLabel = NSTextField(labelWithString: "")
@@ -291,6 +302,42 @@ final class PiAgentNativeAgentBlockView: NSView {
         nameLabel.font = NativeTranscriptFont.body(.semibold)
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        // Model pill beside the name — a monospace capsule (plan-id style) that
+        // hugs its content and never truncates.
+        modelLabel.font = NSFont.monospacedSystemFont(ofSize: NativeTranscriptFont.bodySize, weight: .medium)
+        modelLabel.textColor = AppTheme.ns(AppTheme.mutedText)
+        modelLabel.translatesAutoresizingMaskIntoConstraints = false
+        modelLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        modelPill.translatesAutoresizingMaskIntoConstraints = false
+        modelPill.cardCornerRadius = 11
+        modelPill.fillColor = AppTheme.ns(AppTheme.contentSubtleFill.opacity(0.72))
+        modelPill.strokeColor = .clear
+        modelPill.setContentHuggingPriority(.required, for: .horizontal)
+        modelPill.setContentCompressionResistancePriority(.required, for: .horizontal)
+        modelPill.addSubview(modelLabel)
+        NSLayoutConstraint.activate([
+            modelLabel.leadingAnchor.constraint(equalTo: modelPill.leadingAnchor, constant: 7),
+            modelLabel.trailingAnchor.constraint(equalTo: modelPill.trailingAnchor, constant: -7),
+            // Fixed pill height + centerY so the text is truly centered regardless
+            // of the monospace font's ascender/descender metrics.
+            modelPill.heightAnchor.constraint(equalToConstant: 22),
+            modelLabel.centerYAnchor.constraint(equalTo: modelPill.centerYAnchor)
+        ])
+
+        // Token count beside the pill: muted, truncates before the name does.
+        tokensLabel.font = NativeTranscriptFont.callout()
+        tokensLabel.textColor = AppTheme.ns(AppTheme.mutedText)
+        tokensLabel.lineBreakMode = .byTruncatingTail
+        tokensLabel.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(249), for: .horizontal)
+        tokensLabel.setContentHuggingPriority(.required, for: .horizontal)
+
+        // Reasoning effort beside the tokens: same muted secondary style.
+        thinkingLabel.font = NativeTranscriptFont.callout()
+        thinkingLabel.textColor = AppTheme.ns(AppTheme.mutedText)
+        thinkingLabel.lineBreakMode = .byTruncatingTail
+        thinkingLabel.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(248), for: .horizontal)
+        thinkingLabel.setContentHuggingPriority(.required, for: .horizontal)
 
         outcomePill.font = NativeTranscriptFont.caption2(.medium)
         outcomePill.textColor = AppTheme.ns(AppTheme.mutedText)
@@ -312,9 +359,9 @@ final class PiAgentNativeAgentBlockView: NSView {
         metaLabel.maximumNumberOfLines = 1
         metaLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let nameRow = NSStackView(views: [nameLabel])
+        let nameRow = NSStackView(views: [nameLabel, modelPill, tokensLabel, thinkingLabel])
         nameRow.orientation = .horizontal
-        nameRow.spacing = 7
+        nameRow.spacing = 8
         nameRow.alignment = .centerY
         let titleStack = NSStackView(views: [nameRow, metaLabel])
         titleStack.orientation = .vertical
@@ -351,6 +398,12 @@ final class PiAgentNativeAgentBlockView: NSView {
     func configure(_ payload: NativeAgentBlockPayload) {
         glyph.configure(color: payload.statusColor, isActive: payload.isActive, avatarURL: payload.avatarURL)
         nameLabel.stringValue = payload.agentName
+        modelLabel.stringValue = payload.modelText ?? ""
+        modelPill.isHidden = (payload.modelText?.isEmpty ?? true)
+        tokensLabel.stringValue = payload.tokensText ?? ""
+        tokensLabel.isHidden = (payload.tokensText?.isEmpty ?? true)
+        thinkingLabel.stringValue = payload.thinkingText ?? ""
+        thinkingLabel.isHidden = (payload.thinkingText?.isEmpty ?? true)
         metaLabel.attributedStringValue = metaLine(payload)
         task.configure(source: payload.task)
         rebuildButtons(payload.actions)
@@ -359,11 +412,11 @@ final class PiAgentNativeAgentBlockView: NSView {
     private func metaLine(_ payload: NativeAgentBlockPayload) -> NSAttributedString {
         let muted = AppTheme.ns(AppTheme.mutedText)
         let result = NSMutableAttributedString()
-        result.append(NSAttributedString(string: "● ", attributes: [.foregroundColor: payload.statusColor, .font: NSFont.systemFont(ofSize: 8)]))
+        // No status dot — the colored status word (Running / Completed / Blocked)
+        // already carries the state. Only the elapsed time follows it.
         result.append(NSAttributedString(string: payload.statusText, attributes: [.foregroundColor: payload.statusColor, .font: NativeTranscriptFont.caption(.semibold)]))
-        let tail = payload.metrics.map(\.text)
-        if !tail.isEmpty {
-            result.append(NSAttributedString(string: "  ·  " + tail.joined(separator: "  ·  "), attributes: [.foregroundColor: muted, .font: NativeTranscriptFont.caption()]))
+        if let duration = payload.durationText {
+            result.append(NSAttributedString(string: "   " + duration, attributes: [.foregroundColor: muted, .font: NativeTranscriptFont.caption()]))
         }
         return result
     }
@@ -371,29 +424,35 @@ final class PiAgentNativeAgentBlockView: NSView {
     private func rebuildButtons(_ payloadActions: [NativeAgentBlockPayload.Action]) {
         actions = payloadActions
         buttonStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let base = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+        let muted = AppTheme.ns(AppTheme.mutedText)
         for (i, action) in actions.enumerated() {
-            let base = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-            let image: NSImage?
+            let b: NSButton
             if action.isDestructive {
-                // Palette render so the stop square reads WHITE on a red circle —
-                // matching the composer's white stop glyph, instead of the knockout
-                // square showing the dark background through `.fill`.
-                let palette = NSImage.SymbolConfiguration(paletteColors: [.white, .systemRed])
-                image = NSImage(systemSymbolName: action.symbol, accessibilityDescription: action.help)?
-                    .withSymbolConfiguration(base.applying(palette))
-                image?.isTemplate = false
-            } else {
-                image = NSImage(systemSymbolName: action.symbol, accessibilityDescription: action.help)?
+                // Quiet at rest (muted outline) like its sibling icons; on hover it
+                // fills in white-on-red to flag the destructive action only when
+                // reached for, instead of always shouting in the row.
+                let restSymbol = action.symbol.replacingOccurrences(of: ".fill", with: "")
+                let rest = NSImage(systemSymbolName: restSymbol, accessibilityDescription: action.help)?
                     .withSymbolConfiguration(base)
+                let hover = NSImage(systemSymbolName: action.symbol, accessibilityDescription: action.help)?
+                    .withSymbolConfiguration(base.applying(.init(paletteColors: [.white, .systemRed])))
+                hover?.isTemplate = false
+                let hb = HoverDestructiveButton(image: rest ?? NSImage(), target: self, action: #selector(actionTapped(_:)))
+                hb.restImage = rest
+                hb.hoverImage = hover
+                hb.restTint = muted
+                b = hb
+            } else {
+                let image = NSImage(systemSymbolName: action.symbol, accessibilityDescription: action.help)?
+                    .withSymbolConfiguration(base)
+                b = NSButton(image: image ?? NSImage(), target: self, action: #selector(actionTapped(_:)))
             }
-            let b = NSButton(image: image ?? NSImage(), target: self, action: #selector(actionTapped(_:)))
             b.isBordered = false
             b.imagePosition = .imageOnly
             b.tag = i
             b.isEnabled = action.isEnabled
-            // Destructive button carries its own palette colors; everything else is
-            // a muted template tinted by the host.
-            b.contentTintColor = action.isDestructive ? nil : AppTheme.ns(AppTheme.mutedText)
+            b.contentTintColor = muted
             b.toolTip = action.help
             b.widthAnchor.constraint(equalToConstant: 26).isActive = true
             b.heightAnchor.constraint(equalToConstant: 24).isActive = true
@@ -634,14 +693,16 @@ enum NativeSubagentFactory {
         return "\(v)"
     }
 
-    static func metrics(duration: Int?, tokens: Int?, tools: Int?, model: String?, thinking: String?) -> [NativeAgentBlockPayload.Metric] {
-        var m: [NativeAgentBlockPayload.Metric] = []
-        if let duration { m.append(.init(icon: "timer", text: formattedDuration(duration))) }
-        if let tokens { m.append(.init(icon: "tugriksign.circle", text: compactNumber(tokens))) }
-        if let tools { m.append(.init(icon: "wrench.and.screwdriver", text: "\(tools)")) }
-        if let model = nonEmpty(model) { m.append(.init(icon: "cpu", text: model)) }
-        if let thinking = nonEmpty(thinking) { m.append(.init(icon: "brain.head.profile", text: thinking)) }
-        return m
+    /// Token count shown beside the model pill.
+    static func tokensText(_ tokens: Int?) -> String? {
+        guard let tokens else { return nil }
+        return compactNumber(tokens) + " tokens"
+    }
+
+    /// Reasoning effort shown beside the tokens, e.g. "high thinking".
+    static func thinkingText(_ thinking: String?) -> String? {
+        guard let thinking = nonEmpty(thinking) else { return nil }
+        return thinking + " thinking"
     }
 
     static func showTextPopover(title: String, text: String, from sender: NSButton) {
@@ -705,7 +766,10 @@ extension NativeAgentBlockPayload {
             avatarURL: imageStore.imageURL(for: run.agentName),
             outcomePill: run.expectedOutcome?.displayName,
             task: run.task,
-            metrics: NativeSubagentFactory.metrics(duration: duration, tokens: tokens, tools: tools, model: model, thinking: run.thinking),
+            durationText: duration.map { NativeSubagentFactory.formattedDuration($0) },
+            modelText: NativeSubagentFactory.nonEmpty(model),
+            tokensText: NativeSubagentFactory.tokensText(tokens),
+            thinkingText: NativeSubagentFactory.thinkingText(run.thinking),
             actions: actions
         )
     }
@@ -752,7 +816,10 @@ extension NativeSubagentParallelPayload {
                 avatarURL: imageStore.imageURL(for: child.agentName),
                 outcomePill: child.expectedOutcome?.displayName,
                 task: task,
-                metrics: NativeSubagentFactory.metrics(duration: child.durationMs, tokens: child.totalTokens, tools: child.toolCount, model: child.model, thinking: nil),
+                durationText: child.durationMs.map { NativeSubagentFactory.formattedDuration($0) },
+                modelText: NativeSubagentFactory.nonEmpty(child.model),
+                tokensText: NativeSubagentFactory.tokensText(child.totalTokens),
+                thinkingText: NativeSubagentFactory.thinkingText(run.thinking),
                 actions: actions
             )
         }
@@ -824,4 +891,30 @@ final class PiAgentNativeKeyValuePopover: NSViewController {
     }
 
     @objc private func revealTapped() { revealAction?() }
+}
+
+/// An icon button that stays quiet (muted template) at rest and swaps to a louder
+/// image on hover — used for the destructive Stop control so it reads calm in the
+/// action row but fills in white-on-red when reached for.
+private final class HoverDestructiveButton: NSButton {
+    var restImage: NSImage?
+    var hoverImage: NSImage?
+    var restTint: NSColor?
+    private var hoverTracking: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverTracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { setHovered(true) }
+    override func mouseExited(with event: NSEvent) { setHovered(false) }
+
+    private func setHovered(_ hovered: Bool) {
+        image = hovered ? hoverImage : restImage
+        contentTintColor = hovered ? nil : restTint   // nil lets the hover image's palette colors show.
+    }
 }

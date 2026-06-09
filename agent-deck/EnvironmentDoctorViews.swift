@@ -373,7 +373,6 @@ struct DoctorScreen: View {
                             Text("Pi")
                                 .font(.title3.weight(.semibold))
                                 .fontWidth(.expanded)
-                            AppLabelTag(text: piAgentStatusLabel, color: piAgentStatusColor)
                             if let version = piRuntimeStatus?.currentVersion, !version.isEmpty {
                                 Text(version)
                                     .font(.callout)
@@ -395,6 +394,7 @@ struct DoctorScreen: View {
                     }
 
                     Spacer(minLength: 8)
+                    AppLabelTag(text: piAgentStatusLabel, color: piAgentStatusColor)
                 }
 
                 if let status = piRuntimeStatus {
