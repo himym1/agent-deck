@@ -103,51 +103,89 @@ struct PiAgentAddSessionMenuButton: View {
     }
 }
 
-/// Icon-only round button surfaced next to the `+` only when the user has
-/// Deck agents enabled. Opens a native `Menu` (NSMenu) listing every
-/// discovered agent — tap one to launch a fresh 1:1 chat in the resolved
-/// project (scoped sidebar project → most recently active → first available).
-struct PiAgentChatWithAgentButton: View {
+/// New-session control surfaced when Deck agents are enabled: a single glass
+/// capsule split into `+` (new session) and a paperplane (1:1 with an agent),
+/// separated by a hairline. Built like `GitHubIssuesViews.closeSplitButton` —
+/// the glass sits on the `HStack` and each tap zone is a plain `Button`, so the
+/// fill renders reliably (a `Menu` label's glass does not, outside a toolbar).
+/// The agent list opens as a popover; with no scoped project the `+` opens the
+/// project picker first (mirroring `PiAgentAddSessionMenuButton`).
+struct PiAgentNewSessionSplitButton: View {
     let viewModel: AppViewModel
+    let projects: [DiscoveredProject]
+    let selectedProject: DiscoveredProject?
+    let onNewSession: () -> Void
+    let onNewSessionForProject: (DiscoveredProject) -> Void
+
     @State private var resolvedProject: DiscoveredProject?
     @State private var resolvedAgents: [EffectiveAgentRecord] = []
+    @State private var isAgentPickerPresented = false
+    @State private var isProjectPickerPresented = false
 
     var body: some View {
-        AppCircleIconMenu(
-            style: .soft,
-            tint: AppTheme.brandAccent,
-            size: 30,
-            symbolWeight: .bold,
-            help: "Chat directly with an agent"
-        ) {
-            Image(systemName: "paperplane")
-        } content: {
-            menuContent
+        HStack(spacing: 0) {
+            Button { isAgentPickerPresented.toggle() } label: {
+                Image(systemName: "paperplane")
+                    .font(.system(size: 13, weight: .bold))
+                    .padding(.leading, 11)
+                    .padding(.trailing, 9)
+                    .padding(.vertical, 7)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Chat directly with an agent")
+            .accessibilityLabel("Chat with agent")
+            .popover(isPresented: $isAgentPickerPresented, arrowEdge: .bottom) {
+                PiAgentChatWithAgentPopover(
+                    project: resolvedProject,
+                    agents: resolvedAgents,
+                    onSelect: { agent, project in
+                        isAgentPickerPresented = false
+                        viewModel.startAgentSession(agent: agent, project: project, initialInstruction: nil)
+                    }
+                )
+            }
+
+            Rectangle()
+                .fill(AppTheme.brandAccent.opacity(0.32))
+                .frame(width: 1, height: 16)
+
+            Button(action: plusAction) {
+                Image(systemName: "plus")
+                    .font(.system(size: 13, weight: .bold))
+                    .padding(.leading, 9)
+                    .padding(.trailing, 11)
+                    .padding(.vertical, 7)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(selectedProject == nil ? "New Pi Agent session" : "New session in \(selectedProject!.repositoryDisplayName)")
+            .accessibilityLabel("New Pi Agent session")
+            .popover(isPresented: $isProjectPickerPresented, arrowEdge: .bottom) {
+                PiAgentProjectPickerPopover(
+                    projects: projects,
+                    selectedProject: selectedProject,
+                    onSelectProject: { project in
+                        isProjectPickerPresented = false
+                        onNewSessionForProject(project)
+                    }
+                )
+            }
         }
-        .accessibilityLabel("Chat with agent")
+        .foregroundStyle(AppTheme.brandAccent)
+        .fixedSize()
+        .glassEffect(.regular.tint(AppTheme.brandAccent.opacity(0.18)), in: Capsule(style: .continuous))
+        .contentShape(Capsule(style: .continuous))
         .onAppear { refresh() }
         .onChange(of: viewModel.selectedDiscoveredProject?.path) { _, _ in refresh() }
         .onChange(of: viewModel.discoveredProjects.count) { _, _ in refresh() }
     }
 
-    @ViewBuilder
-    private var menuContent: some View {
-        if let project = resolvedProject {
-            Section("Start a 1:1 session with…") {
-                if resolvedAgents.isEmpty {
-                    Text("No agents available in \(project.repositoryDisplayName)")
-                } else {
-                    ForEach(resolvedAgents, id: \.name) { agent in
-                        Button {
-                            viewModel.startAgentSession(agent: agent, project: project, initialInstruction: nil)
-                        } label: {
-                            Text(agent.name)
-                        }
-                    }
-                }
-            }
+    private func plusAction() {
+        if selectedProject == nil, !projects.isEmpty {
+            isProjectPickerPresented.toggle()
         } else {
-            Text("No project available")
+            onNewSession()
         }
     }
 
@@ -170,6 +208,63 @@ struct PiAgentChatWithAgentButton: View {
             return match
         }
         return viewModel.discoveredProjects.first
+    }
+}
+
+/// Agent picker for the 1:1 button — mirrors `PiAgentProjectPickerPopover`'s glass
+/// panel chrome. Tapping an agent starts a fresh 1:1 chat in the resolved project.
+private struct PiAgentChatWithAgentPopover: View {
+    let project: DiscoveredProject?
+    let agents: [EffectiveAgentRecord]
+    let onSelect: (EffectiveAgentRecord, DiscoveredProject) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Start a 1:1 session")
+                    .font(AppTheme.Font.headline)
+                Text(project.map { "Pick an agent in \($0.repositoryDisplayName)." } ?? "No project available.")
+                    .font(AppTheme.Font.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+
+            Divider()
+
+            if let project, !agents.isEmpty {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 2) {
+                        ForEach(agents, id: \.name) { agent in
+                            Button {
+                                onSelect(agent, project)
+                            } label: {
+                                Text(agent.name)
+                                    .font(AppTheme.Font.callout.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 7)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, 6)
+                }
+                .frame(maxHeight: 300)
+            } else {
+                Text(project == nil ? "No project available." : "No agents available in this project.")
+                    .font(AppTheme.Font.callout)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 12)
+            }
+        }
+        .frame(width: 300)
+        .appGlassPanel(cornerRadius: AppTheme.Chat.panelCornerRadius)
     }
 }
 

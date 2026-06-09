@@ -2678,9 +2678,14 @@ struct PiAgentSidebarSessionsView: View {
                     .help("Delete selected sessions")
                 }
                 if viewModel.appSettings.nativeSubagentsEnabledForNewSessions {
-                    PiAgentChatWithAgentButton(viewModel: viewModel)
-                }
-                if viewModel.selectedDiscoveredProject == nil {
+                    PiAgentNewSessionSplitButton(
+                        viewModel: viewModel,
+                        projects: piAgentNewSessionProjects,
+                        selectedProject: viewModel.selectedDiscoveredProject,
+                        onNewSession: { viewModel.createPiAgentDraftForSelectedProject() },
+                        onNewSessionForProject: { viewModel.createPiAgentDraft(for: $0) }
+                    )
+                } else if viewModel.selectedDiscoveredProject == nil {
                     PiAgentAddSessionMenuButton(
                         projects: piAgentNewSessionProjects,
                         selectedProject: viewModel.selectedDiscoveredProject,
@@ -3199,9 +3204,14 @@ struct PiAgentScreen: View {
                         .accessibilityLabel("Delete selected sessions")
                     }
                     if viewModel.appSettings.nativeSubagentsEnabledForNewSessions {
-                        PiAgentChatWithAgentButton(viewModel: viewModel)
-                    }
-                    if viewModel.selectedDiscoveredProject == nil {
+                        PiAgentNewSessionSplitButton(
+                            viewModel: viewModel,
+                            projects: piAgentNewSessionProjects,
+                            selectedProject: viewModel.selectedDiscoveredProject,
+                            onNewSession: { viewModel.createPiAgentDraftForSelectedProject() },
+                            onNewSessionForProject: { viewModel.createPiAgentDraft(for: $0) }
+                        )
+                    } else if viewModel.selectedDiscoveredProject == nil {
                         PiAgentAddSessionMenuButton(
                             projects: piAgentNewSessionProjects,
                             selectedProject: viewModel.selectedDiscoveredProject,
