@@ -372,14 +372,28 @@ final class PiAgentNativeAgentBlockView: NSView {
         actions = payloadActions
         buttonStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for (i, action) in actions.enumerated() {
-            let image = NSImage(systemSymbolName: action.symbol, accessibilityDescription: action.help)?
-                .withSymbolConfiguration(.init(pointSize: 13, weight: .regular))
+            let base = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+            let image: NSImage?
+            if action.isDestructive {
+                // Palette render so the stop square reads WHITE on a red circle —
+                // matching the composer's white stop glyph, instead of the knockout
+                // square showing the dark background through `.fill`.
+                let palette = NSImage.SymbolConfiguration(paletteColors: [.white, .systemRed])
+                image = NSImage(systemSymbolName: action.symbol, accessibilityDescription: action.help)?
+                    .withSymbolConfiguration(base.applying(palette))
+                image?.isTemplate = false
+            } else {
+                image = NSImage(systemSymbolName: action.symbol, accessibilityDescription: action.help)?
+                    .withSymbolConfiguration(base)
+            }
             let b = NSButton(image: image ?? NSImage(), target: self, action: #selector(actionTapped(_:)))
             b.isBordered = false
             b.imagePosition = .imageOnly
             b.tag = i
             b.isEnabled = action.isEnabled
-            b.contentTintColor = action.isDestructive ? .systemRed : AppTheme.ns(AppTheme.mutedText)
+            // Destructive button carries its own palette colors; everything else is
+            // a muted template tinted by the host.
+            b.contentTintColor = action.isDestructive ? nil : AppTheme.ns(AppTheme.mutedText)
             b.toolTip = action.help
             b.widthAnchor.constraint(equalToConstant: 26).isActive = true
             b.heightAnchor.constraint(equalToConstant: 24).isActive = true
@@ -472,7 +486,7 @@ final class PiAgentNativeSubagentParallelCardView: NSView, PiAgentNativeRowConte
     private let childSpacing: CGFloat = 10
     // Single-line header height: NSTextField's intrinsic height for a 14pt
     // semibold run comes up a hair short and clips descenders, so pin a floor.
-    private let headerHeight: CGFloat = 22
+    private let headerHeight: CGFloat = 18
     private var surfaceWidthC: NSLayoutConstraint!
 
     required init() {
@@ -482,9 +496,9 @@ final class PiAgentNativeSubagentParallelCardView: NSView, PiAgentNativeRowConte
         surface.cardCornerRadius = 16
         addSubview(surface)
 
-        // Set the field's own font to the largest run so it sizes tall enough
-        // for the body-sized title (otherwise the ascenders clip).
-        headerLabel.font = NativeTranscriptFont.body(.semibold)
+        // Shared transcript header scale, matching the memory / web / diff / status
+        // card titles so every card reads at one size.
+        headerLabel.font = NativeTranscriptFont.header
         headerLabel.maximumNumberOfLines = 1
         headerLabel.lineBreakMode = .byTruncatingTail
         childStack.translatesAutoresizingMaskIntoConstraints = false
@@ -562,20 +576,12 @@ final class PiAgentNativeSubagentParallelCardView: NSView, PiAgentNativeRowConte
     }
 
     private func headerLine(_ payload: NativeSubagentParallelPayload) -> NSAttributedString {
-        let result = NSMutableAttributedString()
-        result.append(NSAttributedString(string: payload.title, attributes: [
-            .font: NativeTranscriptFont.body(.semibold),
+        // Title only — the per-agent count and run status are already shown on
+        // each child card below, so the header stays a single clean label.
+        NSAttributedString(string: payload.title, attributes: [
+            .font: NativeTranscriptFont.header,
             .foregroundColor: NSColor.labelColor
-        ]))
-        result.append(NSAttributedString(string: "  ·  \(payload.count)", attributes: [
-            .font: NativeTranscriptFont.caption(.semibold),
-            .foregroundColor: AppTheme.ns(AppTheme.mutedText)
-        ]))
-        result.append(NSAttributedString(string: "   " + payload.statusText, attributes: [
-            .font: NativeTranscriptFont.caption(.semibold),
-            .foregroundColor: payload.statusColor
-        ]))
-        return result
+        ])
     }
 
     func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat {

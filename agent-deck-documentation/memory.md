@@ -227,9 +227,32 @@ Stale memories remain visible in the Memory sidebar but are no longer automatica
 
 Agent Deck stores Markdown first, then ranks recall by on-device semantic similarity. Each memory's title and summary are embedded with `NLContextualEmbedding` (a BERT-class contextual model in the Natural Language framework, macOS 14+), mean-pooled and L2-normalized into one vector. Recall embeds the query the same way and ranks memories by cosine similarity, keeping only those above a similarity threshold; pinned status and recency are tiebreakers, not overrides. The matched records' Markdown bodies are then read for prompt construction.
 
-Embedding runs entirely on-device through an `actor` (`AgentMemoryEmbedder`): no network at inference, no API cost, and nothing leaves the machine. The model asset downloads once via the OS the first time it is requested. Vectors are cached per project in `embeddings.json`, keyed by a content hash so a vector is recomputed only when its source text changes, and tagged with the model identifier so a new OS model invalidates the cache. There is no lexical fallback: if the model is unavailable, recall is simply empty until the asset is ready.
+Embedding runs entirely on-device through an `actor` (`AgentMemoryEmbedder`): no network at inference, no API cost, and nothing leaves the machine. On a supported Apple-silicon Mac the model ships with macOS, so `requestAssets()` resolves instantly with no real download; `load()` just maps it into memory. The model is prewarmed in the background at app launch and when memory is switched on (`AppViewModel.warmMemoryEmbedder` to `AgentMemoryStore.warmEmbedder`), so the first recall isn't a cold load. Vectors are cached per project in `embeddings.json`, keyed by a content hash so a vector is recomputed only when its source text changes, and tagged with the model identifier so a new OS model invalidates the cache.
 
-Because similarity is semantic rather than lexical, filler words self-discount and a query finds related memories even with no shared keywords — which is why the system needs no stopword list or keyword-overlap floor.
+There is no lexical fallback: if the model can't load (an Intel/older Mac with no on-device model, or a transient failure), recall is simply empty. Because that failure is silent, the Memory view surfaces a one-line status only in the problem states (`unavailable` / `unsupported`); when recall is working it shows nothing. Transient failures retry on the next call.
+
+Because similarity is semantic rather than lexical, filler words self-discount and a query finds related memories even with no shared keywords, which is why the system needs no stopword list or keyword-overlap floor.
+
+## Tuning Recall
+
+Recall keeps a memory only when its query-to-memory cosine clears a single floor, `AgentMemoryStore.similarityThreshold` (currently `0.30`). The floor is applied in `AgentMemoryEmbedder.reconcileAndScore`; survivors are then ordered by cosine, with pinned status and recency as tiebreakers, and capped at `maxItems`. The floor is what lets recall **abstain**: when nothing clears it, nothing is injected.
+
+This threshold is Agent Deck's own choice, not borrowed. The inspiration packages do not threshold on similarity: the one that uses embeddings (`pi-session-search`, bundled into `pi-total-recall`) ranks by cosine but takes top-K via Reciprocal Rank Fusion with no cutoff, and `pi-memory`'s recall is lexical (SQLite FTS5), not embeddings. So there is no reference value to copy, and `0.30` is a starting guess that should be tuned against a real corpus.
+
+How to tune it:
+
+- **It is a query-time filter, not an index parameter.** Changing it does not require re-embedding anything; the cached vectors are unaffected. Edit the constant and rebuild, or wire it to a setting (see below).
+- **Direction.** Raise it to be stricter (fewer, more-relevant memories; recall abstains more often). Lower it to surface more (catches looser matches at the risk of noise).
+- **Range.** `NLContextualEmbedding` mean-pooled cosines run compressed: related text often lands around 0.3 to 0.6, unrelated around 0.1 to 0.3. A useful floor is roughly 0.2 to 0.5.
+- **How to observe.** Enable transcript cards (`agentMemoryShowTranscriptCards`) and watch the `Memory Recalled` cards across real sessions. If irrelevant memories appear, raise the floor. If an obviously relevant memory is missed (empty recall where you expected a hit), lower it.
+
+Future options, if a single global floor proves too blunt:
+
+- **Per-kind thresholds.** Preferences and failures are usually worth surfacing on a weak signal, while context can demand a stronger match. Make the floor a function of `AgentMemoryKind` in `reconcileAndScore` or as a post-filter in `retrieve`.
+- **Adaptive (relative) threshold.** Instead of an absolute number, keep results within a delta of the top score (for example `score >= topScore - 0.1`). A strong top match then pulls a few near-peers, while a weak top match pulls nothing. Self-scaling, no fixed anchor.
+- **Rank-based top-K, no floor.** The `pi-session-search` approach: always return the best 1 to 3 by cosine. Deletes the magic number but loses abstention (it always injects something, even on an unrelated session).
+- **Hybrid lexical + semantic.** Reintroduce a lexical signal and fuse it with cosine via Reciprocal Rank Fusion (RRF), as `pi-session-search` does. Only worth it if pure-semantic recall misses exact-token matches in practice.
+- **Expose as a setting.** Promote the constant to `AppSettings` (for example `agentMemorySimilarityThreshold`) with a slider once a good default is established, so it can be tuned without a rebuild.
 
 ## Secret Scanning
 
@@ -273,8 +296,7 @@ The Memory sidebar and Pi agent composer footer expose the main memory enabled t
 
 Likely next steps:
 
-- Add a Memory diagnostics row for embedding-model availability (asset downloaded / loading / unavailable).
-- Tune the cosine similarity threshold against a real corpus, and consider per-kind thresholds.
+- Tune the cosine similarity floor against a real corpus (see Tuning Recall), and consider per-kind or adaptive thresholds.
 - Add optional background memory review after rich turns, implemented as a non-blocking side flow similar to title generation.
 - Add consolidation/dedup (exact + similarity-based) so looser save criteria don't accumulate overlapping memories.
 - Warm the vector cache in the background on write so the first recall after a busy session is instant.

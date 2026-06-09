@@ -29,7 +29,7 @@ struct NativeToolGroupModel {
             var isError: Bool
             var links: [Link]
         }
-        struct Link { var title: String; var domain: String }
+        struct Link { var title: String; var url: String; var domain: String }
     }
 
     struct Diff {
@@ -64,7 +64,7 @@ extension NativeToolGroupModel {
                         title: webRowTitle(for: activity.name),
                         detail: activity.compactDetail,
                         isError: activity.isError,
-                        links: activity.webLinks.map { Web.Link(title: $0.title, domain: $0.domain) }
+                        links: activity.webLinks.map { Web.Link(title: $0.title, url: $0.url, domain: $0.domain) }
                     )
                 },
                 hiddenCount: max(0, webActivities.count - display.count)
@@ -274,6 +274,23 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
 
     private static func captionBold() -> NSFont { NativeTranscriptFont.caption(.semibold) }
 
+    /// A sub-card header glyph on the shared transcript header scale (16pt box,
+    /// `headerIcon`), so "Web"/"Changes" titles read at the same size as the
+    /// memory / status / bubble cards rather than a smaller competing scale.
+    private static func headerGlyph(_ name: String, tint: NSColor) -> NSImageView {
+        let view = NSImageView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.image = NativeTranscriptFont.headerIcon(name)
+        view.contentTintColor = tint
+        view.imageScaling = .scaleProportionallyDown
+        view.setContentHuggingPriority(.required, for: .horizontal)
+        NSLayoutConstraint.activate([
+            view.widthAnchor.constraint(equalToConstant: NativeTranscriptFont.headerIconSize),
+            view.heightAnchor.constraint(equalToConstant: NativeTranscriptFont.headerIconSize)
+        ])
+        return view
+    }
+
     private static func label(_ text: String, font: NSFont, color: NSColor = .labelColor, wraps: Bool = false) -> NSTextField {
         let f = wraps ? NSTextField(wrappingLabelWithString: text) : NSTextField(labelWithString: text)
         f.translatesAutoresizingMaskIntoConstraints = false
@@ -291,46 +308,56 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 8
+        stack.spacing = 10
 
-        // Header
+        // Header: globe + title on the left, call count pinned to the right edge.
         let header = NSStackView()
         header.orientation = .horizontal
         header.spacing = 8
-        let globe = NSImageView()
-        globe.image = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
-        globe.contentTintColor = web.hasErrors ? AppTheme.ns(AppTheme.roleError) : Self.muted
+        header.alignment = .centerY
+        let globe = Self.headerGlyph("globe", tint: web.hasErrors ? AppTheme.ns(AppTheme.roleError) : Self.muted)
         header.addArrangedSubview(globe)
-        header.addArrangedSubview(Self.label(web.title, font: Self.captionBold()))
+        header.addArrangedSubview(Self.label(web.title, font: NativeTranscriptFont.header))
+        header.addArrangedSubview(NSView())   // flexible spacer pushes the count right
         header.addArrangedSubview(Self.label(web.callCount, font: NativeTranscriptFont.caption(), color: Self.muted))
         stack.addArrangedSubview(header)
+        header.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         for row in web.rows {
-            stack.addArrangedSubview(buildWebRow(row, cardWidth: card))
+            let rowView = buildWebRow(row)
+            stack.addArrangedSubview(rowView)
+            rowView.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
         if web.hiddenCount > 0 {
             let suffix = web.hiddenCount == 1 ? "" : "s"
             stack.addArrangedSubview(Self.label("\(web.hiddenCount) older web update\(suffix) hidden",
-                                                font: NativeTranscriptFont.caption2(), color: Self.muted))
+                                                font: NativeTranscriptFont.caption(), color: Self.muted))
         }
 
-        embed(stack, in: card, hInset: 10, vInset: 8)
+        embed(stack, in: card, hInset: AppTheme.Chat.cardHPadding, vInset: AppTheme.Chat.cardVPadding)
         return card
     }
 
-    private func buildWebRow(_ row: NativeToolGroupModel.Web.Row, cardWidth: NSView) -> NSView {
+    /// 14pt icon column + 7pt gap, so the indented source rows (which carry the
+    /// same 21pt leading inset) line up under the query title.
+    private static let webRowIndent: CGFloat = 21
+
+    private func buildWebRow(_ row: NativeToolGroupModel.Web.Row) -> NSView {
         let rowStack = NSStackView()
         rowStack.translatesAutoresizingMaskIntoConstraints = false
         rowStack.orientation = .vertical
         rowStack.alignment = .leading
-        rowStack.spacing = 5
+        rowStack.spacing = 6
 
+        let hasLinks = !row.links.isEmpty
+
+        // Primary line: icon + headline. For searches the query itself is the
+        // headline (the source rows give it context); other calls show the verb
+        // (bold) followed by their detail (muted), separated by weight not a glyph.
         let titleRow = NSStackView()
         titleRow.orientation = .horizontal
         titleRow.spacing = 7
-        titleRow.alignment = .firstBaseline
-        // Fixed 14pt icon column so the title starts at a consistent x and the
-        // bullet-link list (indented 21 = 14 icon + 7 gap) lines up under it.
+        titleRow.alignment = .centerY
         let icon = NSImageView()
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.image = NSImage(systemSymbolName: row.icon, accessibilityDescription: nil)?
@@ -339,47 +366,51 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         icon.imageScaling = .scaleProportionallyDown
         icon.widthAnchor.constraint(equalToConstant: 14).isActive = true
         titleRow.addArrangedSubview(icon)
-        titleRow.addArrangedSubview(Self.label(row.title, font: Self.captionBold()))
-        if let detail = row.detail {
-            let d = Self.label(detail, font: NativeTranscriptFont.caption(), color: Self.muted)
-            d.lineBreakMode = .byTruncatingMiddle
-            titleRow.addArrangedSubview(d)
+        if hasLinks {
+            let query = (row.detail?.isEmpty == false) ? row.detail! : row.title
+            let p = Self.label(query, font: Self.captionBold())
+            p.lineBreakMode = .byTruncatingTail
+            titleRow.addArrangedSubview(p)
+        } else {
+            titleRow.addArrangedSubview(Self.label(row.title, font: Self.captionBold()))
+            if let detail = row.detail, !detail.isEmpty {
+                let d = Self.label(detail, font: NativeTranscriptFont.caption(), color: Self.muted)
+                d.lineBreakMode = .byTruncatingMiddle
+                titleRow.addArrangedSubview(d)
+            }
         }
         rowStack.addArrangedSubview(titleRow)
+        titleRow.widthAnchor.constraint(equalTo: rowStack.widthAnchor).isActive = true
 
-        if !row.links.isEmpty {
+        // Source rows: tappable, open the URL, indented under the query.
+        if hasLinks {
             let expanded = expandedWebRows.contains(row.id)
             let shown = expanded ? row.links : Array(row.links.prefix(Self.inlineLinkLimit))
-            let linksStack = NSStackView()
-            linksStack.orientation = .vertical
-            linksStack.alignment = .leading
-            linksStack.spacing = 3
-            linksStack.edgeInsets = NSEdgeInsets(top: 0, left: 21, bottom: 0, right: 0)
+            let sources = NSStackView()
+            sources.translatesAutoresizingMaskIntoConstraints = false
+            sources.orientation = .vertical
+            sources.alignment = .leading
+            sources.spacing = 1
             for link in shown {
-                let linkRow = NSStackView()
-                linkRow.orientation = .horizontal
-                linkRow.spacing = 6
-                linkRow.alignment = .firstBaseline
-                linkRow.addArrangedSubview(Self.label("•", font: NativeTranscriptFont.caption2(), color: Self.muted))
-                let linkTitle = Self.label(link.title, font: NativeTranscriptFont.caption2(.semibold))
-                linkTitle.lineBreakMode = .byTruncatingTail
-                linkRow.addArrangedSubview(linkTitle)
-                let domain = Self.label(link.domain, font: NativeTranscriptFont.caption2(), color: Self.muted)
-                domain.lineBreakMode = .byTruncatingMiddle
-                linkRow.addArrangedSubview(domain)
-                linksStack.addArrangedSubview(linkRow)
+                let sourceRow = PiAgentNativeWebSourceRow(leadingInset: Self.webRowIndent)
+                sourceRow.configure(title: link.title, domain: link.domain, url: link.url)
+                sources.addArrangedSubview(sourceRow)
+                sourceRow.widthAnchor.constraint(equalTo: sources.widthAnchor).isActive = true
             }
             if row.links.count > Self.inlineLinkLimit {
                 let more = NSButton(title: expanded ? "Show fewer results" : "+\(row.links.count - Self.inlineLinkLimit) more results",
                                     target: self, action: #selector(toggleWebRow(_:)))
                 more.isBordered = false
                 more.bezelStyle = .inline
-                more.font = NativeTranscriptFont.caption2(.semibold)
+                more.font = NativeTranscriptFont.caption(.semibold)
                 more.contentTintColor = AppTheme.ns(AppTheme.brandAccent)
                 more.identifier = NSUserInterfaceItemIdentifier(row.id.uuidString)
-                linksStack.addArrangedSubview(more)
+                let wrap = NSStackView(views: [more])
+                wrap.edgeInsets = NSEdgeInsets(top: 2, left: Self.webRowIndent, bottom: 0, right: 0)
+                sources.addArrangedSubview(wrap)
             }
-            rowStack.addArrangedSubview(linksStack)
+            rowStack.addArrangedSubview(sources)
+            sources.widthAnchor.constraint(equalTo: rowStack.widthAnchor).isActive = true
         }
         return rowStack
     }
@@ -404,23 +435,23 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         let header = NSStackView()
         header.orientation = .horizontal
         header.spacing = 8
-        let icon = NSImageView()
-        icon.image = NSImage(systemSymbolName: "doc.text.magnifyingglass", accessibilityDescription: nil)
-        icon.contentTintColor = Self.muted
-        header.addArrangedSubview(icon)
-        header.addArrangedSubview(Self.label("Changes", font: Self.captionBold()))
+        header.alignment = .centerY
+        header.addArrangedSubview(Self.headerGlyph("plusminus", tint: Self.muted))
+        header.addArrangedSubview(Self.label("Changes", font: NativeTranscriptFont.header))
+        header.addArrangedSubview(NSView())   // flexible spacer pushes the count right
         header.addArrangedSubview(Self.label(diff.fileCount == 1 ? "1 file" : "\(diff.fileCount) files",
                                              font: NativeTranscriptFont.caption(), color: Self.muted))
         stack.addArrangedSubview(header)
+        header.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         for row in diff.rows { stack.addArrangedSubview(buildDiffRow(row)) }
         let hidden = diff.rows.count > 4 ? diff.rows.count - 4 : 0
         if hidden > 0 {
             stack.addArrangedSubview(Self.label("\(hidden) more changed file\(hidden == 1 ? "" : "s") hidden",
-                                                font: NativeTranscriptFont.caption2(), color: Self.muted))
+                                                font: NativeTranscriptFont.caption(), color: Self.muted))
         }
 
-        embed(stack, in: card, hInset: 10, vInset: 8)
+        embed(stack, in: card, hInset: AppTheme.Chat.cardHPadding, vInset: AppTheme.Chat.cardVPadding)
         return card
     }
 
@@ -440,22 +471,18 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         pathLabel.lineBreakMode = .byTruncatingMiddle
         head.addArrangedSubview(pathLabel)
         head.addArrangedSubview(Self.label(row.changeCountText,
-                                           font: .monospacedDigitSystemFont(ofSize: NativeTranscriptFont.caption2Size, weight: .semibold),
+                                           font: .monospacedDigitSystemFont(ofSize: NativeTranscriptFont.captionSize, weight: .semibold),
                                            color: Self.muted))
         head.addArrangedSubview(NSView())  // spacer
         let openBtn = NSButton(title: "Open", target: self, action: #selector(openDiff(_:)))
         openBtn.bezelStyle = .rounded
         openBtn.controlSize = .small
         openBtn.font = NativeTranscriptFont.caption2(.semibold)
-        openBtn.image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: nil)
-        openBtn.imagePosition = .imageLeading
         openBtn.identifier = NSUserInterfaceItemIdentifier(row.path)
         let copyBtn = NSButton(title: "Copy", target: self, action: #selector(copyDiff(_:)))
         copyBtn.bezelStyle = .rounded
         copyBtn.controlSize = .small
         copyBtn.font = NativeTranscriptFont.caption2(.semibold)
-        copyBtn.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: nil)
-        copyBtn.imagePosition = .imageLeading
         copyBtn.identifier = NSUserInterfaceItemIdentifier(row.path)
         diffByPath[row.path] = row
         head.addArrangedSubview(openBtn)
@@ -507,7 +534,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
             let more = NSButton(title: " " + title, target: self, action: #selector(toggleDiffRow(_:)))
             more.isBordered = false
             more.bezelStyle = .inline
-            more.font = NativeTranscriptFont.caption2()
+            more.font = NativeTranscriptFont.caption()
             more.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
             more.imagePosition = .imageLeading
             more.contentTintColor = Self.muted
@@ -594,12 +621,9 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         guard let path = sender.identifier?.rawValue, let row = diffByPath[path] else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(row.diff, forType: .string)
-        if let checkmark = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil) {
-            sender.image = checkmark
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
-                sender.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: nil)
-            }
-        }
+        // Text-only button: confirm by swapping the title briefly.
+        sender.title = "Copied"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { sender.title = "Copy" }
     }
 
     /// Present the full diff in a modal sheet (hosting the SwiftUI diff view — a
@@ -634,6 +658,113 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         expandedWebRows.removeAll()
         expandedDiffRows.removeAll()
         diffByPath.removeAll()
+    }
+}
+
+// MARK: - Web source row
+
+/// One tappable web source: the page title, its domain (muted), and a trailing
+/// chevron. Highlights on hover; opens the URL on click. Carries its own leading
+/// inset so it aligns under the query title without a bullet marker.
+private final class PiAgentNativeWebSourceRow: NSView {
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let domainLabel = NSTextField(labelWithString: "")
+    private let chevron = NSImageView()
+    private var url: String = ""
+    private var trackingArea: NSTrackingArea?
+
+    private let vPad: CGFloat = 3
+    private static let muted = AppTheme.ns(AppTheme.mutedText)
+    private static let accent = AppTheme.ns(AppTheme.brandAccent)
+    // Shared row-hover highlight from the design system (selection fill).
+    private static let hoverFill = AppTheme.ns(AppTheme.selectionFill)
+
+    init(leadingInset: CGFloat) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = AppTheme.Chat.chipCornerRadius
+        layer?.cornerCurve = .continuous
+        layer?.actions = ["backgroundColor": NSNull(), "bounds": NSNull(), "position": NSNull()]
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        // Caption (11) — the design-system content floor for chrome cards, matching
+        // the memory card's tappable link rows. caption2 (10) read too small.
+        titleLabel.font = NativeTranscriptFont.caption(.medium)
+        titleLabel.textColor = .labelColor
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.maximumNumberOfLines = 1
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        addSubview(titleLabel)
+
+        domainLabel.translatesAutoresizingMaskIntoConstraints = false
+        domainLabel.font = NativeTranscriptFont.caption()
+        domainLabel.textColor = Self.muted
+        domainLabel.lineBreakMode = .byTruncatingMiddle
+        domainLabel.maximumNumberOfLines = 1
+        domainLabel.setContentHuggingPriority(.required, for: .horizontal)
+        addSubview(domainLabel)
+
+        chevron.translatesAutoresizingMaskIntoConstraints = false
+        chevron.image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.captionSize, weight: .semibold))
+        chevron.contentTintColor = Self.muted
+        chevron.imageScaling = .scaleNone
+        chevron.setContentHuggingPriority(.required, for: .horizontal)
+        addSubview(chevron)
+
+        NSLayoutConstraint.activate([
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: leadingInset),
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: vPad),
+            titleLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -vPad),
+
+            domainLabel.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 7),
+            domainLabel.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            domainLabel.trailingAnchor.constraint(lessThanOrEqualTo: chevron.leadingAnchor, constant: -8),
+
+            chevron.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            chevron.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor)
+        ])
+
+        addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openSource)))
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var isFlipped: Bool { true }
+
+    func configure(title: String, domain: String, url: String) {
+        self.url = url
+        let displayTitle = title.isEmpty ? domain : title
+        titleLabel.stringValue = displayTitle
+        // Skip the domain when the title already is the domain (no redundancy).
+        domainLabel.stringValue = (displayTitle == domain) ? "" : domain
+        domainLabel.isHidden = domainLabel.stringValue.isEmpty
+        toolTip = url
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { setHover(true) }
+    override func mouseExited(with event: NSEvent) { setHover(false) }
+
+    private func setHover(_ on: Bool) {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = on ? Self.hoverFill.cgColor : NSColor.clear.cgColor
+        }
+        chevron.contentTintColor = on ? Self.accent : Self.muted
+    }
+
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+
+    @objc private func openSource() {
+        guard let link = URL(string: url) else { return }
+        NSWorkspace.shared.open(link)
     }
 }
 

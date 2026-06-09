@@ -66,12 +66,9 @@ struct PiAgentSidebarChip: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                (isSelected
-                    ? Image(systemName: "chevron.right")
-                    : Image("pi"))
+                Image("pi")
                     .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(isSelected ? AppTheme.brandAccent : Color.secondary)
-                    .contentTransition(.symbolEffect(.replace.downUp))
+                    .foregroundStyle(Color.secondary)
                     .frame(width: 12, height: 12)
                     .accessibilityHidden(true)
 
@@ -104,7 +101,6 @@ struct PiAgentSidebarChip: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .animation(.snappy(duration: 0.18), value: isSelected)
         .help(statusText)
         .accessibilityLabel("Pi Agent")
         .accessibilityHint(accessibilityHint)

@@ -346,7 +346,11 @@ extension View {
 ///    both the chrome hint and the symbol. Use for secondary icon actions
 ///    (add-session `+`, clear, etc.).
 struct AppCircleIconButton<Symbol: View>: View {
-    enum Style { case prominent, soft }
+    /// `prominent` — tinted glass + accent-foreground symbol (primary CTAs).
+    /// `soft` — low-opacity tinted glass, tint-colored symbol (secondary actions).
+    /// `neutral` — untinted (clear) glass, muted symbol (back/dismiss controls that
+    /// shouldn't carry an accent), at the same explicit diameter as the others.
+    enum Style { case prominent, soft, neutral }
 
     var style: Style = .soft
     var tint: Color = AppTheme.brandAccent
@@ -365,7 +369,7 @@ struct AppCircleIconButton<Symbol: View>: View {
                 .fontWeight(symbolWeight)
                 .foregroundStyle(symbolColor)
                 .frame(width: size, height: size)
-                .glassEffect(.regular.tint(tintMaterial), in: Circle())
+                .glassEffect(style == .neutral ? .regular : .regular.tint(tintMaterial), in: Circle())
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -376,6 +380,7 @@ struct AppCircleIconButton<Symbol: View>: View {
         switch style {
         case .prominent: return AppTheme.accentForeground
         case .soft: return tint
+        case .neutral: return AppTheme.mutedText
         }
     }
 
@@ -383,6 +388,7 @@ struct AppCircleIconButton<Symbol: View>: View {
         switch style {
         case .prominent: return tint
         case .soft: return tint.opacity(0.18)
+        case .neutral: return .clear  // unused — neutral uses untinted .regular glass
         }
     }
 }

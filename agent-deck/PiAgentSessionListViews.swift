@@ -470,7 +470,9 @@ struct PiAgentSessionRow: View, Equatable {
                 .font(AppTheme.Font.footnote.weight(.semibold))
                 .fontWidth(.expanded)
                 .lineLimit(1)
-                .frame(height: 22, alignment: .center)
+                // Match the non-editing title height so entering rename never
+                // changes the row height (keeps the list height stable).
+                .frame(height: 30, alignment: .center)
                 .focused($isTitleFocused)
                 .onSubmit(commitRename)
                 .onExitCommand { resetRenameState() }
@@ -501,7 +503,14 @@ struct PiAgentSessionRow: View, Equatable {
             .fontWidth(.expanded)
             .foregroundStyle(.primary)
             .padding(.horizontal, 5)
-            .frame(minHeight: 22, maxHeight: 30, alignment: .center)
+            // Fixed (not min/max) so the row's height never depends on whether the
+            // title wraps to two lines. Measuring a wrapping title requires a full
+            // text layout pass; with a stable height the row is cheap to measure, so
+            // the LazyVStack no longer pays a measurement storm when the list
+            // re-evaluates (selection changes, streaming badge updates). 30pt is the
+            // existing two-line cap, so two-line titles are unaffected and one-line
+            // titles simply center in the same box the max already reserved.
+            .frame(height: 30, alignment: .center)
             .contentShape(Rectangle())
             .onHover { isTitleHovered = $0 }
             .onTapGesture(perform: onBeginRename)

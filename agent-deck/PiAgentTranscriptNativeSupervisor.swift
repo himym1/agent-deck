@@ -153,6 +153,15 @@ private final class PiAgentNativeSupervisorField: NSView {
     // vertically ambiguous and the input box overflows under the button row.
     private var inputBottomC: NSLayoutConstraint!
     private var infoBottomC: NSLayoutConstraint!
+    // Top pins, toggled by label presence. With a label the control hangs off the
+    // label's bottom; without one it pins to the field's top — matching
+    // `measuredHeight`, which only counts the label + gap when a label is shown.
+    // (A hidden NSTextField still claims its line height, so pinning to it always
+    // would add a phantom gap the measurement doesn't account for.)
+    private var inputTopWithLabelC: NSLayoutConstraint!
+    private var inputTopNoLabelC: NSLayoutConstraint!
+    private var infoTopWithLabelC: NSLayoutConstraint!
+    private var infoTopNoLabelC: NSLayoutConstraint!
 
     init() {
         super.init(frame: .zero)
@@ -196,8 +205,13 @@ private final class PiAgentNativeSupervisorField: NSView {
         inputHeightC = inputSurface.heightAnchor.constraint(equalToConstant: minInputHeight)
         inputBottomC = inputSurface.bottomAnchor.constraint(equalTo: bottomAnchor)
         infoBottomC = infoField.bottomAnchor.constraint(equalTo: bottomAnchor)
-        // Freeform default: the input box owns the field bottom. `configure`
-        // swaps to `infoBottomC` for read-only info rows.
+        inputTopWithLabelC = inputSurface.topAnchor.constraint(equalTo: labelField.bottomAnchor, constant: labelToInput)
+        inputTopNoLabelC = inputSurface.topAnchor.constraint(equalTo: topAnchor)
+        infoTopWithLabelC = infoField.topAnchor.constraint(equalTo: labelField.bottomAnchor, constant: labelToInput)
+        infoTopNoLabelC = infoField.topAnchor.constraint(equalTo: topAnchor)
+        // Freeform default: an unlabelled input box owning the full field height.
+        // `configure` swaps these for labelled / info-row shapes.
+        inputTopNoLabelC.isActive = true
         inputBottomC.isActive = true
 
         NSLayoutConstraint.activate([
@@ -205,11 +219,9 @@ private final class PiAgentNativeSupervisorField: NSView {
             labelField.leadingAnchor.constraint(equalTo: leadingAnchor),
             labelField.trailingAnchor.constraint(equalTo: trailingAnchor),
 
-            infoField.topAnchor.constraint(equalTo: labelField.bottomAnchor, constant: labelToInput),
             infoField.leadingAnchor.constraint(equalTo: leadingAnchor),
             infoField.trailingAnchor.constraint(equalTo: trailingAnchor),
 
-            inputSurface.topAnchor.constraint(equalTo: labelField.bottomAnchor, constant: labelToInput),
             inputSurface.leadingAnchor.constraint(equalTo: leadingAnchor),
             inputSurface.trailingAnchor.constraint(equalTo: trailingAnchor),
             inputHeightC,
@@ -228,15 +240,21 @@ private final class PiAgentNativeSupervisorField: NSView {
         isInfo = field.isInfo
         isRequired = field.isRequired
 
-        if let label = field.label, !label.isEmpty {
-            labelField.stringValue = label
+        let hasLabel = (field.label?.isEmpty == false)
+        if hasLabel {
+            labelField.stringValue = field.label ?? ""
             labelField.isHidden = false
         } else {
             labelField.isHidden = true
         }
 
-        // Swap the field's bottom pin to whichever control is visible, so the
-        // field height stays deterministic in both shapes.
+        // Pin the visible control's top (to the label when present, else the
+        // field top) and its bottom to the field bottom, so the field height is
+        // deterministic and matches `measuredHeight` in every shape.
+        inputTopWithLabelC.isActive = false
+        inputTopNoLabelC.isActive = false
+        infoTopWithLabelC.isActive = false
+        infoTopNoLabelC.isActive = false
         inputBottomC.isActive = false
         infoBottomC.isActive = false
         if field.isInfo {
@@ -244,6 +262,7 @@ private final class PiAgentNativeSupervisorField: NSView {
             infoField.isHidden = false
             inputSurface.isHidden = true
             scroll.isHidden = true
+            (hasLabel ? infoTopWithLabelC : infoTopNoLabelC).isActive = true
             infoBottomC.isActive = true
         } else {
             infoField.isHidden = true
@@ -251,6 +270,7 @@ private final class PiAgentNativeSupervisorField: NSView {
             scroll.isHidden = false
             textView.string = ""
             (textView.textStorage)?.font = NativeTranscriptFont.callout()
+            (hasLabel ? inputTopWithLabelC : inputTopNoLabelC).isActive = true
             inputBottomC.isActive = true
         }
     }

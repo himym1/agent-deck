@@ -637,21 +637,6 @@ struct TranscriptDebugScreen: View {
             native("debug-parallel-agents", spec: .of(PiAgentNativeSubagentParallelCardView.self) { view, width in
                 view.configure(payload: parallelAgentPayload, width: width)
             }),
-            native("debug-summary", spec: .of(PiAgentNativeSubagentSummaryView.self) { view, width in
-                view.configure(payload: NativeSubagentSummaryPayload(
-                    title: "Parallel · 3 agents",
-                    isRunning: true,
-                    metrics: [
-                        .init(text: "1/3 done", color: .systemGreen),
-                        .init(text: "2 running", color: .systemOrange)
-                    ],
-                    agents: [
-                        .init(icon: "checkmark", color: .systemGreen, name: "Explorer", meta: "4 tools · 8s", detail: "Mapped transcript components", detailIsMono: false),
-                        .init(icon: "ellipsis", color: .systemCyan, name: "Coder", meta: "2 tools · 1.2k token", detail: "Updating shared renderer", detailIsMono: false),
-                        .init(icon: "ellipsis", color: .systemCyan, name: "Reviewer", meta: "running", detail: "Checking visual consistency", detailIsMono: false)
-                    ]
-                ), width: width)
-            }),
             native("debug-supervisor-freeform", spec: .of(PiAgentNativeSupervisorCardView.self) { view, width in
                 view.configure(payload: NativeSupervisorPayload(
                     title: "Agent needs a decision",
@@ -710,8 +695,8 @@ struct TranscriptDebugScreen: View {
                 hasErrors: false,
                 rows: [
                     .init(id: UUID(), icon: "magnifyingglass", title: "Search", detail: "SwiftUI transcript UI patterns", isError: false, links: [
-                        .init(title: "SwiftUI documentation", domain: "developer.apple.com"),
-                        .init(title: "Human Interface Guidelines", domain: "developer.apple.com")
+                        .init(title: "SwiftUI documentation", url: "https://developer.apple.com/documentation/swiftui", domain: "developer.apple.com"),
+                        .init(title: "Human Interface Guidelines", url: "https://developer.apple.com/design/human-interface-guidelines", domain: "developer.apple.com")
                     ]),
                     .init(id: UUID(), icon: "doc.text.magnifyingglass", title: "Read content", detail: "Transcript rendering guidance", isError: false, links: [])
                 ],
@@ -2665,15 +2650,14 @@ struct PiAgentSidebarSessionsView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Button(action: onBackToResources) {
+                AppCircleIconButton(
+                    style: .neutral,
+                    size: 30,
+                    help: "Resources",
+                    action: onBackToResources
+                ) {
                     Image(systemName: "chevron.left")
-                        .font(AppTheme.Font.body.weight(.semibold))
-                        .foregroundStyle(AppTheme.mutedText)
-                        .frame(width: 28, height: 28)
-                        .contentShape(Circle())
                 }
-                .buttonStyle(.plain)
-                .help("Resources")
                 .accessibilityLabel("Show resources")
 
                 Text("Coding Agent")
@@ -2846,6 +2830,24 @@ struct PiAgentSidebarSessionsView: View {
     }
 }
 
+/// Opaque cover shown over the transcript during a session switch — matches the
+/// transcript canvas so the rows settling underneath are hidden, with a centered
+/// spinner. The cover lifts once the table has applied + snapped to the bottom.
+private struct PiAgentTranscriptSettleCover: View {
+    var body: some View {
+        ZStack {
+            Rectangle().fill(AppTheme.windowBackground)
+            VStack(spacing: 10) {
+                AppSpinner()
+                Text("Loading transcript")
+                    .font(.system(size: 12))
+                    .foregroundStyle(AppTheme.mutedText)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
 struct PiAgentScreen: View {
     var viewModel: AppViewModel
     var store: PiAgentSessionStore
@@ -2923,6 +2925,10 @@ struct PiAgentScreen: View {
     @State private var frozenRuntimeFooterSession: PiAgentSessionRecord?
     @State private var stabilizedProcessingMessage: String?
     @State private var processingMessageUpdateTask: Task<Void, Never>?
+    // True briefly after a session switch while the transcript table applies its
+    // new rows and snaps to the bottom; drives the opaque settle cover so the
+    // top-to-bottom render is never visible. See `activeSessionColumn`.
+    @State private var transcriptSettling = false
 
     // Keep long sessions cheap to relayout when side panels open; older visible items remain accessible separately.
     private let recentTranscriptTimelineItemLimit = 50
@@ -3293,6 +3299,14 @@ struct PiAgentScreen: View {
                     .padding(.horizontal, 18)
                     .transcriptEdgeFade()
 
+                // Opaque cover during a session switch so the table building and
+                // settling its rows (top-to-bottom render) is never seen — the user
+                // sees the loading card, then the finished transcript already pinned.
+                if transcriptSettling {
+                    PiAgentTranscriptSettleCover()
+                        .transition(.opacity)
+                }
+
                 // Sits ON TOP of the edge fade (added after it) so the pill
                 // itself is never faded out. Isolated in its own view that observes
                 // `transcriptPinnedState` so toggling the pill never re-evaluates this
@@ -3300,6 +3314,21 @@ struct PiAgentScreen: View {
                 JumpToLatestOverlay(pinnedState: transcriptPinnedState) {
                     requestTranscriptBottomScroll()
                 }
+            }
+            // Cover on session change; lift once the table has had a beat to apply
+            // the new rows and snap to the bottom (after any disk load completes).
+            .onChange(of: store.selectedSession?.id, initial: true) { _, newID in
+                if newID != nil { transcriptSettling = true }
+            }
+            .task(id: store.selectedSession?.id) {
+                guard store.selectedSession != nil else { transcriptSettling = false; return }
+                while store.isSelectedTranscriptLoading {
+                    try? await Task.sleep(for: .milliseconds(16))
+                    if Task.isCancelled { return }
+                }
+                try? await Task.sleep(for: .milliseconds(90))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.18)) { transcriptSettling = false }
             }
 
             PiAgentProcessingIndicatorBar(message: stabilizedProcessingMessage)
@@ -3840,13 +3869,7 @@ struct PiAgentScreen: View {
         subagentRuns: [UUID: PiSubagentRunRecord]
     ) -> PiAgentTranscriptCellKind? {
         switch child {
-        case .assistant(let entry):
-            if let summary = PiAgentSubagentSummary.cached(for: entry) {
-                let payload = NativeSubagentSummaryPayload.make(summary: summary)
-                return .native(.of(PiAgentNativeSubagentSummaryView.self) { view, width in
-                    view.configure(payload: payload, width: width)
-                })
-            }
+        case .assistant:
             return Self.nativeReplyPayload(for: child).map { .bubble($0) }
         case .thinking:
             return Self.nativeReplyPayload(for: child).map { .bubble($0) }
@@ -3956,7 +3979,6 @@ struct PiAgentScreen: View {
     private static func nativeReplyPayload(for child: PiAgentThreadChild) -> NativeBubblePayload? {
         switch child {
         case .assistant(let entry):
-            if PiAgentSubagentSummary.cached(for: entry) != nil { return nil }
             let text = entry.text
             return NativeBubblePayload(
                 role: .assistant,

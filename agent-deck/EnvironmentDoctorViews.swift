@@ -421,19 +421,7 @@ struct DoctorScreen: View {
 
     private func piCommandChip(_ command: String, buttonLabel: String = "Run in Terminal", action: (() -> Void)? = nil) -> some View {
         HStack(spacing: 8) {
-            // Command is a read-only code snippet (subtle fill, not a button
-            // shape) so it doesn't read as tappable.
-            Text(command)
-                .font(.footnote.monospaced())
-                .textSelection(.enabled)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(AppTheme.contentSubtleFill)
-                )
-
-            AppCopyIconButton(text: command, help: "Copy command")
+            DoctorCopyCommandButton(command: command)
 
             if let action {
                 Button(buttonLabel, action: action)
@@ -1017,6 +1005,56 @@ private func warningSection(title: String, warnings: [DiagnosticWarning]) -> som
                         .textSelection(.enabled)
                 }
             }
+        }
+    }
+}
+
+private struct DoctorCopyCommandButton: View {
+    let command: String
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(command, forType: .string)
+            showCopiedFeedback()
+        } label: {
+            HStack(spacing: 0) {
+                Text(command)
+                    .font(.footnote.monospaced())
+                    .padding(.leading, 12)
+                    .padding(.trailing, 10)
+
+                Divider()
+                    .frame(height: 18)
+
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.caption.weight(.semibold))
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(width: 38)
+                    .accessibilityLabel(copied ? "Copied" : "Copy command")
+            }
+            .frame(height: 32)
+            .foregroundStyle(.primary)
+            .glassEffect(.regular, in: Capsule(style: .continuous))
+            .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            if hovering {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .help(copied ? "Copied" : "Copy command")
+    }
+
+    private func showCopiedFeedback() {
+        copied = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1100))
+            copied = false
         }
     }
 }

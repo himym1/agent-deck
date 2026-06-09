@@ -352,7 +352,6 @@ struct PiAgentTranscriptActivity: Identifiable, Hashable {
     var isError: Bool
     var compactDetail: String?
     var webLinks: [PiAgentWebLink]
-    var subagentSummary: PiAgentSubagentSummary?
 
     var representativeEntry: PiAgentTranscriptEntry? { entries.first }
     nonisolated var count: Int { entries.count }
@@ -374,15 +373,13 @@ struct PiAgentTranscriptActivity: Identifiable, Hashable {
         }
         return orderedNames.compactMap { name in
             guard let entries = grouped[name], !entries.isEmpty else { return nil }
-            let subagentSummary = entries.lazy.compactMap(PiAgentSubagentSummary.init(entry:)).first { $0.total > 0 }
             return PiAgentTranscriptActivity(
                 id: entries.first?.id ?? UUID(),
                 name: name,
                 entries: entries,
                 isError: entries.contains { $0.role == .error },
                 compactDetail: compactDetail(for: name, entries: entries),
-                webLinks: webLinks(for: name, entries: entries),
-                subagentSummary: subagentSummary
+                webLinks: webLinks(for: name, entries: entries)
             )
         }
     }
@@ -1274,7 +1271,7 @@ struct PiAgentThreadDiffSummaryView: View {
         if !changes.isEmpty && (isLoading || !rows.isEmpty) {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 8) {
-                    Image(systemName: "doc.text.magnifyingglass")
+                    Image(systemName: "plusminus")
                         .font(AppTheme.Font.caption.weight(.semibold))
                         .foregroundStyle(AppTheme.mutedText)
                     Text("Changes")
@@ -1982,32 +1979,26 @@ struct PiAgentActivityDetailView: View {
     let activity: PiAgentTranscriptActivity
 
     var body: some View {
-        if let summary = activity.subagentSummary {
-            PiAgentSubagentTranscriptView(summary: summary)
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.65)))
-        } else {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Image(systemName: icon)
-                        .foregroundStyle(activity.isError ? AppTheme.roleError : AppTheme.mutedText)
-                    Text(activity.name)
-                        .font(AppTheme.Font.caption.weight(.semibold))
-                    if activity.count > 1 {
-                        Text("×\(activity.count)")
-                            .font(AppTheme.Font.caption2.weight(.bold))
-                            .foregroundStyle(AppTheme.mutedText)
-                    }
-                    Spacer()
-                }
-                ForEach(activity.entries.suffix(3)) { entry in
-                    PiAgentToolTranscriptView(entry: entry, startsExpanded: false)
-                }
-                if activity.entries.count > 3 {
-                    Text("\(activity.entries.count - 3) older updates hidden")
-                        .font(AppTheme.Font.caption2)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .foregroundStyle(activity.isError ? AppTheme.roleError : AppTheme.mutedText)
+                Text(activity.name)
+                    .font(AppTheme.Font.caption.weight(.semibold))
+                if activity.count > 1 {
+                    Text("×\(activity.count)")
+                        .font(AppTheme.Font.caption2.weight(.bold))
                         .foregroundStyle(AppTheme.mutedText)
                 }
+                Spacer()
+            }
+            ForEach(activity.entries.suffix(3)) { entry in
+                PiAgentToolTranscriptView(entry: entry, startsExpanded: false)
+            }
+            if activity.entries.count > 3 {
+                Text("\(activity.entries.count - 3) older updates hidden")
+                    .font(AppTheme.Font.caption2)
+                    .foregroundStyle(AppTheme.mutedText)
             }
         }
     }
@@ -3346,9 +3337,7 @@ struct PiAgentTranscriptCard: View {
 
     @ViewBuilder
     private var content: some View {
-        if let subagentSummary = PiAgentSubagentSummary.cached(for: entry) {
-            PiAgentSubagentTranscriptView(summary: subagentSummary)
-        } else if entry.role == .tool {
+        if entry.role == .tool {
             PiAgentToolTranscriptView(entry: entry)
         } else if entry.role == .thinking {
             thinkingContent
