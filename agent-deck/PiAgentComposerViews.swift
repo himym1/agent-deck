@@ -96,10 +96,32 @@ struct PiAgentComposerBox: View {
     // Non-worktree sessions don't carry `branchName`; resolve the project's
     // current branch off the body hot path via `.task(id:)`.
     @State private var resolvedBranch: String?
+    // Aggregate token/cost (orchestration + subagents) shown in the footer.
+    // Recomputed off the body hot path in `.onChange`, never in `body` (summing
+    // a few ints/doubles, but the subagent-run read must stay off the render path).
+    @State private var costAggregate: PiAgentRuntimeCostAggregate?
 
     private var displayedBranch: String? {
         if let direct = metricsSession?.branchName, !direct.isEmpty { return direct }
         return resolvedBranch
+    }
+
+    /// Change signal for the footer cost aggregate: the parent's tokens/cost plus
+    /// the store's de-noised subagent-runs revision. Read only by `.onChange`.
+    private var costAggregateKey: String {
+        guard let session = metricsSession else { return "" }
+        return [
+            session.id.uuidString,
+            session.totalTokens.map { "\($0)" } ?? "-",
+            session.cost.map { "\($0)" } ?? "-",
+            "\(viewModel.piAgentSessionStore.subagentRunsRevision)"
+        ].joined(separator: "|")
+    }
+
+    private func recomputeCostAggregate() {
+        guard let session = metricsSession else { costAggregate = nil; return }
+        let runs = viewModel.piAgentSessionStore.subagentRuns(for: session.id)
+        costAggregate = PiAgentRuntimeCostAggregate.build(session: session, runs: runs)
     }
 
     private var branchRevealURL: URL? {
@@ -231,6 +253,7 @@ struct PiAgentComposerBox: View {
                     if let metricsSession {
                         PiAgentRuntimeFooter(
                             session: metricsSession,
+                            aggregate: costAggregate,
                             showsSubagentsToggle: showsSubagentsToggle,
                             subagentsToggleEnabled: metricsSession.status == .draft,
                             memoryToggleEnabled: metricsSession.status == .draft,
@@ -250,6 +273,11 @@ struct PiAgentComposerBox: View {
                         // its lifetime, so refreshing on session-id change is enough.
                         .onChange(of: metricsSession.id, initial: true) {
                             showsSubagentsToggle = viewModel.sessionHasSelectableAgents(metricsSession)
+                        }
+                        // Recompute the aggregate when the parent's tokens/cost or
+                        // the subagent runs change (de-noised revision), off-body.
+                        .onChange(of: costAggregateKey, initial: true) {
+                            recomputeCostAggregate()
                         }
                     }
 
@@ -2106,8 +2134,55 @@ struct PiAgentShortcutChip: View {
     }
 }
 
+/// Aggregate token/cost across the orchestration session and its subagents.
+/// Tokens always sum (counts exist for every source); cost sums only the known
+/// values — a subagent whose runtime never reported cost contributes nothing and
+/// shows as `—` in the breakdown rather than skewing the total. Built off the
+/// body hot path in `PiAgentComposerBox` (see `recomputeCostAggregate`).
+struct PiAgentRuntimeCostAggregate: Equatable {
+    struct Source: Equatable, Identifiable {
+        let id: UUID
+        let label: String
+        let model: String?
+        let tokens: Int
+        let cost: Double?
+        let isOrchestration: Bool
+    }
+
+    var totalTokens: Int
+    var totalCost: Double?
+    var sources: [Source]
+    var hasSubagents: Bool
+
+    static func build(session: PiAgentSessionRecord, runs: [PiSubagentRunRecord]) -> PiAgentRuntimeCostAggregate {
+        var sources: [Source] = []
+        var totalTokens = 0
+        var totalCost: Double?
+        func addCost(_ c: Double?) { if let c { totalCost = (totalCost ?? 0) + c } }
+
+        let parentTokens = session.totalTokens ?? 0
+        sources.append(.init(id: session.id, label: "Orchestration", model: session.model, tokens: parentTokens, cost: session.cost, isOrchestration: true))
+        totalTokens += parentTokens
+        addCost(session.cost)
+
+        var subagentCount = 0
+        for run in runs {
+            let children: [PiSubagentChildRecord] = run.children ?? run.child.map { [$0] } ?? []
+            for child in children {
+                let childTokens = child.totalTokens ?? 0
+                sources.append(.init(id: child.id, label: child.agentName, model: child.model, tokens: childTokens, cost: child.cost, isOrchestration: false))
+                totalTokens += childTokens
+                addCost(child.cost)
+                subagentCount += 1
+            }
+        }
+        return .init(totalTokens: totalTokens, totalCost: totalCost, sources: sources, hasSubagents: subagentCount > 0)
+    }
+}
+
 struct PiAgentRuntimeFooter: View {
     let session: PiAgentSessionRecord
+    var aggregate: PiAgentRuntimeCostAggregate? = nil
     let showsSubagentsToggle: Bool
     let subagentsToggleEnabled: Bool
     let memoryToggleEnabled: Bool
@@ -2117,15 +2192,11 @@ struct PiAgentRuntimeFooter: View {
     let onToggleSubagents: () -> Void
     let onToggleOpenAIFast: (() -> Void)?
     let onSetAsDefault: (() -> Void)?
+    @State private var isCostBreakdownPresented = false
 
     var body: some View {
         HStack(spacing: 7) {
-            if let total = session.totalTokens {
-                metric("\(compact(total)) tokens", icon: "tugriksign.circle")
-            }
-            if let cost = session.cost {
-                metric(String(format: "$%.2f", cost), icon: "dollarsign.circle")
-            }
+            aggregateChips
             if memoryToggleEnabled {
                 metricButton(
                     "memory: \(memoryEnabled ? "on" : "off")",
@@ -2174,10 +2245,47 @@ struct PiAgentRuntimeFooter: View {
         .animation(.snappy(duration: 0.18), value: openAIFastStatus)
     }
 
+    /// Token + cost metrics showing the aggregate (orchestration + subagents).
+    /// When subagents ran, the pair becomes tappable and opens a per-source
+    /// breakdown; with no subagents it's the plain parent-only display.
+    @ViewBuilder
+    private var aggregateChips: some View {
+        // Preserve the original "hide until there's a real count" behavior: the
+        // aggregate's totalTokens is always non-nil (parent defaults to 0), so only
+        // surface it once the parent has reported or a subagent contributed.
+        let hasTokens = session.totalTokens != nil || aggregate?.hasSubagents == true
+        let tokens: Int? = hasTokens ? (aggregate?.totalTokens ?? session.totalTokens) : nil
+        let cost = aggregate?.totalCost ?? session.cost
+        let tappable = aggregate?.hasSubagents == true
+        let chips = HStack(spacing: 7) {
+            if let tokens {
+                metric("\(compact(tokens)) tokens", icon: "tugriksign.circle")
+            }
+            if let cost {
+                metric(String(format: "$%.2f", cost), icon: "dollarsign.circle")
+            }
+        }
+        if tappable, let aggregate {
+            chips
+                .contentShape(Rectangle())
+                .onTapGesture { isCostBreakdownPresented.toggle() }
+                .popover(isPresented: $isCostBreakdownPresented, arrowEdge: .bottom) {
+                    PiAgentCostBreakdownPopover(aggregate: aggregate)
+                }
+                .help("Show token & cost breakdown")
+        } else {
+            chips
+        }
+    }
+
     private func metric(_ text: String, icon: String) -> some View {
+        // Icon and text must share the same font size: the row inherits
+        // `AppTheme.Font.caption`, so a smaller `caption2` icon centered against
+        // caption text leaves the baseline-positioned glyph sitting high. Matching
+        // the size makes center alignment exact (no manual offsets).
         HStack(spacing: 3) {
             Image(systemName: icon)
-                .font(AppTheme.Font.caption2.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
                 .contentTransition(.opacity)
             Text(text)
                 .contentTransition(.opacity)
@@ -2192,6 +2300,79 @@ struct PiAgentRuntimeFooter: View {
         }
         .buttonStyle(.plain)
         .help("Toggle \(text.split(separator: ":").first.map(String.init) ?? text)")
+    }
+
+    private func compact(_ value: Int) -> String {
+        if value >= 1_000_000 { return String(format: "%.1fM", Double(value) / 1_000_000) }
+        if value >= 1_000 { return "\(value / 1_000)k" }
+        return "\(value)"
+    }
+}
+
+/// Per-source token & cost breakdown opened from the footer's aggregate chips.
+/// Mirrors `PiAgentContextBreakdownPopover` chrome (header + rows + total).
+/// Subagents whose cost wasn't reported show `—` and are excluded from the total.
+struct PiAgentCostBreakdownPopover: View {
+    let aggregate: PiAgentRuntimeCostAggregate
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Tokens & cost")
+                    .font(AppTheme.Font.headline.weight(.semibold))
+                Text("Across this session and its Deck agents.")
+                    .font(AppTheme.Font.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+            }
+
+            VStack(spacing: 0) {
+                ForEach(Array(aggregate.sources.enumerated()), id: \.element.id) { index, source in
+                    if index > 0 { Divider().opacity(0.4) }
+                    row(for: source)
+                }
+            }
+
+            Divider()
+            HStack(spacing: 8) {
+                Text("Total")
+                    .font(AppTheme.Font.caption.weight(.bold))
+                Spacer(minLength: 8)
+                Text(compact(aggregate.totalTokens))
+                    .font(AppTheme.Font.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(AppTheme.mutedText)
+                Text(aggregate.totalCost.map { String(format: "$%.2f", $0) } ?? "—")
+                    .font(AppTheme.Font.caption.monospacedDigit().weight(.bold))
+                    .frame(width: 56, alignment: .trailing)
+            }
+        }
+        .padding(14)
+        .frame(width: 300, alignment: .leading)
+    }
+
+    private func row(for source: PiAgentRuntimeCostAggregate.Source) -> some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(source.label)
+                    .font(AppTheme.Font.callout.weight(source.isOrchestration ? .semibold : .regular))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                if let model = source.model, !model.isEmpty {
+                    Text(model)
+                        .font(AppTheme.Font.caption2.monospaced())
+                        .foregroundStyle(AppTheme.mutedText)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            Text(compact(source.tokens))
+                .font(AppTheme.Font.caption.monospacedDigit())
+                .foregroundStyle(AppTheme.mutedText)
+            Text(source.cost.map { String(format: "$%.2f", $0) } ?? "—")
+                .font(AppTheme.Font.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(source.cost == nil ? AppTheme.mutedText : .primary)
+                .frame(width: 56, alignment: .trailing)
+        }
+        .padding(.vertical, 6)
     }
 
     private func compact(_ value: Int) -> String {

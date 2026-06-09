@@ -585,6 +585,11 @@ final class NativeMarkdownTextContainer: NSView {
             return true
         case (.code, .code):
             return true
+        case (.table, .table):
+            // A table is a multi-view grid, not a single restyleable text view, so
+            // never reuse in place — an unchanged table is skipped by the identity
+            // check in `reconcileBlocks`; a changed one swaps in a fresh grid.
+            return false
         default:
             return false
         }
@@ -645,6 +650,10 @@ final class NativeMarkdownTextContainer: NSView {
             return text
         case let .numbered(_, text, _):
             return text
+        case .table:
+            // Tables never reuse via the text-view restyle path (see sameKindShape),
+            // so this is unreachable; kept for switch exhaustiveness.
+            return ""
         }
     }
 
@@ -665,6 +674,9 @@ final class NativeMarkdownTextContainer: NSView {
             // Keep in sync with the code font in `view(for:)` — one style below body.
             let size = NSFont.preferredFont(forTextStyle: .callout).pointSize
             return (.monospacedSystemFont(ofSize: size, weight: .regular), MarkdownSemanticStyler.codeBlockColor, false)
+        case .table:
+            // Unreachable (tables rebuild rather than restyle); kept for exhaustiveness.
+            return (NSFont.preferredFont(forTextStyle: .body), .labelColor, true)
         }
     }
 
@@ -837,6 +849,12 @@ final class NativeMarkdownTextContainer: NSView {
     private func reconcileBlocks(old: [MarkdownBlock], new: [MarkdownBlock], frontOffset: Int) {
         for i in 0..<new.count {
             let slot = frontOffset + i
+            // A byte-identical block keeps its existing view untouched regardless of
+            // shape — covers blocks (like tables) that aren't restyled in place but
+            // shouldn't be rebuilt every reconcile while other blocks stream.
+            if i < old.count, slot < stackView.arrangedSubviews.count, old[i] == new[i] {
+                continue
+            }
             let canReuse = i < old.count
                 && slot < stackView.arrangedSubviews.count
                 && Self.sameKindShape(old[i].kind, new[i].kind)
@@ -973,7 +991,66 @@ final class NativeMarkdownTextContainer: NSView {
                 cornerRadius: AppTheme.Chat.subCardCornerRadius,
                 padding: NSEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
             )
+        case let .table(table):
+            return tableBlock(table)
         }
+    }
+
+    /// Native GFM table: an `NSGridView` of wrapping cells (the same
+    /// `AutoSizingMarkdownTextView` used for every other block, so inline styling
+    /// and the width-driven height measurement both work), with a bold header row
+    /// and a hairline separator beneath it. Columns fill the available width.
+    private static func tableBlock(_ table: MarkdownTable) -> NSView {
+        let columnCount = max(1, table.columnCount)
+        let bodyFont = NSFont.preferredFont(forTextStyle: .body)
+        let headerFont = NSFontManager.shared.convert(bodyFont, toHaveTrait: .boldFontMask)
+
+        func cell(_ text: String, isHeader: Bool, alignment: MarkdownTableAlignment) -> NSView {
+            let view = textView(
+                text,
+                font: isHeader ? headerFont : bodyFont,
+                color: isHeader ? MarkdownSemanticStyler.headingColor : .labelColor,
+                parseInlineMarkdown: true
+            )
+            if alignment != .leading, let storage = view.textStorage, storage.length > 0 {
+                let paragraph = NSMutableParagraphStyle()
+                paragraph.alignment = alignment == .center ? .center : .right
+                storage.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: storage.length))
+            }
+            return view
+        }
+
+        var rowViews: [[NSView]] = []
+        rowViews.append((0..<columnCount).map { column in
+            cell(column < table.header.count ? table.header[column] : "", isHeader: true, alignment: table.alignment(column))
+        })
+        for row in table.rows {
+            rowViews.append((0..<columnCount).map { column in
+                cell(column < row.count ? row[column] : "", isHeader: false, alignment: table.alignment(column))
+            })
+        }
+
+        let grid = NSGridView(views: rowViews)
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        grid.rowSpacing = 7
+        grid.columnSpacing = 16
+        grid.xPlacement = .fill
+        grid.yPlacement = .top
+
+        // Hairline under the header row, spanning every column.
+        let divider = NSView()
+        divider.translatesAutoresizingMaskIntoConstraints = false
+        divider.wantsLayer = true
+        divider.layer?.backgroundColor = AppTheme.ns(AppTheme.contentStroke).cgColor
+        divider.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        grid.insertRow(at: 1, with: [divider])
+        grid.mergeCells(inHorizontalRange: NSRange(location: 0, length: columnCount), verticalRange: NSRange(location: 1, length: 1))
+        let dividerCell = grid.cell(atColumnIndex: 0, rowIndex: 1)
+        dividerCell.xPlacement = .fill
+        grid.row(at: 1).topPadding = 1
+        grid.row(at: 1).bottomPadding = 3
+
+        return paddedBlock(grid, padding: NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 0))
     }
 
     // Gap between the marker column and the text column, in points.
@@ -1486,6 +1563,21 @@ private enum MarkdownRenderCache {
     }
 }
 
+nonisolated enum MarkdownTableAlignment: Hashable { case leading, center, trailing }
+
+/// A parsed GFM table. Pure value type so it can be built on the background parse
+/// path and rendered natively (`NativeMarkdownTextContainer.tableBlock`).
+nonisolated struct MarkdownTable: Hashable {
+    var header: [String]
+    var alignments: [MarkdownTableAlignment]
+    var rows: [[String]]
+
+    var columnCount: Int { max(header.count, rows.map(\.count).max() ?? 0) }
+    func alignment(_ column: Int) -> MarkdownTableAlignment {
+        column < alignments.count ? alignments[column] : .leading
+    }
+}
+
 // `nonisolated` so `parse` and its helpers run on a background task (see
 // `MarkdownRenderCache.parseDocument`). Pure string/value logic — no UI state.
 private nonisolated struct MarkdownBlock: Identifiable, Hashable {
@@ -1496,6 +1588,7 @@ private nonisolated struct MarkdownBlock: Identifiable, Hashable {
         case numbered(Int, String, indentLevel: Int)
         case quote(String)
         case code(String)
+        case table(MarkdownTable)
     }
 
     let id: Int
@@ -1534,7 +1627,9 @@ private nonisolated struct MarkdownBlock: Identifiable, Hashable {
             blocks.append(.init(id: blocks.count, kind: kind))
         }
 
-        for line in lines {
+        var lineIndex = 0
+        while lineIndex < lines.count {
+            let line = lines[lineIndex]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             let indentLevel = Self.indentLevel(for: line)
             if trimmed.hasPrefix("```") {
@@ -1548,16 +1643,29 @@ private nonisolated struct MarkdownBlock: Identifiable, Hashable {
                     code.removeAll()
                     codeFenceIndent = line.prefix { $0 == " " || $0 == "\t" }.count
                 }
+                lineIndex += 1
                 continue
             }
             if inCode {
                 code.append(strippingFenceIndent(line))
+                lineIndex += 1
                 continue
             }
             if trimmed.isEmpty {
                 flushParagraph()
+                lineIndex += 1
                 continue
             }
+            // GFM table: a `|…|` header line immediately followed by a `|---|`
+            // separator. Consume the whole table here (needs lookahead) so its rows
+            // don't fall through to the paragraph bucket and render as raw pipes.
+            if let consumed = parseTableAhead(lines, from: lineIndex) {
+                flushParagraph()
+                blocks.append(.init(id: blocks.count, kind: .table(consumed.table)))
+                lineIndex = consumed.nextIndex
+                continue
+            }
+            defer { lineIndex += 1 }
             if let heading = parseHeading(trimmed) {
                 appendSimple(.heading(level: heading.level, text: heading.text))
             } else if let bullet = parseBullet(trimmed) {
@@ -1575,6 +1683,65 @@ private nonisolated struct MarkdownBlock: Identifiable, Hashable {
         }
         flushParagraph()
         return blocks.isEmpty ? [.init(id: 0, kind: .paragraph(source))] : blocks
+    }
+
+    /// If `lines[index]` is a table header followed by a `|---|` separator, parse
+    /// the whole table (header + every contiguous row) and return the index just
+    /// past it. Returns nil when there's no table here.
+    private static func parseTableAhead(_ lines: [String], from index: Int) -> (table: MarkdownTable, nextIndex: Int)? {
+        guard index + 1 < lines.count else { return nil }
+        let headerLine = lines[index].trimmingCharacters(in: .whitespaces)
+        let separatorLine = lines[index + 1].trimmingCharacters(in: .whitespaces)
+        guard headerLine.contains("|"), isTableSeparator(separatorLine) else { return nil }
+
+        let header = tableCells(headerLine)
+        let alignments = tableAlignments(separatorLine)
+        var rows: [[String]] = []
+        var cursor = index + 2
+        while cursor < lines.count {
+            let row = lines[cursor].trimmingCharacters(in: .whitespaces)
+            guard !row.isEmpty, row.contains("|") else { break }
+            rows.append(tableCells(row))
+            cursor += 1
+        }
+        return (MarkdownTable(header: header, alignments: alignments, rows: rows), cursor)
+    }
+
+    /// A GFM separator row: cells of dashes with optional alignment colons, e.g.
+    /// `|---|:--:|---:|`. Strict enough that a paragraph line with a stray pipe
+    /// isn't mistaken for one.
+    private static func isTableSeparator(_ line: String) -> Bool {
+        guard line.contains("-"), line.contains("|") else { return false }
+        let cells = tableCells(line)
+        guard !cells.isEmpty else { return false }
+        return cells.allSatisfy { cell in
+            var body = Substring(cell.trimmingCharacters(in: .whitespaces))
+            guard !body.isEmpty else { return false }
+            if body.first == ":" { body = body.dropFirst() }
+            if body.last == ":" { body = body.dropLast() }
+            return !body.isEmpty && body.allSatisfy { $0 == "-" }
+        }
+    }
+
+    /// Split a `|`-delimited row into trimmed cells, dropping the optional leading
+    /// and trailing pipe so interior empty cells are preserved.
+    private static func tableCells(_ line: String) -> [String] {
+        var body = Substring(line.trimmingCharacters(in: .whitespaces))
+        if body.first == "|" { body = body.dropFirst() }
+        if body.last == "|" { body = body.dropLast() }
+        return body.split(separator: "|", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    private static func tableAlignments(_ separatorLine: String) -> [MarkdownTableAlignment] {
+        tableCells(separatorLine).map { cell in
+            let trimmed = cell.trimmingCharacters(in: .whitespaces)
+            switch (trimmed.hasPrefix(":"), trimmed.hasSuffix(":")) {
+            case (true, true): return .center
+            case (false, true): return .trailing
+            default: return .leading
+            }
+        }
     }
 
     private static func parseHeading(_ line: String) -> (level: Int, text: String)? {
@@ -2236,9 +2403,38 @@ private enum TranscriptAttributedStringCache {
             return bulletString(text: text, indentLevel: indentLevel)
         case let .numbered(number, text, indentLevel):
             return numberedString(number: number, text: text, indentLevel: indentLevel)
+        case let .table(table):
+            return tableString(table)
         case .quote, .code:
             return NSAttributedString() // handled by the caller
         }
+    }
+
+    /// Monospace, column-aligned rendering of a table for this attributed-string
+    /// path (the native transcript uses the `NSGridView` renderer instead).
+    private static func tableString(_ table: MarkdownTable) -> NSAttributedString {
+        let columnCount = max(1, table.columnCount)
+        func padded(_ row: [String]) -> [String] {
+            (0..<columnCount).map { $0 < row.count ? row[$0] : "" }
+        }
+        var widths = [Int](repeating: 0, count: columnCount)
+        for row in [padded(table.header)] + table.rows.map(padded) {
+            for (column, value) in row.enumerated() { widths[column] = max(widths[column], value.count) }
+        }
+        func format(_ row: [String]) -> String {
+            padded(row).enumerated()
+                .map { $1.padding(toLength: widths[$0], withPad: " ", startingAt: 0) }
+                .joined(separator: "  ")
+        }
+        var lines = [format(table.header)]
+        lines.append(widths.map { String(repeating: "─", count: $0) }.joined(separator: "  "))
+        lines.append(contentsOf: table.rows.map(format))
+
+        let font = NSFont.monospacedSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize, weight: .regular)
+        return NSAttributedString(
+            string: lines.joined(separator: "\n"),
+            attributes: [.font: font, .foregroundColor: NSColor.labelColor, .paragraphStyle: NSMutableParagraphStyle()]
+        )
     }
 
     // MARK: per-kind rendering — mirrors MarkdownTextView.blockView

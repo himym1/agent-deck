@@ -735,10 +735,12 @@ extension NativeAgentBlockPayload {
         let tokens = run.child?.totalTokens ?? sum(run.children?.compactMap(\.totalTokens))
         let tools = run.child?.toolCount ?? sum(run.children?.compactMap(\.toolCount))
         let model = run.model ?? run.child?.model ?? run.children?.compactMap(\.model).first
+        let cost = run.child?.cost ?? sumDouble(run.children?.compactMap(\.cost))
 
         var detailRows: [(String, String)] = []
         if let duration { detailRows.append(("Duration", NativeSubagentFactory.formattedDuration(duration))) }
         if let tokens { detailRows.append(("Tokens", NativeSubagentFactory.compactNumber(tokens))) }
+        if let cost { detailRows.append(("Cost", String(format: "$%.2f", cost))) }
         if let tools { detailRows.append(("Tools", "\(tools)")) }
         if let model = NativeSubagentFactory.nonEmpty(model) { detailRows.append(("Model", model)) }
         if let thinking = NativeSubagentFactory.nonEmpty(run.thinking) { detailRows.append(("Thinking", thinking)) }
@@ -779,6 +781,11 @@ extension NativeAgentBlockPayload {
     }
 
     private static func sum(_ values: [Int]?) -> Int? {
+        guard let values, !values.isEmpty else { return nil }
+        return values.reduce(0, +)
+    }
+
+    private static func sumDouble(_ values: [Double]?) -> Double? {
         guard let values, !values.isEmpty else { return nil }
         return values.reduce(0, +)
     }

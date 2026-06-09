@@ -435,6 +435,10 @@ struct AppCircleIconMenu<Symbol: View, Content: View>: View {
         }
         .menuIndicator(.hidden)
         .menuStyle(.borderlessButton)
+        // Without .plain the Menu chrome swallows the label's soft-glass fill, so
+        // the icon renders bare instead of as the tinted-glass circle the action
+        // button (`AppCircleIconButton`) shows. Matches the menu-glass pattern.
+        .buttonStyle(.plain)
         .fixedSize()
         .help(help ?? "")
     }

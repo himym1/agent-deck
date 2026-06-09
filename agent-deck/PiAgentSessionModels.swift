@@ -304,7 +304,13 @@ struct PiSubagentChildRecord: Identifiable, Codable, Hashable {
     var currentTool: String?
     var inputTokens: Int?
     var outputTokens: Int?
+    var cacheReadTokens: Int? = nil
+    var cacheWriteTokens: Int? = nil
     var totalTokens: Int?
+    var contextTokens: Int? = nil
+    /// Runtime-computed cost for this subagent's own Pi session (set from the
+    /// child's `get_session_stats` response, the same source as the parent's).
+    var cost: Double? = nil
     var toolCount: Int?
     var durationMs: Int?
     var artifactDirectory: String?

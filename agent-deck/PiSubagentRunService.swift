@@ -13,6 +13,10 @@ final class PiSubagentRunService {
     private var completionHandlersByRunID: [UUID: (PiSubagentRunRecord) -> Void] = [:]
     private var supervisorTimeoutTasksByRequestID: [String: Task<Void, Never>] = [:]
     private var streamFlushTasksByRunID: [UUID: Task<Void, Never>] = [:]
+    /// On `agent_end` we request the child's session stats (for its cost) and
+    /// hold off completion until the response lands or this timeout fires, so a
+    /// model that never reports stats can't stall the run.
+    private var pendingStatsTasksByRunID: [UUID: Task<Void, Never>] = [:]
     private let fileManager = FileManager.default
     var childMemoryArgumentsProvider: ((PiAgentSessionRecord, EffectiveAgentRecord, String) async throws -> [String])?
     var onMemoryWrite: ((UUID, UUID, String?, AgentMemoryWriteBridgeRequest) -> String)?
@@ -397,6 +401,13 @@ final class PiSubagentRunService {
                     }
                     run.child?.sessionFile = run.childPiSessionFile
                 }
+            } else if event.command == "get_session_stats", let data = event.data {
+                applySubagentStats(data, runID: runID, parentSessionID: parentSessionID)
+                // Stats arrived — cancel the timeout and complete now.
+                if pendingStatsTasksByRunID[runID] != nil {
+                    pendingStatsTasksByRunID.removeValue(forKey: runID)?.cancel()
+                    completeIfNeeded(runID: runID, parentSessionID: parentSessionID)
+                }
             }
         case "tool_execution_start", "tool_execution_update", "tool_execution_end":
             let toolName = event.toolName ?? "tool"
@@ -421,7 +432,7 @@ final class PiSubagentRunService {
         case "extension_ui_request":
             handleExtensionUIRequest(event, rawLine: rawLine, runID: runID, parentSessionID: parentSessionID)
         case "agent_end":
-            completeIfNeeded(runID: runID, parentSessionID: parentSessionID)
+            requestStatsThenComplete(runID: runID, parentSessionID: parentSessionID)
         case "turn_end":
             break
         default:
@@ -490,6 +501,7 @@ final class PiSubagentRunService {
 
     private func clearStreamingState(for runID: UUID) {
         streamFlushTasksByRunID.removeValue(forKey: runID)?.cancel()
+        pendingStatsTasksByRunID.removeValue(forKey: runID)?.cancel()
         assistantEntryIDsByRunID[runID] = nil
         assistantTextByRunID[runID] = nil
         thinkingEntryIDsByRunID[runID] = nil
@@ -599,6 +611,48 @@ final class PiSubagentRunService {
             if let outputURL = outputURL(for: runID, parentSessionID: parentSessionID) {
                 try? text.write(to: outputURL, atomically: true, encoding: .utf8)
             }
+        }
+    }
+
+    /// On `agent_end`, ask the child's still-live Pi session for its stats (the
+    /// only source of its cost) and defer completion until the response lands or
+    /// a short timeout fires. Completion otherwise still happens via process
+    /// termination, so this never adds latency in the common one-shot case.
+    private func requestStatsThenComplete(runID: UUID, parentSessionID: UUID) {
+        // Already awaiting stats (e.g. a duplicate agent_end) — keep waiting; the
+        // in-flight request/timeout will complete the run.
+        guard pendingStatsTasksByRunID[runID] == nil else { return }
+        guard let client = clientsByRunID[runID] else {
+            // No live client (already torn down) — just finish.
+            completeIfNeeded(runID: runID, parentSessionID: parentSessionID)
+            return
+        }
+        client.getSessionStats()
+        pendingStatsTasksByRunID[runID] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self else { return }
+                guard self.pendingStatsTasksByRunID.removeValue(forKey: runID) != nil else { return }
+                self.completeIfNeeded(runID: runID, parentSessionID: parentSessionID)
+            }
+        }
+    }
+
+    /// Parses a child `get_session_stats` response onto `run.child`, mirroring the
+    /// parent path (`PiAgentRunnerService.handle`). Only overwrites fields that are
+    /// present so the `usage`-block token capture stays as a fallback.
+    private func applySubagentStats(_ data: JSONValue, runID: UUID, parentSessionID: UUID) {
+        store.updateSubagentRun(runID, parentSessionID: parentSessionID) { run in
+            guard var child = run.child else { return }
+            if let v = data["tokens"]?["input"]?.numberValue { child.inputTokens = Int(v) }
+            if let v = data["tokens"]?["output"]?.numberValue { child.outputTokens = Int(v) }
+            if let v = data["tokens"]?["cacheRead"]?.numberValue { child.cacheReadTokens = Int(v) }
+            if let v = data["tokens"]?["cacheWrite"]?.numberValue { child.cacheWriteTokens = Int(v) }
+            if let v = data["tokens"]?["total"]?.numberValue { child.totalTokens = Int(v) }
+            if let v = data["cost"]?.numberValue { child.cost = v }
+            if let v = data["contextUsage"]?["tokens"]?.numberValue { child.contextTokens = Int(v) }
+            run.child = child
         }
     }
 

@@ -141,7 +141,7 @@ struct PiAgentChatWithAgentButton: View {
                         Button {
                             viewModel.startAgentSession(agent: agent, project: project, initialInstruction: nil)
                         } label: {
-                            Label(agent.name, systemImage: "paperplane")
+                            Text(agent.name)
                         }
                     }
                 }

@@ -195,7 +195,7 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
             )
             let activity = PiAgentTranscriptActivity(
                 id: entry.id, name: "edit", entries: [entry], isError: false,
-                compactDetail: nil, webLinks: [], subagentSummary: nil
+                compactDetail: nil, webLinks: []
             )
             return PiAgentThreadToolGroup(id: entry.id, entries: [entry], activities: [activity])
         }

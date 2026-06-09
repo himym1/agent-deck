@@ -304,6 +304,9 @@ struct PiNativeSubagentRunCard: View {
         if let totalTokens {
             rows.append(("Tokens", compactNumber(totalTokens)))
         }
+        if let totalCost {
+            rows.append(("Cost", String(format: "$%.2f", totalCost)))
+        }
         if let toolCount {
             rows.append(("Tools", "\(toolCount)"))
         }
@@ -397,6 +400,13 @@ struct PiNativeSubagentRunCard: View {
         let counts = run.children?.compactMap(\.toolCount) ?? []
         guard !counts.isEmpty else { return nil }
         return counts.reduce(0, +)
+    }
+
+    private var totalCost: Double? {
+        if let cost = run.child?.cost { return cost }
+        let costs = run.children?.compactMap(\.cost) ?? []
+        guard !costs.isEmpty else { return nil }
+        return costs.reduce(0, +)
     }
 
     private var modelName: String? {
