@@ -293,10 +293,9 @@ final class PiAgentNativeAgentBlockView: NSView {
     var onToggle: (() -> Void)? { didSet { task.onToggle = onToggle } }
 
     private let headerToTask: CGFloat = 12
-    /// Vertical inset of the model text inside its pill (also used by the height
-    /// measurement so the taller name row isn't clipped). Matches the shared
-    /// identifier-pill style.
-    private static let modelPillVPad: CGFloat = AppTheme.IdentifierPill.verticalPadding
+    /// Vertical inset of the model text inside its container (kept tiny so
+    /// the taller name row isn't clipped now that the background is gone).
+    private static let modelPillVPad: CGFloat = 0
 
     init() {
         super.init(frame: .zero)
@@ -308,23 +307,22 @@ final class PiAgentNativeAgentBlockView: NSView {
 
         // Model pill beside the name — the shared identifier-pill style
         // (AppTheme.IdentifierPill), matching the plan-id pill in the plan
-        // popover: monospace, code-size, regular weight, muted.
+        // popover: condensed standard SF, caption size, medium weight, muted.
         // Hugs its content and never truncates.
-        modelLabel.font = NSFont.monospacedSystemFont(ofSize: AppTheme.IdentifierPill.fontSize, weight: .regular)
+        modelLabel.font = AppTheme.IdentifierPill.nsFont()
         modelLabel.textColor = AppTheme.ns(AppTheme.mutedText)
         modelLabel.translatesAutoresizingMaskIntoConstraints = false
         modelLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         modelPill.translatesAutoresizingMaskIntoConstraints = false
-        // High enough to read as a continuous capsule at this height.
-        modelPill.cardCornerRadius = 9
-        modelPill.fillColor = AppTheme.ns(AppTheme.IdentifierPill.fill)
+        // No background — the identifier reads as bare condensed text.
+        modelPill.cardCornerRadius = 0
+        modelPill.fillColor = .clear
         modelPill.strokeColor = .clear
         modelPill.setContentHuggingPriority(.required, for: .horizontal)
         modelPill.setContentCompressionResistancePriority(.required, for: .horizontal)
         modelPill.addSubview(modelLabel)
-        // Hug the text tightly (equal insets center it vertically); no fixed
-        // height, so the pill never over-pads the model name.
-        let hPad = AppTheme.IdentifierPill.horizontalPadding
+        // Hug the text tightly — no background means no need for pill insets.
+        let hPad: CGFloat = 0
         NSLayoutConstraint.activate([
             modelLabel.leadingAnchor.constraint(equalTo: modelPill.leadingAnchor, constant: hPad),
             modelLabel.trailingAnchor.constraint(equalTo: modelPill.trailingAnchor, constant: -hPad),

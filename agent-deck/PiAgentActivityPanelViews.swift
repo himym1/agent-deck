@@ -230,13 +230,20 @@ struct PiAgentCurrentPlanCard: View {
     /// When false, the card drops its own rounded surface so it can sit directly
     /// inside another container (e.g. a popover) without a card-in-card look.
     let showsSurface: Bool
+    /// When true, a hairline divider sits under the header so the card matches the
+    /// shared popover chrome (header + divider + content).
+    let showsHeaderDivider: Bool
+    /// When false, the plan-id subtitle is hidden (the popover doesn't need it).
+    let showsSubtitle: Bool
 
-    init(plan: PiSessionPlanRecord, showsSurface: Bool = true) {
-        self.title = "Current plan"
+    init(plan: PiSessionPlanRecord, showsSurface: Bool = true, showsHeaderDivider: Bool = false, showsSubtitle: Bool = true) {
+        self.title = "Plan"
         self.subtitle = String(plan.id.uuidString.prefix(8))
         self.isSubtitleIdentifier = true
         self.items = plan.items
         self.showsSurface = showsSurface
+        self.showsHeaderDivider = showsHeaderDivider
+        self.showsSubtitle = showsSubtitle
     }
 
     var body: some View {
@@ -252,30 +259,21 @@ struct PiAgentCurrentPlanCard: View {
     @ViewBuilder
     private var content: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 9) {
-                Image(systemName: "checklist")
-                    .font(AppTheme.Font.caption.weight(.semibold))
-                    .foregroundStyle(AppTheme.brandAccent)
-                    .frame(width: 22, height: 22)
-                    .background(Circle().fill(AppTheme.brandAccent.opacity(0.13)))
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(title)
-                        .font(AppTheme.Font.callout.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Text(subtitle)
-                        .font(isSubtitleIdentifier ? AppTheme.Font.code : AppTheme.Font.caption2.weight(.medium))
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(title)
+                    .font(AppTheme.Popover.titleFont)
+                    .foregroundStyle(Color.primary)
+                if showsSubtitle {
+                    Text(isSubtitleIdentifier ? "id: \(subtitle)" : subtitle)
+                        .font(isSubtitleIdentifier ? AppTheme.IdentifierPill.font : AppTheme.Font.caption2.weight(.medium))
                         .foregroundStyle(AppTheme.mutedText)
-                        .padding(.horizontal, isSubtitleIdentifier ? AppTheme.IdentifierPill.horizontalPadding : 0)
-                        .padding(.vertical, isSubtitleIdentifier ? AppTheme.IdentifierPill.verticalPadding : 0)
-                        .background {
-                            if isSubtitleIdentifier {
-                                Capsule(style: .continuous)
-                                    .fill(AppTheme.IdentifierPill.fill)
-                            }
-                        }
                 }
                 Spacer(minLength: 0)
                 progressBadge
+            }
+
+            if showsHeaderDivider {
+                Divider()
             }
 
             if items.isEmpty {

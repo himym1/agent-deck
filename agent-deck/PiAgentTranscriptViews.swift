@@ -1286,7 +1286,8 @@ struct PiAgentThreadDiffSummaryView: View {
                         .font(AppTheme.Font.caption2)
                         .foregroundStyle(AppTheme.mutedText)
                 }
-                ForEach(rows.prefix(4)) { row in
+                ForEach(Array(rows.prefix(4).enumerated()), id: \.element.id) { index, row in
+                    if index > 0 { Divider().opacity(0.45) }
                     PiAgentInlineDiffCard(row: row)
                 }
                 if rows.count > 4 {
@@ -1488,7 +1489,7 @@ private struct PiAgentInlineDiffCard: View {
     @State private var openTapCount = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Text(row.path.truncatedMiddle(max: 54))
                     .font(AppTheme.Font.caption.weight(.semibold))
@@ -1517,8 +1518,6 @@ private struct PiAgentInlineDiffCard: View {
             }
             PiAgentCompactDiffPreview(diffText: row.diff)
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.textContentFill.opacity(0.75)))
         .sheet(isPresented: $isDiffSheetPresented) {
             PiAgentFullDiffSheet(row: row)
         }
@@ -1577,10 +1576,13 @@ private struct PiAgentFullDiffSheet: View {
         .frame(minWidth: 780, idealWidth: 920, minHeight: 520, idealHeight: 680)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Done") { dismiss() }
+                Button("Copy Diff") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(row.diff, forType: .string)
+                }
             }
             ToolbarItem(placement: .confirmationAction) {
-                AppCopyTextButton(title: "Copy Diff", text: row.diff)
+                Button("Done") { dismiss() }
             }
         }
     }
@@ -1606,7 +1608,10 @@ struct PiAgentNativeFullDiffSheet: View {
                         .foregroundStyle(AppTheme.mutedText)
                 }
                 Spacer(minLength: 0)
-                AppCopyTextButton(title: "Copy Diff", text: row.diff)
+                Button("Copy Diff") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(row.diff, forType: .string)
+                }
                 Button("Done", action: onDone)
                     .keyboardShortcut(.cancelAction)
             }

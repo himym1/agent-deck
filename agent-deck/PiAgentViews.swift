@@ -175,6 +175,13 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
                 rawEntries.compactMap(normalizedTranscriptEntry).filter(isValuableTranscriptEntry)
             )
         )
+        // A store-revision bump from a re-read (file watcher, eviction reload)
+        // frequently yields byte-identical content. Publishing it anyway bumps
+        // streamingRevision, which pulses every transcript consumer — itemsBuild,
+        // updateNSView, apply — and nudges auto-follow on a session where nothing
+        // happened. Identical content must be invisible to the UI. (During real
+        // streaming the tail differs, so this compare exits on first mismatch.)
+        if normalized == entries { return }
         let nextThreads = PiAgentTranscriptThread.make(from: normalized)
         let signature = nextThreads.map(\.id)
         let structurallyChanged = signature != lastThreadSignature
@@ -1065,7 +1072,15 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         // for items dropped from the transcript in `apply(...)`.
         private var cellCache: [String: TranscriptTableCellView] = [:]
         private var cellCacheLRU: [String] = []        // least-recent first, MRU at end
-        private let cellCacheLimit = 160
+        // A cache miss is a full native rebuild (view tree + markdown parse +
+        // text layout, 5-60ms per row) landing synchronously in a scroll-time
+        // vend — the dominant dropped-frame cost when sweeping a long session
+        // (sampled: AutoSizingMarkdownTextView.intrinsicContentSize + fullRebuild
+        // dominate the hitch stacks). LRU order is vend order, so the cap is the
+        // span of rows that scroll up-and-down without thrashing; 160 sat just
+        // under a real reading session's working set. Worst case adds memory for
+        // ~224 more retained rows, traded deliberately for hitch-free reversal.
+        private let cellCacheLimit = 384
 
         let profiler = TranscriptScrollProfiler()
 
@@ -1310,6 +1325,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                         // wheels and scroller drags that post no live-scroll
                         // notification at all.
                         self.lastUserScrollTime = CACurrentMediaTime()
+                        // Let the background project rescan know the transcript is
+                        // being scrolled so it defers its observable-churning refresh
+                        // until the gesture settles (avoids a mid-scroll itemsBuild).
+                        TranscriptInteractionGate.noteInteraction()
                         self.profiler.userScrollTick()
                         // A genuine user-driven bounds change ends the auto-follow
                         // glide immediately (the glide's own scrolls set the
@@ -1378,6 +1397,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     // Start the grace window from gesture end so a streaming
                     // update arriving right after release can't snap the view.
                     self.lastUserScrollTime = CACurrentMediaTime()
+                    TranscriptInteractionGate.noteInteraction()
                 }
             }
         }
@@ -1488,7 +1508,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     // reconfigure those whose item revision has shifted.
                     self.reconfigureChangedVisibleCells()
                     self.restoreScrollAnchorIfNeeded(anchor)
-                    self.handleScrollAfterUpdate(isSessionSwitch: isSessionSwitch, explicitScroll: explicitScroll, wasFollowing: wasFollowing)
+                    // Rows were added/removed (or the session switched) — content
+                    // geometry genuinely moved, so passive follow may act on it.
+                    self.handleScrollAfterUpdate(isSessionSwitch: isSessionSwitch, explicitScroll: explicitScroll, wasFollowing: wasFollowing, contentAdvanced: true)
                 }
             } else {
                 let changedIDs = nextIDs.filter { contentRevisionByID[$0] != nextRevisions[$0] }
@@ -1511,15 +1533,50 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     // wobble. Measuring now and routing through the existing
                     // noteHeightsChanged keeps the follow/anchor behaviour intact;
                     // the later async report sees no height change and no-ops.
-                    let retileIDs = profiler.measureForced { measureChangedCellsSynchronously(Set(changedIDs)) }
-                    if !retileIDs.isEmpty {
-                        flushPendingHeightWorkSynchronously()
-                        noteHeightsChanged(forIDs: retileIDs)
+                    //
+                    // BUT that forced layout is the dominant cost on screen — a
+                    // full `layoutSubtreeIfNeeded` of the streaming cell's subtree
+                    // (nested stacks + hosted SwiftUI islands → sizeThatFits),
+                    // tens of ms every token, on the main thread. It only earns
+                    // its keep while pinned to the bottom, where the squish→snap
+                    // would be visible under the reader. Once auto-follow is off
+                    // the reader is up in history: the growing bottom row is
+                    // offscreen or held by the anchor, so the squish is invisible.
+                    // There we skip the forced measure entirely and let the
+                    // debounced async path (reportMeasuredHeight → noteHeights
+                    // changed) re-tile and anchor-compensate ~16ms later — no
+                    // per-token main-thread storm, which is what hangs/wobbles a
+                    // not-following stream. `pinnedToBottom` mirrors the
+                    // `willAutoFollow` test noteHeightsChanged uses below.
+                    //
+                    // The forced measure is ALSO restricted to real content
+                    // publishes (streaming growth / structure changes). Rows can
+                    // report a new revision with no transcript publish at all —
+                    // the session-level chrome/context hash (skills, visibility,
+                    // subagent summary) folds into every row's contentRevision —
+                    // and apply() can be running inside NSHostingView.layout().
+                    // Forcing layoutSubtreeIfNeeded there is illegal re-entrancy
+                    // (_NSDetectedLayoutRecursion). Those rare chrome reconfigures
+                    // re-tile via the debounced async path instead; only the
+                    // pinned streaming row needs its height in this same pass.
+                    let pinnedToBottom = wasFollowing && !isUserScrollingRecently
+                        && (streamingUpdate || structuralUpdate)
+                    if pinnedToBottom {
+                        let retileIDs = profiler.measureForced { measureChangedCellsSynchronously(Set(changedIDs)) }
+                        if !retileIDs.isEmpty {
+                            flushPendingHeightWorkSynchronously()
+                            noteHeightsChanged(forIDs: retileIDs)
+                        }
                     }
                 } else if streamingUpdate || structuralUpdate {
                     publishPinnedState(isAutoFollowing)
                 }
-                handleScrollAfterUpdate(isSessionSwitch: false, explicitScroll: explicitScroll, wasFollowing: wasFollowing)
+                handleScrollAfterUpdate(
+                    isSessionSwitch: false,
+                    explicitScroll: explicitScroll,
+                    wasFollowing: wasFollowing,
+                    contentAdvanced: !changedIDs.isEmpty
+                )
             }
 
             self.sessionID = sessionID
@@ -1981,7 +2038,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             isProgrammaticScroll = wasProgrammatic
         }
 
-        private func handleScrollAfterUpdate(isSessionSwitch: Bool, explicitScroll: Bool, wasFollowing: Bool) {
+        private func handleScrollAfterUpdate(isSessionSwitch: Bool, explicitScroll: Bool, wasFollowing: Bool, contentAdvanced: Bool) {
             guard let scrollView else { return }
             if isSessionSwitch {
                 // Session selection should open already pinned to the latest row,
@@ -1995,9 +2052,14 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 // User-requested jumps (send, jump-to-latest) re-arm follow intent.
                 isAutoFollowing = true
                 scrollToBottom(settle: true)
-            } else if wasFollowing && !isUserScrollingRecently {
+            } else if wasFollowing && !isUserScrollingRecently && contentAdvanced {
                 // Passive streaming follow — but never while the user is
-                // actively scrolling, or it would yank the viewport.
+                // actively scrolling, or it would yank the viewport. And only
+                // when this update actually changed row content/geometry: an
+                // update can reach here with nothing changed on screen (e.g. a
+                // revision pulse), and gliding on it both yanks an idle session
+                // the user is reading and pays performScrollToBottom's
+                // full-document layout for nothing.
                 scrollToBottom(settle: false)
             } else {
                 publishPinnedState(isAutoFollowing)
@@ -2012,6 +2074,13 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 let shouldSettle = self.pendingScrollSettle
                 self.pendingScrollWork = nil
                 self.pendingScrollSettle = false
+                // Re-check at fire time: this item runs a runloop hop after it
+                // was scheduled, and the user may have grabbed the scroll in
+                // between. Explicit jumps (settle) still win; the passive follow
+                // yields — its glide would be stopped by the next user tick
+                // anyway, but only after paying the height flush + full-document
+                // layout in performScrollToBottom mid-gesture.
+                if !shouldSettle, self.isUserScrollingRecently { return }
                 // Streaming follow (settle == false) glides; explicit / session
                 // switch (settle == true) snaps.
                 self.performScrollToBottom(scrollView, animated: !shouldSettle)

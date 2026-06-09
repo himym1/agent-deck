@@ -278,48 +278,25 @@ struct PiAgentTranscriptDisplayOptionsPopover: View {
     ]
 
     var body: some View {
-        // Plain dividered rows, matching the native Session resources popover —
-        // no per-row themed card surface.
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
-                optionRow(option)
-                if index < options.count - 1 {
-                    Divider()
+        AppPopoverContainer(title: "Transcript display") {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                    AppPopoverToggleRow(
+                        systemImage: option.systemImage,
+                        title: option.title,
+                        subtitle: option.subtitle,
+                        isOn: Binding(
+                            get: { visibility[keyPath: option.keyPath] },
+                            set: { viewModel.setPiAgentTranscriptVisibility(option.keyPath, to: $0) }
+                        )
+                    )
+                    if index < options.count - 1 {
+                        Divider()
+                    }
                 }
             }
+            .padding(.vertical, 4)
         }
-        .padding(14)
-        .frame(width: 340)
-    }
-
-    private func optionRow(_ option: Option) -> some View {
-        HStack(alignment: .top, spacing: 9) {
-            Image(systemName: option.systemImage)
-                .foregroundStyle(AppTheme.mutedText)
-                .frame(width: 17)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(option.title)
-                    .font(.caption.weight(.semibold))
-                    .fontWidth(.expanded)
-                    .foregroundStyle(.primary)
-                Text(option.subtitle)
-                    .font(.caption)
-                    .fontWidth(.condensed)
-                    .foregroundStyle(AppTheme.mutedText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            Toggle(isOn: Binding(
-                get: { visibility[keyPath: option.keyPath] },
-                set: { viewModel.setPiAgentTranscriptVisibility(option.keyPath, to: $0) }
-            )) {
-                EmptyView()
-            }
-            .toggleStyle(.switch)
-            .labelsHidden()
-            .controlSize(.small)
-        }
-        .padding(.vertical, 8)
     }
 }
 

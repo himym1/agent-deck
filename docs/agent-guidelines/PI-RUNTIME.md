@@ -51,7 +51,7 @@ Any explicit `--append-system-prompt` value (even empty string `""`) suppresses 
 - Injected memory is context, not instructions — prefer current repository contents over memory.
 - Never store: temporary task state, speculative facts, raw logs, customer data, secrets, tokens, or private keys.
 - Secret scanning blocks writes containing private keys, tokens, or credentials.
-- Markdown files are the source of truth; `index.sqlite` is a derived cache that can always be rebuilt.
+- Markdown files are the source of truth; `embeddings.json` is a derived per-project vector cache that can always be rebuilt (recall ranks by mean-centered cosine over on-device `NLContextualEmbedding` vectors).
 - Memory types: `context`, `decision`, `runbook`, `failure`, `preference`.
 
 ## Model and Thinking Configuration

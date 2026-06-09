@@ -67,18 +67,67 @@ enum AppTheme {
         static let smallLabel = SwiftUI.Font.system(size: smallLabelSize, weight: .bold, design: .monospaced)
     }
 
-    // MARK: Identifier pill
+    // MARK: Identifier label
     //
-    // The small monospace capsule used for short technical identifiers (plan id,
-    // subagent model). Single source of truth so the SwiftUI plan card and the
-    // AppKit subagent model chip stay visually identical. Weight is `.medium` on
-    // both sides (NSFont.Weight / Font.Weight) — kept local to each call site
-    // since the two frameworks use different weight types.
+    // Typography for short technical identifiers (plan id, subagent
+    // model:thinking). Rendered as bare condensed text — no pill background —
+    // so identifiers recede rather than compete with adjacent content.
+    // `nsFont()` mirrors `font` so SwiftUI and AppKit call sites stay matched.
     enum IdentifierPill {
-        static let fontSize = Font.codeSize
-        static let horizontalPadding: CGFloat = 5
-        static let verticalPadding: CGFloat = 2
-        static var fill: Color { contentSubtleFill.opacity(0.72) }
+        static let fontSize = Font.captionSize
+        static let fontWidthValue: CGFloat = -0.2   // condensed; shared by both frameworks
+        static let font = SwiftUI.Font.system(size: fontSize, weight: .regular).width(.condensed)
+
+        static func nsFont() -> NSFont {
+            let base = NSFont.systemFont(ofSize: fontSize, weight: .regular)
+            let descriptor = base.fontDescriptor.addingAttributes([
+                .traits: [NSFontDescriptor.TraitKey.width: fontWidthValue]
+            ])
+            return NSFont(descriptor: descriptor, size: fontSize) ?? base
+        }
+    }
+
+    // MARK: Popover typography
+    //
+    // Shared font tokens for picker popovers (project picker, agent picker,
+    // model picker, thinking picker) and info popovers so every popover stays
+    // visually consistent. Compact inline pickers (model, thinking) may use
+    // `Font.caption` directly for density; these tokens cover the slightly
+    // roomier popovers that carry a header + selectable list.
+    enum Popover {
+        // Fonts
+        /// Header title — e.g. "Model", "New Session". 13pt semibold.
+        static let titleFont = Font.subheadline.weight(.semibold)
+        /// Header subtitle / descriptive text.
+        static let subtitleFont = Font.caption
+        /// Primary label of a selectable row.
+        static let itemTitleFont = Font.callout.weight(.semibold)
+        /// Secondary label beneath a row title (path, metadata).
+        static let itemSubtitleFont = Font.caption2
+        /// Body text for empty-state or explanatory copy.
+        static let emptyBodyFont = Font.callout
+
+        // Widths — collapse the ad-hoc 220/300/340/360/420/460 scatter to three.
+        static let compactWidth: CGFloat = 260     // single short list (thinking)
+        static let standardWidth: CGFloat = 340    // pickers, cost, context
+        static let wideWidth: CGFloat = 460        // dense resource lists (info)
+
+        // Header insets — the title block that sits above the divider.
+        static let headerHInset: CGFloat = 14
+        static let headerTopInset: CGFloat = 12
+        static let headerBottomInset: CGFloat = 10
+
+        // Selectable-row insets.
+        static let rowHInset: CGFloat = 10
+        static let rowVInset: CGFloat = 7
+
+        // Scroll-list outer padding + height cap.
+        static let listInset: CGFloat = 6
+        static let listMaxHeight: CGFloat = 300
+
+        // Footer (totals / actions) insets.
+        static let footerHInset: CGFloat = 14
+        static let footerVInset: CGFloat = 10
     }
 
     // MARK: Component geometry
@@ -353,6 +402,10 @@ extension View {
 /// the style. This view bypasses that by composing the chrome manually — the
 /// `size` argument is the EXACT diameter, not a hint to the system.
 ///
+/// Size SF Symbols with `imageScale` (default `.large`) and `symbolWeight`, not
+/// explicit `.font(.system(size: ...))`, so these buttons match toolbar and
+/// composer icon sizing.
+///
 /// Two variants:
 ///  - `.prominent` — tinted glass circle with high-contrast (accent-foreground)
 ///    symbol. Use for primary icon CTAs (send, etc.).
@@ -411,6 +464,8 @@ struct AppCircleIconButton<Symbol: View>: View {
 /// Renders the same glass circle chrome but opens a native dropdown menu on
 /// click instead of firing an action. Use for icon-buttons that show a menu
 /// of choices (e.g. the agent-picker paperplane button in the session list).
+/// Like `AppCircleIconButton`, size SF Symbols with `imageScale` and
+/// `symbolWeight`, not explicit point-size fonts.
 struct AppCircleIconMenu<Symbol: View, Content: View>: View {
     enum Style { case prominent, soft }
 

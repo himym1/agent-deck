@@ -130,8 +130,8 @@ model can pull more memory mid-conversation on demand via `agent_deck_memory_sea
 
 For a parent session, the first launch:
 
-1. Builds a retrieval query from the initial prompt, session title, and repository.
-2. Embeds the query on-device and ranks active and pinned memories for the current project by cosine similarity, keeping only those above the similarity threshold (so it injects nothing when nothing is relevant).
+1. Builds a retrieval query from the initial prompt and session title. (The repository name is deliberately excluded: it pulled every query toward the same point and blunted relevance.)
+2. Embeds the query and each memory (title, summary, and a slice of the body) on-device, then ranks active and pinned memories for the current project by mean-centered cosine similarity. Centering matters: raw mean-pooled embeddings are anisotropic (even unrelated memories sit near 0.9 cosine), so the centroid of the candidate set is subtracted from every memory and from the query before comparing, which spreads the scores into a usable range. Recall then keeps the cluster around the best match (anything scoring at least a fixed fraction of the top score) and applies a soft floor that drops the degenerate case. Note: when a project's memories all concern one domain, similarity alone cannot always tell a weak-but-real match from the least-irrelevant one, so recall favors returning the single best memory over guaranteeing an empty result.
 3. If the embedding model is not yet available (first run still fetching the asset, or offline before it is cached), recall is empty for that session — there is no keyword fallback.
 4. Builds a compact memory prompt.
 5. Appends the memory policy and recalled memory through the parent append-prompt path.
@@ -225,7 +225,7 @@ Stale memories remain visible in the Memory sidebar but are no longer automatica
 
 ## Semantic Search
 
-Agent Deck stores Markdown first, then ranks recall by on-device semantic similarity. Each memory's title and summary are embedded with `NLContextualEmbedding` (a BERT-class contextual model in the Natural Language framework, macOS 14+), mean-pooled and L2-normalized into one vector. Recall embeds the query the same way and ranks memories by cosine similarity, keeping only those above a similarity threshold; pinned status and recency are tiebreakers, not overrides. The matched records' Markdown bodies are then read for prompt construction.
+Agent Deck stores Markdown first, then ranks recall by on-device semantic similarity. Each memory's title, summary, and a leading slice of its body (`AgentMemoryStore.embedBodyCharacterLimit`) are embedded with `NLContextualEmbedding` (a BERT-class contextual model in the Natural Language framework, macOS 14+), mean-pooled and L2-normalized into one vector. Recall embeds the query the same way and ranks memories by mean-centered cosine similarity (see Tuning Recall below); pinned status and recency are tiebreakers, not overrides. The matched records' Markdown bodies are then read for prompt construction.
 
 Embedding runs entirely on-device through an `actor` (`AgentMemoryEmbedder`): no network at inference, no API cost, and nothing leaves the machine. On a supported Apple-silicon Mac the model ships with macOS, so `requestAssets()` resolves instantly with no real download; `load()` just maps it into memory. The model is prewarmed in the background at app launch and when memory is switched on (`AppViewModel.warmMemoryEmbedder` to `AgentMemoryStore.warmEmbedder`), so the first recall isn't a cold load. Vectors are cached per project in `embeddings.json`, keyed by a content hash so a vector is recomputed only when its source text changes, and tagged with the model identifier so a new OS model invalidates the cache.
 
@@ -235,24 +235,28 @@ Because similarity is semantic rather than lexical, filler words self-discount a
 
 ## Tuning Recall
 
-Recall keeps a memory only when its query-to-memory cosine clears a single floor, `AgentMemoryStore.similarityThreshold` (currently `0.30`). The floor is applied in `AgentMemoryEmbedder.reconcileAndScore`; survivors are then ordered by cosine, with pinned status and recency as tiebreakers, and capped at `maxItems`. The floor is what lets recall **abstain**: when nothing clears it, nothing is injected.
+Raw mean-pooled `NLContextualEmbedding` vectors are **anisotropic**: they crowd into a narrow cone, so even unrelated memories sit near 0.9 cosine. A single absolute cosine floor on raw vectors therefore filters almost nothing, which is why an early version that did exactly that returned near-arbitrary memories. `AgentMemoryEmbedder.reconcileAndScore` fixes this by **mean-centering**: it subtracts the centroid of the memories being ranked from every memory vector and from the query, renormalizes, then takes the dot product. Subtracting the shared direction spreads the scores back into a usable range so weak matches actually score low. (One memory has no meaningful centroid, so that case falls back to raw cosine.)
 
-This threshold is Agent Deck's own choice, not borrowed. The inspiration packages do not threshold on similarity: the one that uses embeddings (`pi-session-search`, bundled into `pi-total-recall`) ranks by cosine but takes top-K via Reciprocal Rank Fusion with no cutoff, and `pi-memory`'s recall is lexical (SQLite FTS5), not embeddings. So there is no reference value to copy, and `0.30` is a starting guess that should be tuned against a real corpus.
+`AgentMemoryStore.retrieve` then gates the centered scores in two steps:
 
-How to tune it:
+- **Scale-relative keep** (`keepScoreRatio`, currently `0.6`) — the precision lever. Keep only memories scoring at least this fraction of the top score, capped at `maxItems`. It is a fraction, not an absolute margin, because the centered-score scale varies per query; calibration showed a fixed margin over-includes on low-scoring queries. In practice this turns "three to five weakly-related memories" into roughly one.
+- **Soft floor** (`minTopSimilarity`, currently `0.10`) — drops only the degenerate case where the best score is at noise.
 
-- **It is a query-time filter, not an index parameter.** Changing it does not require re-embedding anything; the cached vectors are unaffected. Edit the constant and rebuild, or wire it to a setting (see below).
-- **Direction.** Raise it to be stricter (fewer, more-relevant memories; recall abstains more often). Lower it to surface more (catches looser matches at the risk of noise).
-- **Range.** `NLContextualEmbedding` mean-pooled cosines run compressed: related text often lands around 0.3 to 0.6, unrelated around 0.1 to 0.3. A useful floor is roughly 0.2 to 0.5.
-- **How to observe.** Enable transcript cards (`agentMemoryShowTranscriptCards`) and watch the `Memory Recalled` cards across real sessions. If irrelevant memories appear, raise the floor. If an obviously relevant memory is missed (empty recall where you expected a hit), lower it.
+These constants were chosen from data, not guessed. `MemoryRecallCalibrationTests` loads the real on-device model, embeds a labeled fake corpus, and compares raw cosine, per-set centering, and a global-background-centering variant, writing a full score report to `/tmp/recall_calibration.txt`. Per-set centering ranked the correct topic first on every query and handled small (three-memory) corpora cleanly; the global variant ranked worse, so production uses per-set.
 
-Future options, if a single global floor proves too blunt:
+**Honest limit — abstention is soft, not exact.** When every memory in a project concerns one domain (for example this app's UI), the best genuinely-irrelevant memory can outscore a real-but-weak match, so no absolute floor cleanly separates "relevant" from "nothing fits". The floor only catches the degenerate case; recall favors returning the single best memory over guaranteeing an empty result. The memory policy prompt offsets this by telling agents that recalled memory is context, not instructions, and to prefer current repository contents.
 
-- **Per-kind thresholds.** Preferences and failures are usually worth surfacing on a weak signal, while context can demand a stronger match. Make the floor a function of `AgentMemoryKind` in `reconcileAndScore` or as a post-filter in `retrieve`.
-- **Adaptive (relative) threshold.** Instead of an absolute number, keep results within a delta of the top score (for example `score >= topScore - 0.1`). A strong top match then pulls a few near-peers, while a weak top match pulls nothing. Self-scaling, no fixed anchor.
-- **Rank-based top-K, no floor.** The `pi-session-search` approach: always return the best 1 to 3 by cosine. Deletes the magic number but loses abstention (it always injects something, even on an unrelated session).
-- **Hybrid lexical + semantic.** Reintroduce a lexical signal and fuse it with cosine via Reciprocal Rank Fusion (RRF), as `pi-session-search` does. Only worth it if pure-semantic recall misses exact-token matches in practice.
-- **Expose as a setting.** Promote the constant to `AppSettings` (for example `agentMemorySimilarityThreshold`) with a slider once a good default is established, so it can be tuned without a rebuild.
+How to observe and tune:
+
+- **Watch the scores.** Recall logs a per-memory score breakdown and the gate decision through `os.Logger` (subsystem = bundle id, category `MemoryRecall`): `log stream --predicate 'category == "MemoryRecall"'`. Or enable transcript cards (`agentMemoryShowTranscriptCards`) and watch the `Memory Recalled` cards across real sessions.
+- **Direction.** Raise `keepScoreRatio` toward `1.0` to be stricter (fewer near-peers ride along with the top match); lower it to surface more. Raise `minTopSimilarity` only to suppress more degenerate-top cases.
+- **No re-embedding needed.** Both are query-time gates; changing them does not touch the cached vectors.
+
+Future options, if the current gate proves too blunt:
+
+- **Per-kind tuning.** Preferences and failures are usually worth surfacing on a weaker signal than context. Make `keepScoreRatio` a function of `AgentMemoryKind` as a post-filter in `retrieve`.
+- **Hybrid lexical + semantic.** Reintroduce a lexical signal and fuse it with cosine via Reciprocal Rank Fusion (RRF). Only worth it if pure-semantic recall misses exact-token matches in practice.
+- **Expose as a setting.** Promote `keepScoreRatio` to `AppSettings` with a slider once a good default is established, so it can be tuned without a rebuild.
 
 ## Secret Scanning
 

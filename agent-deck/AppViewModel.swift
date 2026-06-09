@@ -598,9 +598,22 @@ final class AppViewModel: NSObject {
         _ result: AppRefreshSnapshot,
         includeModels: Bool
     ) {
-        projectPreferencesByPath = result.projectPreferencesByPath
-        projectPreferencesRevision &+= 1
-        discoveredProjects = result.discoveredProjects
+        // Swift Observation notifies on every `=`, equal value or not. A
+        // file-watch refresh frequently produces a byte-identical snapshot (the
+        // catalog on disk didn't actually change), so reassigning unconditionally
+        // re-evaluates the whole screen body — including the transcript's
+        // itemsBuild + updateNSView — for nothing. Gate each heavy reassignment
+        // on real inequality so a no-op rescan is invisible to the UI.
+        if projectPreferencesByPath != result.projectPreferencesByPath {
+            projectPreferencesByPath = result.projectPreferencesByPath
+            projectPreferencesRevision &+= 1
+        }
+        // DiscoveredProject has no volatile fields (no timestamps / counts), so
+        // value-equality is a true "the project list didn't change" test — a
+        // session streaming its transcript never alters it.
+        if discoveredProjects != result.discoveredProjects {
+            discoveredProjects = result.discoveredProjects
+        }
 
         if !appSettings.didMigrateAgentAssignmentsFromDiscoveredFiles {
             guard result.includesAllProjectSnapshots else {
@@ -611,17 +624,21 @@ final class AppViewModel: NSObject {
         }
 
         let catalogProjectSnapshots = Array(result.projectSnapshots.values)
-        globalSnapshot = scopedAgentSnapshot(result.globalSnapshot, projectPath: nil, globalCatalogSnapshot: result.globalSnapshot, catalogProjectSnapshots: catalogProjectSnapshots)
+        let newGlobalSnapshot = scopedAgentSnapshot(result.globalSnapshot, projectPath: nil, globalCatalogSnapshot: result.globalSnapshot, catalogProjectSnapshots: catalogProjectSnapshots)
+        if globalSnapshot != newGlobalSnapshot { globalSnapshot = newGlobalSnapshot }
         let freshProjectSnapshots = result.projectSnapshots.mapValues { projectSnapshot in
             scopedAgentSnapshot(projectSnapshot, projectPath: projectSnapshot.projectRoot, globalCatalogSnapshot: result.globalSnapshot, catalogProjectSnapshots: catalogProjectSnapshots)
         }
+        let newAllProjectSnapshots: [String: ScanSnapshot]
         if result.includesAllProjectSnapshots {
-            allProjectSnapshots = freshProjectSnapshots
+            newAllProjectSnapshots = freshProjectSnapshots
         } else {
-            allProjectSnapshots.merge(freshProjectSnapshots) { _, fresh in fresh }
+            var merged = allProjectSnapshots
+            merged.merge(freshProjectSnapshots) { _, fresh in fresh }
             let discoveredProjectPaths = Set(result.discoveredProjects.map(\.path))
-            allProjectSnapshots = allProjectSnapshots.filter { discoveredProjectPaths.contains($0.key) }
+            newAllProjectSnapshots = merged.filter { discoveredProjectPaths.contains($0.key) }
         }
+        if allProjectSnapshots != newAllProjectSnapshots { allProjectSnapshots = newAllProjectSnapshots }
         watchedURLsForAutoRefresh = result.watchedURLs
         if result.includesWatchFingerprint {
             lastWatchFingerprint = result.watchFingerprint
@@ -629,15 +646,19 @@ final class AppViewModel: NSObject {
         updateAutoRefreshWatchList()
 
         if let matchingProject = result.selectedProject {
-            projectRootURL = matchingProject.url
-            snapshot = allProjectSnapshots[matchingProject.path]
+            if projectRootURL != matchingProject.url { projectRootURL = matchingProject.url }
+            let newSnapshot = allProjectSnapshots[matchingProject.path]
                 ?? result.selectedProjectSnapshot.map { scopedAgentSnapshot($0, projectPath: matchingProject.path, globalCatalogSnapshot: result.globalSnapshot, catalogProjectSnapshots: catalogProjectSnapshots) }
                 ?? globalSnapshot
+            if snapshot != newSnapshot { snapshot = newSnapshot }
         } else {
-            projectRootURL = nil
-            self.selectedProjectPath = nil
-            persistSelectedProjectPath(nil)
-            snapshot = makeAggregateSnapshot()
+            if projectRootURL != nil { projectRootURL = nil }
+            if self.selectedProjectPath != nil {
+                self.selectedProjectPath = nil
+                persistSelectedProjectPath(nil)
+            }
+            let newSnapshot = makeAggregateSnapshot()
+            if snapshot != newSnapshot { snapshot = newSnapshot }
         }
 
         // A fresh snapshot is authoritative. Drop pending deletions no longer
@@ -5167,7 +5188,11 @@ final class AppViewModel: NSObject {
             return [guidance]
         }
 
-        let query = [initialPrompt, current.title, current.repository].compactMap { $0 }.joined(separator: "\n")
+        // Match on what the user actually asked. The repository name (and other
+        // boilerplate) pulled every query toward the centroid of the project's UI
+        // memories, blunting relevance, so it's deliberately left out; the title is a
+        // light secondary, used mainly when the opening prompt is terse.
+        let query = [initialPrompt, current.title].compactMap { $0 }.joined(separator: "\n")
         guard let retrieval = await agentMemoryStore.retrieve(
             projectPath: current.projectPath,
             query: query,
@@ -8216,6 +8241,14 @@ final class AppViewModel: NSObject {
         guard !Task.isCancelled else { return }
         watchFingerprintTask = nil
         guard fingerprint != previousFingerprint else { return }
+        // A real on-disk change, but reassigning project state mid-scroll re-evals
+        // the screen body (transcript itemsBuild + updateNSView) and drops frames.
+        // Re-arm the debounce WITHOUT committing the new fingerprint, so once the
+        // gesture settles the next check still sees the change and refreshes.
+        if TranscriptInteractionGate.isInteractingRecently {
+            scheduleRefreshForWatchedFileEvent()
+            return
+        }
         lastWatchFingerprint = fingerprint
         refresh(includeModels: false)
     }

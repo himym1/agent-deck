@@ -99,27 +99,85 @@ actor AgentMemoryEmbedder {
 
     /// Reuses cached vectors whose hash still matches, embeds the rest, prunes
     /// vectors for ids no longer present, and scores every vector against the query
-    /// by cosine similarity (a plain dot product, since vectors are L2-normalized).
-    /// Returns nil only when the query itself cannot be embedded.
-    func reconcileAndScore(query: String, inputs: [EmbeddingInput], cached: [String: MemoryVectorEntry], threshold: Float) -> EmbeddingScoreResult? {
+    /// by *mean-centered* cosine similarity. Returns a score for every embedded
+    /// memory (the caller gates and ranks); returns nil only when the query itself
+    /// cannot be embedded.
+    ///
+    /// Centering is the key step: raw mean-pooled `NLContextualEmbedding` vectors are
+    /// anisotropic — they all crowd into a narrow cone, so even unrelated memories sit
+    /// near 0.9 cosine and no absolute threshold can separate signal from noise.
+    /// Subtracting the corpus centroid from every memory vector and from the query
+    /// removes that shared direction, spreading cosine back across a usable range so
+    /// weak matches actually score low.
+    func reconcileAndScore(query: String, inputs: [EmbeddingInput], cached: [String: MemoryVectorEntry]) -> EmbeddingScoreResult? {
         guard let queryVector = embed(query) else { return nil }
+        let dimension = queryVector.count
         var vectors: [String: MemoryVectorEntry] = [:]
         vectors.reserveCapacity(inputs.count)
         for input in inputs {
-            if let existing = cached[input.id], existing.hash == input.hash, existing.vector.count == queryVector.count {
+            if let existing = cached[input.id], existing.hash == input.hash, existing.vector.count == dimension {
                 vectors[input.id] = existing
-            } else if let vector = embed(input.text), vector.count == queryVector.count {
+            } else if let vector = embed(input.text), vector.count == dimension {
                 vectors[input.id] = MemoryVectorEntry(vector: vector, hash: input.hash)
             }
         }
+
+        let ids = Array(vectors.keys)
         var scores: [String: Float] = [:]
-        for (id, entry) in vectors {
+        scores.reserveCapacity(ids.count)
+        // A meaningful centroid needs at least two memories; with one (or none) there's
+        // no shared direction to subtract, so fall back to raw cosine.
+        guard ids.count >= 2 else {
+            for id in ids {
+                let vector = vectors[id]!.vector
+                var dot: Float = 0
+                for i in 0..<dimension { dot += queryVector[i] * vector[i] }
+                scores[id] = dot
+            }
+            return EmbeddingScoreResult(vectors: vectors, scores: scores)
+        }
+
+        var centroid = [Float](repeating: 0, count: dimension)
+        for id in ids {
+            let vector = vectors[id]!.vector
+            for i in 0..<dimension { centroid[i] += vector[i] }
+        }
+        let inverse = 1.0 / Float(ids.count)
+        for i in 0..<dimension { centroid[i] *= inverse }
+
+        // If the query sits exactly at the centroid there's no direction left to rank
+        // by; return empty scores so the caller abstains rather than ranking on noise.
+        guard let centeredQuery = centerAndNormalize(queryVector, centroid: centroid) else {
+            return EmbeddingScoreResult(vectors: vectors, scores: [:])
+        }
+        for id in ids {
+            guard let centered = centerAndNormalize(vectors[id]!.vector, centroid: centroid) else {
+                scores[id] = 0
+                continue
+            }
             var dot: Float = 0
-            let vector = entry.vector
-            for i in 0..<vector.count { dot += queryVector[i] * vector[i] }
-            if dot >= threshold { scores[id] = dot }
+            for i in 0..<dimension { dot += centeredQuery[i] * centered[i] }
+            scores[id] = dot
         }
         return EmbeddingScoreResult(vectors: vectors, scores: scores)
+    }
+
+    /// Subtracts `centroid` from `vector` and L2-normalizes the difference, so a plain
+    /// dot product of two centered vectors is their cosine in the de-anisotropized
+    /// space. Returns nil when the difference is the zero vector (no direction left).
+    private func centerAndNormalize(_ vector: [Float], centroid: [Float]) -> [Float]? {
+        var out = [Float](repeating: 0, count: vector.count)
+        var norm: Float = 0
+        for i in 0..<vector.count {
+            let value = vector[i] - centroid[i]
+            out[i] = value
+            norm += value * value
+        }
+        norm = norm.squareRoot()
+        guard norm > 0 else { return nil }
+        let scale = 1.0 / norm
+        for i in 0..<vector.count { out[i] *= scale }
+        return out
     }
 
     /// Mean-pools the per-token contextual vectors into one sentence vector and

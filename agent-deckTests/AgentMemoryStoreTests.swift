@@ -3,7 +3,7 @@ import XCTest
 
 @MainActor
 final class AgentMemoryStoreTests: XCTestCase {
-    func testCreateMemoryPersistsMarkdownManifestAndSQLiteIndex() throws {
+    func testCreateMemoryPersistsMarkdownAndManifest() throws {
         let root = try temporaryDirectory()
         let store = AgentMemoryStore(rootURL: root)
 
@@ -20,14 +20,6 @@ final class AgentMemoryStoreTests: XCTestCase {
         XCTAssertEqual(store.records.count, 1)
         XCTAssertTrue(FileManager.default.fileExists(atPath: record.filePath))
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("projects/\(AgentMemoryStore.projectID(for: "/tmp/project"))/manifest.json").path))
-        // FTS rebuild is fire-and-forget on a detached task; poll briefly for the
-        // sqlite file to appear before asserting.
-        let sqlitePath = root.appendingPathComponent("projects/\(AgentMemoryStore.projectID(for: "/tmp/project"))/index.sqlite").path
-        let deadline = Date().addingTimeInterval(3)
-        while !FileManager.default.fileExists(atPath: sqlitePath) && Date() < deadline {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-        }
-        XCTAssertTrue(FileManager.default.fileExists(atPath: sqlitePath))
         let saved = try String(contentsOfFile: record.filePath, encoding: .utf8)
         XCTAssertTrue(saved.contains("type: runbook"))
         XCTAssertTrue(saved.contains("scope: project"))

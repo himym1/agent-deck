@@ -60,10 +60,10 @@ The `ZStack { Color.clear; Image }` gives the layout an explicit hit layer the s
 In agent-deck:
 
 - **`PiAgentSendButton`** (the `↑` / `■` in the composer) — system style: `.buttonStyle(.glassProminent).buttonBorderShape(.circle).tint(tintColor)` where `tintColor` is `brandAccent` (sendable), `Color.red` (running/stop), or `mutedText` (disabled).
-- **`PiAgentAddSessionButton`** (the `+` in the sidebar) — system style: `.buttonStyle(.glassProminent).buttonBorderShape(.capsule).tint(...)`.
+- **`PiAgentAddSessionButton`** (the `+` in the sidebar) — `AppCircleIconButton(style: .soft, size: 30)`.
 - **`AppCopyIconButton`** (every transcript copy button) — manual pattern: `.buttonStyle(.plain)` + `Color.clear` hit layer + `.glassEffect(.regular, in: Capsule)` + explicit `.contentShape(Capsule)`. Footprint must be exactly the size the caller passes (44×22 in headers, 32×32 in popovers) so the hover slot doesn't reflow on appearance.
-- **`AppCircleIconButton`** (icon-only round buttons: `+` add session, compact icon actions) — manual chrome with `.glassEffect(.regular.tint(...), in: Circle())`, exact `size` diameter, `.buttonStyle(.plain)`. Two styles: `.prominent` (opaque tint, accent-foreground symbol) and `.soft` (low-opacity tint, tint-colored symbol).
-- **`AppCircleIconMenu`** (icon-only round menu buttons: agent-picker paperplane) — same chrome as `AppCircleIconButton` but wraps a `Menu` instead of a `Button`. Same `.prominent`/`.soft` style options and exact `size` control.
+- **`AppCircleIconButton`** (icon-only round buttons: `+` add session, compact icon actions) — manual chrome with `.glassEffect(.regular.tint(...), in: Circle())`, exact `size` diameter, `.buttonStyle(.plain)`. Two styles: `.prominent` (opaque tint, accent-foreground symbol), `.soft` (low-opacity tint, tint-colored symbol), and `.neutral` (untinted glass, muted symbol). Size SF Symbols with `imageScale`/`symbolWeight`; do not use explicit `.font(.system(size: ...))` on these icons.
+- **`AppCircleIconMenu`** (icon-only round menu buttons: agent-picker paperplane) — same chrome as `AppCircleIconButton` but wraps a `Menu` instead of a `Button`. Same `.prominent`/`.soft` style options, exact `size` control, and `imageScale`/`symbolWeight` icon sizing.
 - **All other formerly-`.borderedProminent` buttons** — `.buttonStyle(.glassProminent)`. Previously `.bordered` → `.buttonStyle(.glass)`.
 
 Migration cheatsheet (already applied):

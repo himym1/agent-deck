@@ -157,12 +157,12 @@ final class PiAgentNativeMemoryCardView: NSView, PiAgentNativeRowContent {
         titleLabel.maximumNumberOfLines = 1
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
+        // Summary line ("Loaded N relevant memory…") is intentionally hidden:
+        // the title + the tappable memory rows are enough; the running count
+        // is duplicative. Hidden views are detached from the stack layout
+        // (NSStackView default), so no extra space is reserved.
         summaryLabel.translatesAutoresizingMaskIntoConstraints = false
-        summaryLabel.font = NativeTranscriptFont.footnote()
-        summaryLabel.textColor = AppTheme.ns(AppTheme.mutedText)
-        summaryLabel.lineBreakMode = .byWordWrapping
-        summaryLabel.maximumNumberOfLines = 0
-        summaryLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        summaryLabel.isHidden = true
 
         fallbackLabel.translatesAutoresizingMaskIntoConstraints = false
         fallbackLabel.font = NativeTranscriptFont.caption(.medium)
@@ -233,7 +233,6 @@ final class PiAgentNativeMemoryCardView: NSView, PiAgentNativeRowContent {
         iconView.contentTintColor = payload.tint
 
         titleLabel.stringValue = payload.title
-        summaryLabel.stringValue = payload.summary
 
         rebuildRows(payload.memoryRows)
         if let fallback = payload.fallbackCount, payload.memoryRows.isEmpty {

@@ -1310,54 +1310,21 @@ private struct PiAgentComposerProjectPickerPopover: View {
     let onSelectProject: (DiscoveredProject) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("New Session")
-                    .font(AppTheme.Font.headline)
-                Text("Choose a project for Pi Agent.")
-                    .font(AppTheme.Font.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-
-            Divider()
-
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 2) {
-                    ForEach(projects) { project in
-                        Button {
-                            onSelectProject(project)
-                        } label: {
-                            HStack(spacing: 10) {
-                                ProjectIconView(imageURL: project.iconFileURL, symbolName: project.fallbackSymbolName, size: 24, assetName: project.projectType.assetName)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(project.repositoryDisplayName)
-                                        .font(AppTheme.Font.callout.weight(.semibold))
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(1)
-                                    Text(project.path)
-                                        .font(AppTheme.Font.caption2)
-                                        .foregroundStyle(AppTheme.mutedText)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .contentShape(Rectangle())
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 7)
-                        }
-                        .buttonStyle(.plain)
+        AppPopoverContainer(title: "New Session", subtitle: "Choose a project for Pi Agent.") {
+            AppPopoverScrollList {
+                ForEach(projects) { project in
+                    AppPopoverProjectRow(
+                        imageURL: project.iconFileURL,
+                        symbolName: project.fallbackSymbolName,
+                        assetName: project.projectType.assetName,
+                        title: project.repositoryDisplayName,
+                        path: project.path
+                    ) {
+                        onSelectProject(project)
                     }
                 }
-                .padding(.horizontal, 6)
-                .padding(.bottom, 6)
             }
-            .frame(maxHeight: 300)
         }
-        .frame(width: 340)
-        .appGlassPanel(cornerRadius: AppTheme.Chat.panelCornerRadius)
     }
 }
 
@@ -1650,10 +1617,11 @@ struct PiAgentContextBreakdownPopover: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Context usage")
-                    .font(AppTheme.Font.headline.weight(.semibold))
+        VStack(alignment: .leading, spacing: 0) {
+            AppPopoverHeader(title: "Context usage")
+            Divider()
+
+            VStack(alignment: .leading, spacing: 12) {
                 if let tokens = session.contextTokens, let window = session.contextWindow {
                     HStack(spacing: 4) {
                         Image(systemName: "tugriksign.circle")
@@ -1667,9 +1635,8 @@ struct PiAgentContextBreakdownPopover: View {
                         .font(AppTheme.Font.caption)
                         .foregroundStyle(AppTheme.mutedText)
                 }
-            }
 
-            PiAgentContextDotGrid(rows: visibleRows)
+                PiAgentContextDotGrid(rows: visibleRows)
 
             VStack(alignment: .leading, spacing: 8) {
                 if session.contextBreakdown.isEmpty == false {
@@ -1749,9 +1716,13 @@ struct PiAgentContextBreakdownPopover: View {
                     PiAgentContextStat(label: "Tools", value: "\(toolCalls)", icon: "wrench.and.screwdriver")
                 }
             }
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 14)
         }
-        .padding(14)
-        .frame(width: 360, alignment: .leading)
+        .frame(width: AppTheme.Popover.standardWidth)
+        .foregroundStyle(.primary)
     }
 
     private func tint(for key: String) -> Color {
@@ -2246,8 +2217,8 @@ struct PiAgentRuntimeFooter: View {
     }
 
     /// Token + cost metrics showing the aggregate (orchestration + subagents).
-    /// When subagents ran, the pair becomes tappable and opens a per-source
-    /// breakdown; with no subagents it's the plain parent-only display.
+    /// The pair is always tappable once there's something to show, opening the
+    /// per-source breakdown — with no subagents that's just the main-chat line.
     @ViewBuilder
     private var aggregateChips: some View {
         // Preserve the original "hide until there's a real count" behavior: the
@@ -2256,7 +2227,7 @@ struct PiAgentRuntimeFooter: View {
         let hasTokens = session.totalTokens != nil || aggregate?.hasSubagents == true
         let tokens: Int? = hasTokens ? (aggregate?.totalTokens ?? session.totalTokens) : nil
         let cost = aggregate?.totalCost ?? session.cost
-        let tappable = aggregate?.hasSubagents == true
+        let tappable = aggregate != nil && (tokens != nil || cost != nil)
         let chips = HStack(spacing: 7) {
             if let tokens {
                 metric("\(compact(tokens)) tokens", icon: "tugriksign.circle")
@@ -2310,35 +2281,45 @@ struct PiAgentRuntimeFooter: View {
 }
 
 /// Per-source token & cost breakdown opened from the footer's aggregate chips.
-/// Mirrors `PiAgentContextBreakdownPopover` chrome (header + rows + total).
-/// Subagents whose cost wasn't reported show `—` and are excluded from the total.
+/// Uses the shared popover chrome (header + rows + total). With no subagents it
+/// shows just the main-chat line. Sources whose cost wasn't reported show `—`
+/// and are excluded from the total.
 struct PiAgentCostBreakdownPopover: View {
     let aggregate: PiAgentRuntimeCostAggregate
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
+            AppPopoverHeader(title: "Token cost")
+            Divider()
+
             VStack(spacing: 0) {
                 ForEach(Array(aggregate.sources.enumerated()), id: \.element.id) { index, source in
                     if index > 0 { Divider().opacity(0.4) }
                     row(for: source)
                 }
             }
+            .padding(.horizontal, AppTheme.Popover.footerHInset)
+            .padding(.vertical, 6)
 
-            Divider()
-            HStack(spacing: 8) {
-                Text("Total")
-                    .font(AppTheme.Font.caption.weight(.bold))
-                Spacer(minLength: 8)
-                Text(compact(aggregate.totalTokens))
-                    .font(AppTheme.Font.caption.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(AppTheme.mutedText)
-                Text(aggregate.totalCost.map { String(format: "$%.2f", $0) } ?? "—")
-                    .font(AppTheme.Font.caption.monospacedDigit().weight(.bold))
-                    .frame(width: 56, alignment: .trailing)
+            // A single main-chat source makes the total redundant with its row.
+            if aggregate.sources.count > 1 {
+                AppPopoverFooter {
+                    HStack(spacing: 8) {
+                        Text("Total")
+                            .font(AppTheme.Font.caption.weight(.bold))
+                        Spacer(minLength: 8)
+                        Text(compact(aggregate.totalTokens))
+                            .font(AppTheme.Font.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(AppTheme.mutedText)
+                        Text(aggregate.totalCost.map { String(format: "$%.2f", $0) } ?? "—")
+                            .font(AppTheme.Font.caption.monospacedDigit().weight(.bold))
+                            .frame(width: 56, alignment: .trailing)
+                    }
+                }
             }
         }
-        .padding(14)
-        .frame(width: 300, alignment: .leading)
+        .frame(width: AppTheme.Popover.standardWidth)
+        .foregroundStyle(.primary)
     }
 
     private func row(for source: PiAgentRuntimeCostAggregate.Source) -> some View {
@@ -2409,12 +2390,8 @@ struct PiAgentModelPicker: View {
         }
         .buttonStyle(.plain)
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Label("Model", systemImage: "cpu")
-                        .font(AppTheme.Font.caption.weight(.semibold))
-                        .foregroundStyle(AppTheme.mutedText)
-                    Spacer()
+            VStack(alignment: .leading, spacing: 0) {
+                AppPopoverHeader(title: "Model") {
                     Button {
                         onRefresh()
                     } label: {
@@ -2425,67 +2402,42 @@ struct PiAgentModelPicker: View {
                     .accessibilityLabel("Refresh models")
                 }
 
+                Divider()
+
                 ScrollView(showsIndicators: false) {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(groupedModelOptions, id: \.provider) { group in
-                            VStack(alignment: .leading, spacing: 5) {
-                                HStack(spacing: 6) {
-                                    ProviderLabel(provider: group.provider, logoSize: 14, spacing: 5)
-                                        .font(AppTheme.Font.caption.weight(.bold))
-                                        .fontWidth(.expanded)
-                                        .foregroundStyle(.primary)
-                                    Spacer(minLength: 0)
-                                }
-                                .padding(.horizontal, 2)
+                            VStack(alignment: .leading, spacing: 4) {
+                                ProviderLabel(provider: group.provider, logoSize: 14, spacing: 5)
+                                    .font(AppTheme.Font.caption.weight(.bold))
+                                    .fontWidth(.expanded)
+                                    .foregroundStyle(.primary)
+                                    .padding(.horizontal, AppTheme.Popover.rowHInset)
 
-                                VStack(spacing: 3) {
+                                VStack(spacing: 2) {
                                     ForEach(group.models) { model in
-                                        Button {
+                                        AppPopoverTextRow(
+                                            isSelected: model.provider == resolvedProvider && model.id == resolvedModelID,
+                                            title: model.id,
+                                            subtitle: modelMetadataSubtitle(model)
+                                        ) {
                                             onSelect(.init(provider: model.provider, modelID: model.id))
                                             isPresented = false
-                                        } label: {
-                                            modelRow(
-                                                title: model.id,
-                                                subtitle: modelMetadataSubtitle(model),
-                                                isSelected: model.provider == resolvedProvider && model.id == resolvedModelID
-                                            )
                                         }
-                                        .buttonStyle(.plain)
                                     }
                                 }
                             }
                         }
                     }
-                    .padding(.vertical, 2)
+                    .padding(.horizontal, AppTheme.Popover.listInset)
+                    .padding(.vertical, AppTheme.Popover.listInset)
                 }
-                .frame(maxHeight: 340)
+                .frame(maxHeight: AppTheme.Popover.listMaxHeight)
             }
-            .padding(12)
-            .frame(width: 360)
+            .frame(width: AppTheme.Popover.standardWidth)
+            .foregroundStyle(.primary)
         }
         .help(isRunning ? "Change this Pi session's model" : "Choose a model for this session before launch")
-    }
-
-    private func modelRow(title: String, subtitle: String, isSelected: Bool) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(isSelected ? AppTheme.brandAccent : AppTheme.mutedText)
-                .frame(width: 16)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(AppTheme.Font.caption.weight(.semibold))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(subtitle)
-                    .font(AppTheme.Font.caption2)
-                    .foregroundStyle(AppTheme.mutedText)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.chipCornerRadius, style: .continuous).fill(isSelected ? AppTheme.selectionFill : Color.clear))
     }
 
     @ViewBuilder
@@ -2562,7 +2514,6 @@ struct PiAgentThinkingPicker: View {
     let onSelect: (String) -> Void
 
     @State private var isPresented = false
-    @State private var hoveredLevel: String?
     @State private var optimisticLevel: String?
 
     private var isLoadingLevels: Bool { supportedLevels.isEmpty }
@@ -2590,30 +2541,34 @@ struct PiAgentThinkingPicker: View {
         }
         .buttonStyle(.plain)
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Thinking", systemImage: "brain.head.profile")
-                    .font(AppTheme.Font.caption.weight(.semibold))
-                    .foregroundStyle(AppTheme.mutedText)
-
+            AppPopoverContainer(width: AppTheme.Popover.compactWidth, title: "Thinking") {
                 if isLoadingLevels {
                     HStack(spacing: 10) {
                         AppSpinner()
                             .controlSize(.small)
                         Text("Loading")
-                            .font(AppTheme.Font.caption.weight(.semibold))
+                            .font(AppTheme.Popover.emptyBodyFont)
                             .foregroundStyle(AppTheme.mutedText)
                         Spacer(minLength: 0)
                     }
                     .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, AppTheme.Popover.headerHInset)
+                    .padding(.vertical, 10)
                 } else {
-                    ForEach(levels, id: \.self) { candidate in
-                        thinkingLevelRow(candidate)
+                    AppPopoverScrollList {
+                        ForEach(levels, id: \.self) { candidate in
+                            AppPopoverTextRow(
+                                isSelected: candidate == resolvedLevel,
+                                title: candidate.capitalized
+                            ) {
+                                optimisticLevel = candidate
+                                onSelect(candidate)
+                                isPresented = false
+                            }
+                        }
                     }
                 }
             }
-            .padding(12)
-            .frame(width: 220)
         }
         .help(isRunning ? "Change thinking level" : "Choose thinking level for this session before launch")
         .onChange(of: normalizedLevel) { _, _ in
@@ -2627,46 +2582,6 @@ struct PiAgentThinkingPicker: View {
         }
     }
 
-    private func thinkingLevelRow(_ candidate: String) -> some View {
-        let isSelected = candidate == resolvedLevel
-        let isHovered = hoveredLevel == candidate
-        let rowShape = RoundedRectangle(cornerRadius: AppTheme.Chat.chipCornerRadius, style: .continuous)
-
-        return Button {
-            optimisticLevel = candidate
-            onSelect(candidate)
-            isPresented = false
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(AppTheme.Font.body.weight(.semibold))
-                    .foregroundStyle(isSelected ? AppTheme.brandAccent : AppTheme.mutedText)
-                    .frame(width: 18, height: 18)
-
-                Text(candidate.capitalized)
-                    .font(AppTheme.Font.caption.weight(.semibold))
-                    .foregroundStyle(.primary)
-
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-            .padding(.horizontal, 10)
-            .background(rowShape.fill(rowFill(isSelected: isSelected, isHovered: isHovered)))
-            .contentShape(rowShape)
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            hoveredLevel = hovering ? candidate : (hoveredLevel == candidate ? nil : hoveredLevel)
-        }
-        .accessibilityLabel("Thinking \(candidate.capitalized)")
-        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-    }
-
-    private func rowFill(isSelected: Bool, isHovered: Bool) -> Color {
-        if isSelected { return AppTheme.selectionFill }
-        if isHovered { return AppTheme.contentSubtleFill }
-        return .clear
-    }
 
     private var normalizedLevel: String? {
         guard let level else { return nil }

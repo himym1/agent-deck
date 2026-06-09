@@ -126,7 +126,8 @@ struct PiAgentNewSessionSplitButton: View {
         HStack(spacing: 0) {
             Button { isAgentPickerPresented.toggle() } label: {
                 Image(systemName: "paperplane")
-                    .font(.system(size: 13, weight: .bold))
+                    .imageScale(.large)
+                    .fontWeight(.bold)
                     .padding(.leading, 11)
                     .padding(.trailing, 9)
                     .padding(.vertical, 7)
@@ -152,7 +153,8 @@ struct PiAgentNewSessionSplitButton: View {
 
             Button(action: plusAction) {
                 Image(systemName: "plus")
-                    .font(.system(size: 13, weight: .bold))
+                    .imageScale(.large)
+                    .fontWeight(.bold)
                     .padding(.leading, 9)
                     .padding(.trailing, 11)
                     .padding(.vertical, 7)
@@ -219,52 +221,22 @@ private struct PiAgentChatWithAgentPopover: View {
     let onSelect: (EffectiveAgentRecord, DiscoveredProject) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Start a 1:1 session")
-                    .font(AppTheme.Font.headline)
-                Text(project.map { "Pick an agent in \($0.repositoryDisplayName)." } ?? "No project available.")
-                    .font(AppTheme.Font.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-
-            Divider()
-
+        AppPopoverContainer(
+            title: "Start a 1:1 session",
+            subtitle: project.map { "Pick an agent in \($0.repositoryDisplayName)." } ?? "No project available."
+        ) {
             if let project, !agents.isEmpty {
-                ScrollView(showsIndicators: false) {
-                    VStack(spacing: 2) {
-                        ForEach(agents, id: \.name) { agent in
-                            Button {
-                                onSelect(agent, project)
-                            } label: {
-                                Text(agent.name)
-                                    .font(AppTheme.Font.callout.weight(.semibold))
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .contentShape(Rectangle())
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 7)
-                            }
-                            .buttonStyle(.plain)
+                AppPopoverScrollList {
+                    ForEach(agents, id: \.name) { agent in
+                        AppPopoverTextRow(title: agent.name) {
+                            onSelect(agent, project)
                         }
                     }
-                    .padding(.horizontal, 6)
-                    .padding(.bottom, 6)
                 }
-                .frame(maxHeight: 300)
             } else {
-                Text(project == nil ? "No project available." : "No agents available in this project.")
-                    .font(AppTheme.Font.callout)
-                    .foregroundStyle(AppTheme.mutedText)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 12)
+                AppPopoverEmptyState(text: project == nil ? "No project available." : "No agents available in this project.")
             }
         }
-        .frame(width: 300)
-        .appGlassPanel(cornerRadius: AppTheme.Chat.panelCornerRadius)
     }
 }
 
@@ -274,64 +246,22 @@ private struct PiAgentProjectPickerPopover: View {
     let onSelectProject: (DiscoveredProject) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("New Session")
-                    .font(AppTheme.Font.headline)
-                Text("Choose a project for Pi Agent.")
-                    .font(AppTheme.Font.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-
-            Divider()
-
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 2) {
-                    ForEach(projects) { project in
-                        Button {
-                            onSelectProject(project)
-                        } label: {
-                            HStack(spacing: 10) {
-                                ProjectIconView(imageURL: project.iconFileURL, symbolName: project.fallbackSymbolName, size: 24, assetName: project.projectType.assetName)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    HStack(spacing: 6) {
-                                        Text(project.repositoryDisplayName)
-                                            .font(AppTheme.Font.callout.weight(.semibold))
-                                            .foregroundStyle(.primary)
-                                            .lineLimit(1)
-                                        if project.id == selectedProject?.id {
-                                            Text("Current")
-                                                .font(AppTheme.Font.caption2.weight(.semibold))
-                                                .foregroundStyle(AppTheme.brandAccent)
-                                                .padding(.horizontal, 5)
-                                                .padding(.vertical, 2)
-                                                .background(Capsule(style: .continuous).fill(AppTheme.brandAccent.opacity(0.10)))
-                                        }
-                                    }
-                                    Text(project.path)
-                                        .font(AppTheme.Font.caption2)
-                                        .foregroundStyle(AppTheme.mutedText)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .contentShape(Rectangle())
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 7)
-                        }
-                        .buttonStyle(.plain)
+        AppPopoverContainer(title: "New Session", subtitle: "Choose a project for Pi Agent.") {
+            AppPopoverScrollList {
+                ForEach(projects) { project in
+                    AppPopoverProjectRow(
+                        imageURL: project.iconFileURL,
+                        symbolName: project.fallbackSymbolName,
+                        assetName: project.projectType.assetName,
+                        title: project.repositoryDisplayName,
+                        path: project.path,
+                        isCurrent: project.id == selectedProject?.id
+                    ) {
+                        onSelectProject(project)
                     }
                 }
-                .padding(.horizontal, 6)
-                .padding(.bottom, 6)
             }
-            .frame(maxHeight: 300)
         }
-        .frame(width: 340)
-        .appGlassPanel(cornerRadius: AppTheme.Chat.panelCornerRadius)
     }
 }
 

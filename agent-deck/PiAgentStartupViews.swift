@@ -84,27 +84,14 @@ struct PiAgentStartupResourcesPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Image("pi")
-                    .resizable()
-                    .renderingMode(.template)
-                    .scaledToFit()
-                    .frame(width: 16, height: 16)
-                    .foregroundStyle(AppTheme.piLogo.gradient)
-                Text("Session resources")
-                    .font(.headline)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
-            .padding(.bottom, 10)
+            AppPopoverHeader(title: "Session resources")
 
             Divider()
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 14) {
-                    resourceSection("Runtime", icon: "cpu", color: AppTheme.piLogo, items: runtimeItems, columns: 1, showsDetails: true)
-                    resourceSection("Extensions", icon: "puzzlepiece.extension", color: .orange, items: extensionItems, columns: 1, showsDetails: true)
+                    resourceSection("Runtime", icon: "cpu", items: runtimeItems, columns: 1, showsDetails: true)
+                    resourceSection("Extensions", icon: "puzzlepiece.extension", items: extensionItems, columns: 1, showsDetails: true)
                     toolCallSection
 
                     if isEmpty {
@@ -114,17 +101,17 @@ struct PiAgentStartupResourcesPopover: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, 8)
                     } else {
-                        resourceSection("Context", icon: "doc.text", color: .blue, items: contextItems, columns: 1)
-                        resourceSection("Environment", icon: "key", color: .green, items: envItems, columns: 1)
-                        resourceSection("Agents", icon: "paperplane", color: .teal, items: agentItems, columns: 1, showsDetails: true)
-                        resourceSection("Skills", icon: "wand.and.stars", color: AppTheme.assistantAccent, items: skillItems, columns: 1)
-                        resourceSection("Prompts", icon: AppSymbols.promptTemplate, color: .indigo, items: promptItems, columns: 1)
+                        resourceSection("Context", icon: "doc.text", items: contextItems, columns: 1)
+                        resourceSection("Environment", icon: "key", items: envItems, columns: 1)
+                        resourceSection("Agents", icon: "paperplane", items: agentItems, columns: 1, showsDetails: true)
+                        resourceSection("Skills", icon: "wand.and.stars", items: skillItems, columns: 1)
+                        resourceSection("Prompts", icon: AppSymbols.promptTemplate, items: promptItems, columns: 1)
                     }
                 }
                 .padding(14)
             }
         }
-        .frame(width: 460, height: 480)
+        .frame(width: AppTheme.Popover.wideWidth, height: 480)
         .onAppear { toolRecap = viewModel.toolCallRecap(forSessionID: session.id) }
     }
 
@@ -134,7 +121,7 @@ struct PiAgentStartupResourcesPopover: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Image(systemName: "wrench.and.screwdriver")
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(AppTheme.mutedText)
                         .frame(width: 18)
                     Text("Tool calls")
                         .font(.subheadline.weight(.semibold))
@@ -294,12 +281,12 @@ struct PiAgentStartupResourcesPopover: View {
     // MARK: - Section / chip
 
     @ViewBuilder
-    private func resourceSection(_ title: String, icon: String, color: Color, items: [PiStartupResourceItem], columns: Int = 1, showsDetails: Bool = false) -> some View {
+    private func resourceSection(_ title: String, icon: String, items: [PiStartupResourceItem], columns: Int = 1, showsDetails: Bool = false) -> some View {
         if !items.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Image(systemName: icon)
-                        .foregroundStyle(color)
+                        .foregroundStyle(AppTheme.mutedText)
                         .frame(width: 18)
                     Text(title)
                         .font(.subheadline.weight(.semibold))

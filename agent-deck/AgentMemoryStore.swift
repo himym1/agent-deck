@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import os
 
 enum AgentMemoryError: LocalizedError {
     case secretDetected(String)
@@ -39,11 +40,29 @@ final class AgentMemoryStore: ObservableObject {
     /// change (staleness detected by content hash, not timestamp).
     private var embeddingCache: [String: ProjectEmbeddingIndex] = [:]
 
-    /// Cosine-similarity floor for recall. Vectors are L2-normalized, so this is a
-    /// dot product in [-1, 1]; below it a memory is treated as unrelated and not
-    /// injected — this is the "abstain when nothing fits" behavior that replaces the
-    /// old keyword floor. Tune against the real corpus.
-    static let similarityThreshold: Float = 0.30
+    /// Soft safety floor on the best mean-centered cosine. This is NOT a precise
+    /// relevance gate: calibration (`MemoryRecallCalibrationTests`) shows that when a
+    /// query and the memories share one domain (e.g. this app's UI), the best
+    /// genuinely-irrelevant memory can outscore a real-but-weak match, so no absolute
+    /// floor cleanly separates "relevant" from "abstain". It exists only to drop the
+    /// degenerate case (top score at/below noise). The real precision lever is
+    /// `keepScoreRatio` below. Tune via the `recallLog` score breakdown.
+    nonisolated static let minTopSimilarity: Float = 0.10
+    /// Keep only memories scoring at least this fraction of the top score, so recall
+    /// returns the cluster around the best match (usually one, sometimes two) instead
+    /// of padding out to `maxItems` with weak hits. A fraction (not an absolute
+    /// margin) because the centered-score scale varies per query; calibration showed a
+    /// fixed margin over-includes on low-scoring queries.
+    nonisolated static let keepScoreRatio: Float = 0.6
+    /// Cap on body characters fed to the embedder, on top of title + summary. Enough
+    /// to capture what a memory is actually about without diluting the mean-pooled
+    /// vector with a long tail.
+    nonisolated static let embedBodyCharacterLimit = 600
+
+    /// Logs the per-memory recall score breakdown and the gate decision, so the
+    /// thresholds above can be tuned against real queries (`log stream --predicate
+    /// 'category == "MemoryRecall"'`).
+    private static let recallLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "agent-deck", category: "MemoryRecall")
 
     init(rootURL: URL? = nil, fileManager: FileManager = .default) {
         self.fileManager = fileManager
@@ -188,30 +207,60 @@ final class AgentMemoryStore: ObservableObject {
         let existing = await loadedEmbeddingIndex(for: projectPath)
         let cached = (existing?.model == model) ? (existing?.vectors ?? [:]) : [:]
         let inputs = injectable.map { record -> EmbeddingInput in
-            let text = record.title + "\n" + record.summary
-            return EmbeddingInput(id: record.id, text: text, hash: Self.contentHash(text))
+            // Hash on `updatedAt` rather than body content so a cache hit never has to
+            // read the body off disk; any edit bumps `updatedAt` and invalidates the
+            // vector. The body is read only when we actually (re)embed, just below.
+            let hash = Self.contentHash("\(record.title)\n\(record.summary)\n\(record.updatedAt.timeIntervalSinceReferenceDate)")
+            if cached[record.id]?.hash == hash {
+                return EmbeddingInput(id: record.id, text: "", hash: hash) // reuses cached vector
+            }
+            // Embed title + summary + a slice of the body, so a memory is matched on
+            // what it actually says, not just a title that shares surface words with
+            // the query.
+            let body = (try? readBody(from: URL(fileURLWithPath: record.filePath))) ?? ""
+            let trimmedBody = String(body.prefix(Self.embedBodyCharacterLimit)).trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = trimmedBody.isEmpty
+                ? "\(record.title)\n\(record.summary)"
+                : "\(record.title)\n\(record.summary)\n\(trimmedBody)"
+            return EmbeddingInput(id: record.id, text: text, hash: hash)
         }
         guard let result = await AgentMemoryEmbedder.shared.reconcileAndScore(
             query: trimmedQuery,
             inputs: inputs,
-            cached: cached,
-            threshold: Self.similarityThreshold
+            cached: cached
         ) else { return nil }
 
         embeddingCache[projectPath] = ProjectEmbeddingIndex(model: model, vectors: result.vectors)
         persistEmbeddingIndex(embeddingCache[projectPath]!, projectPath: projectPath)
 
         let ranked = injectable
-            .filter { result.scores[$0.id] != nil }
-            .sorted { lhs, rhs in
-                let lScore = result.scores[lhs.id] ?? 0, rScore = result.scores[rhs.id] ?? 0
-                if lScore != rScore { return lScore > rScore }
-                if lhs.status != rhs.status { return lhs.status == .pinned }
-                return lhs.updatedAt > rhs.updatedAt
+            .compactMap { record -> (record: AgentMemoryRecord, score: Float)? in
+                guard let score = result.scores[record.id] else { return nil }
+                return (record, score)
             }
+            .sorted { lhs, rhs in
+                if lhs.score != rhs.score { return lhs.score > rhs.score }
+                if lhs.record.status != rhs.record.status { return lhs.record.status == .pinned }
+                return lhs.record.updatedAt > rhs.record.updatedAt
+            }
+        guard let topScore = ranked.first?.score else { return nil }
+        let breakdown = ranked.map { "\($0.record.title.prefix(28))=\(String(format: "%.3f", $0.score))" }.joined(separator: ", ")
+        Self.recallLog.debug("recall: top=\(String(format: "%.3f", topScore), privacy: .public) [\(breakdown, privacy: .public)]")
+
+        // Safety floor: drop only the degenerate case (best score at/below noise).
+        guard topScore >= Self.minTopSimilarity else {
+            Self.recallLog.debug("recall abstained: top \(String(format: "%.3f", topScore), privacy: .public) < floor \(String(format: "%.3f", Self.minTopSimilarity), privacy: .public)")
+            return nil
+        }
+        // Scale-relative keep (the precision lever): only memories within a fraction of
+        // the top score ride along, so one strong hit doesn't pad the injection out to
+        // `maxItems` with weak ones. Adapts to each query's centered-score scale.
+        let keepCutoff = topScore * Self.keepScoreRatio
+        let top = ranked
+            .filter { $0.score >= keepCutoff }
             .prefix(maxItems)
-        guard !ranked.isEmpty else { return nil }
-        let top = Array(ranked)
+            .map(\.record)
+        guard !top.isEmpty else { return nil }
         return AgentMemoryRetrieval(records: top, prompt: memoryContextPrompt(for: top, maxCharacters: maxCharacters))
     }
 

@@ -21,7 +21,7 @@ struct PiAgentPlanToolbarButton: View {
         Button {
             isPopoverPresented.toggle()
         } label: {
-            Label("Current plan", systemImage: "checklist")
+            Label("Plan", systemImage: "checklist")
         }
         .symbolRenderingMode(.monochrome)
         .foregroundStyle(tint)
@@ -30,9 +30,9 @@ struct PiAgentPlanToolbarButton: View {
         .disabled(plan == nil)
         .popover(isPresented: $isPopoverPresented, arrowEdge: .bottom) {
             if let plan {
-                PiAgentCurrentPlanCard(plan: plan, showsSurface: false)
+                PiAgentCurrentPlanCard(plan: plan, showsSurface: false, showsHeaderDivider: true, showsSubtitle: false)
                     .padding(16)
-                    .frame(width: 360)
+                    .frame(width: AppTheme.Popover.standardWidth)
             }
         }
     }
