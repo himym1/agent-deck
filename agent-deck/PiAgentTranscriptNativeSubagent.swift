@@ -294,6 +294,9 @@ final class PiAgentNativeAgentBlockView: NSView {
     var onToggle: (() -> Void)? { didSet { task.onToggle = onToggle } }
 
     private let headerToTask: CGFloat = 12
+    /// Vertical inset of the model text inside its pill (also used by the height
+    /// measurement so the taller name row isn't clipped).
+    private static let modelPillVPad: CGFloat = 3
 
     init() {
         super.init(frame: .zero)
@@ -316,13 +319,13 @@ final class PiAgentNativeAgentBlockView: NSView {
         modelPill.setContentHuggingPriority(.required, for: .horizontal)
         modelPill.setContentCompressionResistancePriority(.required, for: .horizontal)
         modelPill.addSubview(modelLabel)
+        // Hug the text tightly (equal insets center it vertically); no fixed
+        // height, so the pill never over-pads the model name.
         NSLayoutConstraint.activate([
             modelLabel.leadingAnchor.constraint(equalTo: modelPill.leadingAnchor, constant: 7),
             modelLabel.trailingAnchor.constraint(equalTo: modelPill.trailingAnchor, constant: -7),
-            // Fixed pill height + centerY so the text is truly centered regardless
-            // of the monospace font's ascender/descender metrics.
-            modelPill.heightAnchor.constraint(equalToConstant: 22),
-            modelLabel.centerYAnchor.constraint(equalTo: modelPill.centerYAnchor)
+            modelLabel.topAnchor.constraint(equalTo: modelPill.topAnchor, constant: Self.modelPillVPad),
+            modelLabel.bottomAnchor.constraint(equalTo: modelPill.bottomAnchor, constant: -Self.modelPillVPad)
         ])
 
         // Token count beside the pill: muted, truncates before the name does.
@@ -468,7 +471,11 @@ final class PiAgentNativeAgentBlockView: NSView {
     func measuredHeight(forWidth width: CGFloat) -> CGFloat {
         let nameH = ceil(nameLabel.intrinsicContentSize.height)
         let metaH = ceil(metaLabel.intrinsicContentSize.height)
-        let headerH = max(34, nameH + 3 + metaH)
+        // The name row hugs the tallest of the name and the model pill (text +
+        // vertical insets), so the status line below it never gets clipped.
+        let pillH = modelPill.isHidden ? 0 : ceil(modelLabel.intrinsicContentSize.height) + Self.modelPillVPad * 2
+        let nameRowH = max(nameH, pillH)
+        let headerH = max(34, nameRowH + 3 + metaH)
         let taskH = task.measuredHeight(forWidth: width)
         return ceil(headerH + headerToTask + taskH)
     }
