@@ -2161,7 +2161,7 @@ struct PiAgentRuntimeCostAggregate: Equatable {
         func addCost(_ c: Double?) { if let c { totalCost = (totalCost ?? 0) + c } }
 
         let parentTokens = session.totalTokens ?? 0
-        sources.append(.init(id: session.id, label: "Main chat", model: session.model, tokens: parentTokens, cost: session.cost, isOrchestration: true))
+        sources.append(.init(id: session.id, label: "main chat", model: session.model, tokens: parentTokens, cost: session.cost, isOrchestration: true))
         totalTokens += parentTokens
         addCost(session.cost)
 
