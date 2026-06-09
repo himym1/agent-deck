@@ -996,61 +996,46 @@ final class NativeMarkdownTextContainer: NSView {
         }
     }
 
-    /// Native GFM table: an `NSGridView` of wrapping cells (the same
-    /// `AutoSizingMarkdownTextView` used for every other block, so inline styling
-    /// and the width-driven height measurement both work), with a bold header row
-    /// and a hairline separator beneath it. Columns fill the available width.
+    /// Native GFM table: builds each cell's attributed string (header cells bold,
+    /// inline markdown parsed) and hands them to `MarkdownTableView`, which lays the
+    /// grid out by hand with equal columns and self-measured row heights. An
+    /// `NSGridView` of auto-sizing text views does NOT constrain column widths here,
+    /// so cells stacked into one tall column — manual layout (the osaurus approach)
+    /// is what actually wraps cells into proper columns.
     private static func tableBlock(_ table: MarkdownTable) -> NSView {
-        let columnCount = max(1, table.columnCount)
         let bodyFont = NSFont.preferredFont(forTextStyle: .body)
         let headerFont = NSFontManager.shared.convert(bodyFont, toHaveTrait: .boldFontMask)
 
-        func cell(_ text: String, isHeader: Bool, alignment: MarkdownTableAlignment) -> NSView {
-            let view = textView(
+        func cellAttr(_ text: String, isHeader: Bool, alignment: MarkdownTableAlignment) -> NSAttributedString {
+            // Header cells are bold and carry the theme's heading tint (consistent
+            // with the rest of the markdown highlighting); body cells use normal text.
+            let base = attributedString(
                 text,
                 font: isHeader ? headerFont : bodyFont,
                 color: isHeader ? MarkdownSemanticStyler.headingColor : .labelColor,
                 parseInlineMarkdown: true
             )
-            if alignment != .leading, let storage = view.textStorage, storage.length > 0 {
-                let paragraph = NSMutableParagraphStyle()
-                paragraph.alignment = alignment == .center ? .center : .right
-                storage.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: storage.length))
+            let mutable = NSMutableAttributedString(attributedString: base)
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineBreakMode = .byWordWrapping
+            paragraph.lineSpacing = 2
+            paragraph.alignment = alignment == .center ? .center : (alignment == .trailing ? .right : .natural)
+            mutable.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: mutable.length))
+            return mutable
+        }
+
+        let columnCount = max(1, table.columnCount)
+        let header = (0..<columnCount).map { column in
+            cellAttr(column < table.header.count ? table.header[column] : "", isHeader: true, alignment: table.alignment(column))
+        }
+        let rows = table.rows.map { row in
+            (0..<columnCount).map { column in
+                cellAttr(column < row.count ? row[column] : "", isHeader: false, alignment: table.alignment(column))
             }
-            return view
         }
-
-        var rowViews: [[NSView]] = []
-        rowViews.append((0..<columnCount).map { column in
-            cell(column < table.header.count ? table.header[column] : "", isHeader: true, alignment: table.alignment(column))
-        })
-        for row in table.rows {
-            rowViews.append((0..<columnCount).map { column in
-                cell(column < row.count ? row[column] : "", isHeader: false, alignment: table.alignment(column))
-            })
-        }
-
-        let grid = NSGridView(views: rowViews)
-        grid.translatesAutoresizingMaskIntoConstraints = false
-        grid.rowSpacing = 7
-        grid.columnSpacing = 16
-        grid.xPlacement = .fill
-        grid.yPlacement = .top
-
-        // Hairline under the header row, spanning every column.
-        let divider = NSView()
-        divider.translatesAutoresizingMaskIntoConstraints = false
-        divider.wantsLayer = true
-        divider.layer?.backgroundColor = AppTheme.ns(AppTheme.contentStroke).cgColor
-        divider.heightAnchor.constraint(equalToConstant: 1).isActive = true
-        grid.insertRow(at: 1, with: [divider])
-        grid.mergeCells(inHorizontalRange: NSRange(location: 0, length: columnCount), verticalRange: NSRange(location: 1, length: 1))
-        let dividerCell = grid.cell(atColumnIndex: 0, rowIndex: 1)
-        dividerCell.xPlacement = .fill
-        grid.row(at: 1).topPadding = 1
-        grid.row(at: 1).bottomPadding = 3
-
-        return paddedBlock(grid, padding: NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 0))
+        let view = MarkdownTableView()
+        view.configure(headerCells: header, bodyRows: rows)
+        return view
     }
 
     // Gap between the marker column and the text column, in points.
@@ -1314,6 +1299,162 @@ final class NativeMarkdownTextContainer: NSView {
         case 2: return "▪"
         default: return "•"
         }
+    }
+}
+
+/// Native GFM table laid out by hand (the osaurus approach): equal-width columns,
+/// each cell a text view measured at the column width, a hairline under the header,
+/// and a self height-constraint so the host stack's `fittingSize` includes it.
+/// `NSGridView` was tried first but doesn't constrain column widths against the
+/// auto-sizing cells, collapsing every cell into one tall column.
+private final class MarkdownTableView: NSView {
+    private var cellViews: [[NSTextView]] = []   // [row][col]; row 0 is the header
+    private let separator = NSBox()
+    private var heightConstraint: NSLayoutConstraint!
+    /// Bands (full-width row rects) for the zebra-striped body rows, filled in `draw`.
+    private var stripeRects: [NSRect] = []
+
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        separator.boxType = .separator
+        separator.translatesAutoresizingMaskIntoConstraints = true
+        separator.isHidden = true
+        addSubview(separator)
+        heightConstraint = heightAnchor.constraint(equalToConstant: 24)
+        heightConstraint.priority = .required - 1
+        heightConstraint.isActive = true
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(headerCells: [NSAttributedString], bodyRows: [[NSAttributedString]]) {
+        cellViews.forEach { $0.forEach { $0.removeFromSuperview() } }
+        cellViews.removeAll()
+        let columnCount = max(headerCells.count, bodyRows.map(\.count).max() ?? 0)
+        guard columnCount > 0 else { heightConstraint.constant = 1; return }
+
+        let header = (0..<columnCount).map { Self.makeCell(headerCells.indices.contains($0) ? headerCells[$0] : NSAttributedString()) }
+        cellViews.append(header)
+        header.forEach { addSubview($0) }
+        for row in bodyRows {
+            let cells = (0..<columnCount).map { Self.makeCell(row.indices.contains($0) ? row[$0] : NSAttributedString()) }
+            cellViews.append(cells)
+            cells.forEach { addSubview($0) }
+        }
+        needsLayout = true
+    }
+
+    private static func makeCell(_ attr: NSAttributedString) -> NSTextView {
+        let tv = NSTextView(frame: .zero)
+        tv.isEditable = false
+        tv.isSelectable = true
+        tv.drawsBackground = false
+        tv.textContainerInset = .zero
+        tv.textContainer?.lineFragmentPadding = 0
+        tv.textContainer?.widthTracksTextView = false
+        tv.isVerticallyResizable = false
+        tv.isHorizontallyResizable = false
+        // Read-only model output — disable the idle text services (same as the
+        // other transcript text views) so streaming edits stay cheap.
+        tv.isContinuousSpellCheckingEnabled = false
+        tv.isGrammarCheckingEnabled = false
+        tv.isAutomaticSpellingCorrectionEnabled = false
+        tv.isAutomaticQuoteSubstitutionEnabled = false
+        tv.isAutomaticDashSubstitutionEnabled = false
+        tv.isAutomaticTextReplacementEnabled = false
+        tv.isAutomaticLinkDetectionEnabled = false
+        tv.isAutomaticDataDetectionEnabled = false
+        tv.textStorage?.setAttributedString(attr)
+        return tv
+    }
+
+    override func layout() {
+        super.layout()
+        if bounds.width > 0.5 { relayout(width: bounds.width) }
+    }
+
+    private func relayout(width: CGFloat) {
+        let columnCount = cellViews.first?.count ?? 0
+        guard columnCount > 0, width > 1 else { heightConstraint.constant = 1; return }
+
+        let columnGap: CGFloat = 16
+        let rowGap: CGFloat = 8
+        let separatorGap: CGFloat = 6
+        let headerPaddingBottom: CGFloat = 6
+        let totalGaps = CGFloat(columnCount - 1) * columnGap
+        let usable = max(width - totalGaps, CGFloat(columnCount) * 40)
+        let columnWidth = floor(usable / CGFloat(columnCount))
+
+        // Row heights from each cell's own TextKit layout at the column width.
+        var rowHeights: [CGFloat] = []
+        for row in cellViews {
+            var maxH: CGFloat = 0
+            for cell in row {
+                cell.textContainer?.containerSize = NSSize(width: columnWidth, height: .greatestFiniteMagnitude)
+                if let lm = cell.layoutManager, let tc = cell.textContainer {
+                    lm.ensureLayout(for: tc)
+                    maxH = max(maxH, ceil(lm.usedRect(for: tc).height) + 2)
+                }
+            }
+            rowHeights.append(max(maxH, 18))
+        }
+
+        var y: CGFloat = 0
+        var stripes: [NSRect] = []
+        var bodyOrdinal = 0
+        for (rowIdx, row) in cellViews.enumerated() {
+            var x: CGFloat = 0
+            let rowH = rowHeights[rowIdx]
+            for (colIdx, cell) in row.enumerated() {
+                cell.frame = NSRect(x: x, y: y, width: columnWidth, height: rowH)
+                x += columnWidth
+                if colIdx < row.count - 1 { x += columnGap }
+            }
+            // Zebra-stripe every other body row (header excluded): a faint full-width
+            // band behind the cells, padded into the row gaps so the stripes touch.
+            if rowIdx > 0 {
+                if bodyOrdinal % 2 == 1 {
+                    stripes.append(NSRect(x: 0, y: y - rowGap / 2, width: width, height: rowH + rowGap))
+                }
+                bodyOrdinal += 1
+            }
+            y += rowH
+            if rowIdx == 0 {
+                y += headerPaddingBottom
+                separator.frame = NSRect(x: 0, y: y, width: width, height: 1)
+                separator.isHidden = false
+                y += separatorGap
+            } else if rowIdx < cellViews.count - 1 {
+                y += rowGap
+            }
+        }
+
+        if stripes != stripeRects {
+            stripeRects = stripes
+            needsDisplay = true
+        }
+
+        let newHeight = max(ceil(y), 1)
+        if abs(heightConstraint.constant - newHeight) > 0.5 {
+            heightConstraint.constant = newHeight
+            invalidateIntrinsicContentSize()
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard !stripeRects.isEmpty else { return }
+        AppTheme.ns(AppTheme.contentSubtleFill.opacity(0.2)).setFill()
+        for rect in stripeRects where rect.intersects(dirtyRect) {
+            NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4).fill()
+        }
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: heightConstraint.constant)
     }
 }
 

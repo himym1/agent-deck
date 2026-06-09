@@ -2161,7 +2161,7 @@ struct PiAgentRuntimeCostAggregate: Equatable {
         func addCost(_ c: Double?) { if let c { totalCost = (totalCost ?? 0) + c } }
 
         let parentTokens = session.totalTokens ?? 0
-        sources.append(.init(id: session.id, label: "Orchestration", model: session.model, tokens: parentTokens, cost: session.cost, isOrchestration: true))
+        sources.append(.init(id: session.id, label: "Main chat", model: session.model, tokens: parentTokens, cost: session.cost, isOrchestration: true))
         totalTokens += parentTokens
         addCost(session.cost)
 
@@ -2317,14 +2317,6 @@ struct PiAgentCostBreakdownPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Tokens & cost")
-                    .font(AppTheme.Font.headline.weight(.semibold))
-                Text("Across this session and its Deck agents.")
-                    .font(AppTheme.Font.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-            }
-
             VStack(spacing: 0) {
                 ForEach(Array(aggregate.sources.enumerated()), id: \.element.id) { index, source in
                     if index > 0 { Divider().opacity(0.4) }
@@ -2353,7 +2345,7 @@ struct PiAgentCostBreakdownPopover: View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(source.label)
-                    .font(AppTheme.Font.callout.weight(source.isOrchestration ? .semibold : .regular))
+                    .font(AppTheme.Font.callout)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 if let model = source.model, !model.isEmpty {
