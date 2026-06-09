@@ -726,9 +726,8 @@ struct TranscriptDebugScreen: View {
             outcomePill: "Artifact",
             task: "Implement the complete transcript component gallery using production renderers.",
             durationText: "42s",
-            modelText: "claude-sonnet",
+            modelText: "claude-sonnet:high",
             tokensText: "2.4k tokens",
-            thinkingText: "high thinking",
             actions: [
                 .init(symbol: "info.circle", help: "Run details") { _ in },
                 .init(symbol: "text.bubble", help: "Open transcript") { _ in },
@@ -754,9 +753,8 @@ struct TranscriptDebugScreen: View {
                     outcomePill: "Report",
                     task: "Inventory every production transcript row.",
                     durationText: "18s",
-                    modelText: "claude-sonnet",
+                    modelText: "claude-sonnet:medium",
                     tokensText: nil,
-                    thinkingText: "medium thinking",
                     actions: [.init(symbol: "text.bubble", help: "Open transcript") { _ in }]
                 ),
                 NativeAgentBlockPayload(
@@ -770,7 +768,6 @@ struct TranscriptDebugScreen: View {
                     durationText: "11s",
                     modelText: nil,
                     tokensText: nil,
-                    thinkingText: nil,
                     actions: [.init(symbol: "text.bubble", help: "Open transcript") { _ in }]
                 )
             ]

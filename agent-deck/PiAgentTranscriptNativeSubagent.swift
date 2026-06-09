@@ -24,13 +24,13 @@ struct NativeAgentBlockPayload {
     var task: String
     /// Elapsed time, shown on the status line next to the status word.
     var durationText: String?
-    /// Model name, shown in a monospace capsule pill beside the agent name
-    /// (matching the plan-id pill) so it never truncates.
+    /// Model + reasoning effort, shown in a monospace capsule pill beside the
+    /// agent name as `model:thinking` (e.g. `opencode-go/mimo-v2.5:off`). Uses
+    /// the shared identifier-pill style (AppTheme.IdentifierPill) so it matches
+    /// the plan-id pill in the plan popover. Hugs its content, never truncates.
     var modelText: String?
     /// Token count, shown as muted text beside the model pill.
     var tokensText: String?
-    /// Reasoning effort (e.g. "high thinking"), shown as muted text.
-    var thinkingText: String?
     var actions: [Action]
 
     struct Action {
@@ -283,7 +283,6 @@ final class PiAgentNativeAgentBlockView: NSView {
     private let modelPill = NativeCardSurface()
     private let modelLabel = NSTextField(labelWithString: "")
     private let tokensLabel = NSTextField(labelWithString: "")
-    private let thinkingLabel = NSTextField(labelWithString: "")
     private let outcomePill = NSTextField(labelWithString: "")
     private let outcomeCapsule = NativeCardSurface()
     private let metaLabel = NSTextField(labelWithString: "")
@@ -295,8 +294,9 @@ final class PiAgentNativeAgentBlockView: NSView {
 
     private let headerToTask: CGFloat = 12
     /// Vertical inset of the model text inside its pill (also used by the height
-    /// measurement so the taller name row isn't clipped).
-    private static let modelPillVPad: CGFloat = 3
+    /// measurement so the taller name row isn't clipped). Matches the shared
+    /// identifier-pill style.
+    private static let modelPillVPad: CGFloat = AppTheme.IdentifierPill.verticalPadding
 
     init() {
         super.init(frame: .zero)
@@ -306,24 +306,28 @@ final class PiAgentNativeAgentBlockView: NSView {
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        // Model pill beside the name — a monospace capsule (plan-id style) that
-        // hugs its content and never truncates.
-        modelLabel.font = NSFont.monospacedSystemFont(ofSize: NativeTranscriptFont.bodySize, weight: .medium)
+        // Model pill beside the name — the shared identifier-pill style
+        // (AppTheme.IdentifierPill), matching the plan-id pill in the plan
+        // popover: monospace, code-size, regular weight, muted.
+        // Hugs its content and never truncates.
+        modelLabel.font = NSFont.monospacedSystemFont(ofSize: AppTheme.IdentifierPill.fontSize, weight: .regular)
         modelLabel.textColor = AppTheme.ns(AppTheme.mutedText)
         modelLabel.translatesAutoresizingMaskIntoConstraints = false
         modelLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         modelPill.translatesAutoresizingMaskIntoConstraints = false
-        modelPill.cardCornerRadius = 11
-        modelPill.fillColor = AppTheme.ns(AppTheme.contentSubtleFill.opacity(0.72))
+        // High enough to read as a continuous capsule at this height.
+        modelPill.cardCornerRadius = 9
+        modelPill.fillColor = AppTheme.ns(AppTheme.IdentifierPill.fill)
         modelPill.strokeColor = .clear
         modelPill.setContentHuggingPriority(.required, for: .horizontal)
         modelPill.setContentCompressionResistancePriority(.required, for: .horizontal)
         modelPill.addSubview(modelLabel)
         // Hug the text tightly (equal insets center it vertically); no fixed
         // height, so the pill never over-pads the model name.
+        let hPad = AppTheme.IdentifierPill.horizontalPadding
         NSLayoutConstraint.activate([
-            modelLabel.leadingAnchor.constraint(equalTo: modelPill.leadingAnchor, constant: 7),
-            modelLabel.trailingAnchor.constraint(equalTo: modelPill.trailingAnchor, constant: -7),
+            modelLabel.leadingAnchor.constraint(equalTo: modelPill.leadingAnchor, constant: hPad),
+            modelLabel.trailingAnchor.constraint(equalTo: modelPill.trailingAnchor, constant: -hPad),
             modelLabel.topAnchor.constraint(equalTo: modelPill.topAnchor, constant: Self.modelPillVPad),
             modelLabel.bottomAnchor.constraint(equalTo: modelPill.bottomAnchor, constant: -Self.modelPillVPad)
         ])
@@ -334,13 +338,6 @@ final class PiAgentNativeAgentBlockView: NSView {
         tokensLabel.lineBreakMode = .byTruncatingTail
         tokensLabel.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(249), for: .horizontal)
         tokensLabel.setContentHuggingPriority(.required, for: .horizontal)
-
-        // Reasoning effort beside the tokens: same muted secondary style.
-        thinkingLabel.font = NativeTranscriptFont.callout()
-        thinkingLabel.textColor = AppTheme.ns(AppTheme.mutedText)
-        thinkingLabel.lineBreakMode = .byTruncatingTail
-        thinkingLabel.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(248), for: .horizontal)
-        thinkingLabel.setContentHuggingPriority(.required, for: .horizontal)
 
         outcomePill.font = NativeTranscriptFont.caption2(.medium)
         outcomePill.textColor = AppTheme.ns(AppTheme.mutedText)
@@ -362,7 +359,7 @@ final class PiAgentNativeAgentBlockView: NSView {
         metaLabel.maximumNumberOfLines = 1
         metaLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let nameRow = NSStackView(views: [nameLabel, modelPill, tokensLabel, thinkingLabel])
+        let nameRow = NSStackView(views: [nameLabel, modelPill, tokensLabel])
         nameRow.orientation = .horizontal
         nameRow.spacing = 8
         nameRow.alignment = .centerY
@@ -405,8 +402,6 @@ final class PiAgentNativeAgentBlockView: NSView {
         modelPill.isHidden = (payload.modelText?.isEmpty ?? true)
         tokensLabel.stringValue = payload.tokensText ?? ""
         tokensLabel.isHidden = (payload.tokensText?.isEmpty ?? true)
-        thinkingLabel.stringValue = payload.thinkingText ?? ""
-        thinkingLabel.isHidden = (payload.thinkingText?.isEmpty ?? true)
         metaLabel.attributedStringValue = metaLine(payload)
         task.configure(source: payload.task)
         rebuildButtons(payload.actions)
@@ -706,10 +701,13 @@ enum NativeSubagentFactory {
         return compactNumber(tokens) + " tokens"
     }
 
-    /// Reasoning effort shown beside the tokens, e.g. "high thinking".
-    static func thinkingText(_ thinking: String?) -> String? {
-        guard let thinking = nonEmpty(thinking) else { return nil }
-        return thinking + " thinking"
+    /// Model + reasoning effort for the identifier pill, in the `model:thinking`
+    /// form AI apps use (e.g. `opencode-go/mimo-v2.5:off`). Falls back to the
+    /// model alone when there is no thinking value, and to nil with no model.
+    static func modelChipText(model: String?, thinking: String?) -> String? {
+        guard let model = nonEmpty(model) else { return nil }
+        guard let thinking = nonEmpty(thinking) else { return model }
+        return "\(model):\(thinking)"
     }
 
     static func showTextPopover(title: String, text: String, from sender: NSButton) {
@@ -738,7 +736,7 @@ extension NativeAgentBlockPayload {
         let tools = run.child?.toolCount ?? sum(run.children?.compactMap(\.toolCount))
         let model = run.model ?? run.child?.model ?? run.children?.compactMap(\.model).first
 
-        var detailRows: [(String, String)] = [("Deck agent ID", run.id.uuidString)]
+        var detailRows: [(String, String)] = []
         if let duration { detailRows.append(("Duration", NativeSubagentFactory.formattedDuration(duration))) }
         if let tokens { detailRows.append(("Tokens", NativeSubagentFactory.compactNumber(tokens))) }
         if let tools { detailRows.append(("Tools", "\(tools)")) }
@@ -774,9 +772,8 @@ extension NativeAgentBlockPayload {
             outcomePill: run.expectedOutcome?.displayName,
             task: run.task,
             durationText: duration.map { NativeSubagentFactory.formattedDuration($0) },
-            modelText: NativeSubagentFactory.nonEmpty(model),
+            modelText: NativeSubagentFactory.modelChipText(model: model, thinking: run.thinking),
             tokensText: NativeSubagentFactory.tokensText(tokens),
-            thinkingText: NativeSubagentFactory.thinkingText(run.thinking),
             actions: actions
         )
     }
@@ -824,9 +821,8 @@ extension NativeSubagentParallelPayload {
                 outcomePill: child.expectedOutcome?.displayName,
                 task: task,
                 durationText: child.durationMs.map { NativeSubagentFactory.formattedDuration($0) },
-                modelText: NativeSubagentFactory.nonEmpty(child.model),
+                modelText: NativeSubagentFactory.modelChipText(model: child.model, thinking: run.thinking),
                 tokensText: NativeSubagentFactory.tokensText(child.totalTokens),
-                thinkingText: NativeSubagentFactory.thinkingText(run.thinking),
                 actions: actions
             )
         }

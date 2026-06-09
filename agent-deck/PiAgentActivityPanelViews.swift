@@ -263,14 +263,14 @@ struct PiAgentCurrentPlanCard: View {
                         .font(AppTheme.Font.callout.weight(.semibold))
                         .foregroundStyle(.primary)
                     Text(subtitle)
-                        .font(isSubtitleIdentifier ? AppTheme.Font.code.weight(.medium) : AppTheme.Font.caption2.weight(.medium))
+                        .font(isSubtitleIdentifier ? AppTheme.Font.code : AppTheme.Font.caption2.weight(.medium))
                         .foregroundStyle(AppTheme.mutedText)
-                        .padding(.horizontal, isSubtitleIdentifier ? 5 : 0)
-                        .padding(.vertical, isSubtitleIdentifier ? 2 : 0)
+                        .padding(.horizontal, isSubtitleIdentifier ? AppTheme.IdentifierPill.horizontalPadding : 0)
+                        .padding(.vertical, isSubtitleIdentifier ? AppTheme.IdentifierPill.verticalPadding : 0)
                         .background {
                             if isSubtitleIdentifier {
                                 Capsule(style: .continuous)
-                                    .fill(AppTheme.contentSubtleFill.opacity(0.72))
+                                    .fill(AppTheme.IdentifierPill.fill)
                             }
                         }
                 }

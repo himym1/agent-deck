@@ -67,6 +67,20 @@ enum AppTheme {
         static let smallLabel = SwiftUI.Font.system(size: smallLabelSize, weight: .bold, design: .monospaced)
     }
 
+    // MARK: Identifier pill
+    //
+    // The small monospace capsule used for short technical identifiers (plan id,
+    // subagent model). Single source of truth so the SwiftUI plan card and the
+    // AppKit subagent model chip stay visually identical. Weight is `.medium` on
+    // both sides (NSFont.Weight / Font.Weight) — kept local to each call site
+    // since the two frameworks use different weight types.
+    enum IdentifierPill {
+        static let fontSize = Font.codeSize
+        static let horizontalPadding: CGFloat = 5
+        static let verticalPadding: CGFloat = 2
+        static var fill: Color { contentSubtleFill.opacity(0.72) }
+    }
+
     // MARK: Component geometry
     //
     // Corner radii and padding for the transcript / chat component set. Keeps

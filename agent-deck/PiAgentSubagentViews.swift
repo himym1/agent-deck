@@ -294,9 +294,7 @@ struct PiNativeSubagentRunCard: View {
     }
 
     private var detailRows: [(String, String)] {
-        var rows: [(String, String)] = [
-            ("Deck agent ID", run.id.uuidString)
-        ]
+        var rows: [(String, String)] = []
         if let turnIndex = run.child?.index, turnIndex > 0 {
             rows.append(("Continuation", "Turn \(turnIndex + 1)"))
         }
