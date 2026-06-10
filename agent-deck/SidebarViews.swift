@@ -71,6 +71,11 @@ struct SidebarTitleBar: View {
                 }
             }
             .accessibilityElement(children: .combine)
+            // Optical centering: the pixel font's glyphs sit entirely above
+            // the baseline while its line box carries ~1.8pt of empty descent
+            // (at 18pt), so frame-centering renders the visible title ~0.9pt
+            // high next to the icons. Integral 1pt keeps the pixels crisp.
+            .offset(y: 1)
 
             Spacer(minLength: 8)
 

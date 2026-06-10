@@ -898,6 +898,16 @@ struct ContentView: View {
         ctx.openSettings = { openSettings() }
         ctx.refresh = { viewModel.refreshEverything() }
         ctx.openPiAgent = { viewModel.openPiAgentScreen() }
+        // Mirrors the header chevron: expanding routes through
+        // openPiAgentScreen (selects the agent tab too), collapsing just
+        // clears the flag, same as the expanded panel's onCollapse.
+        ctx.toggleSessionsPanel = {
+            if viewModel.isCodingAgentPanelExpanded {
+                viewModel.isCodingAgentPanelExpanded = false
+            } else {
+                viewModel.openPiAgentScreen()
+            }
+        }
         ctx.openProjects = { viewModel.selectedSidebarItem = .projects }
         ctx.openIssues = { viewModel.selectedSidebarItem = .issues }
         ctx.openAgents = { viewModel.selectedSidebarItem = .agents }
