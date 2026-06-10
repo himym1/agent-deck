@@ -4,6 +4,24 @@ Agent Deck Memory is the app-owned memory system for parent Pi Agent sessions an
 
 It is inspired by `pi-memctx`, `pi-hermes-memory`, `pi-total-recall`, `pi-memory`, `pi-memory-md`, and `unipi`, but Agent Deck owns the storage, prompt injection, tools, UI, and safety checks.
 
+## How It Works in One Page
+
+Memory operates in two layers with opposite sharing policies:
+
+**Layer 1 — the index: all titles, always.** Every session starts with a one-line list of *everything* stored for the project — id, kind, title, one-sentence summary. No bodies. It costs a few hundred tokens and exists so the agent knows what's in memory: that awareness is what lets it update an existing memory instead of writing a duplicate, and what tells it there is something worth searching for when the topic shifts.
+
+**Layer 2 — precision injection: full content, only when relevant.** Memory bodies are injected only for memories that match the opening prompt:
+
+1. The prompt and each memory are turned into vectors by a small on-device Apple model and compared — meaning-based, so paraphrases match.
+2. Because that small model is noisy, every meaningful word the prompt shares with a memory's title/summary adds a ranking boost — lexical evidence corrects embedding mistakes.
+3. A memory is injected only if it clears a qualification gate: a very high semantic score on its own, or at least two shared informative words. If nothing clears the gate, **nothing is injected** — "hello" gets zero memories.
+
+Mid-conversation, `agent_deck_memory_search` runs the same matching on demand.
+
+The split is deliberate: titles are shared wholesale because they are nearly free and enable awareness; *content* is strictly precision-injected because irrelevant content is what pollutes context. (Claude Code's memory makes the same trade-off — an always-loaded index with on-demand bodies — the difference is that its model reads the index and decides what to load itself, while Agent Deck's recall decision is made by calibrated embedding + keyword gates.)
+
+The rest of this document is the detailed reference for each piece.
+
 ## Goals
 
 - Reduce repeated project rediscovery across sessions.
