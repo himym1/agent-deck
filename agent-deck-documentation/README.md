@@ -14,7 +14,7 @@ This is the canonical reference set for how Agent Deck composes with the Pi CLI,
 - [Pi RPC launch flags](pi-rpc-launch-flags.md) — the full subprocess context surface.
 - [Skills](skills-logic.md) — discovery, catalog, assignment, and explicit injection.
 - [Model and thinking logic](model-and-thinking-logic.md) — launch-time configuration and per-session overrides.
-- [Memory](memory.md) — project-scoped Markdown memory, SQLite indexing, write tools, and recall.
+- [Memory](memory.md) — project-scoped Markdown memory: launch-time index + recall, hybrid semantic/lexical ranking, upsert write tools with a near-duplicate guard.
 - [Resource refresh and file watching](resource-refresh-and-file-watching.md) — FSEvents-driven catalog refresh.
 
 ## API reference

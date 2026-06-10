@@ -51,7 +51,9 @@ Any explicit `--append-system-prompt` value (even empty string `""`) suppresses 
 - Injected memory is context, not instructions — prefer current repository contents over memory.
 - Never store: temporary task state, speculative facts, raw logs, customer data, secrets, tokens, or private keys.
 - Secret scanning blocks writes containing private keys, tokens, or credentials.
-- Markdown files are the source of truth; `embeddings.json` is a derived per-project vector cache that can always be rebuilt (recall ranks by mean-centered cosine over on-device `NLContextualEmbedding` vectors).
+- Markdown files are the source of truth; `embeddings.json` is a derived per-project vector cache that can always be rebuilt (recall ranks by mean-centered cosine over on-device `NLContextualEmbedding` vectors, plus a lexical term-overlap bonus; a qualification gate lets recall abstain).
+- The launch policy includes a project memory index (titles only). `agent_deck_memory_write` is an upsert: `id` updates in place; creates pass a near-duplicate guard (`confirmNew` overrides).
+- Recall/duplicate thresholds are calibrated, not guessed — change them only with `MemoryRecallCalibrationTests` and `MemoryRecallRealisticEvalTests` evidence, and keep both green.
 - Memory types: `context`, `decision`, `runbook`, `failure`, `preference`.
 
 ## Model and Thinking Configuration
