@@ -1445,6 +1445,22 @@ struct ContentView: View {
     private var memoryPrimaryToolbarContent: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             ControlGroup {
+                // Button-style toggle, not a switch: toolbar islands hold
+                // Label-based controls so overflow menus and VoiceOver get the
+                // text, and the on-state renders as the native tinted glass
+                // highlight instead of an embedded NSSwitch.
+                Toggle(isOn: Binding(
+                    get: { viewModel.appSettings.agentMemoryEnabled },
+                    set: { viewModel.setAgentMemoryEnabled($0) }
+                )) {
+                    Label("Project Memory", systemImage: SidebarItem.memory.systemImage)
+                }
+                .toggleStyle(.button)
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(viewModel.appSettings.agentMemoryEnabled ? AppTheme.brandAccent : .secondary)
+                .tint(AppTheme.brandAccent)
+                .help(viewModel.appSettings.agentMemoryEnabled ? "Project memory is on. Click to pause." : "Project memory is paused. Click to turn it on.")
+
                 Button {
                     isMemoryInfoPresented.toggle()
                 } label: {
@@ -1655,6 +1671,9 @@ struct ContentView: View {
         switch viewModel.selectedSidebarItem {
         case .agent:
             return viewModel.piAgentSessionStore.selectedSession?.displayTitle ?? "Coding Agent"
+        case .memory:
+            // Mirrors the toolbar toggle so the state reads at a glance.
+            return viewModel.appSettings.agentMemoryEnabled ? "Memory: On" : "Memory: Off"
         default:
             return viewModel.selectedSidebarItem.rawValue
         }

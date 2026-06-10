@@ -1272,7 +1272,8 @@ struct PiAgentThreadDiffSummaryView: View {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 8) {
                     Image(systemName: "plusminus")
-                        .font(AppTheme.Font.caption.weight(.semibold))
+                        .imageScale(.small)
+                        .fontWeight(.semibold)
                         .foregroundStyle(AppTheme.mutedText)
                     Text("Changes")
                         .font(AppTheme.Font.caption.weight(.semibold))
@@ -1719,13 +1720,13 @@ private struct PiAgentCompactDiffPreview: View {
                 let visible = isExpanded ? parsedAllLines : Array(parsedAllLines.prefix(10))
                 ForEach(visible.indices, id: \.self) { index in
                     let line = visible[index]
-                    HStack(spacing: 9) {
+                    HStack(spacing: 8) {
                         Text(line.gutter)
-                            .font(AppTheme.Font.caption.monospaced().weight(.semibold))
+                            .font(AppTheme.Font.caption2.monospaced().weight(.semibold))
                             .foregroundStyle(line.color)
-                            .frame(width: 40, alignment: .trailing)
+                            .frame(width: 36, alignment: .trailing)
                         Text(line.content.isEmpty ? " " : line.content)
-                            .font(AppTheme.Font.caption.monospaced())
+                            .font(AppTheme.Font.caption2.monospaced())
                             .foregroundStyle(line.color)
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -1822,7 +1823,8 @@ struct PiAgentWebActivitySummaryView: View {
         VStack(alignment: .leading, spacing: AppTheme.Chat.childSpacing) {
             HStack(spacing: 8) {
                 Image(systemName: "globe")
-                    .font(AppTheme.Font.caption.weight(.semibold))
+                    .imageScale(.small)
+                    .fontWeight(.semibold)
                     .foregroundStyle(hasErrors ? AppTheme.roleError : AppTheme.mutedText)
                 Text(title)
                     .font(AppTheme.Font.caption.weight(.semibold))
@@ -2085,7 +2087,8 @@ struct PiAgentStatusTranscriptRow: View {
     private var compactStatusRow: some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
-                .font(AppTheme.Font.caption.weight(.semibold))
+                .imageScale(.small)
+                .fontWeight(.semibold)
                 .foregroundStyle(color)
             Text(title)
                 .font(AppTheme.Font.caption.weight(.semibold))
@@ -3345,7 +3348,12 @@ struct PiAgentTranscriptCard: View {
         if entry.role == .tool {
             PiAgentToolTranscriptView(entry: entry)
         } else if entry.role == .thinking {
-            thinkingContent
+            // Mirrors the native thinking bubble: a single MarkdownTextView, no
+            // subhead. Both renderers MUST stay in lockstep — see
+            // `nativeReplyPayload(for:)` for the production path.
+            let display = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            MarkdownTextView(source: display.isEmpty ? "Pi has not emitted reasoning text yet." : display)
+                .frame(maxWidth: .infinity, alignment: .leading)
         } else if entry.role == .user {
             PiAgentUserMessageContent(entry: entry, skills: skills, commandSlashNames: commandSlashNames)
         } else if entry.role == .assistant {
@@ -3355,21 +3363,6 @@ struct PiAgentTranscriptCard: View {
             Text(entry.text)
                 .font(entry.role == .tool || entry.role == .stderr || entry.role == .raw ? AppTheme.Font.code : AppTheme.Font.body)
                 .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    @ViewBuilder
-    private var thinkingContent: some View {
-        reasoningContent(source: entry.text)
-    }
-
-    private func reasoningContent(source: String) -> some View {
-        let displayText = source.trimmingCharacters(in: .whitespacesAndNewlines)
-        return VStack(alignment: .leading, spacing: 6) {
-            Text("Reasoning")
-                .font(AppTheme.Font.caption.weight(.semibold))
-            MarkdownTextView(source: displayText.isEmpty ? "Pi has not emitted reasoning text yet." : displayText)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }

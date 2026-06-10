@@ -51,6 +51,11 @@ struct CommandRunner: CommandRunning {
         let executableURL = try await resolveExecutableURL(for: command)
 
         return try await withCheckedThrowingContinuation { continuation in
+            // The target defaults to MainActor isolation, so without this hop the
+            // synchronous setup — including `process.run()`'s fork/exec — executes
+            // on the main thread and stalls the UI for every command the app
+            // spawns (sampled: 150-340ms hangs in the release-sheet preflight).
+            DispatchQueue.global(qos: .userInitiated).async {
             let process = Process()
             process.executableURL = executableURL
             process.arguments = arguments
@@ -91,6 +96,7 @@ struct CommandRunner: CommandRunning {
                     process.terminate()
                     finish(.failure(CommandRunnerError.timedOut(command: command, timeout: timeout)))
                 }
+            }
             }
         }
     }
@@ -185,6 +191,10 @@ struct CommandRunner: CommandRunning {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
 
         return try await withCheckedThrowingContinuation { continuation in
+            // Same main-thread hop as `run`: spawning the user's login shell to
+            // resolve an executable is the slowest spawn in the app (full shell
+            // init) and must never run on the main thread.
+            DispatchQueue.global(qos: .userInitiated).async {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: shell)
             process.arguments = ["-lic", "command -v \(command)"]
@@ -231,10 +241,11 @@ struct CommandRunner: CommandRunning {
                 process.terminate()
                 finish(nil)
             }
+            }
         }
     }
 
-    static func processEnvironment(merging environment: [String: String]?, executableURL: URL? = nil) -> [String: String] {
+    nonisolated static func processEnvironment(merging environment: [String: String]?, executableURL: URL? = nil) -> [String: String] {
         var merged = ProcessInfo.processInfo.environment
         let defaultPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         if let existingPath = merged["PATH"], !existingPath.isEmpty {
@@ -341,6 +352,10 @@ private final class LockedProcessOutputCollector: @unchecked Sendable {
 private final class LockedFinishGate: @unchecked Sendable {
     private let lock = NSLock()
     nonisolated(unsafe) private var didFinish = false
+
+    // Explicit nonisolated init: the implicit one inherits the target's MainActor
+    // default and would be uncallable from the background spawn queue.
+    nonisolated init() {}
 
     nonisolated func tryFinish() -> Bool {
         lock.lock()

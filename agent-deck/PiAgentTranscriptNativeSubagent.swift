@@ -280,7 +280,6 @@ final class PiAgentNativeExpandableMarkdown: NSView {
 final class PiAgentNativeAgentBlockView: NSView {
     private let glyph = PiAgentNativeSubagentGlyph()
     private let nameLabel = NSTextField(labelWithString: "")
-    private let modelPill = NativeCardSurface()
     private let modelLabel = NSTextField(labelWithString: "")
     private let tokensLabel = NSTextField(labelWithString: "")
     private let outcomePill = NSTextField(labelWithString: "")
@@ -293,9 +292,6 @@ final class PiAgentNativeAgentBlockView: NSView {
     var onToggle: (() -> Void)? { didSet { task.onToggle = onToggle } }
 
     private let headerToTask: CGFloat = 12
-    /// Vertical inset of the model text inside its container (kept tiny so
-    /// the taller name row isn't clipped now that the background is gone).
-    private static let modelPillVPad: CGFloat = 0
 
     init() {
         super.init(frame: .zero)
@@ -305,30 +301,15 @@ final class PiAgentNativeAgentBlockView: NSView {
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        // Model pill beside the name — the shared identifier-pill style
-        // (AppTheme.IdentifierPill), matching the plan-id pill in the plan
-        // popover: condensed standard SF, caption size, medium weight, muted.
-        // Hugs its content and never truncates.
+        // Model identifier beside the name — bare condensed text via the
+        // shared AppTheme.IdentifierPill style. No wrapping view; the row
+        // center-aligns mixed font sizes so the model text sits visually
+        // centered beside the larger agent name.
         modelLabel.font = AppTheme.IdentifierPill.nsFont()
         modelLabel.textColor = AppTheme.ns(AppTheme.mutedText)
         modelLabel.translatesAutoresizingMaskIntoConstraints = false
+        modelLabel.setContentHuggingPriority(.required, for: .horizontal)
         modelLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-        modelPill.translatesAutoresizingMaskIntoConstraints = false
-        // No background — the identifier reads as bare condensed text.
-        modelPill.cardCornerRadius = 0
-        modelPill.fillColor = .clear
-        modelPill.strokeColor = .clear
-        modelPill.setContentHuggingPriority(.required, for: .horizontal)
-        modelPill.setContentCompressionResistancePriority(.required, for: .horizontal)
-        modelPill.addSubview(modelLabel)
-        // Hug the text tightly — no background means no need for pill insets.
-        let hPad: CGFloat = 0
-        NSLayoutConstraint.activate([
-            modelLabel.leadingAnchor.constraint(equalTo: modelPill.leadingAnchor, constant: hPad),
-            modelLabel.trailingAnchor.constraint(equalTo: modelPill.trailingAnchor, constant: -hPad),
-            modelLabel.topAnchor.constraint(equalTo: modelPill.topAnchor, constant: Self.modelPillVPad),
-            modelLabel.bottomAnchor.constraint(equalTo: modelPill.bottomAnchor, constant: -Self.modelPillVPad)
-        ])
 
         // Token count beside the pill: muted, truncates before the name does.
         tokensLabel.font = NativeTranscriptFont.callout()
@@ -357,7 +338,7 @@ final class PiAgentNativeAgentBlockView: NSView {
         metaLabel.maximumNumberOfLines = 1
         metaLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let nameRow = NSStackView(views: [nameLabel, modelPill, tokensLabel])
+        let nameRow = NSStackView(views: [nameLabel, modelLabel, tokensLabel])
         nameRow.orientation = .horizontal
         nameRow.spacing = 8
         nameRow.alignment = .centerY
@@ -397,7 +378,7 @@ final class PiAgentNativeAgentBlockView: NSView {
         glyph.configure(color: payload.statusColor, isActive: payload.isActive, avatarURL: payload.avatarURL)
         nameLabel.stringValue = payload.agentName
         modelLabel.stringValue = payload.modelText ?? ""
-        modelPill.isHidden = (payload.modelText?.isEmpty ?? true)
+        modelLabel.isHidden = (payload.modelText?.isEmpty ?? true)
         tokensLabel.stringValue = payload.tokensText ?? ""
         tokensLabel.isHidden = (payload.tokensText?.isEmpty ?? true)
         metaLabel.attributedStringValue = metaLine(payload)
@@ -464,10 +445,10 @@ final class PiAgentNativeAgentBlockView: NSView {
     func measuredHeight(forWidth width: CGFloat) -> CGFloat {
         let nameH = ceil(nameLabel.intrinsicContentSize.height)
         let metaH = ceil(metaLabel.intrinsicContentSize.height)
-        // The name row hugs the tallest of the name and the model pill (text +
-        // vertical insets), so the status line below it never gets clipped.
-        let pillH = modelPill.isHidden ? 0 : ceil(modelLabel.intrinsicContentSize.height) + Self.modelPillVPad * 2
-        let nameRowH = max(nameH, pillH)
+        // The name row hugs the tallest of the name and the model identifier
+        // text, so the status line below it never gets clipped.
+        let modelH = modelLabel.isHidden ? 0 : ceil(modelLabel.intrinsicContentSize.height)
+        let nameRowH = max(nameH, modelH)
         let headerH = max(34, nameRowH + 3 + metaH)
         let taskH = task.measuredHeight(forWidth: width)
         return ceil(headerH + headerToTask + taskH)

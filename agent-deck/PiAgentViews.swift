@@ -77,6 +77,12 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
     // cover all transcript content, the rest are settings/skills/subagent/session.
     fileprivate var memoizedTranscriptItems: [PiAgentAppKitTranscriptItem] = []
     fileprivate var memoizedTranscriptItemsSignature: Int?
+#if DEBUG
+    // Last itemsBuild signature inputs, labeled — lets the rebuild-trigger
+    // diagnostic name exactly which input invalidated the memo. Not @Published
+    // (written during a body pass, same contract as the memo fields above).
+    fileprivate var lastItemsBuildComponents: [String: Int] = [:]
+#endif
 
     private var updateTask: Task<Void, Never>?
     private var lastSessionID: UUID?
@@ -572,7 +578,7 @@ struct TranscriptDebugScreen: View {
                 headerTitle: thinking.title,
                 iconSymbol: "brain.head.profile",
                 markdownSource: thinking.text,
-                bodyPrefix: "Reasoning",
+                bodyPrefix: nil,
                 copyText: thinking.text,
                 copySide: .trailing,
                 isThreadChild: true
@@ -1465,6 +1471,20 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             itemByID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             let nextRevisions = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.contentRevision) })
 
+#if DEBUG
+            // Names what woke a real apply(). An idle session should never reach
+            // this line; when it does, the trigger identifies the pulse source.
+            let trigger = [
+                isSessionSwitch ? "sessionSwitch" : nil,
+                idsChanged ? "ids" : nil,
+                revisionChanged ? "revisions" : nil,
+                structuralUpdate ? "structural" : nil,
+                streamingUpdate ? "streaming" : nil,
+                explicitScroll ? "explicitScroll" : nil
+            ].compactMap { $0 }.joined(separator: "+")
+            TranscriptScrollProfiler.logger.error("apply work — trigger: \(trigger, privacy: .public)")
+#endif
+
             if isSessionSwitch || idsChanged {
                 let anchor = (!isSessionSwitch && !explicitScroll && !wasFollowing) ? captureScrollAnchor() : nil
                 if isSessionSwitch {
@@ -1610,7 +1630,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 benchTargetSessions = min(benchMaxSessions, max(1, benchScopedCount))
                 benchAdvanceBudget = benchScopedCount + benchMaxSessions + 4
                 if let id = sessionID { benchSeenIDs.insert(id) }
-                TranscriptScrollProfiler.logger.info("SCROLLBENCH armed — sweeping up to \(self.benchTargetSessions) of \(self.benchScopedCount) session(s)")
+                // .error so it shows in default console captures — this run drives
+                // session switches + programmatic scrolls and MUST be unmissable
+                // (an enabled flag once masqueraded as idle-session scroll glitches).
+                TranscriptScrollProfiler.logger.error("SCROLLBENCH armed (ScrollBenchEnabled defaults flag) — sweeping up to \(self.benchTargetSessions) of \(self.benchScopedCount) session(s); disable: defaults delete streetcoding.agent-deck ScrollBenchEnabled")
                 scheduleSessionRoutine()
                 return
             }
@@ -1644,7 +1667,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             benchSessionsTested += 1
             let label = "S\(benchSessionsTested)/\(benchTargetSessions):\(sessionID.uuidString.prefix(8))"
             updateBenchFingerprint()
-            TranscriptScrollProfiler.logger.info("SCROLLBENCH \(label, privacy: .public) rows=\(tableView.numberOfRows)")
+            TranscriptScrollProfiler.logger.error("SCROLLBENCH \(label, privacy: .public) rows=\(tableView.numberOfRows)")
 
             // Short burst: small local oscillation near current position.
             benchPhase = .shortScroll
@@ -2540,7 +2563,15 @@ private struct SessionListContent: View, Equatable {
         else { diff = nil }
 #if DEBUG
         if let diff {
-            SessionListContent.perfLog.error("SessionListContent re-eval — input changed: \(diff, privacy: .public)")
+            if diff == "selectedSessionIDs" {
+                // Selection churn with no user click has shown up in scroll
+                // traces; print the actual delta so the mutator can be named.
+                let old = lhs.selectedSessionIDs.map { String($0.uuidString.prefix(8)) }.sorted().joined(separator: ",")
+                let new = rhs.selectedSessionIDs.map { String($0.uuidString.prefix(8)) }.sorted().joined(separator: ",")
+                SessionListContent.perfLog.error("SessionListContent re-eval — selectedSessionIDs changed: [\(old, privacy: .public)] -> [\(new, privacy: .public)]")
+            } else {
+                SessionListContent.perfLog.error("SessionListContent re-eval — input changed: \(diff, privacy: .public)")
+            }
         }
 #endif
         return diff == nil
@@ -3531,6 +3562,9 @@ struct PiAgentScreen: View {
             if transcriptCache.memoizedTranscriptItemsSignature == signature {
                 return transcriptCache.memoizedTranscriptItems
             }
+#if DEBUG
+            debugLogItemsBuildTrigger()
+#endif
             let items = appKitTranscriptItemsBuild
             transcriptCache.memoizedTranscriptItems = items
             transcriptCache.memoizedTranscriptItemsSignature = signature
@@ -3565,6 +3599,42 @@ struct PiAgentScreen: View {
         }
         return hasher.finalize()
     }
+
+#if DEBUG
+    /// Names which memo input invalidated `appKitTranscriptItems` — the labels
+    /// mirror `appKitTranscriptItemsSignature` (with the chrome/context hashes
+    /// split into their fields) so an unexplained rebuild on an idle session can
+    /// be attributed straight from the console. Runs only on a memo miss.
+    private func debugLogItemsBuildTrigger() {
+        var components: [String: Int] = [
+            "render": transcriptCache.renderRevision,
+            "streaming": transcriptCache.streamingRevision,
+            "archived": showArchivedPreCompactionTranscript ? 1 : 0,
+            "visibility": String(describing: viewModel.appSettings.piAgentTranscriptVisibility).hashValue,
+            "skills": visibleSkillsForSelectedSession.map(\.name).hashValue
+        ]
+        if let session = store.selectedSession {
+            components["sessionID"] = session.id.hashValue
+            components["status"] = String(describing: session.status).hashValue
+            components["loading"] = store.isSelectedTranscriptLoading ? 1 : 0
+            components["path"] = (session.worktreePath ?? session.projectPath).hashValue
+            components["command"] = session.commandInvocations.hashValue
+            var forkHasher = Hasher()
+            forkHasher.combine(session.forkedFromParentTitle)
+            forkHasher.combine(session.forkedFromSessionID)
+            forkHasher.combine(session.forkedFromTranscriptSnapshot)
+            components["fork"] = forkHasher.finalize()
+            components["runs"] = store.subagentRuns(for: session.id).hashValue
+            components["requests"] = store.supervisorRequests(for: session.id).hashValue
+        }
+        let previous = transcriptCache.lastItemsBuildComponents
+        transcriptCache.lastItemsBuildComponents = components
+        guard !previous.isEmpty else { return }
+        let changed = Set(components.keys).union(previous.keys).filter { components[$0] != previous[$0] }.sorted()
+        guard !changed.isEmpty else { return }
+        TranscriptScrollProfiler.logger.error("itemsBuild trigger — changed inputs: \(changed.joined(separator: ","), privacy: .public)")
+    }
+#endif
 
     private var appKitTranscriptItemsBuild: [PiAgentAppKitTranscriptItem] {
         let timelineSnapshot = transcriptTimelineSnapshot
@@ -3744,7 +3814,7 @@ struct PiAgentScreen: View {
                     ) {
                         // Native rendering for the supported child types; the
                         // rest (tool groups, subagent/memory cards) still hosted.
-                        let revision = appKitChildBlockRevision(child, contextRevision: contextRevision)
+                        let revision = appKitChildBlockRevision(child, contextRevision: contextRevision, subagentRuns: subagentRuns)
                         memoizedBlockIDs.insert(child.id)
                         let nativeKind = transcriptCache.cachedBlockKind(id: child.id, revision: revision) {
                             nativeChildKind(
@@ -4077,7 +4147,7 @@ struct PiAgentScreen: View {
                 headerTitle: entry.title,
                 iconSymbol: "brain.head.profile",
                 markdownSource: display.isEmpty ? "Pi has not emitted reasoning text yet." : display,
-                bodyPrefix: "Reasoning",
+                bodyPrefix: nil,
                 copyText: display,
                 copySide: .trailing,
                 isThreadChild: true
@@ -4114,13 +4184,27 @@ struct PiAgentScreen: View {
     /// Content revision for a child block — only that child's entry/entries +
     /// context. A sibling streaming does not bump this, so only the streaming
     /// block's row reconfigures.
-    private func appKitChildBlockRevision(_ child: PiAgentThreadChild, contextRevision: Int) -> Int {
+    private func appKitChildBlockRevision(
+        _ child: PiAgentThreadChild,
+        contextRevision: Int,
+        subagentRuns: [UUID: PiSubagentRunRecord]
+    ) -> Int {
         var hasher = Hasher()
         hasher.combine(contextRevision)
         switch child {
         case let .steering(entry), let .thinking(entry), let .assistant(entry),
-             let .status(entry), let .error(entry):
+             let .error(entry):
             hashEntryRevision(entry, into: &hasher)
+        case let .status(entry):
+            hashEntryRevision(entry, into: &hasher)
+            // A status child fronting a Deck agent run renders the whole run
+            // record (status, children, durations, results) — fold exactly that
+            // run in so ONLY this row re-renders as the run streams. This is the
+            // narrow replacement for the all-rows run hash that used to live in
+            // the shared context revision above.
+            if let runID = entry.nativeSubagentRunID, let run = subagentRuns[runID] {
+                hasher.combine(run)
+            }
         case let .retry(entry, _):
             hashEntryRevision(entry, into: &hasher)
         case let .toolGroup(group):
@@ -4150,9 +4234,13 @@ struct PiAgentScreen: View {
         hasher.combine(String(describing: viewModel.appSettings.piAgentTranscriptVisibility))
         hasher.combine(visibleSkillsForSelectedSession.map(\.name))
         hasher.combine(store.selectedSession.map { $0.worktreePath ?? $0.projectPath })
-        if let sessionID = store.selectedSession?.id {
-            hasher.combine(store.subagentRuns(for: sessionID).map { "\($0.id):\($0.status):\($0.updatedAt)" })
-        }
+        // Deliberately NO subagent-run state here: this revision folds into EVERY
+        // row, and run records update on every subagent event — hashing them here
+        // invalidated the whole transcript (full itemsBuild + visible reconfigure)
+        // several times a second for the entire run (steady 40-80ms hitches). The
+        // one row that renders a run folds its own record in via
+        // `appKitChildBlockRevision`; the itemsBuild memo signature still hashes
+        // all runs, so the descriptor list itself can never go stale.
         return hasher.finalize()
     }
 

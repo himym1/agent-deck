@@ -4,22 +4,24 @@ struct MemoryScreen: View {
     var viewModel: AppViewModel
     @ObservedObject var memoryStore: AgentMemoryStore
     @Binding var searchText: String
-    @State private var selectedStatus: AgentMemoryStatus?
-    @State private var selectedKind: AgentMemoryKind?
     @State private var selectedRecordID: String?
     @State private var isNewMemoryPresented = false
+    @State private var recordPendingDeletion: AgentMemoryRecord?
     /// Cached derivations of `memoryStore.records(projectPath:)`. Re-computed
     /// only when one of the input drivers changes — not on every body eval.
     /// Without this, every observable read of `memoryStore` would re-walk the
-    /// full records array.
-    @State private var cachedCurrent: [AgentMemoryRecord] = []
-    @State private var cachedFiltered: [AgentMemoryRecord] = []
+    /// full records array. Mirrors `PromptsScreen.cachedLayout`.
+    @State private var cachedLayout: (
+        sections: [AppListSection<AgentMemoryRecord>],
+        visible: [AgentMemoryRecord],
+        hasAny: Bool
+    ) = ([], [], false)
 
     var body: some View {
-        AppPage("Memory", subtitle: "Review project memories used by Agent Deck") {
-
-            overviewCard
-            libraryCard
+        SplitView {
+            libraryPane
+        } detail: {
+            detailPane
         }
         // Toolbar buttons live in ContentView's central switch (memoryPrimaryToolbarContent)
         // so the island doesn't jump when switching views. "New Memory" arrives here
@@ -40,7 +42,23 @@ struct MemoryScreen: View {
                 }
             )
         }
+        .alert("Delete Memory?", isPresented: Binding(
+            get: { recordPendingDeletion != nil },
+            set: { if !$0 { recordPendingDeletion = nil } }
+        ), presenting: recordPendingDeletion) { record in
+            Button("Delete", role: .destructive) {
+                deleteMemory(record)
+            }
+            Button("Cancel", role: .cancel) {
+                recordPendingDeletion = nil
+            }
+        } message: { record in
+            Text("Delete \"\(record.title.isEmpty ? "Untitled Memory" : record.title)\"? The memory file is removed from disk and agents stop recalling it.")
+        }
         .task(id: cacheKey) { recomputeCachedLayout() }
+        .task {
+            if viewModel.appSettings.agentMemoryEnabled { memoryStore.warmEmbedder() }
+        }
         // Select a record requested from a transcript recall card. `.onChange`
         // covers the case where this screen is already showing; `.onAppear`
         // covers a fresh switch to the Memory tab (the id was set before we existed).
@@ -48,75 +66,99 @@ struct MemoryScreen: View {
         .onChange(of: viewModel.selectedMemoryID) { _, _ in consumePendingMemorySelection() }
     }
 
+    // MARK: Cached layout
+
+    private var cacheKey: String {
+        // Stable signature for `.task(id:)`. `revision` bumps once per write,
+        // far cheaper than diffing the full records array.
+        "\(memoryStore.revision)|\(viewModel.selectedProjectPath ?? "")|\(searchText)"
+    }
+
+    private func recomputeCachedLayout() {
+        let current = memoryStore.records(projectPath: viewModel.selectedProjectPath)
+
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let visible: [AgentMemoryRecord]
+        if query.isEmpty {
+            visible = current
+        } else {
+            visible = current.filter { record in
+                ([record.title, record.summary, record.kind.displayName, record.status.displayName, record.scope.displayName, record.filePath] + record.tags)
+                    .contains { $0.lowercased().contains(query) }
+            }
+        }
+
+        var sections: [AppListSection<AgentMemoryRecord>] = []
+        // Pinned leads: it is the strongest signal, then the working set, then
+        // the two not-recalled tiers.
+        for status in [AgentMemoryStatus.pinned, .active, .stale, .archived] {
+            let items = visible.filter { $0.status == status }
+            if !items.isEmpty {
+                sections.append(AppListSection(
+                    id: status.rawValue,
+                    title: status.displayName,
+                    info: status.sectionInfo,
+                    items: items
+                ))
+            }
+        }
+        if sections.isEmpty {
+            sections.append(AppListSection(
+                id: "empty",
+                title: "Memories",
+                items: [],
+                emptyMessage: current.isEmpty ? emptyLibraryMessage : "No memories match your search."
+            ))
+        }
+
+        cachedLayout = (sections, visible, !current.isEmpty)
+        ensureSelection()
+    }
+
+    private var emptyLibraryMessage: String {
+        viewModel.selectedProjectPath == nil
+            ? "Select a project to inspect its memory."
+            : "No memories yet."
+    }
+
+    private func ensureSelection() {
+        guard selectedRecordID == nil
+            || !cachedLayout.visible.contains(where: { $0.id == selectedRecordID }) else { return }
+        selectedRecordID = cachedLayout.visible.first?.id
+    }
+
+    private var selectedRecord: AgentMemoryRecord? {
+        guard let selectedRecordID else { return cachedLayout.visible.first }
+        return cachedLayout.visible.first(where: { $0.id == selectedRecordID }) ?? cachedLayout.visible.first
+    }
+
     /// Apply a memory selection queued by `AppViewModel.openMemory(byID:)`. Clears
-    /// filters/search so the target lands in the visible set, then consumes the id.
+    /// search so the target lands in the visible set, then consumes the id.
     private func consumePendingMemorySelection() {
         guard let id = viewModel.selectedMemoryID else { return }
-        selectedStatus = nil
-        selectedKind = nil
         if !searchText.isEmpty { searchText = "" }
         selectedRecordID = id
         viewModel.selectedMemoryID = nil
     }
 
-    private var cacheKey: String {
-        // Stable signature for `.task(id:)`. `revision` bumps once per write,
-        // far cheaper than diffing the full records array.
-        "\(memoryStore.revision)|\(viewModel.selectedProjectPath ?? "")|\(searchText)|\(selectedStatus?.rawValue ?? "")|\(selectedKind?.rawValue ?? "")"
-    }
+    // MARK: Library pane
 
-    private func recomputeCachedLayout() {
-        let current = memoryStore.records(projectPath: viewModel.selectedProjectPath)
-        cachedCurrent = current
-
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        cachedFiltered = current.filter { record in
-            if let selectedStatus, record.status != selectedStatus { return false }
-            if let selectedKind, record.kind != selectedKind { return false }
-            guard !query.isEmpty else { return true }
-            let haystack = ([record.title, record.summary, record.kind.displayName, record.status.displayName, record.scope.displayName, record.filePath] + record.tags)
-                .joined(separator: " ")
-                .lowercased()
-            return haystack.contains(query)
-        }
-    }
-
-    private var currentRecords: [AgentMemoryRecord] { cachedCurrent }
-    private var filteredRecords: [AgentMemoryRecord] { cachedFiltered }
-
-    private var selectedRecord: AgentMemoryRecord? {
-        guard let selectedRecordID else { return filteredRecords.first }
-        return filteredRecords.first(where: { $0.id == selectedRecordID }) ?? filteredRecords.first
-    }
-
-    private var overviewCard: some View {
-        AppCard(title: "Project Memory", trailing: {
-            Toggle("", isOn: Binding(
-                get: { viewModel.appSettings.agentMemoryEnabled },
-                set: { viewModel.setAgentMemoryEnabled($0) }
-            ))
-            .labelsHidden()
-            .appSwitch()
-        }) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Durable project context that agents can recall: architecture notes, decisions, preferences, runbooks, and recurring failures.")
-                    .foregroundStyle(AppTheme.mutedText)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if viewModel.appSettings.agentMemoryEnabled {
-                    embeddingStatusRow
-                }
+    private var libraryPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            embeddingStatusRow
+            AppList(
+                sections: cachedLayout.sections,
+                selection: .single($selectedRecordID)
+            ) { record in
+                memoryListRow(record)
             }
-        }
-        .task {
-            if viewModel.appSettings.agentMemoryEnabled { memoryStore.warmEmbedder() }
         }
     }
 
     /// Recall is semantic, on-device, and fallback-free, so it fails silently when
-    /// the model can't run. This surfaces a line only in those problem states; when
-    /// recall is working there's nothing to show (the model ships with macOS and is
-    /// effectively always ready).
+    /// the model can't run. This surfaces a strip above the list only in those
+    /// problem states; when recall is working there's nothing to show (the model
+    /// ships with macOS and is effectively always ready), so the panes stay aligned.
     @ViewBuilder
     private var embeddingStatusRow: some View {
         switch memoryStore.embeddingStatus {
@@ -130,128 +172,90 @@ struct MemoryScreen: View {
     }
 
     private func statusLine(_ systemImage: String, _ tint: Color, _ text: String) -> some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: systemImage).foregroundStyle(tint)
             Text(text)
         }
-        .font(.callout)
+        .font(.caption)
         .foregroundStyle(AppTheme.mutedText)
+        .padding(.horizontal, 18)
+        .padding(.top, AppTheme.Split.contentTopInset + 2)
+        .padding(.bottom, 4)
     }
 
-    private var libraryCard: some View {
-        AppCard(title: "Memory Library") {
-            VStack(alignment: .leading, spacing: 14) {
-                filterBar
-
-                if currentRecords.isEmpty {
-                    ContentUnavailableView("No Memories Yet", systemImage: "brain", description: Text(viewModel.selectedProjectPath == nil ? "Select a project to inspect its memory." : "Create a memory manually or let agents write durable project memories from sessions."))
-                        .frame(maxWidth: .infinity, minHeight: 360)
-                } else if filteredRecords.isEmpty {
-                    ContentUnavailableView("No Matching Memories", systemImage: "line.3.horizontal.decrease.circle", description: Text("Try clearing search or changing the filters."))
-                        .frame(maxWidth: .infinity, minHeight: 360)
-                } else {
-                    HStack(alignment: .top, spacing: 14) {
-                        memoryList
-
-                        Divider()
-
-                        if let selectedRecord {
-                            MemoryDetailView(record: selectedRecord, memoryStore: memoryStore, viewModel: viewModel)
-                                .frame(maxWidth: .infinity, minHeight: 430, alignment: .topLeading)
-                        }
-                    }
-                }
+    private func memoryListRow(_ record: AgentMemoryRecord) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: record.kind.systemImage)
+                .foregroundStyle(record.status.tint)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(record.title.isEmpty ? "Untitled Memory" : record.title)
+                    .font(.headline)
+                    .fontWidth(.expanded)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(record.summary.isEmpty ? "No summary provided." : record.summary)
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .lineLimit(2)
             }
+            Spacer(minLength: 0)
         }
-    }
-
-    private var filterBar: some View {
-        HStack(spacing: 10) {
-            Picker("Status", selection: Binding(
-                get: { selectedStatus?.rawValue ?? "all" },
-                set: { selectedStatus = $0 == "all" ? nil : AgentMemoryStatus(rawValue: $0) }
-            )) {
-                Text("All Statuses").tag("all")
-                ForEach(AgentMemoryStatus.allCases) { status in
-                    Text(status.displayName).tag(status.rawValue)
-                }
-            }
-            .labelsHidden()
-            .frame(width: 150)
-
-            Picker("Type", selection: Binding(
-                get: { selectedKind?.rawValue ?? "all" },
-                set: { selectedKind = $0 == "all" ? nil : AgentMemoryKind(rawValue: $0) }
-            )) {
-                Text("All Types").tag("all")
-                ForEach(AgentMemoryKind.allCases) { kind in
-                    Text(kind.displayName).tag(kind.rawValue)
-                }
-            }
-            .labelsHidden()
-            .frame(width: 170)
-
-            Button("Clear") {
-                searchText = ""
-                selectedStatus = nil
-                selectedKind = nil
-            }
-            .appSecondaryButton()
-            .disabled(searchText.isEmpty && selectedStatus == nil && selectedKind == nil)
-        }
-    }
-
-    private var memoryList: some View {
-        List {
-            ForEach(filteredRecords) { record in
-                MemoryRecordRow(record: record, isSelected: record.id == selectedRecord?.id) {
-                    selectedRecordID = record.id
-                }
-                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
-                .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
-                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                    Button(role: .destructive) {
-                        deleteMemory(record)
+        .padding(.vertical, 6)
+        .contextMenu {
+            ForEach(AgentMemoryStatus.allCases) { status in
+                if status != record.status {
+                    Button {
+                        viewModel.setAgentMemoryStatus(record.id, status: status)
                     } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                    .tint(.red)
-                }
-                .contextMenu {
-                    Button { viewModel.setAgentMemoryStatus(record.id, status: .active) } label: {
-                        Label("Mark Active", systemImage: AgentMemoryStatus.active.systemImage)
-                    }
-                    Button { viewModel.setAgentMemoryStatus(record.id, status: .pinned) } label: {
-                        Label("Pin", systemImage: AgentMemoryStatus.pinned.systemImage)
-                    }
-                    Button { viewModel.setAgentMemoryStatus(record.id, status: .stale) } label: {
-                        Label("Mark Stale", systemImage: AgentMemoryStatus.stale.systemImage)
-                    }
-                    Button { viewModel.setAgentMemoryStatus(record.id, status: .archived) } label: {
-                        Label("Archive", systemImage: AgentMemoryStatus.archived.systemImage)
-                    }
-                    Divider()
-                    Button(role: .destructive) {
-                        deleteMemory(record)
-                    } label: {
-                        Label("Delete Memory", systemImage: "trash")
+                        Label(status.actionTitle, systemImage: status.systemImage)
                     }
                 }
             }
+            Divider()
+            Button(role: .destructive) {
+                recordPendingDeletion = record
+            } label: {
+                Label("Delete Memory", systemImage: "trash")
+            }
         }
-        .listStyle(.plain)
-        .scrollIndicators(.hidden)
-        .hideNativeScrollers()
-        .scrollContentBackground(.hidden)
-        .background(Color.clear)
-        .frame(minWidth: 310, idealWidth: 360, maxWidth: 440, minHeight: 430)
+    }
+
+    // MARK: Detail pane
+
+    @ViewBuilder
+    private var detailPane: some View {
+        if let record = selectedRecord {
+            MemoryDetailView(
+                record: record,
+                memoryStore: memoryStore,
+                viewModel: viewModel,
+                onDelete: { recordPendingDeletion = $0 }
+            )
+        } else if !cachedLayout.hasAny {
+            AppEmptyState(
+                "No Memories Yet",
+                systemImage: "brain",
+                description: viewModel.selectedProjectPath == nil
+                    ? "Select a project to inspect its memory."
+                    : "Create a memory manually or let agents write durable project memories from sessions.",
+                layout: .fill
+            )
+        } else {
+            AppEmptyState(
+                "No Matching Memories",
+                systemImage: "line.3.horizontal.decrease.circle",
+                description: "Try a different search.",
+                layout: .fill
+            )
+        }
     }
 
     private func deleteMemory(_ record: AgentMemoryRecord) {
         if selectedRecordID == record.id {
             selectedRecordID = nil
         }
+        recordPendingDeletion = nil
         viewModel.deleteAgentMemory(record.id)
     }
 }
@@ -322,91 +326,68 @@ struct MemoryInfoPopover: View {
 }
 
 
-private struct MemoryRecordRow: View {
-    let record: AgentMemoryRecord
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: record.kind.systemImage)
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(record.status.tint)
-                    .frame(width: 30, height: 30)
-                    .background(record.status.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) {
-                        Text(record.title.isEmpty ? "Untitled Memory" : record.title)
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        Spacer(minLength: 6)
-                        Text(record.status.displayName)
-                            .font(.caption)
-                            .foregroundStyle(AppTheme.mutedText)
-                    }
-
-                    Text(record.summary.isEmpty ? "No summary provided." : record.summary)
-                        .font(.callout)
-                        .foregroundStyle(AppTheme.mutedText)
-                        .lineLimit(2)
-
-                    HStack(spacing: 6) {
-                        Label(record.kind.displayName, systemImage: record.kind.systemImage)
-                        Label(record.scope.displayName, systemImage: record.scope.systemImage)
-                    }
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-                    .lineLimit(1)
-                }
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .appContentSurface(cornerRadius: 12, isSelected: isSelected)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(record.title.isEmpty ? "Untitled Memory" : record.title)
-    }
-}
-
 private struct MemoryDetailView: View {
     let record: AgentMemoryRecord
     @ObservedObject var memoryStore: AgentMemoryStore
     var viewModel: AppViewModel
+    let onDelete: (AgentMemoryRecord) -> Void
     @State private var isEditing = false
+    /// Body markdown loaded off the render path. `document(for:)` reads the
+    /// file from disk, so it runs in `.task(id:)` rather than in `body`.
+    @State private var bodyText = ""
 
     var body: some View {
-        let document = memoryStore.document(for: record)
-        VStack(alignment: .leading, spacing: 16) {
-            header(document: document)
+        AppPage(record.title.isEmpty ? "Untitled Memory" : record.title, lazy: true) {
+            AppCard(title: record.title.isEmpty ? "Untitled Memory" : record.title, trailing: { statusPicker }) {
+                if !record.summary.isEmpty {
+                    Text(record.summary)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                AppKeyValueList(rows: metadataRows)
+            }
 
-            HStack(alignment: .top, spacing: 12) {
-                MemoryInfoPanel(record: record)
-                    .frame(width: 220)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Memory Body")
-                        .font(.headline)
-                        .fontWidth(.expanded)
-                    ScrollView(showsIndicators: false) {
-                        MarkdownTextView(source: document.body.isEmpty ? "_No body._" : document.body)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                            .padding(12)
+            LazyMarkdownCard(
+                title: "Memory Body",
+                source: bodyText.isEmpty ? "_No body._" : bodyText,
+                minimumHeight: 120,
+                trailing: {
+                    Button {
+                        isEditing = true
+                    } label: {
+                        Label("Edit", systemImage: "square.and.pencil")
+                            .font(.caption.weight(.semibold))
+                            .labelStyle(.titleAndIcon)
                     }
-                    .frame(minHeight: 250)
-                    .appContentSurface(cornerRadius: 12)
+                    .appSmallSecondaryButton()
+                    .help("Edit memory")
+                }
+            )
+
+            AppCard(title: "Delete Memory") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Remove this memory from the project. The memory file is deleted from disk and agents stop recalling it.")
+                        .font(.callout)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Button("Delete Memory", role: .destructive) {
+                        onDelete(record)
+                    }
+                    .appDestructiveButton()
                 }
             }
+        }
+        .task(id: "\(record.id)|\(record.updatedAt.timeIntervalSinceReferenceDate)") {
+            bodyText = memoryStore.document(for: record).body
         }
         .sheet(isPresented: $isEditing) {
             MemoryEditorSheet(
                 title: "Edit Memory",
                 initialTitle: record.title,
                 initialSummary: record.summary,
-                initialBody: document.body,
+                initialBody: bodyText,
                 initialKind: record.kind,
                 initialTags: record.tags.joined(separator: ", "),
                 onSave: { title, summary, body, kind, tags in
@@ -417,72 +398,23 @@ private struct MemoryDetailView: View {
         }
     }
 
-    private func header(document: AgentMemoryDocument) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: record.kind.systemImage)
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(record.status.tint)
-                    .frame(width: 44, height: 44)
-                    .background(record.status.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(record.title.isEmpty ? "Untitled Memory" : record.title)
-                        .font(.title3.weight(.bold))
-                        .fontWidth(.expanded)
-                        .lineLimit(2)
-                    Text(record.summary.isEmpty ? "No summary provided." : record.summary)
-                        .foregroundStyle(AppTheme.mutedText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer(minLength: 0)
-
-                Menu {
-                    Button("Mark Active") { viewModel.setAgentMemoryStatus(record.id, status: .active) }
-                    Button("Pin") { viewModel.setAgentMemoryStatus(record.id, status: .pinned) }
-                    Button("Mark Stale") { viewModel.setAgentMemoryStatus(record.id, status: .stale) }
-                    Button("Archive") { viewModel.setAgentMemoryStatus(record.id, status: .archived) }
-                    Divider()
-                    Button("Delete", role: .destructive) { viewModel.deleteAgentMemory(record.id) }
-                } label: {
-                    Label("Actions", systemImage: "ellipsis.circle")
-                }
-                .appSecondaryButton()
-                .controlSize(.regular)
-
-                Button("Edit") { isEditing = true }
-                    .appSecondaryButton()
-                    .controlSize(.regular)
+    private var statusPicker: some View {
+        Picker("Status", selection: Binding(
+            get: { record.status },
+            set: { viewModel.setAgentMemoryStatus(record.id, status: $0) }
+        )) {
+            ForEach(AgentMemoryStatus.allCases) { status in
+                Label(status.displayName, systemImage: status.systemImage).tag(status)
             }
-
         }
-        .padding(14)
-        .appContentSurface(cornerRadius: 14)
-    }
-}
-
-private struct MemoryInfoPanel: View {
-    let record: AgentMemoryRecord
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Details")
-                .font(.headline)
-                .fontWidth(.expanded)
-
-            AppKeyValueList(rows: rows)
-
-            AppCopyTextButton(title: "Copy Path", text: record.filePath)
-        }
-        .padding(12)
-        .appContentSurface(cornerRadius: 12)
+        .labelsHidden()
+        .appMenuPicker()
+        .fixedSize()
     }
 
-    private var rows: [(String, String)] {
+    private var metadataRows: [(String, String)] {
         var rows: [(String, String)] = [
             ("Type", record.kind.displayName),
-            ("Status", record.status.displayName),
             ("Scope", record.scope.displayName),
             ("Created", record.createdAt.formatted(date: .abbreviated, time: .shortened)),
             ("Updated", record.updatedAt.formatted(date: .abbreviated, time: .shortened))
@@ -490,7 +422,7 @@ private struct MemoryInfoPanel: View {
         if let sourceAgentName = record.sourceAgentName, !sourceAgentName.isEmpty {
             rows.append(("Source", sourceAgentName))
         }
-        rows.append(("Path", record.filePath))
+        rows.append(("File", record.filePath))
         return rows
     }
 }
@@ -526,14 +458,24 @@ private struct MemoryEditorSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title)
-                    .font(.title2.weight(.bold))
-                    .fontWidth(.expanded)
-                Text("Give agents concise, reusable context. Good memories are specific, durable, and easy to verify.")
-                    .foregroundStyle(AppTheme.mutedText)
+        // Mirrors the `MarkdownFileEditorSheet` chrome: compact headline header
+        // (18pt) + Divider, bare monospaced editor, Divider, 16pt footer.
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.headline)
+                        .fontWidth(.expanded)
+                    Text("Give agents concise, reusable context. Good memories are specific, durable, and easy to verify.")
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
             }
+            .padding(18)
+
+            Divider()
 
             Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 12) {
                 GridRow {
@@ -552,24 +494,25 @@ private struct MemoryEditorSheet: View {
                         }
                     }
                     .labelsHidden()
-                    .frame(maxWidth: 260)
+                    .appMenuPicker()
+                    .frame(maxWidth: 260, alignment: .leading)
                 }
                 GridRow {
                     Text("Tags").foregroundStyle(AppTheme.mutedText)
                     AppTextField(text: $tags, placeholder: "Comma-separated tags")
                 }
             }
+            .padding(18)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Body")
-                    .font(.headline)
-                    .fontWidth(.expanded)
-                TextEditor(text: $bodyText)
-                    .font(.body.monospaced())
-                    .frame(minHeight: 250)
-                    .padding(6)
-                    .appContentSurface(cornerRadius: 10)
-            }
+            Divider()
+
+            TextEditor(text: $bodyText)
+                .font(.system(.body, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .padding(12)
+                .frame(maxHeight: .infinity)
+
+            Divider()
 
             HStack {
                 Spacer()
@@ -579,13 +522,13 @@ private struct MemoryEditorSheet: View {
                     onSave(memoryTitle.trimmedForMemory, summary.trimmedForMemory, bodyText, kind, parsedTags)
                     dismiss()
                 }
-                .buttonStyle(AppPrimaryButtonStyle())
+                .appPrimaryButton()
                 .keyboardShortcut(.defaultAction)
                 .disabled(memoryTitle.trimmedForMemory.isEmpty)
             }
+            .padding(16)
         }
-        .padding(22)
-        .frame(width: 720, height: 600)
+        .frame(width: 760, height: 620)
     }
 
     private var parsedTags: [String] {
@@ -600,33 +543,45 @@ struct PiAgentMemoryActivityCard: View {
 
     var body: some View {
         AppRowCard {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .top, spacing: 8) {
                 Image(systemName: event.event.systemImage)
-                    .font(.title3.weight(.semibold))
+                    .font(AppTheme.Font.footnote.weight(.semibold))
                     .foregroundStyle(event.event == .blocked ? .red : AppTheme.brandAccent)
-                    .frame(width: 30, height: 30)
-                VStack(alignment: .leading, spacing: 3) {
+                    .frame(width: 16, height: 16)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 0) {
                     Text(event.title)
-                        .font(.headline)
-                    Text(event.summary)
-                        .font(.callout)
-                        .foregroundStyle(AppTheme.mutedText)
-                    if let titles = event.memoryTitles, !titles.isEmpty {
-                        // Titles snapshot taken at injection time; tapping opens
-                        // that exact record in the Memory screen via notification.
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(Array(zip(event.memoryIDs, titles).enumerated()), id: \.offset) { _, pair in
-                                injectedMemoryRow(id: pair.0, title: pair.1)
-                            }
-                        }
-                        .padding(.top, 2)
-                    } else if !event.memoryIDs.isEmpty {
-                        Text("\(event.memoryIDs.count) memor\(event.memoryIDs.count == 1 ? "y" : "ies")")
-                            .font(.caption.weight(.medium))
+                        .font(AppTheme.Font.footnote.weight(.semibold))
+                        .fontWidth(.expanded)
+                    if hasTitledRows {
+                        memoryRows
+                            .padding(.top, 6)
+                    } else {
+                        Text(event.summary)
+                            .font(AppTheme.Font.caption.weight(.medium))
                             .foregroundStyle(AppTheme.mutedText)
+                            .padding(.top, 3)
+                        if !event.memoryIDs.isEmpty {
+                            Text("\(event.memoryIDs.count) memor\(event.memoryIDs.count == 1 ? "y" : "ies")")
+                                .font(AppTheme.Font.caption.weight(.medium))
+                                .foregroundStyle(AppTheme.mutedText)
+                                .padding(.top, 6)
+                        }
                     }
                 }
                 Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private var hasTitledRows: Bool {
+        event.memoryTitles?.isEmpty == false
+    }
+
+    private var memoryRows: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(zip(event.memoryIDs, event.memoryTitles ?? []).enumerated()), id: \.offset) { _, pair in
+                injectedMemoryRow(id: pair.0, title: pair.1)
             }
         }
     }
@@ -641,11 +596,11 @@ struct PiAgentMemoryActivityCard: View {
         } label: {
             HStack(spacing: 6) {
                 Text(title.isEmpty ? "Untitled Memory" : title)
-                    .font(.caption.weight(.medium))
+                    .font(AppTheme.Font.caption.weight(.medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Image(systemName: "chevron.right")
-                    .font(.caption2)
+                    .font(AppTheme.Font.caption2.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
                 Spacer(minLength: 0)
             }
@@ -667,14 +622,6 @@ private extension AgentMemoryKind {
     }
 }
 
-private extension AgentMemoryScope {
-    var systemImage: String {
-        switch self {
-        case .project: return "folder"
-        }
-    }
-}
-
 private extension AgentMemoryStatus {
     var tint: Color {
         switch self {
@@ -691,6 +638,26 @@ private extension AgentMemoryStatus {
         case .pinned: return "pin.fill"
         case .stale: return "clock.badge.exclamationmark"
         case .archived: return "archivebox.fill"
+        }
+    }
+
+    /// Context-menu verb for moving a record into this status.
+    var actionTitle: String {
+        switch self {
+        case .active: return "Mark Active"
+        case .pinned: return "Pin"
+        case .stale: return "Mark Stale"
+        case .archived: return "Archive"
+        }
+    }
+
+    /// Help-popover copy for the status section headers in the library list.
+    var sectionInfo: String {
+        switch self {
+        case .pinned: return "Eligible for recall into sessions, and ranked ahead of equally relevant active memories."
+        case .active: return "Eligible for recall into sessions when relevant to the task."
+        case .stale: return "Marked as possibly outdated. Not recalled into sessions."
+        case .archived: return "Kept for reference only. Not recalled into sessions."
         }
     }
 }

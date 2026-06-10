@@ -126,7 +126,7 @@ struct PiAgentNewSessionSplitButton: View {
         HStack(spacing: 0) {
             Button { isAgentPickerPresented.toggle() } label: {
                 Image(systemName: "paperplane")
-                    .imageScale(.large)
+                    .imageScale(.medium)
                     .fontWeight(.bold)
                     .padding(.leading, 11)
                     .padding(.trailing, 9)

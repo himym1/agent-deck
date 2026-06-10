@@ -294,7 +294,7 @@ The first settings live in `AppSettings`:
 - `agentMemoryInjectionCharacterBudget`
 - `agentMemoryRetentionDays`
 
-The Memory sidebar and Pi agent composer footer expose the main memory enabled toggle. Additional settings can be surfaced after the UX is validated.
+Memory is enabled by default for fresh settings. The Memory sidebar exposes the main memory enabled toggle; the Pi agent composer footer does not duplicate it.
 
 ## Future Work
 

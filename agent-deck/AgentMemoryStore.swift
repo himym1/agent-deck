@@ -45,8 +45,10 @@ final class AgentMemoryStore: ObservableObject {
     /// query and the memories share one domain (e.g. this app's UI), the best
     /// genuinely-irrelevant memory can outscore a real-but-weak match, so no absolute
     /// floor cleanly separates "relevant" from "abstain". It exists only to drop the
-    /// degenerate case (top score at/below noise). The real precision lever is
-    /// `keepScoreRatio` below. Tune via the `recallLog` score breakdown.
+    /// degenerate case (top score at/below noise); the abstain decision proper is the
+    /// qualification gate (`strongTopSimilarity` / `minQueryTermOverlap`) and the
+    /// precision lever among matches is `keepScoreRatio` below. Tune via the
+    /// `recallLog` score breakdown.
     nonisolated static let minTopSimilarity: Float = 0.10
     /// Keep only memories scoring at least this fraction of the top score, so recall
     /// returns the cluster around the best match (usually one, sometimes two) instead
@@ -54,6 +56,18 @@ final class AgentMemoryStore: ObservableObject {
     /// margin) because the centered-score scale varies per query; calibration showed a
     /// fixed margin over-includes on low-scoring queries.
     nonisolated static let keepScoreRatio: Float = 0.6
+    /// A centered score at or above this is a match on its own, no lexical support
+    /// needed (keeps paraphrase recall working). Below it, the score alone cannot
+    /// distinguish a weak real match from the best irrelevant memory — centered
+    /// scores are zero-sum across the set (the centered vectors sum to zero), so
+    /// SOME memory always scores positive no matter the query. Calibration: real
+    /// matches span 0.15-0.59, junk top-1s reached 0.23.
+    nonisolated static let strongTopSimilarity: Float = 0.30
+    /// Below `strongTopSimilarity`, a memory only qualifies when it shares at least
+    /// this many informative terms with the query. Calibration: every real weak
+    /// match shared 2+ ("skill"+"project", "tables"+"markdown"+"render"); every
+    /// junk top-1 shared at most 1.
+    nonisolated static let minQueryTermOverlap = 2
     /// Cap on body characters fed to the embedder, on top of title + summary. Enough
     /// to capture what a memory is actually about without diluting the mean-pooled
     /// vector with a long tail.
@@ -243,20 +257,43 @@ final class AgentMemoryStore: ObservableObject {
                 if lhs.record.status != rhs.record.status { return lhs.record.status == .pinned }
                 return lhs.record.updatedAt > rhs.record.updatedAt
             }
-        guard let topScore = ranked.first?.score else { return nil }
-        let breakdown = ranked.map { "\($0.record.title.prefix(28))=\(String(format: "%.3f", $0.score))" }.joined(separator: ", ")
-        Self.recallLog.debug("recall: top=\(String(format: "%.3f", topScore), privacy: .public) [\(breakdown, privacy: .public)]")
+        guard !ranked.isEmpty else { return nil }
 
-        // Safety floor: drop only the degenerate case (best score at/below noise).
-        guard topScore >= Self.minTopSimilarity else {
-            Self.recallLog.debug("recall abstained: top \(String(format: "%.3f", topScore), privacy: .public) < floor \(String(format: "%.3f", Self.minTopSimilarity), privacy: .public)")
+        // Qualification (the abstain decision): centered scores are zero-sum across
+        // the set, so some memory always ranks positive and rank position alone can
+        // never say "nothing matches". A memory counts as an actual match only when
+        // its score is strong outright, or it shares informative vocabulary with the
+        // query. Raw-cosine scores (single-memory corpus, no centroid to subtract)
+        // saturate near 0.9 for ANY text and are never "strong", so a lone memory
+        // must qualify lexically.
+        let queryTerms = Self.informativeTerms(in: trimmedQuery)
+        let centered = result.vectors.count >= 2
+        let qualified = ranked.filter { entry in
+            if centered && entry.score >= Self.strongTopSimilarity { return true }
+            // Overlap is judged on the same text the embedder saw (title + summary +
+            // body slice), plus tags; the body read is reached only for sub-strong
+            // entries, once per recall.
+            let body = (try? readBody(from: URL(fileURLWithPath: entry.record.filePath))) ?? ""
+            let memoryText = "\(entry.record.title)\n\(entry.record.summary)\n\(entry.record.tags.joined(separator: " "))\n\(body.prefix(Self.embedBodyCharacterLimit))"
+            return queryTerms.intersection(Self.informativeTerms(in: memoryText)).count >= Self.minQueryTermOverlap
+        }
+        let breakdown = ranked.map { entry in
+            let mark = qualified.contains(where: { $0.record.id == entry.record.id }) ? "+" : "-"
+            return "\(entry.record.title.prefix(28))=\(String(format: "%.3f", entry.score))\(mark)"
+        }.joined(separator: ", ")
+        Self.recallLog.debug("recall: top=\(String(format: "%.3f", ranked[0].score), privacy: .public) [\(breakdown, privacy: .public)]")
+
+        // Safety floor on the best QUALIFIED score: drops the degenerate case where a
+        // memory qualified lexically but the embedding still puts it at/below noise.
+        guard let topScore = qualified.first?.score, topScore >= Self.minTopSimilarity else {
+            Self.recallLog.debug("recall abstained: no qualified memory above floor \(String(format: "%.3f", Self.minTopSimilarity), privacy: .public)")
             return nil
         }
         // Scale-relative keep (the precision lever): only memories within a fraction of
         // the top score ride along, so one strong hit doesn't pad the injection out to
         // `maxItems` with weak ones. Adapts to each query's centered-score scale.
         let keepCutoff = topScore * Self.keepScoreRatio
-        let top = ranked
+        let top = qualified
             .filter { $0.score >= keepCutoff }
             .prefix(maxItems)
             .map(\.record)
@@ -316,6 +353,41 @@ final class AgentMemoryStore: ObservableObject {
             (hash ^ UInt64(byte)) &* 1099511628211
         }
         return String(value, radix: 16)
+    }
+
+    /// Function words plus vocabulary so ubiquitous in queries about a desktop app
+    /// (app, view, button, ...) that sharing it carries no relevance signal; the
+    /// term-overlap gate counts only what's left.
+    nonisolated static let overlapStopwords: Set<String> = [
+        "the", "and", "for", "are", "was", "were", "been", "being", "have", "has", "had",
+        "having", "can", "could", "should", "would", "will", "shall", "may", "might",
+        "must", "not", "nor", "but", "with", "without", "from", "into", "over", "under",
+        "again", "further", "once", "here", "there", "all", "any", "both", "each", "few",
+        "more", "most", "other", "some", "such", "only", "own", "same", "than", "too",
+        "very", "just", "also", "already", "you", "your", "yours", "our", "ours", "his",
+        "her", "hers", "its", "their", "theirs", "this", "that", "these", "those", "what",
+        "which", "who", "whom", "why", "how", "when", "where", "does", "did", "done",
+        "doing", "please", "want", "wants", "need", "needs", "like", "make", "makes",
+        "use", "uses", "using", "get", "gets", "got", "yes", "okay", "still", "even",
+        "ever", "never", "always", "guess", "case", "thing", "things", "way", "isn",
+        "don", "didn", "doesn", "wasn", "weren", "aren", "couldn", "shouldn", "wouldn",
+        "hasn", "haven", "ain", "let", "lets",
+        "app", "apps", "view", "views", "window", "windows", "screen", "screens",
+        "button", "buttons", "menu", "menus", "coding", "code", "agent", "agents",
+    ]
+
+    /// Lowercased content words of `text` for the term-overlap gate: split on
+    /// non-alphanumerics, drop stopwords/short tokens/numbers, and strip a plural
+    /// "s" so "skills" matches "skill".
+    nonisolated static func informativeTerms(in text: String) -> Set<String> {
+        var terms: Set<String> = []
+        for raw in text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }) {
+            var term = String(raw)
+            guard term.count >= 3, Int(term) == nil, !overlapStopwords.contains(term) else { continue }
+            if term.count > 3, term.hasSuffix("s") { term = String(term.dropLast()) }
+            terms.insert(term)
+        }
+        return terms
     }
 
     /// Renders the fenced `<memory-context>` block for a set of records. Shared by

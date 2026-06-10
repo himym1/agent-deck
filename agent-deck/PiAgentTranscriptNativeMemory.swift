@@ -4,7 +4,7 @@ import SwiftUI
 // Native (pure AppKit) memory-activity card — replaces the hosted SwiftUI
 // `PiAgentMemoryActivityCard` so scrolling never re-runs SwiftUI layout for the
 // recall/store/edit chrome rows. A full-width card: an event glyph beside a
-// title + summary, then either tappable injected-memory rows (each posting the
+// title, then either tappable injected-memory rows (each posting the
 // open-memory notification directly) or a bare "N memories" caption.
 //
 // Like the other native rows, the view is a DUMB renderer driven by a plain
@@ -18,7 +18,6 @@ struct NativeMemoryCardPayload {
     /// Glyph tint — red for blocked, brand accent otherwise.
     var tint: NSColor
     var title: String
-    var summary: String
     /// Tappable injected-memory rows (id + snapshot title), in display order.
     var memoryRows: [(id: String, title: String)]
     /// Shown only when there are no titled rows but IDs exist (e.g. "3 memories").
@@ -47,7 +46,6 @@ extension NativeMemoryCardPayload {
             iconSymbol: event.event.systemImage,
             tint: event.event == .blocked ? .systemRed : AppTheme.ns(AppTheme.brandAccent),
             title: event.title,
-            summary: event.summary,
             memoryRows: rows,
             fallbackCount: fallback
         )
@@ -116,13 +114,12 @@ private final class PiAgentNativeMemoryLinkRow: NSView {
 
 // MARK: - Memory activity card
 
-/// Full-width memory-activity card (rounded chrome): glyph + title/summary +
+/// Full-width memory-activity card (rounded chrome): glyph + title +
 /// tappable memory rows or a fallback count caption. Self-measures precisely.
 final class PiAgentNativeMemoryCardView: NSView, PiAgentNativeRowContent {
     private let surface = NativeCardSurface()
     private let iconView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
-    private let summaryLabel = NSTextField(wrappingLabelWithString: "")
     private let fallbackLabel = NSTextField(labelWithString: "")
     private let rowStack = NSStackView()
 
@@ -132,8 +129,8 @@ final class PiAgentNativeMemoryCardView: NSView, PiAgentNativeRowContent {
     private let pad: CGFloat = 14
     private let iconSize: CGFloat = NativeTranscriptFont.headerIconSize
     private let iconGap: CGFloat = 8
-    private let titleToSummary: CGFloat = 3
-    private let summaryToRows: CGFloat = 6
+    /// Header-to-content gap shared with the bubble and question cards.
+    private let headerToContent: CGFloat = 8
     private let rowSpacing: CGFloat = 2
 
     private var surfaceWidthC: NSLayoutConstraint!
@@ -157,13 +154,6 @@ final class PiAgentNativeMemoryCardView: NSView, PiAgentNativeRowContent {
         titleLabel.maximumNumberOfLines = 1
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        // Summary line ("Loaded N relevant memory…") is intentionally hidden:
-        // the title + the tappable memory rows are enough; the running count
-        // is duplicative. Hidden views are detached from the stack layout
-        // (NSStackView default), so no extra space is reserved.
-        summaryLabel.translatesAutoresizingMaskIntoConstraints = false
-        summaryLabel.isHidden = true
-
         fallbackLabel.translatesAutoresizingMaskIntoConstraints = false
         fallbackLabel.font = NativeTranscriptFont.caption(.medium)
         fallbackLabel.textColor = AppTheme.ns(AppTheme.mutedText)
@@ -174,14 +164,12 @@ final class PiAgentNativeMemoryCardView: NSView, PiAgentNativeRowContent {
         rowStack.alignment = .leading
         rowStack.spacing = rowSpacing
 
-        let textStack = NSStackView(views: [titleLabel, summaryLabel, fallbackLabel, rowStack])
+        let textStack = NSStackView(views: [titleLabel, fallbackLabel, rowStack])
         textStack.translatesAutoresizingMaskIntoConstraints = false
         textStack.orientation = .vertical
         textStack.alignment = .leading
         textStack.spacing = 0
-        textStack.setCustomSpacing(titleToSummary, after: titleLabel)
-        textStack.setCustomSpacing(summaryToRows, after: summaryLabel)
-        textStack.setCustomSpacing(summaryToRows, after: fallbackLabel)
+        textStack.setCustomSpacing(headerToContent, after: titleLabel)
 
         surface.addSubview(iconView)
         surface.addSubview(textStack)
@@ -217,11 +205,6 @@ final class PiAgentNativeMemoryCardView: NSView, PiAgentNativeRowContent {
     // the reply column rather than spanning the full transcript width.
     private func cardWidth(_ rowWidth: CGFloat) -> CGFloat {
         max(1, PiAgentBubbleWidth.replyCap(for: rowWidth))
-    }
-
-    /// Inner width available to the text column (card minus padding, icon, gap).
-    private func textWidth(_ rowWidth: CGFloat) -> CGFloat {
-        max(1, cardWidth(rowWidth) - pad * 2 - iconSize - iconGap)
     }
 
     func configure(payload: NativeMemoryCardPayload, width rowWidth: CGFloat) {
@@ -264,20 +247,15 @@ final class PiAgentNativeMemoryCardView: NSView, PiAgentNativeRowContent {
     }
 
     func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat {
-        let inner = textWidth(rowWidth)
-        let titleH = ceil(titleLabel.intrinsicContentSize.height)
-        summaryLabel.preferredMaxLayoutWidth = inner
-        let summaryH = ceil(summaryLabel.intrinsicContentSize.height)
-
-        var textColumnH = titleH + titleToSummary + summaryH
+        var textColumnH = ceil(titleLabel.intrinsicContentSize.height)
         if !linkRows.isEmpty {
-            textColumnH += summaryToRows
+            textColumnH += headerToContent
             for (i, row) in linkRows.enumerated() {
                 if i > 0 { textColumnH += rowSpacing }
                 textColumnH += row.measuredHeight()
             }
         } else if !fallbackLabel.isHidden {
-            textColumnH += summaryToRows + ceil(fallbackLabel.intrinsicContentSize.height)
+            textColumnH += headerToContent + ceil(fallbackLabel.intrinsicContentSize.height)
         }
 
         // The card hugs the taller of the icon and the text column.

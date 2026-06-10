@@ -256,12 +256,7 @@ struct PiAgentComposerBox: View {
                             aggregate: costAggregate,
                             showsSubagentsToggle: showsSubagentsToggle,
                             subagentsToggleEnabled: metricsSession.status == .draft,
-                            memoryToggleEnabled: metricsSession.status == .draft,
-                            memoryEnabled: viewModel.appSettings.agentMemoryEnabled,
                             openAIFastStatus: openAIFastStatus(for: metricsSession),
-                            onToggleMemory: {
-                                viewModel.setAgentMemoryEnabled(!viewModel.appSettings.agentMemoryEnabled)
-                            },
                             onToggleSubagents: {
                                 viewModel.setSubagentsEnabledForSelectedDraftAndNewSessions(!metricsSession.subagentsEnabled)
                             },
@@ -2156,10 +2151,7 @@ struct PiAgentRuntimeFooter: View {
     var aggregate: PiAgentRuntimeCostAggregate? = nil
     let showsSubagentsToggle: Bool
     let subagentsToggleEnabled: Bool
-    let memoryToggleEnabled: Bool
-    let memoryEnabled: Bool
     let openAIFastStatus: Bool?
-    let onToggleMemory: () -> Void
     let onToggleSubagents: () -> Void
     let onToggleOpenAIFast: (() -> Void)?
     let onSetAsDefault: (() -> Void)?
@@ -2168,17 +2160,6 @@ struct PiAgentRuntimeFooter: View {
     var body: some View {
         HStack(spacing: 7) {
             aggregateChips
-            if memoryToggleEnabled {
-                metricButton(
-                    "memory: \(memoryEnabled ? "on" : "off")",
-                    icon: SidebarItem.memory.systemImage,
-                    action: onToggleMemory
-                )
-                .help("Draft only. Parent-session memory recall is decided when Pi starts.")
-            } else {
-                metric("memory: \(memoryEnabled ? "on" : "off")", icon: SidebarItem.memory.systemImage)
-                    .help("Parent-session memory recall is fixed when Pi starts. Change the global memory setting in Settings for future sessions.")
-            }
             if showsSubagentsToggle {
                 if subagentsToggleEnabled {
                     metricButton(
@@ -2211,7 +2192,6 @@ struct PiAgentRuntimeFooter: View {
         .font(AppTheme.Font.caption)
         .foregroundStyle(AppTheme.mutedText)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .animation(.snappy(duration: 0.18), value: memoryEnabled)
         .animation(.snappy(duration: 0.18), value: session.subagentsEnabled)
         .animation(.snappy(duration: 0.18), value: openAIFastStatus)
     }

@@ -467,12 +467,14 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
     }
 
     private func buildDiffRow(_ row: PiAgentThreadDiffSummaryView.Row) -> NSView {
-        let inner = makeSubCard(cornerRadius: AppTheme.Chat.subCardCornerRadius, fill: AppTheme.ns(AppTheme.textContentFill.opacity(0.75)), stroke: .clear)
+        // No per-file inner card surface: the outer card + the +/- line
+        // backgrounds already carry the row, and stacking surfaces makes the
+        // Changes card read as "card-in-card" heavy.
         let stack = NSStackView()
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 6
+        stack.spacing = 4
 
         let head = NSStackView()
         head.orientation = .horizontal
@@ -500,9 +502,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         head.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         stack.addArrangedSubview(buildDiffPreview(for: row))
-
-        embed(stack, in: inner, hInset: 8, vInset: 8)
-        return inner
+        return stack
     }
 
     private var diffByPath: [String: PiAgentThreadDiffSummaryView.Row] = [:]
@@ -561,8 +561,12 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         bg.wantsLayer = true
         bg.layer?.backgroundColor = line.background.cgColor
 
-        let mono = NSFont.monospacedSystemFont(ofSize: NativeTranscriptFont.calloutSize, weight: .regular)
-        let monoBold = NSFont.monospacedSystemFont(ofSize: NativeTranscriptFont.calloutSize, weight: .semibold)
+        // Match reply markdown code blocks exactly: the same preferred-callout
+        // point size, so both scale together with Dynamic Type / accessibility
+        // text size instead of one staying hardcoded.
+        let codeSize = NSFont.preferredFont(forTextStyle: .callout).pointSize
+        let mono = NSFont.monospacedSystemFont(ofSize: codeSize, weight: .regular)
+        let monoBold = NSFont.monospacedSystemFont(ofSize: codeSize, weight: .semibold)
 
         let gutter = Self.label(line.gutter, font: monoBold, color: line.color)
         gutter.alignment = .right

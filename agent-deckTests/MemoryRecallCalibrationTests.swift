@@ -316,6 +316,110 @@ final class MemoryRecallCalibrationTests: XCTestCase {
         XCTAssertEqual(kept, ["theming"], "keep gate should return only the theming memory, dropping the dictation/transcript noise")
     }
 
+    // MARK: Qualification gate (abstain) regression
+
+    /// A memory document as the qualification gate sees it: the embedder reads
+    /// title + summary + body slice; term overlap additionally counts tags.
+    private struct GateDoc {
+        let name: String
+        let title: String
+        let summary: String
+        let tags: String
+        let body: String
+        var embedText: String { "\(title)\n\(summary)\n\(String(body.prefix(600)))" }
+        var overlapText: String { "\(title)\n\(summary)\n\(tags)\n\(String(body.prefix(600)))" }
+    }
+
+    /// Replays the 2026-06-10 production miss: a query about removing the composer
+    /// footer's memory toggle recalled the unrelated Dictation memory. Centered
+    /// vectors sum to zero, so some memory always ranks positive and the old
+    /// floor-only gate injected the top-1 no matter what. The qualification gate
+    /// (strong score OR informative-term overlap) must abstain when nothing
+    /// matches, without losing any true recall from the ranking calibration.
+    func testQualificationGateAbstainsWhenNothingMatches() async throws {
+        guard let model = NLContextualEmbedding(language: .english) else {
+            throw XCTSkip("No English contextual embedding model on this OS")
+        }
+        if !model.hasAvailableAssets { _ = try? await model.requestAssets() }
+        do { try model.load() } catch { throw XCTSkip("Embedding model asset unavailable: \(error)") }
+        defer { model.unload() }
+
+        /// Mirrors the gate in `AgentMemoryStore.retrieve`, returning the recalled
+        /// doc name or nil for abstain.
+        func decide(_ docs: [GateDoc], _ query: String) throws -> String? {
+            let vecs = try docs.map { doc -> [Float] in
+                guard let v = embed(doc.embedText, model: model) else { throw XCTSkip("embed failed") }
+                return v
+            }
+            guard let qv = embed(query, model: model) else { return nil }
+            let scores = score(strategy: .perSet, queryVec: qv, docVecs: vecs, backgroundMean: [])
+            let centered = docs.count >= 2
+            let queryTerms = AgentMemoryStore.informativeTerms(in: query)
+            let ranked = zip(docs, scores).sorted { $0.1 > $1.1 }
+            let qualified = ranked.filter { doc, score in
+                if centered && score >= AgentMemoryStore.strongTopSimilarity { return true }
+                return queryTerms.intersection(AgentMemoryStore.informativeTerms(in: doc.overlapText)).count >= AgentMemoryStore.minQueryTermOverlap
+            }
+            guard let top = qualified.first, top.1 >= AgentMemoryStore.minTopSimilarity else { return nil }
+            return top.0.name
+        }
+
+        // The three memories that were active when the real miss happened, verbatim.
+        let dictation = GateDoc(
+            name: "dictation",
+            title: "Pi Agent composer Dictation shortcut",
+            summary: "Pi Agent composer starts macOS system Dictation from the focused text editor with Option-D; there is no visible mic button.",
+            tags: "pi-agent composer dictation appkit keyboard-shortcut",
+            body: "PiAgentComposerViews.swift handles Dictation in the composer's DropSafeNSTextView.keyDown: when the focused editor receives Option-D, the coordinator focuses the text view and calls the responder-chain startDictation action. If unavailable, the composer shows a message to enable Dictation in System Settings. There is intentionally no visible composer mic button.")
+        let emptyState = GateDoc(
+            name: "emptystate",
+            title: "Shared AppEmptyState component",
+            summary: "Page-level empty states should use AppEmptyState from DesignSystem.swift for consistent ContentUnavailableView framing and padding.",
+            tags: "swiftui design-system empty-state",
+            body: "Added AppEmptyState in DesignSystem.swift as the shared design-system wrapper around ContentUnavailableView. Use layout fill for full-pane placeholders and compact for inline placeholders.")
+        let skillWarn = GateDoc(
+            name: "skillwarn",
+            title: "Missing skill warning resolution UX moves to global",
+            summary: "Missing skill warnings can now move an existing same-named skill into the global skill catalog.",
+            tags: "skills warnings ux",
+            body: "Missing skill warning details look for a same-named skill visible elsewhere, show its Found Elsewhere path, explain the project-scope mismatch, and offer Move to Global Skills.")
+        let memToggle = GateDoc(
+            name: "memtoggle",
+            title: "Memory toggle lives in Memory view only",
+            summary: "Agent memory is enabled by default for fresh settings and the Pi composer footer no longer exposes a duplicate memory on/off chip.",
+            tags: "memory composer settings ui",
+            body: "Updated AppSettings.agentMemoryEnabled default and decode fallback to true. The main memory toggle is in AgentMemoryViews.swift. PiAgentRuntimeFooter should not show or toggle memory status; the footer now focuses on runtime metrics.")
+        let missTrio = [dictation, emptyState, skillWarn]
+        let missQuery = "can you please remove from the footer of the composer the memory on/off switch? we already have a dedicated memory view. also memory should be on by default in all projects, I guess this is already the case?"
+        let dictationQuery = "how do I start dictation in the composer, is there a mic button?"
+
+        XCTAssertNil(try decide(missTrio, missQuery),
+                     "no relevant memory existed; recall must abstain instead of injecting the Dictation memory")
+        XCTAssertEqual(try decide(missTrio + [memToggle], missQuery), "memtoggle",
+                       "once the relevant memory exists, the same query must recall it")
+        XCTAssertEqual(try decide(missTrio, dictationQuery), "dictation",
+                       "a genuinely relevant query against the same corpus must still recall")
+
+        // Every positive ranking case must survive the gate.
+        let fullDocs = corpus.map { GateDoc(name: $0.topic, title: $0.title, summary: $0.summary, tags: "", body: $0.body) }
+        for query in queries {
+            XCTAssertEqual(try decide(fullDocs, query.text), query.relevantTopic,
+                           "gate must not break true recall for: \(query.text)")
+        }
+
+        // Corpus with no memory on the query's topic: abstain.
+        let unrelatedTrio = ["auth", "skills", "sandbox"].compactMap { topic in fullDocs.first { $0.name == topic } }
+        XCTAssertNil(try decide(unrelatedTrio, queries[0].text),
+                     "theming query against auth/skills/sandbox memories must abstain")
+
+        // Single-memory corpus: raw cosine saturates near 0.9 for any text, so a lone
+        // memory must qualify lexically rather than ride the old floor.
+        XCTAssertNil(try decide([dictation], missQuery),
+                     "a single irrelevant memory must not be auto-injected")
+        XCTAssertEqual(try decide([dictation], dictationQuery), "dictation",
+                       "a single relevant memory must still be recalled")
+    }
+
     /// Returns the per-set-centered ranking (the shipped strategy) for assertions.
     @discardableResult
     private func smallCorpusProbe(model: NLContextualEmbedding, backgroundMean: [Float], pick topics: [String], query: Query) throws -> [(topic: String, score: Float)] {
