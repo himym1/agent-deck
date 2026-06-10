@@ -832,6 +832,11 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
     var pendingSteeringMessages: [String]
     var pendingFollowUpMessages: [String]
     var subagentsEnabled: Bool
+    /// Whether Agent Deck memory was enabled when this session's Pi process
+    /// (re)launched — stamped per launch in the runner, since memory injection
+    /// is decided by the global setting at process start. Drives the resources
+    /// popover's Memory section, mirroring `subagentsEnabled` for Deck agents.
+    var memoryEnabled: Bool
     var agentSelection: Set<String>?
     var injectedExtensions: [String]?
     var agentName: String?
@@ -886,7 +891,7 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
         case status, lastError, lastSummary, needsAttention, isPinned, lastNotificationAt
         case inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, totalTokens, toolCalls, toolResults, contextTokens, contextWindow, contextPercent, contextBreakdown, cost
         case finalSystemPrompt, finalSystemPromptCapturedAt
-        case pendingSteeringMessages, pendingFollowUpMessages, subagentsEnabled, agentSelection, injectedExtensions, agentName, isCompacting, isTitleUserEdited, createdAt, updatedAt
+        case pendingSteeringMessages, pendingFollowUpMessages, subagentsEnabled, memoryEnabled, agentSelection, injectedExtensions, agentName, isCompacting, isTitleUserEdited, createdAt, updatedAt
         case forkedFromSessionID, forkedFromParentTitle, forkedFromUserMessageText, forkedFromTranscriptSnapshot
         case recalledMemoryPrompt, recalledMemoryIDs, memoryRecallCompleted
     }
@@ -935,6 +940,7 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
         pendingSteeringMessages: [String],
         pendingFollowUpMessages: [String],
         subagentsEnabled: Bool,
+        memoryEnabled: Bool = true,
         agentSelection: Set<String>? = nil,
         injectedExtensions: [String]? = nil,
         agentName: String? = nil,
@@ -993,6 +999,7 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
         self.pendingSteeringMessages = pendingSteeringMessages
         self.pendingFollowUpMessages = pendingFollowUpMessages
         self.subagentsEnabled = subagentsEnabled
+        self.memoryEnabled = memoryEnabled
         self.agentSelection = agentSelection
         self.injectedExtensions = injectedExtensions
         self.agentName = agentName
@@ -1055,6 +1062,7 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
             pendingSteeringMessages: try container.decodeIfPresent([String].self, forKey: .pendingSteeringMessages) ?? [],
             pendingFollowUpMessages: try container.decodeIfPresent([String].self, forKey: .pendingFollowUpMessages) ?? [],
             subagentsEnabled: try container.decodeIfPresent(Bool.self, forKey: .subagentsEnabled) ?? true,
+            memoryEnabled: try container.decodeIfPresent(Bool.self, forKey: .memoryEnabled) ?? true,
             agentSelection: try container.decodeIfPresent(Set<String>.self, forKey: .agentSelection),
             injectedExtensions: try container.decodeIfPresent([String].self, forKey: .injectedExtensions),
             agentName: try container.decodeIfPresent(String.self, forKey: .agentName),

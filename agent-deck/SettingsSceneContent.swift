@@ -50,8 +50,6 @@ struct SettingsSceneContent: View {
             AgentSettingsTab(viewModel: viewModel)
         case .automations:
             AutomationsSettingsTab(viewModel: viewModel)
-        case .github:
-            GitHubSettingsTab(viewModel: viewModel)
         case .performance:
             PerformanceSettingsTab(viewModel: viewModel)
         case .subagents:
@@ -82,7 +80,6 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case appearance = "Appearance"
     case agent = "Agent"
     case automations = "Automations"
-    case github = "GitHub"
     case performance = "Performance"
     case subagents = "Deck agents"
     case commands = "Commands"
@@ -96,7 +93,6 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .appearance: return "paintpalette"
         case .agent: return "sparkles.rectangle.stack"
         case .automations: return "wand.and.stars"
-        case .github: return "chevron.left.forwardslash.chevron.right"
         case .performance: return "speedometer"
         case .subagents: return "slider.horizontal.3"
         case .commands: return "terminal"
@@ -743,7 +739,7 @@ private struct AppearanceSettingsTab: View {
             VStack(alignment: .leading, spacing: 8) {
                 previewBubble(previewTheme.assistant, systemIcon: "person.fill", role: "You", text: "Add a theme picker to the settings screen.")
                 previewBubble(previewTheme.accent, assetIcon: "pi", role: "Assistant", text: "I fixed the custom theme alignment and corrected the color mapping.")
-                previewBubble(previewTheme.thinking, systemIcon: "brain", role: "Thinking", text: "Weighing a few layout options…")
+                previewBubble(previewTheme.thinking, systemIcon: "brain.head.profile", role: "Thinking", text: "Weighing a few layout options…")
                 previewBubble(previewTheme.tool, systemIcon: "wrench.and.screwdriver.fill", role: "Tool", text: "Edit DesignSystem.swift")
                 previewBubble(previewTheme.error, systemIcon: "exclamationmark.triangle.fill", role: "Error", text: "Could not read the file.")
 
@@ -1612,33 +1608,6 @@ private extension AgentDeckShortcutItem {
         case " ": return "Space"
         default: return key.uppercased()
         }
-    }
-}
-
-// MARK: - GitHub
-
-private struct GitHubSettingsTab: View {
-    var viewModel: AppViewModel
-
-    var body: some View {
-        SettingsForm {
-            SettingsSection {
-                SettingsStepperRow(
-                    title: "Issue cache lifetime:",
-                    value: cacheLifetimeBinding,
-                    range: 1...240,
-                    valueText: "\(viewModel.gitHubBoardCacheLifetimeMinutes) minutes",
-                    note: "Refresh bypasses the cache."
-                )
-            }
-        }
-    }
-
-    private var cacheLifetimeBinding: Binding<Int> {
-        Binding(
-            get: { viewModel.gitHubBoardCacheLifetimeMinutes },
-            set: { viewModel.setGitHubBoardCacheLifetimeMinutes($0) }
-        )
     }
 }
 

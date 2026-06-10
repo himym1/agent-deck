@@ -779,6 +779,10 @@ final class PiAgentRunnerService {
                 record.launchCommand = client.launchCommand
                 record.status = .running
                 record.injectedExtensions = injectedExtensionPaths.isEmpty ? nil : injectedExtensionPaths
+                // Stamped per launch: memory injection (recall prompts, memory
+                // tools) is decided by the global setting at process start, so
+                // the resources popover can report what this run actually got.
+                record.memoryEnabled = AppSettingsStore.shared.settings.agentMemoryEnabled
             }
             client.getState()
             client.getCommands()

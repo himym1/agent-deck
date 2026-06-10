@@ -4697,10 +4697,6 @@ final class AppViewModel: NSObject {
         appSettingsController.gitHubBoardCacheLifetime
     }
 
-    var gitHubBoardCacheLifetimeMinutes: Int {
-        appSettingsController.gitHubBoardCacheLifetimeMinutes
-    }
-
     var piAgentNotificationDelayMinutes: Int {
         appSettingsController.piAgentNotificationDelayMinutes
     }
@@ -4725,11 +4721,6 @@ final class AppViewModel: NSObject {
 
     func setPiAgentIdleParkingTimeoutMinutes(_ minutes: Int) {
         guard appSettingsController.setPiAgentIdleParkingTimeoutMinutes(minutes) else { return }
-        syncAppSettings()
-    }
-
-    func setGitHubBoardCacheLifetimeMinutes(_ minutes: Int) {
-        guard appSettingsController.setGitHubBoardCacheLifetimeMinutes(minutes) else { return }
         syncAppSettings()
     }
 
@@ -5982,7 +5973,18 @@ final class AppViewModel: NSObject {
     }
 
     var shouldWarnDoctor: Bool {
-        !hasConfirmedProjectsRootPaths || !configuredProjectsRootsExist || !snapshot.warnings.isEmpty
+        !hasConfirmedProjectsRootPaths
+            || !configuredProjectsRootsExist
+            || !snapshot.warnings.isEmpty
+            // The sidebar no longer shows the GitHub account/status card, so a
+            // broken connection surfaces here: warning triangle on Doctor, and
+            // Doctor's GitHub card explains.
+            || githubConnectionHasFailed
+    }
+
+    private var githubConnectionHasFailed: Bool {
+        if case .failed = githubConnectionState { return true }
+        return false
     }
 
     /// True only when every configured projects-root entry resolves to an

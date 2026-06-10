@@ -642,15 +642,25 @@ struct DoctorScreen: View {
     private var githubAccessSection: some View {
         AppCard(title: "GitHub") {
             HStack(alignment: .top, spacing: 14) {
-                Image("github")
-                    .resizable()
-                    .renderingMode(.template)
-                    .scaledToFit()
-                    .foregroundStyle(effectiveGitHubAccount == nil ? AppTheme.mutedText : .green)
-                    .frame(width: 24, height: 24)
+                if let account = effectiveGitHubAccount {
+                    SidebarGitHubAvatarView(url: githubAvatarURL(for: account), size: 32)
+                        .overlay(alignment: .bottomTrailing) {
+                            Circle()
+                                .fill(githubStatusColor)
+                                .frame(width: 10, height: 10)
+                                .overlay(Circle().stroke(AppTheme.contentFill, lineWidth: 2))
+                        }
+                } else {
+                    Image("github")
+                        .resizable()
+                        .renderingMode(.template)
+                        .scaledToFit()
+                        .foregroundStyle(AppTheme.mutedText)
+                        .frame(width: 24, height: 24)
+                }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("GitHub CLI")
+                    Text(effectiveGitHubAccount?.login ?? "GitHub CLI")
                         .font(.body.weight(.semibold))
                         .fontWidth(.expanded)
 
@@ -676,8 +686,8 @@ struct DoctorScreen: View {
 
                 Spacer(minLength: 8)
                 AppLabelTag(
-                    text: effectiveGitHubAccount == nil ? "Optional" : "Ready",
-                    color: effectiveGitHubAccount == nil ? .secondary : .green
+                    text: effectiveGitHubAccount == nil ? "Optional" : githubStatusText,
+                    color: effectiveGitHubAccount == nil ? .secondary : githubStatusColor
                 )
             }
             .padding(.vertical, 12)
@@ -698,6 +708,35 @@ struct DoctorScreen: View {
             return "Optional. Install the GitHub CLI and sign in to enable issue, comment, commit, and push workflows."
         }
         return "Optional. Connect GitHub CLI to enable issue, comment, commit, and push workflows."
+    }
+
+    private var githubStatusText: String {
+        if viewModel.githubIsRefreshingEverything {
+            return "Refreshing…"
+        }
+        switch viewModel.githubConnectionState {
+        case .connected: return "Connected"
+        case .checking: return "Connecting…"
+        case .failed: return "Error"
+        case .available: return "Ready"
+        case .unavailable: return "Unavailable"
+        case .disconnected: return "Inactive"
+        }
+    }
+
+    private var githubStatusColor: Color {
+        switch viewModel.githubConnectionState {
+        case .connected: return .green
+        case .failed: return .red
+        default: return .secondary
+        }
+    }
+
+    private func githubAvatarURL(for account: GitHubHostAccount) -> URL? {
+        guard account.host.caseInsensitiveCompare("github.com") == .orderedSame else { return nil }
+        // Server-resized avatar (~160px) instead of the full 460px source:
+        // crisper at 32pt and ~7x lighter to download.
+        return URL(string: "https://avatars.githubusercontent.com/\(account.login)?s=160")
     }
 
     // MARK: - Web Access

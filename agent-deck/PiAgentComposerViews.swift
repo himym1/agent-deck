@@ -2369,7 +2369,10 @@ struct PiAgentModelPicker: View {
             .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        // .top so the popover deterministically opens above the composer chip
+        // (the composer sits at the window bottom; .bottom only looked right
+        // when AppKit happened to flip it).
+        .popover(isPresented: $isPresented, arrowEdge: .top) {
             VStack(alignment: .leading, spacing: 0) {
                 AppPopoverHeader(title: "Model") {
                     Button {
@@ -2385,20 +2388,28 @@ struct PiAgentModelPicker: View {
                 Divider()
 
                 ScrollView(showsIndicators: false) {
-                    LazyVStack(alignment: .leading, spacing: 10) {
+                    LazyVStack(alignment: .leading, spacing: 16) {
                         ForEach(groupedModelOptions, id: \.provider) { group in
-                            VStack(alignment: .leading, spacing: 4) {
+                            // Provider sections use the resources-popover header
+                            // treatment: label over a hairline, clear air between
+                            // groups so the list doesn't read as one long run.
+                            VStack(alignment: .leading, spacing: 6) {
                                 ProviderLabel(provider: group.provider, logoSize: 14, spacing: 5)
                                     .font(AppTheme.Font.caption.weight(.bold))
                                     .fontWidth(.expanded)
                                     .foregroundStyle(.primary)
                                     .padding(.horizontal, AppTheme.Popover.rowHInset)
 
+                                // Inset to the row content width so it reads as
+                                // part of the section, not an edge-to-edge rule.
+                                Divider()
+                                    .padding(.horizontal, AppTheme.Popover.rowHInset)
+
                                 VStack(spacing: 2) {
                                     ForEach(group.models) { model in
-                                        AppPopoverTextRow(
+                                        PiAgentModelOptionRow(
+                                            model: model,
                                             isSelected: model.provider == resolvedProvider && model.id == resolvedModelID,
-                                            title: model.id,
                                             subtitle: modelMetadataSubtitle(model)
                                         ) {
                                             onSelect(.init(provider: model.provider, modelID: model.id))
@@ -2457,12 +2468,10 @@ struct PiAgentModelPicker: View {
     }
 
     private func modelMetadataSubtitle(_ model: PiAgentModelOption) -> String {
-        var badges: [String] = []
-        if let contextWindow = model.contextWindow { badges.append("ctx \(compactModelNumber(contextWindow))") }
-        if let maxOutput = model.maxOutput { badges.append("out \(compactModelNumber(maxOutput))") }
-        badges.append(model.supportsThinking == false ? "no thinking" : "thinking")
-        if model.supportsImages == true { badges.append("images") }
-        return badges.joined(separator: " · ")
+        var parts: [String] = []
+        if let contextWindow = model.contextWindow { parts.append("\(compactModelNumber(contextWindow)) context") }
+        if let maxOutput = model.maxOutput { parts.append("\(compactModelNumber(maxOutput)) output") }
+        return parts.joined(separator: ", ")
     }
 
     private func compactModelNumber(_ value: Int) -> String {
@@ -2520,7 +2529,8 @@ struct PiAgentThinkingPicker: View {
             .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        // .top so it opens above the composer like the model picker does.
+        .popover(isPresented: $isPresented, arrowEdge: .top) {
             AppPopoverContainer(width: AppTheme.Popover.compactWidth, title: "Thinking") {
                 if isLoadingLevels {
                     HStack(spacing: 10) {
@@ -2537,9 +2547,9 @@ struct PiAgentThinkingPicker: View {
                 } else {
                     AppPopoverScrollList {
                         ForEach(levels, id: \.self) { candidate in
-                            AppPopoverTextRow(
-                                isSelected: candidate == resolvedLevel,
-                                title: candidate.capitalized
+                            PiAgentThinkingLevelRow(
+                                level: candidate,
+                                isSelected: candidate == resolvedLevel
                             ) {
                                 optimisticLevel = candidate
                                 onSelect(candidate)
@@ -2577,5 +2587,126 @@ struct PiAgentThinkingPicker: View {
             return resolvedLevel.isEmpty ? "loading" : resolvedLevel
         }
         return levels.contains(resolvedLevel) ? resolvedLevel : "\(resolvedLevel) unavailable"
+    }
+}
+
+/// Model picker row: id + "272K context, 128K output" subtitle, capability
+/// glyphs at the trailing edge (brain.head.profile = thinking, photo = image
+/// input — plain `brain` is the Memory symbol, don't reuse it here), and the
+/// standard accent checkmark for the active model. Mirrors `AppPopoverTextRow`
+/// chrome; exists only to host the trailing glyph slot.
+private struct PiAgentModelOptionRow: View {
+    let model: PiAgentModelOption
+    let isSelected: Bool
+    let subtitle: String
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text(model.id)
+                            .font(AppTheme.Popover.itemTitleFont)
+                            .foregroundStyle(Color.primary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if isSelected {
+                            AppPopoverSelectionMark()
+                        }
+                    }
+                    if !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(AppTheme.Popover.itemSubtitleFont)
+                            .foregroundStyle(AppTheme.mutedText)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 8)
+                HStack(spacing: 6) {
+                    if model.supportsThinking != false {
+                        Image(systemName: "brain.head.profile")
+                            .help("Supports thinking")
+                            .accessibilityLabel("Supports thinking")
+                    }
+                    if model.supportsImages == true {
+                        Image(systemName: "photo")
+                            .help("Supports image input")
+                            .accessibilityLabel("Supports image input")
+                    }
+                }
+                .imageScale(.small)
+                .foregroundStyle(AppTheme.mutedText)
+            }
+            // The active model keeps full strength; the alternatives recede
+            // until hovered, so the list scans as "current + options".
+            .opacity(isSelected || isHovering ? 1 : 0.55)
+            .contentShape(Rectangle())
+            .padding(.horizontal, AppTheme.Popover.rowHInset)
+            .padding(.vertical, AppTheme.Popover.rowVInset)
+            .background(
+                RoundedRectangle(cornerRadius: AppTheme.Chat.chipCornerRadius, style: .continuous)
+                    .fill(isSelected ? AppTheme.selectionFill : (isHovering ? Color.primary.opacity(0.06) : Color.clear))
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+    }
+}
+
+/// Thinking level row: level name + a five-dot intensity gauge (filled dots =
+/// how hard the model thinks) + the standard accent checkmark. The checkmark
+/// slot is always reserved so the dot gauges align in a scannable column.
+private struct PiAgentThinkingLevelRow: View {
+    let level: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    private static let intensityByLevel: [String: Int] = [
+        "off": 0, "minimal": 1, "low": 2, "medium": 3, "high": 4, "xhigh": 5
+    ]
+    private static let maxIntensity = 5
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Text(level.capitalized)
+                        .font(AppTheme.Popover.itemTitleFont)
+                        .foregroundStyle(Color.primary)
+                        .lineLimit(1)
+                    if isSelected {
+                        AppPopoverSelectionMark()
+                    }
+                }
+                Spacer(minLength: 8)
+                if let intensity = Self.intensityByLevel[level] {
+                    HStack(spacing: 3) {
+                        ForEach(0..<Self.maxIntensity, id: \.self) { index in
+                            Circle()
+                                .fill(index < intensity ? AnyShapeStyle(AppTheme.brandAccent) : AnyShapeStyle(AppTheme.mutedText.opacity(0.28)))
+                                .frame(width: 5, height: 5)
+                        }
+                    }
+                    .accessibilityHidden(true)
+                }
+            }
+            // Same treatment as the model rows: current choice full strength,
+            // alternatives recede until hovered.
+            .opacity(isSelected || isHovering ? 1 : 0.55)
+            .contentShape(Rectangle())
+            .padding(.horizontal, AppTheme.Popover.rowHInset)
+            .padding(.vertical, AppTheme.Popover.rowVInset)
+            .background(
+                RoundedRectangle(cornerRadius: AppTheme.Chat.chipCornerRadius, style: .continuous)
+                    .fill(isSelected ? AppTheme.selectionFill : (isHovering ? Color.primary.opacity(0.06) : Color.clear))
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
     }
 }

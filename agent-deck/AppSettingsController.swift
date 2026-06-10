@@ -43,13 +43,9 @@ final class AppSettingsController {
         persist()
     }
 
-    var gitHubBoardCacheLifetime: TimeInterval {
-        TimeInterval(gitHubBoardCacheLifetimeMinutes * 60)
-    }
-
-    var gitHubBoardCacheLifetimeMinutes: Int {
-        max(settings.gitHubBoardCacheLifetimeMinutes, 1)
-    }
+    /// Fixed issue-board cache lifetime. Was user-configurable; nobody needs
+    /// to tune it, and Refresh bypasses the cache anyway.
+    var gitHubBoardCacheLifetime: TimeInterval { 15 * 60 }
 
     var piAgentNotificationDelayMinutes: Int {
         max(settings.piAgentNotificationDelayMinutes, 1)
@@ -257,15 +253,6 @@ final class AppSettingsController {
         let normalizedMinutes = max(minutes, 1)
         guard settings.piAgentIdleParkingTimeoutMinutes != normalizedMinutes else { return false }
         settings.piAgentIdleParkingTimeoutMinutes = normalizedMinutes
-        persist()
-        return true
-    }
-
-    @discardableResult
-    func setGitHubBoardCacheLifetimeMinutes(_ minutes: Int) -> Bool {
-        let normalizedMinutes = max(minutes, 1)
-        guard settings.gitHubBoardCacheLifetimeMinutes != normalizedMinutes else { return false }
-        settings.gitHubBoardCacheLifetimeMinutes = normalizedMinutes
         persist()
         return true
     }

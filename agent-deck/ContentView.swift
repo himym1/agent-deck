@@ -5,6 +5,14 @@ import SwiftUI
 /// Shared animation for the sidebar's Resources ↔ Coding Agent push. A gentle
 /// spring (slightly over-damped so it settles without overshoot) reads as a
 /// crisp navigation push rather than a flat cross-fade.
+/// Curves for the Coding Agent pull-up. `move` drives the offset/scale
+/// transforms (gentle spring, slight settle); `fade` is deliberately shorter
+/// so the incoming layer is already readable while still in motion.
+enum PanelTransition {
+    static let move: Animation = .spring(response: 0.42, dampingFraction: 0.86)
+    static let fade: Animation = .easeOut(duration: 0.22)
+}
+
 enum SidebarTransition {
     static let curve: Animation = .spring(response: 0.34, dampingFraction: 0.86)
 }
@@ -533,39 +541,42 @@ struct ContentView: View {
                 // cross-fade rendering two heavy trees from scratch. The hidden
                 // layer doesn't re-layout (SessionListContent is .equatable).
                 ZStack(alignment: .topLeading) {
+                    // Motion and fade run on separate, scoped curves: the spring
+                    // drives the (GPU-cheap) offset/scale transforms while a
+                    // shorter easeOut handles opacity, so the layers hand off
+                    // without the dead "both translucent" dip a single shared
+                    // curve produces. The nav recedes upward as the panel lifts
+                    // in from below with a slight bottom-anchored scale, which
+                    // reads as the card growing rather than a plain cross-fade.
                     navigationSidebarLayer(warnings: warnings)
+                        .offset(y: isPanelExpanded ? -28 : 0)
+                        .animation(PanelTransition.move, value: isPanelExpanded)
                         .opacity(isPanelExpanded ? 0 : 1)
-                        // Eases up and out as the session list pushes up from below.
-                        .offset(y: isPanelExpanded ? -24 : 0)
+                        .animation(PanelTransition.fade, value: isPanelExpanded)
                         .allowsHitTesting(!isPanelExpanded)
 
                     CodingAgentExpandedPanel(
                         viewModel: viewModel,
                         store: viewModel.piAgentSessionStore,
+                        projects: filteredProjects,
+                        selectedProject: selectedProject,
+                        projectFilterText: $projectFilterText,
+                        isSearchDebouncing: projectSearchIsDebouncing,
+                        onSelectProject: { viewModel.setSelectedProject($0?.url) },
                         sessionSearchText: $piAgentSessionSearchText,
                         isActive: isPanelExpanded,
                         onCollapse: { viewModel.isCodingAgentPanelExpanded = false }
                     )
-                    // Sits just below the fold when collapsed, slides home on expand.
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .padding(.bottom, 14)
+                    .scaleEffect(isPanelExpanded ? 1 : 0.96, anchor: .bottom)
+                    .offset(y: isPanelExpanded ? 0 : 44)
+                    .animation(PanelTransition.move, value: isPanelExpanded)
                     .opacity(isPanelExpanded ? 1 : 0)
-                    .offset(y: isPanelExpanded ? 0 : 32)
+                    .animation(PanelTransition.fade, value: isPanelExpanded)
                     .allowsHitTesting(isPanelExpanded)
                 }
-                .animation(SidebarTransition.curve, value: isPanelExpanded)
-
-                SidebarProjectGitHubCard(
-                    viewModel: viewModel,
-                    projects: filteredProjects,
-                    selectedProject: selectedProject,
-                    selectedProjectPath: viewModel.selectedProjectPath,
-                    filterText: $projectFilterText,
-                    isSearchDebouncing: projectFilterText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != debouncedProjectFilterText,
-                    onSelectProject: { viewModel.setSelectedProject($0?.url) },
-                    onChooseProject: { viewModel.chooseProjectRoot() }
-                )
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 14)
             }
             .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.clear, ignoresSafeAreaEdges: .all)
@@ -680,25 +691,40 @@ struct ContentView: View {
         }
     }
 
-    /// The navigation layer of the sidebar: section list + the collapsed Coding
-    /// Agent panel. Extracted so it can live as a permanently-mounted ZStack
-    /// layer underneath the expanded panel (see `mainContent`).
+    /// The navigation layer of the sidebar: brand title bar, GitHub account
+    /// card, section list, and the collapsed Coding Agent panel. Extracted so
+    /// it can live as a permanently-mounted ZStack layer underneath the
+    /// expanded panel (see `mainContent`), which overlays all of it.
     @ViewBuilder
     private func navigationSidebarLayer(warnings: [SidebarItem: Bool]) -> some View {
         VStack(spacing: 0) {
-            sidebarSectionsList(warnings: warnings)
+            SidebarTitleBar(viewModel: viewModel)
+                .padding(.horizontal, 16)
                 .padding(.top, 10)
+
+            sidebarSectionsList(warnings: warnings)
+                .padding(.top, 14)
 
             Spacer(minLength: 0)
 
             CodingAgentCollapsedPanel(
                 viewModel: viewModel,
-                store: viewModel.piAgentSessionStore
+                store: viewModel.piAgentSessionStore,
+                projects: filteredProjects,
+                selectedProject: selectedProject,
+                projectFilterText: $projectFilterText,
+                isSearchDebouncing: projectSearchIsDebouncing,
+                onSelectProject: { viewModel.setSelectedProject($0?.url) }
             )
             .padding(.horizontal, 16)
             .padding(.top, 8)
+            .padding(.bottom, 14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var projectSearchIsDebouncing: Bool {
+        projectFilterText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != debouncedProjectFilterText
     }
 
     private func completeOnboarding() {

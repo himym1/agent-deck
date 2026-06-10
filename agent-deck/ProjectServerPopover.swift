@@ -10,6 +10,7 @@ struct ProjectServerPopover: View {
     @State private var commands: [ServerCommand] = []
     @State private var selectedCommandID: String?
     @State private var didLoadCommands = false
+    @State private var isURLHovering = false
 
     private var service: ProjectServerService { viewModel.projectServerService }
 
@@ -37,17 +38,26 @@ struct ProjectServerPopover: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
-            Divider()
-            content
-            if !conflicts.isEmpty {
-                Divider()
-                conflictsSection
+        VStack(alignment: .leading, spacing: 0) {
+            AppPopoverHeader(title: "Dev Server", subtitle: session.projectName) {
+                if let status = currentServer?.status {
+                    headerStatusPill(status)
+                }
             }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 12) {
+                content
+                if !conflicts.isEmpty {
+                    Divider()
+                    conflictsSection
+                }
+            }
+            .padding(.horizontal, AppTheme.Popover.headerHInset)
+            .padding(.vertical, 12)
         }
-        .padding(16)
-        .frame(width: 360)
+        .frame(width: AppTheme.Popover.standardWidth)
         .task {
             let detected = ServerCommandDetector.detect(at: projectURL)
             commands = detected
@@ -55,30 +65,6 @@ struct ProjectServerPopover: View {
                 selectedCommandID = detected.first?.id
             }
             didLoadCommands = true
-        }
-    }
-
-    private var header: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "server.rack")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(AppTheme.brandAccent)
-                .frame(width: 22, height: 22)
-                .background(Circle().fill(AppTheme.brandAccent.opacity(0.13)))
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Dev Server")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(AppTheme.mutedText)
-                Text(session.projectName)
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer(minLength: 0)
-            if let status = currentServer?.status {
-                headerStatusPill(status)
-            }
         }
     }
 
@@ -262,24 +248,41 @@ struct ProjectServerPopover: View {
         )
     }
 
+    /// URL row styled as a sibling of `commandChip` (same shape, fill, stroke)
+    /// so command + address read as one stacked info block. The accent lives
+    /// only on the address text — a full accent-tinted row read as a warning.
     private func urlLink(_ url: URL) -> some View {
         Link(destination: url) {
             HStack(spacing: 6) {
-                Image(systemName: "arrow.up.right.square")
-                    .font(.caption.weight(.semibold))
+                Image(systemName: "globe")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(AppTheme.mutedText)
                 Text(url.absoluteString)
-                    .font(.caption.weight(.medium))
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(AppTheme.brandAccent)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Spacer(minLength: 0)
+                Spacer(minLength: 6)
+                Image(systemName: "arrow.up.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(isURLHovering ? AppTheme.brandAccent : AppTheme.mutedText)
             }
-            .foregroundStyle(AppTheme.brandAccent)
             .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .appGlassCapsule()
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isURLHovering ? AppTheme.contentSubtleFill : AppTheme.contentSubtleFill.opacity(0.72))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(AppTheme.contentStroke, lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
+        .onHover { isURLHovering = $0 }
+        .help("Open \(url.absoluteString) in the browser")
     }
 
     private func statusMessage(_ message: String) -> some View {

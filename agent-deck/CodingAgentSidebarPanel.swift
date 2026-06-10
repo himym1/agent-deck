@@ -1,30 +1,74 @@
 import SwiftUI
 
-/// Header row shared by both states of the Coding Agent pull-up panel: pi mark,
-/// title, live status badges, a per-state trailing slot (new-session controls,
+/// Header row shared by both states of the Coding Agent pull-up panel: the
+/// project selector (icon + name + picker glyph opening the project popover),
+/// live status badges, a per-state trailing slot (new-session controls,
 /// delete) and the expand/collapse chevron. The whole row is tappable; inner
 /// buttons take gesture priority so their own actions still win.
 struct CodingAgentPanelHeader<Trailing: View>: View {
     let viewModel: AppViewModel
     let isExpanded: Bool
     let onToggle: () -> Void
+    let projects: [DiscoveredProject]
+    let selectedProject: DiscoveredProject?
+    let selectedProjectPath: String?
+    @Binding var projectFilterText: String
+    let isSearchDebouncing: Bool
+    let onSelectProject: (DiscoveredProject?) -> Void
     @ViewBuilder var trailing: Trailing
 
-    var body: some View {
-        HStack(spacing: 8) {
-            Image("pi")
-                .resizable()
-                .renderingMode(.template)
-                .scaledToFit()
-                .frame(width: 13, height: 13)
-                .foregroundStyle(Color.secondary)
-                .accessibilityHidden(true)
+    @State private var isProjectPickerPresented = false
 
-            Text("Coding Agent")
-                .font(.callout.weight(.semibold))
-                .fontWidth(.expanded)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            ProjectIconView(
+                imageURL: selectedProject?.iconFileURL,
+                symbolName: selectedProject?.fallbackSymbolName ?? "square.grid.2x2",
+                size: 34,
+                assetName: selectedProject?.projectType.assetName
+            )
+
+            Button {
+                isProjectPickerPresented.toggle()
+            } label: {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .center, spacing: 5) {
+                        Text(selectedProjectTitle)
+                            .font(.body)
+                            .fontWeight(.medium)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    if selectedProject != nil {
+                        Text(selectedProjectSubtitle)
+                            .font(.callout)
+                            .fontWeight(.regular)
+                            .foregroundStyle(AppTheme.mutedText)
+                            .lineLimit(1)
+                            .fontWidth(.compressed)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Choose project")
+            .accessibilityLabel("Choose project")
+            .accessibilityHint("Opens the project picker")
+            .popover(isPresented: $isProjectPickerPresented, arrowEdge: .bottom) {
+                ProjectPickerPopover(
+                    projects: projects,
+                    selectedProjectPath: selectedProjectPath,
+                    filterText: $projectFilterText,
+                    isSearchDebouncing: isSearchDebouncing,
+                    onSelectProject: { project in
+                        onSelectProject(project)
+                        isProjectPickerPresented = false
+                    }
+                )
+            }
 
             CodingAgentStatusBadges(viewModel: viewModel)
 
@@ -44,6 +88,29 @@ struct CodingAgentPanelHeader<Trailing: View>: View {
         }
         .contentShape(Rectangle())
         .onTapGesture(perform: onToggle)
+    }
+
+    private var selectedProjectTitle: String {
+        if selectedProject == nil && selectedProjectPath == nil {
+            return "All Projects"
+        }
+        if let remote = selectedProject?.gitHubRemote {
+            return remote.repo
+        }
+        if let selectedProject {
+            return selectedProject.name
+        }
+        if let selectedProjectPath {
+            return URL(fileURLWithPath: selectedProjectPath).lastPathComponent
+        }
+        return "Choose Project"
+    }
+
+    private var selectedProjectSubtitle: String {
+        if let remote = selectedProject?.gitHubRemote {
+            return remote.owner
+        }
+        return selectedProject?.path ?? selectedProjectPath ?? ""
     }
 }
 
@@ -124,6 +191,11 @@ struct CodingAgentNewSessionControls: View {
 struct CodingAgentCollapsedPanel: View {
     let viewModel: AppViewModel
     let store: PiAgentSessionStore
+    let projects: [DiscoveredProject]
+    let selectedProject: DiscoveredProject?
+    @Binding var projectFilterText: String
+    let isSearchDebouncing: Bool
+    let onSelectProject: (DiscoveredProject?) -> Void
 
     /// Cached so `body` never reads `store.sessions` directly — `touchSession`
     /// mutates that array many times per second during streaming. Rebuilt only
@@ -138,12 +210,18 @@ struct CodingAgentCollapsedPanel: View {
             CodingAgentPanelHeader(
                 viewModel: viewModel,
                 isExpanded: false,
-                onToggle: { viewModel.openPiAgentScreen() }
+                onToggle: { viewModel.openPiAgentScreen() },
+                projects: projects,
+                selectedProject: selectedProject,
+                selectedProjectPath: viewModel.selectedProjectPath,
+                projectFilterText: $projectFilterText,
+                isSearchDebouncing: isSearchDebouncing,
+                onSelectProject: onSelectProject
             ) {
                 CodingAgentNewSessionControls(viewModel: viewModel)
             }
-            // 8 (card) + 6 here = the badge card's 14pt content inset, so the
-            // header lines up with the project/GitHub rows below.
+            // 8 (card) + 6 here = a 14pt content inset, matching the account
+            // card at the top of the sidebar.
             .padding(.horizontal, 6)
             .padding(.top, 2)
 
@@ -153,7 +231,6 @@ struct CodingAgentCollapsedPanel: View {
                     selectedSessionID: store.selectedSessionID,
                     isAgentSelected: viewModel.selectedSidebarItem == .agent,
                     workingSessionIDs: workingRecentSessionIDs,
-                    projectsByID: recentProjectsByID,
                     onSelect: { viewModel.selectPiAgentSession($0) }
                 )
                 .equatable()
@@ -169,10 +246,6 @@ struct CodingAgentCollapsedPanel: View {
 
     private var workingRecentSessionIDs: Set<UUID> {
         Set(recentSessions.filter { viewModel.piAgentSessionIsWorking($0) }.map(\.id))
-    }
-
-    private var recentProjectsByID: [UUID: DiscoveredProject?] {
-        Dictionary(uniqueKeysWithValues: recentSessions.map { ($0.id, viewModel.projectByPath[$0.projectPath]) })
     }
 
     private func rebuildRecents() {
@@ -200,7 +273,6 @@ private struct CodingAgentRecentList: View, Equatable {
     let selectedSessionID: UUID?
     let isAgentSelected: Bool
     let workingSessionIDs: Set<UUID>
-    let projectsByID: [UUID: DiscoveredProject?]
     let onSelect: (UUID) -> Void
 
     static func == (lhs: CodingAgentRecentList, rhs: CodingAgentRecentList) -> Bool {
@@ -208,21 +280,6 @@ private struct CodingAgentRecentList: View, Equatable {
             && lhs.selectedSessionID == rhs.selectedSessionID
             && lhs.isAgentSelected == rhs.isAgentSelected
             && lhs.workingSessionIDs == rhs.workingSessionIDs
-            && projectsVisuallyEqual(lhs.projectsByID, rhs.projectsByID)
-    }
-
-    /// Compare the project map by ONLY what a row's icon shows (identity + icon
-    /// file): `viewModel.projectByPath` is reassigned wholesale on every project
-    /// re-discovery, which fires constantly while an agent writes files.
-    private static func projectsVisuallyEqual(_ lhs: [UUID: DiscoveredProject?], _ rhs: [UUID: DiscoveredProject?]) -> Bool {
-        guard lhs.count == rhs.count else { return false }
-        for (id, lProject) in lhs {
-            let rProject = rhs[id] ?? nil
-            if lProject?.id != rProject?.id || lProject?.iconFileURL != rProject?.iconFileURL {
-                return false
-            }
-        }
-        return true
     }
 
     var body: some View {
@@ -230,7 +287,6 @@ private struct CodingAgentRecentList: View, Equatable {
             ForEach(sessions) { session in
                 CodingAgentRecentRow(
                     session: session,
-                    project: projectsByID[session.id] ?? nil,
                     isSelected: isAgentSelected && selectedSessionID == session.id,
                     isRunning: workingSessionIDs.contains(session.id),
                     onSelect: { onSelect(session.id) }
@@ -241,11 +297,11 @@ private struct CodingAgentRecentList: View, Equatable {
     }
 }
 
-/// Compact one-line session row for the collapsed panel: project icon, title,
-/// and a live status slot (typing dots while running, bell when waiting).
+/// Compact one-line session row for the collapsed panel: title and a live
+/// status slot (typing dots while running, bell when waiting). No project icon
+/// — the panel header's project selector already says where you are.
 struct CodingAgentRecentRow: View, Equatable {
     let session: PiAgentSessionRecord
-    let project: DiscoveredProject?
     let isSelected: Bool
     let isRunning: Bool
     let onSelect: () -> Void
@@ -254,8 +310,6 @@ struct CodingAgentRecentRow: View, Equatable {
     // instance's closure captured the same session id, so it stays correct.
     static func == (lhs: CodingAgentRecentRow, rhs: CodingAgentRecentRow) -> Bool {
         lhs.session == rhs.session
-            && lhs.project?.id == rhs.project?.id
-            && lhs.project?.iconFileURL == rhs.project?.iconFileURL
             && lhs.isSelected == rhs.isSelected
             && lhs.isRunning == rhs.isRunning
     }
@@ -265,10 +319,8 @@ struct CodingAgentRecentRow: View, Equatable {
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 8) {
-                PiAgentProjectIcon(project: project, session: session)
-
                 Text(session.displayTitle)
-                    .font(AppTheme.Font.footnote.weight(.semibold))
+                    .font(AppTheme.Font.footnote.weight(.medium))
                     .fontWidth(.expanded)
                     .foregroundStyle(.primary)
                     .lineLimit(1)

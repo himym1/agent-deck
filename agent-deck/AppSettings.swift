@@ -147,7 +147,6 @@ enum PiAgentExtensionLoadingMode: String, Codable, CaseIterable, Hashable, Ident
 }
 
 struct AppSettings: Codable, Hashable {
-    var gitHubBoardCacheLifetimeMinutes: Int = 15
     var piAgentNotificationDelayMinutes: Int = 3
     var piAgentIdleParkingEnabled: Bool = true
     var piAgentIdleParkingTimeoutMinutes: Int = 10
@@ -201,7 +200,6 @@ struct AppSettings: Codable, Hashable {
     var selectedAppIconName: String?
 
     enum CodingKeys: String, CodingKey {
-        case gitHubBoardCacheLifetimeMinutes
         case piAgentNotificationDelayMinutes
         case piAgentIdleParkingEnabled
         case piAgentIdleParkingTimeoutMinutes
@@ -254,7 +252,6 @@ struct AppSettings: Codable, Hashable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        gitHubBoardCacheLifetimeMinutes = try container.decodeIfPresent(Int.self, forKey: .gitHubBoardCacheLifetimeMinutes) ?? 15
         piAgentNotificationDelayMinutes = try container.decodeIfPresent(Int.self, forKey: .piAgentNotificationDelayMinutes) ?? 3
         let decodedIdleParkingTimeout = try container.decodeIfPresent(Int.self, forKey: .piAgentIdleParkingTimeoutMinutes) ?? 10
         piAgentIdleParkingEnabled = try container.decodeIfPresent(Bool.self, forKey: .piAgentIdleParkingEnabled) ?? (decodedIdleParkingTimeout > 0)

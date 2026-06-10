@@ -49,236 +49,75 @@ struct SidebarNavigationRow: View {
 }
 
 
-struct SidebarProjectGitHubCard: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+/// Brand row at the top of the sidebar: pixel title on the left; on the right
+/// the Sparkle update shortcut (only when an update is available), the
+/// refresh-everything button, and the Settings gear.
+struct SidebarTitleBar: View {
+    var viewModel: AppViewModel
     @Environment(\.openSettings) private var openSettings
     @EnvironmentObject private var updater: UpdaterService
-    var viewModel: AppViewModel
-    let projects: [DiscoveredProject]
-    let selectedProject: DiscoveredProject?
-    let selectedProjectPath: String?
-    @Binding var filterText: String
-    let isSearchDebouncing: Bool
-    let onSelectProject: (DiscoveredProject?) -> Void
-    let onChooseProject: () -> Void
-
-    @State private var isExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 10) {
-                ProjectIconView(
-                    imageURL: selectedProject?.iconFileURL,
-                    symbolName: selectedProject?.fallbackSymbolName ?? "square.grid.2x2",
-                    size: 34,
-                    assetName: selectedProject?.projectType.assetName
-                )
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(selectedProjectTitle)
-                        .font(.body)
-                        .fontWeight(.medium)
-//                        .fontWidth(selectedProject != nil ? .expanded : .standard )
-                        .lineLimit(1)
-                    if selectedProject != nil {
-                        Text(selectedProjectSubtitle)
-                            .font(.callout)
-                            .fontWeight(.regular)
-                            .foregroundStyle(AppTheme.mutedText)
-                            .lineLimit(1)
-                            .fontWidth(.compressed)
-                    }
-                }
-
-                Spacer(minLength: 8)
-
-                Button {
-                    isExpanded.toggle()
-                } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, height: 28)
-                        .appControlSurface(cornerRadius: 14)
-                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Choose project")
-                .accessibilityHint("Opens the project picker")
-                .popover(isPresented: $isExpanded, arrowEdge: .bottom) {
-                    ProjectPickerPopover(
-                        projects: projects,
-                        selectedProjectPath: selectedProjectPath,
-                        filterText: $filterText,
-                        isSearchDebouncing: isSearchDebouncing,
-                        onSelectProject: { project in
-                            onSelectProject(project)
-                            isExpanded = false
-                        }
-                    )
+        HStack(alignment: .center, spacing: 8) {
+            HStack(alignment: .center, spacing: 12) {
+                ForEach(AppBrand.titleWords, id: \.self) { word in
+                    Text(word)
+                        .font(AppFonts.kemcoPixelBold(size: 18))
+                        .foregroundStyle(.primary)
                 }
             }
+            .accessibilityElement(children: .combine)
 
-            Divider()
-                .opacity(0.7)
+            Spacer(minLength: 8)
 
-            HStack(spacing: 12) {
-                SidebarGitHubAvatarView(url: avatarURL, size: 32)
-                    .overlay(alignment: Alignment.bottomTrailing) {
-                        Circle()
-                            .fill(statusColor)
-                            .frame(width: 10, height: 10)
-                            .overlay(Circle().stroke(AppTheme.contentFill, lineWidth: 2))
-                    }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(accountName)
-                        .fontWeight(.medium)
-                        .lineLimit(1)
-                    Text(statusText)
-                        .font(.callout)
-                        .fontWeight(.regular)
-                        .foregroundStyle(AppTheme.mutedText)
-                        .fontWidth(.compressed)
-                }
-
-                Spacer()
-
+            if updater.updateAvailable {
                 Button {
-                    viewModel.refreshEverything()
+                    updater.checkForUpdates()
                 } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(AppTheme.mutedText)
-                        .frame(width: 28, height: 28)
-                        .appControlSurface(cornerRadius: 14)
-                        .symbolEffect(.rotate.byLayer, isActive: viewModel.githubIsRefreshingEverything)
-                }
-                .buttonStyle(.plain)
-                .help("Refresh GitHub status, project scans, and repo data")
-                .accessibilityLabel("Refresh GitHub and projects")
-                .disabled(viewModel.githubIsRefreshingEverything)
-            }
-
-            Divider()
-                .opacity(0.7)
-
-            HStack(spacing: 8) {
-                HStack(alignment: .center, spacing: 7) {
-                    ForEach(AppBrand.titleWords, id: \.self) { word in
-                        Text(word)
-                            .font(AppFonts.kemcoPixelBold(size: 11))
-                    }
-                }
-                .foregroundStyle(AppTheme.mutedText)
-                .accessibilityLabel(AppBrand.displayName)
-
-                Spacer(minLength: 8)
-
-                if updater.updateAvailable {
-                    Button {
-                        updater.checkForUpdates()
-                    } label: {
-                        Image(systemName: "arrow.down.circle.fill")
-                            .imageScale(.medium)
-                            .foregroundStyle(AppTheme.brandAccent)
-                            .frame(width: 22, height: 22)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help(updater.availableVersion.map { "Update to version \($0)" } ?? "Update available")
-                    .accessibilityLabel("Install update")
-                }
-
-                Button {
-                    openSettings()
-                } label: {
-                    Image(systemName: "gearshape")
-                        .imageScale(.medium)
-                        .foregroundStyle(AppTheme.mutedText)
+                    // Point size chosen so the filled circle's optical diameter
+                    // matches the gear glyph next to it (circle badges render
+                    // smaller than outline glyphs at equal scale).
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundStyle(AppTheme.brandAccent)
                         .frame(width: 22, height: 22)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Settings…")
-                .accessibilityLabel("Settings")
+                .help(updater.availableVersion.map { "Update to version \($0)" } ?? "Update available")
+                .accessibilityLabel("Install update")
             }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: isExpanded)
-        .appContentSurface(cornerRadius: 16)
-    }
 
-    private var selectedProjectTitle: String {
-        if selectedProject == nil && selectedProjectPath == nil {
-            return "All Projects"
-        }
-        if let remote = selectedProject?.gitHubRemote {
-            return remote.repo
-        }
-        if let selectedProject {
-            return selectedProject.name
-        }
-        if let selectedProjectPath {
-            return URL(fileURLWithPath: selectedProjectPath).lastPathComponent
-        }
-        return "Choose Project"
-    }
+            Button {
+                viewModel.refreshEverything()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .imageScale(.medium)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+                    .symbolEffect(.rotate.byLayer, isActive: viewModel.githubIsRefreshingEverything)
+            }
+            .buttonStyle(.plain)
+            .help("Refresh GitHub status, project scans, and repo data")
+            .accessibilityLabel("Refresh GitHub and projects")
+            .disabled(viewModel.githubIsRefreshingEverything)
 
-    private var selectedProjectSubtitle: String {
-        if let remote = selectedProject?.gitHubRemote {
-            return remote.owner
-        }
-        return selectedProject?.path ?? selectedProjectPath ?? ""
-    }
-
-    private var accountName: String {
-        viewModel.currentGitHubAccount?.login ?? "GitHub"
-    }
-
-    private var statusText: String {
-        if viewModel.githubIsRefreshingEverything {
-            return "Refreshing…"
-        }
-
-        switch viewModel.githubConnectionState {
-        case .connected:
-            return "Connected"
-        case .checking:
-            return "Connecting…"
-        case .failed:
-            return "Error"
-        case .available:
-            return "Ready"
-        case .unavailable:
-            return "Unavailable"
-        case .disconnected:
-            return "Inactive"
+            Button {
+                openSettings()
+            } label: {
+                Image(systemName: "gearshape")
+                    .imageScale(.medium)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Settings…")
+            .accessibilityLabel("Settings")
         }
     }
-
-    private var statusColor: Color {
-        switch viewModel.githubConnectionState {
-        case .connected:
-            return .green
-        case .failed:
-            return .red
-        default:
-            return .secondary
-        }
-    }
-
-    private var avatarURL: URL? {
-        guard let account = viewModel.currentGitHubAccount,
-              account.host.caseInsensitiveCompare("github.com") == .orderedSame else { return nil }
-        // Request a server-resized avatar (~160px) instead of the full 460px source:
-        // crisper at 32pt and ~7x lighter to download.
-        return URL(string: "https://avatars.githubusercontent.com/\(account.login)?s=160")
-    }
-
 }
-
 
 struct ProjectPickerPopover: View {
     let projects: [DiscoveredProject]

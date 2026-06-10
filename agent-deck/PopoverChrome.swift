@@ -83,8 +83,9 @@ struct AppPopoverScrollList<Content: View>: View {
     }
 }
 
-/// Selectable text row (model, thinking, agent). A trailing checkmark marks the
-/// active choice; a subtle fill backs the selected row.
+/// Selectable text row (model, thinking, agent). The active choice carries the
+/// app-wide selection mark — accent `checkmark.circle.fill` right after the
+/// name (same as the Settings/agent-editor pickers) — plus a subtle fill.
 struct AppPopoverTextRow: View {
     var isSelected: Bool = false
     let title: String
@@ -95,11 +96,16 @@ struct AppPopoverTextRow: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(AppTheme.Popover.itemTitleFont)
-                        .foregroundStyle(Color.primary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    HStack(spacing: 6) {
+                        Text(title)
+                            .font(AppTheme.Popover.itemTitleFont)
+                            .foregroundStyle(Color.primary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if isSelected {
+                            AppPopoverSelectionMark()
+                        }
+                    }
                     if let subtitle, !subtitle.isEmpty {
                         Text(subtitle)
                             .font(AppTheme.Popover.itemSubtitleFont)
@@ -108,11 +114,6 @@ struct AppPopoverTextRow: View {
                     }
                 }
                 Spacer(minLength: 8)
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(AppTheme.Popover.itemTitleFont)
-                        .foregroundStyle(AppTheme.brandAccent)
-                }
             }
             .contentShape(Rectangle())
             .padding(.horizontal, AppTheme.Popover.rowHInset)
@@ -188,12 +189,24 @@ struct AppPopoverToggleRow: View {
             }
             Spacer(minLength: 8)
             Toggle(isOn: $isOn) { EmptyView() }
-                .toggleStyle(.switch)
+                .appSwitch()
                 .labelsHidden()
                 .controlSize(.small)
         }
         .padding(.horizontal, AppTheme.Popover.rowHInset)
         .padding(.vertical, 8)
+    }
+}
+
+/// The app-wide "this is the active choice" mark for popover rows: accent
+/// `checkmark.circle.fill` placed right after the name, matching the
+/// Settings/agent-editor picker rows.
+struct AppPopoverSelectionMark: View {
+    var body: some View {
+        Image(systemName: "checkmark.circle.fill")
+            .font(AppTheme.Font.caption.weight(.semibold))
+            .foregroundStyle(AppTheme.brandAccent)
+            .accessibilityLabel("Selected")
     }
 }
 

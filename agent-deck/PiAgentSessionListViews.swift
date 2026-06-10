@@ -140,6 +140,7 @@ struct PiAgentNewSessionSplitButton: View {
                 PiAgentChatWithAgentPopover(
                     project: resolvedProject,
                     agents: resolvedAgents,
+                    imageStore: viewModel.agentImageStore,
                     onSelect: { agent, project in
                         isAgentPickerPresented = false
                         viewModel.startAgentSession(agent: agent, project: project, initialInstruction: nil)
@@ -218,6 +219,7 @@ struct PiAgentNewSessionSplitButton: View {
 private struct PiAgentChatWithAgentPopover: View {
     let project: DiscoveredProject?
     let agents: [EffectiveAgentRecord]
+    let imageStore: AgentImageStore
     let onSelect: (EffectiveAgentRecord, DiscoveredProject) -> Void
 
     var body: some View {
@@ -228,7 +230,10 @@ private struct PiAgentChatWithAgentPopover: View {
             if let project, !agents.isEmpty {
                 AppPopoverScrollList {
                     ForEach(agents, id: \.name) { agent in
-                        AppPopoverTextRow(title: agent.name) {
+                        PiAgentChatAgentRow(
+                            agent: agent,
+                            avatarURL: imageStore.imageURL(for: agent.name)
+                        ) {
                             onSelect(agent, project)
                         }
                     }
@@ -236,6 +241,74 @@ private struct PiAgentChatWithAgentPopover: View {
             } else {
                 AppPopoverEmptyState(text: project == nil ? "No project available." : "No agents available in this project.")
             }
+        }
+    }
+}
+
+/// Rich agent row for the 1:1 picker: avatar (same circle treatment as the
+/// subagent run cards), name + model, and the agent's description underneath.
+private struct PiAgentChatAgentRow: View {
+    let agent: EffectiveAgentRecord
+    let avatarURL: URL?
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 10) {
+                avatar
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(agent.name)
+                            .font(AppTheme.Popover.itemTitleFont)
+                            .foregroundStyle(Color.primary)
+                            .lineLimit(1)
+                        if let model = agent.resolved.model, !model.isEmpty {
+                            Text(model)
+                                .font(AppTheme.Font.caption2)
+                                .foregroundStyle(AppTheme.mutedText)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                    if !agentDescription.isEmpty {
+                        Text(agentDescription)
+                            .font(AppTheme.Popover.itemSubtitleFont)
+                            .foregroundStyle(AppTheme.mutedText)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, AppTheme.Popover.rowHInset)
+            .padding(.vertical, AppTheme.Popover.rowVInset)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var agentDescription: String {
+        agent.resolved.description.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    @ViewBuilder
+    private var avatar: some View {
+        if let avatarURL, let nsImage = AgentImageLoader.image(at: avatarURL) {
+            Image(nsImage: nsImage)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 28, height: 28)
+                .clipShape(Circle())
+        } else {
+            Circle()
+                .fill(AppTheme.contentSubtleFill)
+                .frame(width: 28, height: 28)
+                .overlay {
+                    Image(systemName: "paperplane")
+                        .font(AppTheme.Font.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                }
         }
     }
 }
@@ -267,7 +340,6 @@ private struct PiAgentProjectPickerPopover: View {
 
 struct PiAgentSessionRow: View, Equatable {
     let session: PiAgentSessionRecord
-    let project: DiscoveredProject?
     let isSelected: Bool
     let isRunning: Bool
     let isRenaming: Bool
@@ -289,14 +361,6 @@ struct PiAgentSessionRow: View, Equatable {
     // instance's closures captured the same session, so they stay correct.
     static func == (lhs: PiAgentSessionRow, rhs: PiAgentSessionRow) -> Bool {
         lhs.session == rhs.session
-            // Compare the project by ONLY what the row draws — its icon (identity
-            // + icon file). The full `DiscoveredProject ==` includes volatile
-            // fields (e.g. gitHubRemote resolving) that churn while an agent writes
-            // files; using it here made EVERY row re-render whenever the list
-            // re-evaluated for an unrelated reason (a session switch, selection
-            // change). Mirrors `SessionListContent.projectsVisuallyEqual`.
-            && lhs.project?.id == rhs.project?.id
-            && lhs.project?.iconFileURL == rhs.project?.iconFileURL
             && lhs.isSelected == rhs.isSelected
             && lhs.isRunning == rhs.isRunning
             && lhs.isRenaming == rhs.isRenaming
@@ -312,13 +376,8 @@ struct PiAgentSessionRow: View, Equatable {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .center, spacing: 8) {
-                HStack(alignment: .center, spacing: 6) {
-                    PiAgentProjectIcon(project: project, session: session)
-
-                    titleView
-                        .layoutPriority(1)
-                }
-                .layoutPriority(1)
+                titleView
+                    .layoutPriority(1)
 
                 Spacer(minLength: 0)
             }
@@ -492,7 +551,7 @@ struct PiAgentSessionRow: View, Equatable {
         if isRenaming {
             TextField("Session name", text: $draftTitle)
                 .textFieldStyle(.plain)
-                .font(AppTheme.Font.footnote.weight(.semibold))
+                .font(AppTheme.Font.footnote.weight(.medium))
                 .fontWidth(.expanded)
                 .lineLimit(1)
                 // Match the non-editing title height so entering rename never
@@ -524,7 +583,7 @@ struct PiAgentSessionRow: View, Equatable {
                     .foregroundStyle(AppTheme.mutedText)
                     .opacity(isTitleHovered ? 0.8 : 0)
             }
-            .font(AppTheme.Font.footnote.weight(.semibold))
+            .font(AppTheme.Font.footnote.weight(.medium))
             .fontWidth(.expanded)
             .foregroundStyle(.primary)
             .padding(.horizontal, 5)
@@ -672,61 +731,6 @@ private struct PiAgentSessionTelemetryStrip: View {
 
     private func segmentHeight(index: Int) -> CGFloat {
         activeSegment(index) ? CGFloat([2, 3, 2, 4, 3, 2][index % 6]) : 2
-    }
-}
-
-struct PiAgentProjectIcon: View {
-    let project: DiscoveredProject?
-    let session: PiAgentSessionRecord
-    @State private var image: NSImage?
-
-    var body: some View {
-        Group {
-            if let image {
-                Image(nsImage: image)
-                    .interpolation(.high)
-                    .antialiased(true)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                fallback
-            }
-        }
-        .frame(width: 22, height: 22)
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Chat.chipCornerRadius, style: .continuous))
-        // Route through the shared ProjectIconCache so scrolling the session
-        // list doesn't re-decode the same PNG per row appear. Identity is the
-        // file path; same key used by ProjectIconView for the project switcher.
-        .task(id: project?.iconFileURL?.path) {
-            await loadImage()
-        }
-    }
-
-    private func loadImage() async {
-        guard let url = project?.iconFileURL else {
-            image = nil
-            return
-        }
-        if let cached = await ProjectIconCache.shared.cachedImage(for: url) {
-            image = cached
-            return
-        }
-        let loaded = await ProjectIconCache.shared.loadImage(for: url)
-        guard url == project?.iconFileURL else { return }
-        image = loaded
-    }
-
-    private var fallback: some View {
-        RoundedRectangle(cornerRadius: AppTheme.Chat.chipCornerRadius, style: .continuous)
-            .fill(AppTheme.contentSubtleFill)
-            .overlay {
-                Image(session.kind == .issue ? "github" : "pi")
-                    .resizable()
-                    .renderingMode(.template)
-                    .scaledToFit()
-                    .padding(5)
-                    .foregroundStyle(AppTheme.mutedText)
-            }
     }
 }
 

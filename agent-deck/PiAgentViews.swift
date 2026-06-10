@@ -2133,7 +2133,7 @@ private extension PiAgentTranscriptThread {
 /// pulse and rebuild it only when something it actually shows changed.
 ///
 /// All per-row dynamic state (selection, running, renaming, title-generating, git
-/// activity, project) is passed in as resolved values and compared in `==`, so the
+/// activity) is passed in as resolved values and compared in `==`, so the
 /// list can never go stale: a real change to any of them differs the inputs and
 /// forces a rebuild. Bindings and callbacks are intentionally excluded from `==`.
 private struct SessionListContent: View, Equatable {
@@ -2143,7 +2143,6 @@ private struct SessionListContent: View, Equatable {
     let workingSessionIDs: Set<UUID>
     let generatingTitleIDs: Set<UUID>
     let activityByID: [UUID: PiAgentSessionGitActivity]
-    let projectsByID: [UUID: DiscoveredProject?]
 
     @Binding var selection: Set<UUID>
     let onSelect: (PiAgentSessionRecord) -> Void
@@ -2161,7 +2160,6 @@ private struct SessionListContent: View, Equatable {
         else if lhs.workingSessionIDs != rhs.workingSessionIDs { diff = "workingSessionIDs" }
         else if lhs.generatingTitleIDs != rhs.generatingTitleIDs { diff = "generatingTitleIDs" }
         else if lhs.activityByID != rhs.activityByID { diff = "activityByID" }
-        else if !Self.projectsVisuallyEqual(lhs.projectsByID, rhs.projectsByID) { diff = "projectsByID" }
         else { diff = nil }
 #if DEBUG
         if let diff {
@@ -2177,25 +2175,6 @@ private struct SessionListContent: View, Equatable {
         }
 #endif
         return diff == nil
-    }
-
-    /// Compare the project map by ONLY what a row's icon actually shows — the
-    /// project identity (path) and its icon file — not the whole DiscoveredProject.
-    /// `viewModel.projectByPath` is reassigned wholesale on every project
-    /// re-discovery, which fires constantly while an agent writes files; the
-    /// re-derived projects differ in volatile fields (e.g. gitHubRemote resolving)
-    /// that the session row never displays. Comparing the full value made the list
-    /// re-evaluate ~30Hz (the dominant scroll-profile cost); this keeps it stable
-    /// while still reacting to a project being added/removed or its icon changing.
-    private static func projectsVisuallyEqual(_ lhs: [UUID: DiscoveredProject?], _ rhs: [UUID: DiscoveredProject?]) -> Bool {
-        guard lhs.count == rhs.count else { return false }
-        for (id, lProject) in lhs {
-            let rProject = rhs[id] ?? nil
-            if lProject?.id != rProject?.id || lProject?.iconFileURL != rProject?.iconFileURL {
-                return false
-            }
-        }
-        return true
     }
 
 #if DEBUG
@@ -2221,7 +2200,6 @@ private struct SessionListContent: View, Equatable {
     private func row(_ session: PiAgentSessionRecord) -> some View {
         PiAgentSessionRow(
             session: session,
-            project: projectsByID[session.id] ?? nil,
             isSelected: selectedSessionIDs.contains(session.id),
             isRunning: workingSessionIDs.contains(session.id),
             isRenaming: renamingSessionID == session.id,
@@ -2256,6 +2234,11 @@ private struct SessionListContent: View, Equatable {
 struct CodingAgentExpandedPanel: View {
     let viewModel: AppViewModel
     let store: PiAgentSessionStore
+    let projects: [DiscoveredProject]
+    let selectedProject: DiscoveredProject?
+    @Binding var projectFilterText: String
+    let isSearchDebouncing: Bool
+    let onSelectProject: (DiscoveredProject?) -> Void
     @Binding var sessionSearchText: String
     /// True only while the panel is expanded. Both panel states are kept
     /// permanently mounted (ZStack in `mainContent`) so the pull-up is a cheap
@@ -2285,7 +2268,7 @@ struct CodingAgentExpandedPanel: View {
             header
                 .padding(.horizontal, 14)
                 .padding(.top, 10)
-                .padding(.bottom, 12)
+                .padding(.bottom, 10)
 
             if !hasAnyScopedSessions {
                 AppEmptyState("No sessions yet", systemImage: "square.and.pencil", description: emptySessionsMessage, layout: .fill)
@@ -2299,7 +2282,6 @@ struct CodingAgentExpandedPanel: View {
                     workingSessionIDs: workingVisibleSessionIDs,
                     generatingTitleIDs: viewModel.piAgentTitleGeneratingSessionIDs,
                     activityByID: visibleSessionActivityByID,
-                    projectsByID: visibleSessionProjectsByID,
                     selection: $selectedSessionIDs,
                     onSelect: { session in
                         renamingSessionID = nil
@@ -2317,7 +2299,11 @@ struct CodingAgentExpandedPanel: View {
                 .equatable()
             }
         }
-        .background(Color.clear)
+        // No inner padding around the list: AppList's own inset + the row's
+        // 18pt content padding keep session rows at the rhythm they had when
+        // the list was full-bleed in the sidebar.
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .appContentSurface(cornerRadius: 16)
         .onAppear {
             rebuildVisibleSessions()
             syncVisibleSessionSelection()
@@ -2357,7 +2343,13 @@ struct CodingAgentExpandedPanel: View {
         CodingAgentPanelHeader(
             viewModel: viewModel,
             isExpanded: true,
-            onToggle: onCollapse
+            onToggle: onCollapse,
+            projects: projects,
+            selectedProject: selectedProject,
+            selectedProjectPath: viewModel.selectedProjectPath,
+            projectFilterText: $projectFilterText,
+            isSearchDebouncing: isSearchDebouncing,
+            onSelectProject: onSelectProject
         ) {
             if selectedSessionIDs.count > 1 {
                 Button(role: .destructive) { requestDeleteSessions(selectedSessionIDs) } label: {
@@ -2432,10 +2424,6 @@ struct CodingAgentExpandedPanel: View {
         Dictionary(uniqueKeysWithValues: visibleSessions.compactMap { session in
             sessionActivityCache[session.id].map { (session.id, $0) }
         })
-    }
-
-    private var visibleSessionProjectsByID: [UUID: DiscoveredProject?] {
-        Dictionary(uniqueKeysWithValues: visibleSessions.map { ($0.id, viewModel.projectByPath[$0.projectPath]) })
     }
 
     private var emptySessionsMessage: String {
@@ -2920,7 +2908,6 @@ struct PiAgentScreen: View {
                             workingSessionIDs: workingVisibleSessionIDs,
                             generatingTitleIDs: viewModel.piAgentTitleGeneratingSessionIDs,
                             activityByID: visibleSessionActivityByID,
-                            projectsByID: visibleSessionProjectsByID,
                             selection: $selectedSessionIDs,
                             onSelect: { session in
                                 renamingSessionID = nil
@@ -2965,13 +2952,6 @@ struct PiAgentScreen: View {
         return map
     }
 
-    private var visibleSessionProjectsByID: [UUID: DiscoveredProject?] {
-        var map: [UUID: DiscoveredProject?] = [:]
-        for session in visibleSessions {
-            map[session.id] = viewModel.projectByPath[session.projectPath]
-        }
-        return map
-    }
 
     private var activeSessionColumn: some View {
         VStack(spacing: 0) {

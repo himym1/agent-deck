@@ -104,6 +104,7 @@ struct PiAgentStartupResourcesPopover: View {
                         resourceSection("Context", icon: "doc.text", items: contextItems, columns: 1)
                         resourceSection("Environment", icon: "key", items: envItems, columns: 1)
                         resourceSection("Agents", icon: "paperplane", items: agentItems, columns: 1, showsDetails: true)
+                        resourceSection("Memory", icon: "brain", items: memoryItems, columns: 1, showsDetails: true)
                         resourceSection("Skills", icon: "wand.and.stars", items: skillItems, columns: 1)
                         resourceSection("Prompts", icon: AppSymbols.promptTemplate, items: promptItems, columns: 1)
                     }
@@ -121,10 +122,11 @@ struct PiAgentStartupResourcesPopover: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Image(systemName: "wrench.and.screwdriver")
-                        .foregroundStyle(AppTheme.mutedText)
+                        .foregroundStyle(AppTheme.brandAccent)
                         .frame(width: 18)
                     Text("Tool calls")
                         .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.brandAccent)
                     Spacer()
                 }
 
@@ -244,6 +246,22 @@ struct PiAgentStartupResourcesPopover: View {
         }
     }
 
+    private var memoryItems: [PiStartupResourceItem] {
+        guard session.memoryEnabled else {
+            return [.init(title: "This session started with Memory disabled", detail: "Enable Memory before starting a new session if you want recall and capture again.", kind: .none)]
+        }
+        let recalledCount = session.recalledMemoryIDs?.count ?? 0
+        let title: String
+        if recalledCount > 0 {
+            title = recalledCount == 1 ? "1 memory recalled at start" : "\(recalledCount) memories recalled at start"
+        } else if session.memoryRecallCompleted {
+            title = "No relevant memories recalled at start"
+        } else {
+            title = "Memory enabled"
+        }
+        return [.init(title: title, detail: "Relevant memories are injected at launch; new durable facts are captured as you work.", kind: .none)]
+    }
+
     private var skillItems: [PiStartupResourceItem] {
         // Only the skills the orchestration parent was actually launched with —
         // global defaults ∪ project-assigned — not every skill discovered on
@@ -286,10 +304,11 @@ struct PiAgentStartupResourcesPopover: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Image(systemName: icon)
-                        .foregroundStyle(AppTheme.mutedText)
+                        .foregroundStyle(AppTheme.brandAccent)
                         .frame(width: 18)
                     Text(title)
                         .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.brandAccent)
                     Spacer()
                 }
 
