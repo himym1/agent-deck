@@ -319,7 +319,9 @@ final class MemoryRecallCalibrationTests: XCTestCase {
     // MARK: Qualification gate (abstain) regression
 
     /// A memory document as the qualification gate sees it: the embedder reads
-    /// title + summary + body slice; term overlap additionally counts tags.
+    /// title + summary + body slice; term overlap counts the curated fields only
+    /// (title + summary + tags — body vocabulary qualified junk in the realistic
+    /// eval, so production excludes it).
     private struct GateDoc {
         let name: String
         let title: String
@@ -327,7 +329,7 @@ final class MemoryRecallCalibrationTests: XCTestCase {
         let tags: String
         let body: String
         var embedText: String { "\(title)\n\(summary)\n\(String(body.prefix(600)))" }
-        var overlapText: String { "\(title)\n\(summary)\n\(tags)\n\(String(body.prefix(600)))" }
+        var overlapText: String { "\(title)\n\(summary)\n\(tags)" }
     }
 
     /// Replays the 2026-06-10 production miss: a query about removing the composer
@@ -345,23 +347,30 @@ final class MemoryRecallCalibrationTests: XCTestCase {
         defer { model.unload() }
 
         /// Mirrors the gate in `AgentMemoryStore.retrieve`, returning the recalled
-        /// doc name or nil for abstain.
+        /// doc name or nil for abstain: hybrid ranking (centered cosine + capped
+        /// term-overlap bonus), strong-or-lexical qualification, floor on the best
+        /// qualified hybrid score.
         func decide(_ docs: [GateDoc], _ query: String) throws -> String? {
             let vecs = try docs.map { doc -> [Float] in
                 guard let v = embed(doc.embedText, model: model) else { throw XCTSkip("embed failed") }
                 return v
             }
             guard let qv = embed(query, model: model) else { return nil }
-            let scores = score(strategy: .perSet, queryVec: qv, docVecs: vecs, backgroundMean: [])
+            let rawScores = score(strategy: .perSet, queryVec: qv, docVecs: vecs, backgroundMean: [])
             let centered = docs.count >= 2
             let queryTerms = AgentMemoryStore.informativeTerms(in: query)
-            let ranked = zip(docs, scores).sorted { $0.1 > $1.1 }
-            let qualified = ranked.filter { doc, score in
-                if centered && score >= AgentMemoryStore.strongTopSimilarity { return true }
-                return queryTerms.intersection(AgentMemoryStore.informativeTerms(in: doc.overlapText)).count >= AgentMemoryStore.minQueryTermOverlap
+            let entries = zip(docs, rawScores).map { doc, raw -> (doc: GateDoc, hybrid: Float, raw: Float, overlap: Int) in
+                let overlap = queryTerms.intersection(AgentMemoryStore.informativeTerms(in: doc.overlapText)).count
+                let bonus = AgentMemoryStore.overlapBonusWeight * Float(min(overlap, AgentMemoryStore.overlapBonusCap))
+                return (doc, raw + bonus, raw, overlap)
             }
-            guard let top = qualified.first, top.1 >= AgentMemoryStore.minTopSimilarity else { return nil }
-            return top.0.name
+            let ranked = entries.sorted { $0.hybrid > $1.hybrid }
+            let qualified = ranked.filter { entry in
+                if centered && entry.raw >= AgentMemoryStore.strongTopSimilarity { return true }
+                return entry.overlap >= AgentMemoryStore.minQueryTermOverlap
+            }
+            guard let top = qualified.first, top.hybrid >= AgentMemoryStore.minTopSimilarity else { return nil }
+            return top.doc.name
         }
 
         // The three memories that were active when the real miss happened, verbatim.

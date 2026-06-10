@@ -61,22 +61,46 @@ final class AgentMemoryStore: ObservableObject {
     /// distinguish a weak real match from the best irrelevant memory — centered
     /// scores are zero-sum across the set (the centered vectors sum to zero), so
     /// SOME memory always scores positive no matter the query. Calibration: real
-    /// matches span 0.15-0.59, junk top-1s reached 0.23.
-    nonisolated static let strongTopSimilarity: Float = 0.30
+    /// strong matches score ~0.59; the realistic eval (real store + real prompts,
+    /// June 2026) saw genuinely-irrelevant top-1s reach 0.423, so 0.30 was too low.
+    nonisolated static let strongTopSimilarity: Float = 0.50
     /// Below `strongTopSimilarity`, a memory only qualifies when it shares at least
     /// this many informative terms with the query. Calibration: every real weak
     /// match shared 2+ ("skill"+"project", "tables"+"markdown"+"render"); every
-    /// junk top-1 shared at most 1.
+    /// junk top-1 shared at most 1 (overlap judged on title/summary/tags only).
     nonisolated static let minQueryTermOverlap = 2
+    /// Ranking-time bonus per shared informative term (capped below). The embedder
+    /// alone mis-ranks weak-but-real matches: in the realistic eval AppEmptyState
+    /// scored -0.026 against an "add an empty placeholder state" prompt while an
+    /// unrelated memory scored 0.349. Lexical evidence is the corrective signal, so
+    /// the ranking/floor score is `centered + bonus·min(overlap, cap)` while the
+    /// strong-qualification check stays on the raw centered score.
+    nonisolated static let overlapBonusWeight: Float = 0.12
+    nonisolated static let overlapBonusCap = 4
     /// Cap on body characters fed to the embedder, on top of title + summary. Enough
     /// to capture what a memory is actually about without diluting the mean-pooled
     /// vector with a long tail.
     nonisolated static let embedBodyCharacterLimit = 600
+    /// Centered-cosine floor for the near-duplicate write guard. Calibrated in
+    /// `MemoryRecallRealisticEvalTests` against the real store's June 2026
+    /// duplicate pairs: actual re-writes scored 0.475 and 0.830, while genuinely
+    /// new same-domain facts peaked at 0.224 — 0.45 splits the clusters.
+    nonisolated static let duplicateSimilarity: Float = 0.45
+    /// Overlap-coefficient floor (|A∩B| / min(|A|,|B|) over informative terms) for
+    /// the lexical duplicate check — the only duplicate signal when the embedder is
+    /// unavailable or the project has a single memory (raw cosine saturates ~0.9).
+    /// Calibration: real duplicate pairs reached 0.647; new facts stayed ≤ 0.09.
+    nonisolated static let duplicateTermOverlap: Float = 0.55
 
     /// Logs the per-memory recall score breakdown and the gate decision, so the
     /// thresholds above can be tuned against real queries (`log stream --predicate
     /// 'category == "MemoryRecall"'`).
     private static let recallLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "agent-deck", category: "MemoryRecall")
+
+    /// Last recall/duplicate-check score breakdown, mirroring what `recallLog`
+    /// emits. Debug-level oslog isn't persisted, so the eval suite (and a future
+    /// Memory-view inspector) reads this instead of the log stream.
+    private(set) var lastScoreBreakdown: String?
 
     init(rootURL: URL? = nil, fileManager: FileManager = .default) {
         self.fileManager = fileManager
@@ -163,7 +187,10 @@ final class AgentMemoryStore: ObservableObject {
         return record
     }
 
-    func updateMemory(id: String, title: String, summary: String, body: String, tags: [String]) throws {
+    /// `reactivateIfStale` is set by the agent upsert path: an agent updating a
+    /// stale memory is asserting the fact is current again, so it returns to the
+    /// injectable pool. UI edits leave status alone.
+    func updateMemory(id: String, title: String, summary: String, body: String, tags: [String], reactivateIfStale: Bool = false) throws {
         guard let index = records.firstIndex(where: { $0.id == id }) else { throw AgentMemoryError.missingRecord(id) }
         if let finding = scanner.findSecret(in: title + "\n" + summary + "\n" + body) {
             throw AgentMemoryError.secretDetected(finding)
@@ -172,6 +199,7 @@ final class AgentMemoryStore: ObservableObject {
         record.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         record.summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         record.tags = tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        if reactivateIfStale, record.status == .stale { record.status = .active }
         record.updatedAt = Date()
         try write(document: AgentMemoryDocument(record: record, body: body), to: URL(fileURLWithPath: record.filePath))
         records[index] = record
@@ -220,24 +248,7 @@ final class AgentMemoryStore: ObservableObject {
         // backfill path.
         let existing = await loadedEmbeddingIndex(for: projectPath)
         let cached = (existing?.model == model) ? (existing?.vectors ?? [:]) : [:]
-        let inputs = injectable.map { record -> EmbeddingInput in
-            // Hash on `updatedAt` rather than body content so a cache hit never has to
-            // read the body off disk; any edit bumps `updatedAt` and invalidates the
-            // vector. The body is read only when we actually (re)embed, just below.
-            let hash = Self.contentHash("\(record.title)\n\(record.summary)\n\(record.updatedAt.timeIntervalSinceReferenceDate)")
-            if cached[record.id]?.hash == hash {
-                return EmbeddingInput(id: record.id, text: "", hash: hash) // reuses cached vector
-            }
-            // Embed title + summary + a slice of the body, so a memory is matched on
-            // what it actually says, not just a title that shares surface words with
-            // the query.
-            let body = (try? readBody(from: URL(fileURLWithPath: record.filePath))) ?? ""
-            let trimmedBody = String(body.prefix(Self.embedBodyCharacterLimit)).trimmingCharacters(in: .whitespacesAndNewlines)
-            let text = trimmedBody.isEmpty
-                ? "\(record.title)\n\(record.summary)"
-                : "\(record.title)\n\(record.summary)\n\(trimmedBody)"
-            return EmbeddingInput(id: record.id, text: text, hash: hash)
-        }
+        let inputs = embeddingInputs(for: injectable, cached: cached)
         guard let result = await AgentMemoryEmbedder.shared.reconcileAndScore(
             query: trimmedQuery,
             inputs: inputs,
@@ -247,14 +258,36 @@ final class AgentMemoryStore: ObservableObject {
         embeddingCache[projectPath] = ProjectEmbeddingIndex(model: model, vectors: result.vectors)
         persistEmbeddingIndex(embeddingCache[projectPath]!, projectPath: projectPath)
 
+        // Term overlap is judged on title + summary + tags — the curated fields. The
+        // body is deliberately excluded: incidental body vocabulary (file lists, code
+        // identifiers) qualified junk in the realistic eval, while a real match's
+        // curated fields always carry the topic. This also means the gate never
+        // reads bodies off disk.
+        let queryTerms = Self.informativeTerms(in: trimmedQuery)
+        let overlapByID = Dictionary(uniqueKeysWithValues: injectable.map { record -> (String, Int) in
+            let gateText = "\(record.title)\n\(record.summary)\n\(record.tags.joined(separator: " "))"
+            return (record.id, queryTerms.intersection(Self.informativeTerms(in: gateText)).count)
+        })
+
+        // Ranking and the floor use a hybrid score: centered cosine plus a capped
+        // per-shared-term bonus. The embedder alone mis-ranks weak-but-real matches
+        // (see `overlapBonusWeight`); shared informative vocabulary is exactly the
+        // evidence that corrects it.
         let ranked = injectable
-            .compactMap { record -> (record: AgentMemoryRecord, score: Float)? in
-                guard let score = result.scores[record.id] else { return nil }
-                return (record, score)
+            .compactMap { record -> (record: AgentMemoryRecord, score: Float, rawScore: Float)? in
+                guard let raw = result.scores[record.id] else { return nil }
+                let bonus = Self.overlapBonusWeight * Float(min(overlapByID[record.id] ?? 0, Self.overlapBonusCap))
+                return (record, raw + bonus, raw)
             }
             .sorted { lhs, rhs in
-                if lhs.score != rhs.score { return lhs.score > rhs.score }
+                // Quantize the score for ordering so usage acts only as a near-tie
+                // break: a memory that keeps proving useful wins over a same-scoring
+                // neighbor, but never outranks a genuinely better match.
+                let lhsBucket = (lhs.score / 0.02).rounded(.down)
+                let rhsBucket = (rhs.score / 0.02).rounded(.down)
+                if lhsBucket != rhsBucket { return lhsBucket > rhsBucket }
                 if lhs.record.status != rhs.record.status { return lhs.record.status == .pinned }
+                if lhs.record.useCount != rhs.record.useCount { return lhs.record.useCount > rhs.record.useCount }
                 return lhs.record.updatedAt > rhs.record.updatedAt
             }
         guard !ranked.isEmpty else { return nil }
@@ -262,25 +295,20 @@ final class AgentMemoryStore: ObservableObject {
         // Qualification (the abstain decision): centered scores are zero-sum across
         // the set, so some memory always ranks positive and rank position alone can
         // never say "nothing matches". A memory counts as an actual match only when
-        // its score is strong outright, or it shares informative vocabulary with the
-        // query. Raw-cosine scores (single-memory corpus, no centroid to subtract)
-        // saturate near 0.9 for ANY text and are never "strong", so a lone memory
-        // must qualify lexically.
-        let queryTerms = Self.informativeTerms(in: trimmedQuery)
+        // its raw centered score is strong outright, or it shares informative
+        // vocabulary with the query. Raw-cosine scores (single-memory corpus, no
+        // centroid to subtract) saturate near 0.9 for ANY text and are never
+        // "strong", so a lone memory must qualify lexically.
         let centered = result.vectors.count >= 2
         let qualified = ranked.filter { entry in
-            if centered && entry.score >= Self.strongTopSimilarity { return true }
-            // Overlap is judged on the same text the embedder saw (title + summary +
-            // body slice), plus tags; the body read is reached only for sub-strong
-            // entries, once per recall.
-            let body = (try? readBody(from: URL(fileURLWithPath: entry.record.filePath))) ?? ""
-            let memoryText = "\(entry.record.title)\n\(entry.record.summary)\n\(entry.record.tags.joined(separator: " "))\n\(body.prefix(Self.embedBodyCharacterLimit))"
-            return queryTerms.intersection(Self.informativeTerms(in: memoryText)).count >= Self.minQueryTermOverlap
+            if centered && entry.rawScore >= Self.strongTopSimilarity { return true }
+            return (overlapByID[entry.record.id] ?? 0) >= Self.minQueryTermOverlap
         }
         let breakdown = ranked.map { entry in
             let mark = qualified.contains(where: { $0.record.id == entry.record.id }) ? "+" : "-"
-            return "\(entry.record.title.prefix(28))=\(String(format: "%.3f", entry.score))\(mark)"
+            return "\(entry.record.title.prefix(28))=\(String(format: "%.3f", entry.score))(raw \(String(format: "%.3f", entry.rawScore)), ov \(overlapByID[entry.record.id] ?? 0))\(mark)"
         }.joined(separator: ", ")
+        lastScoreBreakdown = breakdown
         Self.recallLog.debug("recall: top=\(String(format: "%.3f", ranked[0].score), privacy: .public) [\(breakdown, privacy: .public)]")
 
         // Safety floor on the best QUALIFIED score: drops the degenerate case where a
@@ -299,6 +327,117 @@ final class AgentMemoryStore: ObservableObject {
             .map(\.record)
         guard !top.isEmpty else { return nil }
         return AgentMemoryRetrieval(records: top, prompt: memoryContextPrompt(for: top, maxCharacters: maxCharacters))
+    }
+
+    /// Builds the embedder inputs for a set of records. Hashes on `updatedAt` rather
+    /// than body content so a cache hit never has to read the body off disk; any edit
+    /// bumps `updatedAt` and invalidates the vector. The body is read only when the
+    /// record actually needs (re)embedding. The embed text is title + summary + a
+    /// slice of the body, so a memory is matched on what it actually says, not just a
+    /// title that shares surface words with the query.
+    private func embeddingInputs(for records: [AgentMemoryRecord], cached: [String: MemoryVectorEntry]) -> [EmbeddingInput] {
+        records.map { record -> EmbeddingInput in
+            let hash = Self.contentHash("\(record.title)\n\(record.summary)\n\(record.updatedAt.timeIntervalSinceReferenceDate)")
+            if cached[record.id]?.hash == hash {
+                return EmbeddingInput(id: record.id, text: "", hash: hash) // reuses cached vector
+            }
+            let body = (try? readBody(from: URL(fileURLWithPath: record.filePath))) ?? ""
+            let trimmedBody = String(body.prefix(Self.embedBodyCharacterLimit)).trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = trimmedBody.isEmpty
+                ? "\(record.title)\n\(record.summary)"
+                : "\(record.title)\n\(record.summary)\n\(trimmedBody)"
+            return EmbeddingInput(id: record.id, text: text, hash: hash)
+        }
+    }
+
+    /// The near-duplicate write guard: returns the existing injectable memory that
+    /// most likely already covers a candidate write, or nil when the write looks
+    /// genuinely new. Two signals, either sufficient:
+    ///
+    ///  - centered cosine ≥ `duplicateSimilarity` between the candidate text and a
+    ///    memory's embed text (needs the embedder and ≥2 memories for centering);
+    ///  - informative-term overlap coefficient ≥ `duplicateTermOverlap`, which also
+    ///    covers the single-memory corpus and the embedder-unavailable path.
+    ///
+    /// Best-effort by design: when neither signal is computable the write proceeds —
+    /// the guard reduces duplicates, it must never block legitimate writes outright
+    /// (the caller's `confirmNew` is the agent-facing escape hatch).
+    func findNearDuplicate(projectPath: String?, title: String, summary: String, body: String) async -> AgentMemoryRecord? {
+        guard let projectPath else { return nil }
+        let candidates = records(projectPath: projectPath).filter(\.isInjectable)
+        guard !candidates.isEmpty else { return nil }
+        let trimmedBody = String(body.prefix(Self.embedBodyCharacterLimit)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidateText = trimmedBody.isEmpty ? "\(title)\n\(summary)" : "\(title)\n\(summary)\n\(trimmedBody)"
+
+        // Embedding signal first: it is the stronger judge of "same fact in
+        // different words".
+        if candidates.count >= 2, case .ready(let model) = await resolveEmbedder() {
+            let existing = await loadedEmbeddingIndex(for: projectPath)
+            let cached = (existing?.model == model) ? (existing?.vectors ?? [:]) : [:]
+            let inputs = embeddingInputs(for: candidates, cached: cached)
+            if let result = await AgentMemoryEmbedder.shared.reconcileAndScore(query: candidateText, inputs: inputs, cached: cached) {
+                embeddingCache[projectPath] = ProjectEmbeddingIndex(model: model, vectors: result.vectors)
+                persistEmbeddingIndex(embeddingCache[projectPath]!, projectPath: projectPath)
+                let scored = candidates
+                    .compactMap { record -> (record: AgentMemoryRecord, score: Float)? in
+                        guard let score = result.scores[record.id] else { return nil }
+                        return (record, score)
+                    }
+                    .sorted { $0.score > $1.score }
+                lastScoreBreakdown = scored.map { "\($0.record.title.prefix(28))=\(String(format: "%.3f", $0.score))" }.joined(separator: ", ")
+                let best = scored.first
+                if let best, best.score >= Self.duplicateSimilarity {
+                    Self.recallLog.debug("duplicate guard: embedding hit \(best.record.title.prefix(40), privacy: .public) score=\(String(format: "%.3f", best.score), privacy: .public)")
+                    return best.record
+                }
+            }
+        }
+
+        // Lexical signal: overlap coefficient over informative terms of the same
+        // text the embedder sees, plus tags.
+        let candidateTerms = Self.informativeTerms(in: candidateText)
+        guard !candidateTerms.isEmpty else { return nil }
+        var bestLexical: (record: AgentMemoryRecord, overlap: Float)?
+        for record in candidates {
+            let recordBody = (try? readBody(from: URL(fileURLWithPath: record.filePath))) ?? ""
+            let recordText = "\(record.title)\n\(record.summary)\n\(record.tags.joined(separator: " "))\n\(recordBody.prefix(Self.embedBodyCharacterLimit))"
+            let recordTerms = Self.informativeTerms(in: recordText)
+            let denominator = min(candidateTerms.count, recordTerms.count)
+            guard denominator > 0 else { continue }
+            let overlap = Float(candidateTerms.intersection(recordTerms).count) / Float(denominator)
+            if overlap > (bestLexical?.overlap ?? 0) { bestLexical = (record, overlap) }
+        }
+        if let bestLexical {
+            lastScoreBreakdown = (lastScoreBreakdown.map { $0 + " | " } ?? "") + "lexicalBest \(bestLexical.record.title.prefix(28))=\(String(format: "%.2f", bestLexical.overlap))"
+        }
+        if let bestLexical, bestLexical.overlap >= Self.duplicateTermOverlap {
+            Self.recallLog.debug("duplicate guard: lexical hit \(bestLexical.record.title.prefix(40), privacy: .public) overlap=\(String(format: "%.2f", bestLexical.overlap), privacy: .public)")
+            return bestLexical.record
+        }
+        return nil
+    }
+
+    /// One line per injectable memory for the launch guidance index — what gives the
+    /// agent awareness of what's stored (so it updates instead of duplicating, and
+    /// knows what `agent_deck_memory_search` can find) without paying for bodies.
+    /// `records` is already sorted pinned-first then newest-first, so a cap keeps the
+    /// most load-bearing entries. Returns nil when the project has no memory.
+    func memoryIndexPrompt(projectPath: String?, maxEntries: Int = 40) -> String? {
+        guard let projectPath else { return nil }
+        let injectable = records(projectPath: projectPath).filter(\.isInjectable)
+        guard !injectable.isEmpty else { return nil }
+        let shown = injectable.prefix(maxEntries)
+        var lines = shown.map { record -> String in
+            let summary = record.summary.count > 110 ? record.summary.prefix(110) + "…" : record.summary
+            return "- \(record.id) · \(record.kind.rawValue) · \(record.title) — \(summary)"
+        }
+        if injectable.count > shown.count {
+            lines.append("- …and \(injectable.count - shown.count) more; find them with agent_deck_memory_search.")
+        }
+        return """
+        Project memory index (titles only; bodies arrive via recall or agent_deck_memory_search):
+        \(lines.joined(separator: "\n"))
+        """
     }
 
     /// Eagerly loads the on-device model (downloading the asset if needed) so the
@@ -377,14 +516,17 @@ final class AgentMemoryStore: ObservableObject {
     ]
 
     /// Lowercased content words of `text` for the term-overlap gate: split on
-    /// non-alphanumerics, drop stopwords/short tokens/numbers, and strip a plural
-    /// "s" so "skills" matches "skill".
+    /// non-alphanumerics, drop stopwords/short tokens/numbers, strip a plural "s"
+    /// so "skills" matches "skill", then a trailing "ing" so "showing" matches
+    /// "show" and "signing" matches "sign". Plural first so "strings" and "string"
+    /// stem identically; "ing" is stripped only when ≥3 characters remain.
     nonisolated static func informativeTerms(in text: String) -> Set<String> {
         var terms: Set<String> = []
         for raw in text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }) {
             var term = String(raw)
             guard term.count >= 3, Int(term) == nil, !overlapStopwords.contains(term) else { continue }
             if term.count > 3, term.hasSuffix("s") { term = String(term.dropLast()) }
+            if term.count >= 6, term.hasSuffix("ing") { term = String(term.dropLast(3)) }
             terms.insert(term)
         }
         return terms

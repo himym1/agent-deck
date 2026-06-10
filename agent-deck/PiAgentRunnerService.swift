@@ -146,7 +146,7 @@ final class PiAgentRunnerService {
     /// session. Wired by `AppViewModel` to
     /// `PiSkillLaunchResolver.childSkillArguments(agent:snapshot:)`.
     var boundAgentSkillArgumentsProvider: ((EffectiveAgentRecord) throws -> [String])?
-    var onMemoryWrite: ((UUID, AgentMemoryWriteBridgeRequest) -> String)?
+    var onMemoryWrite: ((UUID, AgentMemoryWriteBridgeRequest) async -> String)?
     var onMemoryMarkStale: ((UUID, AgentMemoryStaleBridgeRequest) async -> String)?
     var onMemorySearch: ((UUID, AgentMemorySearchBridgeRequest) async -> String)?
 
@@ -2142,8 +2142,11 @@ final class PiAgentRunnerService {
             store.append(.init(sessionID: sessionID, role: .error, title: "\(AppBrand.displayName) Bridge Error", text: "Could not parse memory write request.", rawJSON: rawLine))
             return
         }
-        let result = onMemoryWrite?(sessionID, request) ?? "\(AppBrand.displayName) memory is not available."
-        clientsBySessionID[sessionID]?.respondToExtensionUI(id: requestID, value: result)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let result = await self.onMemoryWrite?(sessionID, request) ?? "\(AppBrand.displayName) memory is not available."
+            self.clientsBySessionID[sessionID]?.respondToExtensionUI(id: requestID, value: result)
+        }
     }
 
     private func handleManagedSubagentBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, sessionID: UUID) {

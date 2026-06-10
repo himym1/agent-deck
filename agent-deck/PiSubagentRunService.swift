@@ -19,7 +19,7 @@ final class PiSubagentRunService {
     private var pendingStatsTasksByRunID: [UUID: Task<Void, Never>] = [:]
     private let fileManager = FileManager.default
     var childMemoryArgumentsProvider: ((PiAgentSessionRecord, EffectiveAgentRecord, String) async throws -> [String])?
-    var onMemoryWrite: ((UUID, UUID, String?, AgentMemoryWriteBridgeRequest) -> String)?
+    var onMemoryWrite: ((UUID, UUID, String?, AgentMemoryWriteBridgeRequest) async -> String)?
     var onMemoryMarkStale: ((UUID, UUID, String?, AgentMemoryStaleBridgeRequest) async -> String)?
     var onMemorySearch: ((UUID, UUID, String?, AgentMemorySearchBridgeRequest) async -> String)?
 
@@ -1197,8 +1197,11 @@ final class PiSubagentRunService {
             return
         }
         let agentName = store.subagentRuns(for: parentSessionID).first(where: { $0.id == runID })?.agentName
-        let result = onMemoryWrite?(parentSessionID, runID, agentName, request) ?? "\(AppBrand.displayName) memory is not available."
-        clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: result)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let result = await self.onMemoryWrite?(parentSessionID, runID, agentName, request) ?? "\(AppBrand.displayName) memory is not available."
+            self.clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: result)
+        }
     }
 
     private func bridgePayload(from event: PiAgentRPCEvent) -> String? {

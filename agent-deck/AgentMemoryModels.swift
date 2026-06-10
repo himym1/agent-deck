@@ -149,6 +149,11 @@ struct AgentMemoryWriteBridgeRequest: Codable, Hashable {
     var kind: AgentMemoryKind?
     var tags: [String]?
     var reason: String?
+    /// Existing memory id to update in place (upsert). Nil creates a new memory.
+    var id: String?
+    /// Skips the near-duplicate guard when the agent confirms the new memory is
+    /// genuinely distinct from the match the guard reported.
+    var confirmNew: Bool?
 
     enum CodingKeys: String, CodingKey {
         case title
@@ -157,6 +162,8 @@ struct AgentMemoryWriteBridgeRequest: Codable, Hashable {
         case kind = "kindHint"
         case tags
         case reason
+        case id
+        case confirmNew
     }
 }
 

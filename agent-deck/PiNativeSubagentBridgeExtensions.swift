@@ -634,11 +634,13 @@ struct PiNativeSubagentBridgeExtensions {
 
         const MemoryWriteParams = Type.Object({
             title: Type.String({ description: "Short title for the memory." }),
-            summary: Type.String({ description: "One-sentence summary." }),
-            body: Type.String({ description: "Markdown body with the durable fact, decision, runbook, or failure." }),
+            summary: Type.String({ description: "One sentence written as a retrieval key: use the words a future question about this topic would use." }),
+            body: Type.String({ description: "Markdown body with the durable fact, decision, runbook, or failure. Use absolute dates, never relative ones." }),
             kind: Type.Optional(MemoryKind),
             tags: Type.Optional(Type.Array(Type.String(), { description: "Short searchable tags." })),
-            reason: Type.Optional(Type.String({ description: "Why this should be remembered." }))
+            reason: Type.Optional(Type.String({ description: "Why this should be remembered." })),
+            id: Type.Optional(Type.String({ description: "Existing memory id to update in place instead of creating a new memory. Use when the project memory index shows a memory already covering this fact." })),
+            confirmNew: Type.Optional(Type.Boolean({ description: "Set true only after a write was held as a likely duplicate and the memory is genuinely a different fact." }))
         }, { additionalProperties: false });
 
         const MemoryStaleParams = Type.Object({
@@ -655,12 +657,15 @@ struct PiNativeSubagentBridgeExtensions {
         export default function (pi: ExtensionAPI) {
             pi.registerTool({
                 name: "agent_deck_memory_write",
-                description: "Store durable Agent Deck project memory. Agent Deck scans for secrets and writes to the current project's memory store.",
+                description: "Store or update durable Agent Deck project memory. Pass id to update an existing memory in place; omit it to create one. Agent Deck scans for secrets and holds writes that look like duplicates of an existing memory.",
                 parameters: MemoryWriteParams,
-                promptSnippet: "agent_deck_memory_write(title, summary, body, kind?, tags?, reason?): store durable Agent Deck project memory.",
+                promptSnippet: "agent_deck_memory_write(title, summary, body, kind?, tags?, reason?, id?, confirmNew?): store durable Agent Deck project memory, or update the memory with the given id.",
                 promptGuidelines: [
-                    "Use this after discovering durable project knowledge: architecture, important files, commands, CI, deployment, conventions, decisions, recurring failures, runbooks, or project-specific preferences.",
+                    "Before writing, check the project memory index in your instructions. If an existing memory covers the same fact, pass its id to update it instead of creating a near-duplicate.",
+                    "Store what the repository cannot tell a future session: decisions with their rationale, approaches that failed and why, user corrections and standing preferences, runbooks, and non-obvious gotchas that took real effort to discover.",
+                    "Do not store facts a future session can rediscover with one search or file read (plain file layout, obvious code structure) — stored copies go stale silently.",
                     "When a task takes several corrections or retries to get right, store the settled outcome and the approaches that failed once confirmed, so the next run skips the dead ends.",
+                    "Write the summary as a retrieval key and use absolute dates, never relative ones.",
                     "Do not store temporary session state, raw logs, credentials, tokens, private keys, customer data, or speculative facts.",
                     "Deck agent findings should be stored as normal project memory."
                 ],
@@ -673,7 +678,9 @@ struct PiNativeSubagentBridgeExtensions {
                         body: String((params as any).body ?? ""),
                         kindHint: (params as any).kind ? String((params as any).kind) : undefined,
                         tags: Array.isArray((params as any).tags) ? (params as any).tags.map((item: any) => String(item)) : undefined,
-                        reason: (params as any).reason ? String((params as any).reason) : undefined
+                        reason: (params as any).reason ? String((params as any).reason) : undefined,
+                        id: (params as any).id ? String((params as any).id) : undefined,
+                        confirmNew: typeof (params as any).confirmNew === "boolean" ? (params as any).confirmNew : undefined
                     });
                     onUpdate?.({ content: [{ type: "text", text: "Writing Agent Deck memory..." }] });
                     const result = await ctx.ui.editor("AGENT_DECK_BRIDGE memory_write", payload);
