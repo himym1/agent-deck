@@ -13,6 +13,48 @@ enum PanelTransition {
     static let fade: Animation = .easeOut(duration: 0.22)
 }
 
+/// Hosts the two permanently-mounted sidebar layers and owns the ONLY read of
+/// `isCodingAgentPanelExpanded`, so toggling the panel invalidates just this
+/// subtree — never the window body, toolbar, or detail/transcript.
+///
+/// Both layers stay mounted so expanding is a pure clip/transform/opacity
+/// animation over already-laid-out trees — no teardown/rebuild (which re-ran
+/// the session caches' onAppear mid-animation) and no cross-fade rendering two
+/// heavy trees from scratch. Motion and fade run on separate scoped curves so
+/// the layers hand off without the dead "both translucent" dip. The corner
+/// radius morphs 16→0 as the panel scales up from the card's position — the
+/// container-transform read without matchedGeometryEffect, which would run
+/// layout on the heavy session list every animation frame.
+private struct CodingAgentPanelLayers<Nav: View, Panel: View>: View {
+    var viewModel: AppViewModel
+    @ViewBuilder var nav: () -> Nav
+    let panel: (Bool) -> Panel
+
+    var body: some View {
+        let isPanelExpanded = viewModel.isCodingAgentPanelExpanded
+        ZStack(alignment: .topLeading) {
+            nav()
+                // Recedes slightly in scale as well as position — reads as the
+                // nav dropping back a layer while the panel grows over it.
+                .scaleEffect(isPanelExpanded ? 0.98 : 1, anchor: .top)
+                .offset(y: isPanelExpanded ? -24 : 0)
+                .animation(PanelTransition.move, value: isPanelExpanded)
+                .opacity(isPanelExpanded ? 0 : 1)
+                .animation(PanelTransition.fade, value: isPanelExpanded)
+                .allowsHitTesting(!isPanelExpanded)
+
+            panel(isPanelExpanded)
+                .clipShape(RoundedRectangle(cornerRadius: isPanelExpanded ? 0 : 16, style: .continuous))
+                .scaleEffect(isPanelExpanded ? 1 : 0.94, anchor: .bottom)
+                .offset(y: isPanelExpanded ? 0 : 52)
+                .animation(PanelTransition.move, value: isPanelExpanded)
+                .opacity(isPanelExpanded ? 1 : 0)
+                .animation(PanelTransition.fade, value: isPanelExpanded)
+                .allowsHitTesting(isPanelExpanded)
+        }
+    }
+}
+
 enum SidebarTransition {
     static let curve: Animation = .spring(response: 0.34, dampingFraction: 0.86)
 }
@@ -531,34 +573,16 @@ struct ContentView: View {
     @ViewBuilder
     private var mainContent: some View {
         let warnings = sidebarWarningSnapshot
-        let isPanelExpanded = viewModel.isCodingAgentPanelExpanded
         NavigationSplitView(columnVisibility: $navigationColumnVisibility) {
-            VStack(spacing: 0) {
-                // Both states of the Coding Agent pull-up panel stay permanently
-                // mounted in a ZStack so expanding is a pure opacity/offset
-                // animation over already-laid-out trees — no teardown/rebuild
-                // (which re-ran the session caches' onAppear mid-animation) and no
-                // cross-fade rendering two heavy trees from scratch. The hidden
-                // layer doesn't re-layout (SessionListContent is .equatable).
-                ZStack(alignment: .topLeading) {
-                    // Motion and fade run on separate, scoped curves: the spring
-                    // drives the (GPU-cheap) offset/scale transforms while a
-                    // shorter easeOut handles opacity, so the layers hand off
-                    // without the dead "both translucent" dip a single shared
-                    // curve produces. The nav recedes upward as the panel lifts
-                    // in from below with a slight bottom-anchored scale, which
-                    // reads as the card growing rather than a plain cross-fade.
-                    navigationSidebarLayer(warnings: warnings)
-                        // Recedes slightly in scale as well as position — reads
-                        // as the nav dropping back a layer while the panel grows
-                        // over it (transform-only, no layout work).
-                        .scaleEffect(isPanelExpanded ? 0.98 : 1, anchor: .top)
-                        .offset(y: isPanelExpanded ? -24 : 0)
-                        .animation(PanelTransition.move, value: isPanelExpanded)
-                        .opacity(isPanelExpanded ? 0 : 1)
-                        .animation(PanelTransition.fade, value: isPanelExpanded)
-                        .allowsHitTesting(!isPanelExpanded)
-
+            // The expansion flag is read ONLY inside CodingAgentPanelLayers:
+            // reading it here made every expand/collapse invalidate the whole
+            // window body — NavigationSplitView, `.toolbar` (AppKit re-tiles
+            // every item and rebuilds its menus, a 100ms+ main-thread hang) and
+            // the detail tree (transcript updateNSView mid-animation).
+            CodingAgentPanelLayers(
+                viewModel: viewModel,
+                nav: { navigationSidebarLayer(warnings: warnings) },
+                panel: { isExpanded in
                     CodingAgentExpandedPanel(
                         viewModel: viewModel,
                         store: viewModel.piAgentSessionStore,
@@ -568,25 +592,11 @@ struct ContentView: View {
                         isSearchDebouncing: projectSearchIsDebouncing,
                         onSelectProject: { viewModel.setSelectedProject($0?.url) },
                         sessionSearchText: $piAgentSessionSearchText,
-                        isActive: isPanelExpanded,
+                        isActive: isExpanded,
                         onCollapse: { viewModel.isCodingAgentPanelExpanded = false }
                     )
-                    // Container-transform read without matched geometry: the
-                    // corner radius morphs from the collapsed card's 16 to 0 as
-                    // the layer scales up from the card's position, so it looks
-                    // like the card itself growing to fill the sidebar. Clip +
-                    // scale + offset are all GPU transforms — the session list
-                    // never re-lays-out mid-flight (matchedGeometryEffect would
-                    // run layout on the heavy list every animation frame).
-                    .clipShape(RoundedRectangle(cornerRadius: isPanelExpanded ? 0 : 16, style: .continuous))
-                    .scaleEffect(isPanelExpanded ? 1 : 0.94, anchor: .bottom)
-                    .offset(y: isPanelExpanded ? 0 : 52)
-                    .animation(PanelTransition.move, value: isPanelExpanded)
-                    .opacity(isPanelExpanded ? 1 : 0)
-                    .animation(PanelTransition.fade, value: isPanelExpanded)
-                    .allowsHitTesting(isPanelExpanded)
                 }
-            }
+            )
             // Min width fits the pixel title + refresh/gear without wrapping.
             .frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.clear, ignoresSafeAreaEdges: .all)
