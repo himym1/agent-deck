@@ -549,7 +549,11 @@ struct ContentView: View {
                     // in from below with a slight bottom-anchored scale, which
                     // reads as the card growing rather than a plain cross-fade.
                     navigationSidebarLayer(warnings: warnings)
-                        .offset(y: isPanelExpanded ? -28 : 0)
+                        // Recedes slightly in scale as well as position — reads
+                        // as the nav dropping back a layer while the panel grows
+                        // over it (transform-only, no layout work).
+                        .scaleEffect(isPanelExpanded ? 0.98 : 1, anchor: .top)
+                        .offset(y: isPanelExpanded ? -24 : 0)
                         .animation(PanelTransition.move, value: isPanelExpanded)
                         .opacity(isPanelExpanded ? 0 : 1)
                         .animation(PanelTransition.fade, value: isPanelExpanded)
@@ -567,8 +571,16 @@ struct ContentView: View {
                         isActive: isPanelExpanded,
                         onCollapse: { viewModel.isCodingAgentPanelExpanded = false }
                     )
-                    .scaleEffect(isPanelExpanded ? 1 : 0.96, anchor: .bottom)
-                    .offset(y: isPanelExpanded ? 0 : 44)
+                    // Container-transform read without matched geometry: the
+                    // corner radius morphs from the collapsed card's 16 to 0 as
+                    // the layer scales up from the card's position, so it looks
+                    // like the card itself growing to fill the sidebar. Clip +
+                    // scale + offset are all GPU transforms — the session list
+                    // never re-lays-out mid-flight (matchedGeometryEffect would
+                    // run layout on the heavy list every animation frame).
+                    .clipShape(RoundedRectangle(cornerRadius: isPanelExpanded ? 0 : 16, style: .continuous))
+                    .scaleEffect(isPanelExpanded ? 1 : 0.94, anchor: .bottom)
+                    .offset(y: isPanelExpanded ? 0 : 52)
                     .animation(PanelTransition.move, value: isPanelExpanded)
                     .opacity(isPanelExpanded ? 1 : 0)
                     .animation(PanelTransition.fade, value: isPanelExpanded)

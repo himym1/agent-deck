@@ -437,7 +437,7 @@ struct PiAgentSessionRow: View, Equatable {
         .saturation(seenAppearanceAmount)
         .opacity(seenContentOpacity)
         .padding(.horizontal, 18)
-        .padding(.vertical, 8)
+        .padding(.vertical, 11)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .trailing) {
             ZStack(alignment: .trailing) {
@@ -586,7 +586,6 @@ struct PiAgentSessionRow: View, Equatable {
             .font(AppTheme.Font.footnote.weight(.medium))
             .fontWidth(.expanded)
             .foregroundStyle(.primary)
-            .padding(.horizontal, 5)
             // Fixed (not min/max) so the row's height never depends on whether the
             // title wraps to two lines. Measuring a wrapping title requires a full
             // text layout pass; with a stable height the row is cheap to measure, so

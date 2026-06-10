@@ -230,7 +230,7 @@ struct CodingAgentCollapsedPanel: View {
     private static let maxRecents = 6
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             CodingAgentPanelHeader(
                 viewModel: viewModel,
                 isExpanded: false,
@@ -316,7 +316,7 @@ private struct CodingAgentRecentList: View, Equatable {
     }
 
     var body: some View {
-        VStack(spacing: 1) {
+        VStack(spacing: 3) {
             ForEach(sessions) { session in
                 CodingAgentRecentRow(
                     session: session,
@@ -373,7 +373,7 @@ struct CodingAgentRecentRow: View, Equatable {
             }
             // 8 (card) + 6 here = 14pt content inset, aligned with the header.
             .padding(.horizontal, 6)
-            .padding(.vertical, 6)
+            .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
