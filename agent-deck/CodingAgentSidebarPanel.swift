@@ -39,10 +39,13 @@ struct CodingAgentPanelHeader<Trailing: View>: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
+            // 30 matches the visible height of the title+subtitle block beside
+            // it (34 overhung the text on both ends) and the 30pt round
+            // controls at the row's trailing edge.
             ProjectIconView(
                 imageURL: selectedProject?.iconFileURL,
                 symbolName: selectedProject?.fallbackSymbolName ?? "square.grid.2x2",
-                size: 34,
+                size: 30,
                 assetName: selectedProject?.projectType.assetName
             )
 
