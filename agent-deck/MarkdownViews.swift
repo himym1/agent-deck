@@ -1490,6 +1490,18 @@ private final class AutoSizingMarkdownTextView: NSTextView {
         if let cached = cachedIntrinsic, cached.version == contentVersion, abs(cached.width - width) < 0.5 {
             return NSSize(width: NSView.noIntrinsicMetric, height: cached.height)
         }
+        // No real width yet: a freshly built block enters the window's
+        // update-constraints pass before any layout has assigned it a frame, so
+        // wrapping here would run a full TextKit layout at a ~1pt width — one
+        // line fragment per word, the single most expensive thing a transcript
+        // scroll does, multiplied per block per newly revealed row — and the
+        // result is thrown away once the real width lands. Report a placeholder
+        // instead (uncached, so this never masks a real measurement); `layout()`
+        // invalidates the intrinsic when the frame arrives and the same display
+        // cycle re-queries at the true width, paying for exactly one layout.
+        if width < 2 {
+            return NSSize(width: NSView.noIntrinsicMetric, height: 1)
+        }
         textContainer.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: textContainer)
         let height = max(1, ceil(layoutManager.usedRect(for: textContainer).height) + textContainerInset.height * 2)
