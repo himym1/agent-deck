@@ -1036,18 +1036,20 @@ struct ContentView: View {
 
     private var agentsToggleButton: some View {
         let enabled = viewModel.appSettings.nativeSubagentsEnabledForNewSessions
-        let button = Button {
-            viewModel.toggleSubagentsForNewSessions()
-        } label: {
-            Label("Deck Agents", systemImage: enabled ? "paperplane.fill" : "paperplane")
+        // Button-style toggle matching the Memory toolbar's on/off control, so
+        // both screens encode "feature is on" the same way (semantic toggle,
+        // native tinted glass on-state) instead of a chrome-swapped Button.
+        return Toggle(isOn: Binding(
+            get: { viewModel.appSettings.nativeSubagentsEnabledForNewSessions },
+            set: { _ in viewModel.toggleSubagentsForNewSessions() }
+        )) {
+            Label("Deck Agents", systemImage: "paperplane")
         }
-        .help(enabled ? "Turn Deck agents off for new sessions" : "Turn Deck agents on for new sessions")
-
-        if enabled {
-            return AnyView(button.toolbarPrimaryActionChrome())
-        } else {
-            return AnyView(button.toolbarNeutralChrome())
-        }
+        .toggleStyle(.button)
+        .symbolRenderingMode(.monochrome)
+        .foregroundStyle(enabled ? AppTheme.brandAccent : .secondary)
+        .tint(AppTheme.brandAccent)
+        .help(enabled ? "Deck agents are on for new sessions. Click to turn off." : "Deck agents are off for new sessions. Click to turn on.")
     }
 
     @ToolbarContentBuilder
@@ -1125,13 +1127,6 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var agentsPrimaryToolbarContent: some ToolbarContent {
-        // Deck agents on/off toggle — same global default as the Pi Agent composer footer.
-        ToolbarItem(placement: .primaryAction) {
-            agentsToggleButton
-        }
-
-        ToolbarSpacer(.fixed, placement: .primaryAction)
-
         // Utility island: filter the list, bulk-edit models, and (contextually)
         // create a replacement for a selected builtin agent.
         ToolbarItem(placement: .primaryAction) {
@@ -1155,11 +1150,14 @@ struct ContentView: View {
 
         ToolbarSpacer(.fixed, placement: .primaryAction)
 
-        // Info + create island. `newAgentMenu` is the tinted trailing member, so
-        // the ControlGroup renders it as a filled prominent segment — matching
-        // the primary action in the instruction-editor toolbars.
+        // Toggle + info + create island, mirroring the Memory toolbar's
+        // (Toggle, Info, New) so the two screens read identically.
+        // `newAgentMenu` is the tinted trailing member, so the ControlGroup
+        // renders it as a filled prominent segment — matching the primary
+        // action in the instruction-editor toolbars.
         ToolbarItem(placement: .primaryAction) {
             ControlGroup {
+                agentsToggleButton
                 subagentsInfoButton
                 newAgentMenu
             }
@@ -1728,6 +1726,9 @@ struct ContentView: View {
         case .memory:
             // Mirrors the toolbar toggle so the state reads at a glance.
             return viewModel.appSettings.agentMemoryEnabled ? "Memory: On" : "Memory: Off"
+        case .agents:
+            // Same at-a-glance state as Memory, driven by the same toolbar toggle.
+            return viewModel.appSettings.nativeSubagentsEnabledForNewSessions ? "Agents: On" : "Agents: Off"
         default:
             return viewModel.selectedSidebarItem.rawValue
         }

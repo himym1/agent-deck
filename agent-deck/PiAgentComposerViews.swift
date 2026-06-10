@@ -87,12 +87,6 @@ struct PiAgentComposerBox: View {
     var suggestionKeyBridge: ComposerSuggestionKeyBridge = ComposerSuggestionKeyBridge()
     @State private var isDropTargeted = false
     @State private var isIssuePickerPresented = false
-    // Memoized: whether the runtime footer shows the subagents toggle. Resolving
-    // it (`sessionHasSelectableAgents`) reads the project-scan snapshots; calling
-    // it inline in `body` registered those as observation dependencies, so the
-    // whole composer re-rendered on every background project re-scan during a
-    // streaming session. Computed off the hot path in `.onChange` instead.
-    @State private var showsSubagentsToggle = true
     // Non-worktree sessions don't carry `branchName`; resolve the project's
     // current branch off the body hot path via `.task(id:)`.
     @State private var resolvedBranch: String?
@@ -254,21 +248,10 @@ struct PiAgentComposerBox: View {
                         PiAgentRuntimeFooter(
                             session: metricsSession,
                             aggregate: costAggregate,
-                            showsSubagentsToggle: showsSubagentsToggle,
-                            subagentsToggleEnabled: metricsSession.status == .draft,
                             openAIFastStatus: openAIFastStatus(for: metricsSession),
-                            onToggleSubagents: {
-                                viewModel.setSubagentsEnabledForSelectedDraftAndNewSessions(!metricsSession.subagentsEnabled)
-                            },
                             onToggleOpenAIFast: openAIFastToggleAction(for: metricsSession),
                             onSetAsDefault: setAsDefaultAction(for: metricsSession)
                         )
-                        // Resolve the toggle's visibility off the body hot path.
-                        // The session's agent universe is effectively static for
-                        // its lifetime, so refreshing on session-id change is enough.
-                        .onChange(of: metricsSession.id, initial: true) {
-                            showsSubagentsToggle = viewModel.sessionHasSelectableAgents(metricsSession)
-                        }
                         // Recompute the aggregate when the parent's tokens/cost or
                         // the subagent runs change (de-noised revision), off-body.
                         .onChange(of: costAggregateKey, initial: true) {
@@ -2149,10 +2132,7 @@ struct PiAgentRuntimeCostAggregate: Equatable {
 struct PiAgentRuntimeFooter: View {
     let session: PiAgentSessionRecord
     var aggregate: PiAgentRuntimeCostAggregate? = nil
-    let showsSubagentsToggle: Bool
-    let subagentsToggleEnabled: Bool
     let openAIFastStatus: Bool?
-    let onToggleSubagents: () -> Void
     let onToggleOpenAIFast: (() -> Void)?
     let onSetAsDefault: (() -> Void)?
     @State private var isCostBreakdownPresented = false
@@ -2160,19 +2140,6 @@ struct PiAgentRuntimeFooter: View {
     var body: some View {
         HStack(spacing: 7) {
             aggregateChips
-            if showsSubagentsToggle {
-                if subagentsToggleEnabled {
-                    metricButton(
-                        "agents: \(session.subagentsEnabled ? "on" : "off")",
-                        icon: "paperplane",
-                        action: onToggleSubagents
-                    )
-                    .help("Draft only. This sets the current draft and the default for new sessions.")
-                } else {
-                    metric("agents: \(session.subagentsEnabled ? "on" : "off")", icon: "paperplane")
-                        .help("Deck agents can only be changed before the first message starts Pi.")
-                }
-            }
             if let openAIFastStatus {
                 metricButton(
                     "fast: \(openAIFastStatus ? "on" : "off")",
@@ -2192,7 +2159,6 @@ struct PiAgentRuntimeFooter: View {
         .font(AppTheme.Font.caption)
         .foregroundStyle(AppTheme.mutedText)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .animation(.snappy(duration: 0.18), value: session.subagentsEnabled)
         .animation(.snappy(duration: 0.18), value: openAIFastStatus)
     }
 
