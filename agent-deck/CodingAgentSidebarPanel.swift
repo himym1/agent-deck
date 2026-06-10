@@ -206,9 +206,10 @@ struct CodingAgentNewSessionControls: View {
     }
 }
 
-/// Collapsed state of the Coding Agent pull-up panel: header + the most recent
-/// sessions inline, so resuming a chat is one click without expanding. Lives at
-/// the bottom of the nav sidebar, just above the project/GitHub card.
+/// Collapsed state of the Coding Agent pull-up panel: header + the session
+/// list inline (visually capped at six rows, scrollable beyond that), so
+/// resuming a chat is one click without expanding. Lives at the bottom of the
+/// nav sidebar, just above the project/GitHub card.
 struct CodingAgentCollapsedPanel: View {
     let viewModel: AppViewModel
     let store: PiAgentSessionStore
@@ -226,8 +227,14 @@ struct CodingAgentCollapsedPanel: View {
     /// on the non-streaming triggers that actually change the list, mirroring
     /// the expanded panel's `cachedVisibleSessions`.
     @State private var recentSessions: [PiAgentSessionRecord] = []
+    /// On-demand jump consumed by the list's `AppList`; set when this panel
+    /// becomes the visible one so the selected session scrolls into view.
+    @State private var recentScrollRequest: UUID?
+    @State private var pendingDeleteSessionID: UUID?
+    @State private var isDeleteSessionAlertPresented = false
 
-    private static let maxRecents = 6
+    /// Rows shown before the list scrolls.
+    private static let visibleRecentRows = 5
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -255,19 +262,64 @@ struct CodingAgentCollapsedPanel: View {
                     selectedSessionID: store.selectedSessionID,
                     isAgentSelected: viewModel.selectedSidebarItem == .agent,
                     workingSessionIDs: workingRecentSessionIDs,
-                    onSelect: { viewModel.selectPiAgentSession($0) }
+                    bottomContentInset: recentListFadeHeight > 0 ? recentListFadeHeight + 2 : 4,
+                    scrollRequestID: recentScrollRequest,
+                    scrollRequest: $recentScrollRequest,
+                    onSelect: { viewModel.selectPiAgentSession($0) },
+                    onDelete: { id in
+                        pendingDeleteSessionID = id
+                        isDeleteSessionAlertPresented = true
+                    }
                 )
                 .equatable()
+                .frame(height: recentListHeight)
+                .bottomEdgeFade(height: recentListFadeHeight)
             }
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .appContentSurface(cornerRadius: 16)
-        .onAppear(perform: rebuildRecents)
+        .onAppear {
+            rebuildRecents()
+            recentScrollRequest = store.selectedSessionID
+        }
         .onChange(of: store.sessionListRevision) { _, _ in rebuildRecents() }
         .onChange(of: viewModel.selectedProjectPath) { _, _ in rebuildRecents() }
         .onChange(of: sessionSearchText) { _, _ in rebuildRecents() }
         .onChange(of: viewModel.showPiAgentAttentionOnly) { _, _ in rebuildRecents() }
+        // The expanded panel stays mounted while this one shows (and vice
+        // versa), so collapsing is the moment to re-sync this list's scroll
+        // offset with whatever session was picked in the expanded list.
+        .onChange(of: viewModel.isCodingAgentPanelExpanded) { _, isExpanded in
+            if !isExpanded { recentScrollRequest = store.selectedSessionID }
+        }
+        .alert("Delete Pi Agent session?", isPresented: $isDeleteSessionAlertPresented) {
+            Button("Delete", role: .destructive) {
+                if let id = pendingDeleteSessionID {
+                    viewModel.deletePiAgentSessions([id])
+                }
+                pendingDeleteSessionID = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDeleteSessionID = nil }
+        } message: {
+            Text("This removes the selected Pi Agent session and its local transcript from \(AppBrand.displayName).")
+        }
+    }
+
+    /// Hugs the content up to `visibleRecentRows` rows, then locks so the rest
+    /// scrolls. Mirrors AppList's internal geometry (row spacing + the 4pt
+    /// bottom content padding).
+    private var recentListHeight: CGFloat {
+        let rows = CGFloat(min(recentSessions.count, Self.visibleRecentRows))
+        return rows * CodingAgentRecentRow.rowHeight
+            + max(0, rows - 1) * AppListMetrics.rowSpacing
+            + 4
+    }
+
+    /// Fade only when there is hidden content to hint at; a fade over a
+    /// fully-visible list just dims the last row.
+    private var recentListFadeHeight: CGFloat {
+        recentSessions.count > Self.visibleRecentRows ? 24 : 0
     }
 
     private var workingRecentSessionIDs: Set<UUID> {
@@ -288,11 +340,7 @@ struct CodingAgentCollapsedPanel: View {
         if !query.isEmpty {
             scoped = scoped.filter { $0.matchesSessionSearch(query) }
         }
-        let next = Array(
-            scoped
-                .sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
-                .prefix(Self.maxRecents)
-        )
+        let next = scoped.sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
         if next != recentSessions { recentSessions = next }
     }
 }
@@ -306,93 +354,131 @@ private struct CodingAgentRecentList: View, Equatable {
     let selectedSessionID: UUID?
     let isAgentSelected: Bool
     let workingSessionIDs: Set<UUID>
+    /// Past the panel's fade when one shows, so the last row can scroll clear
+    /// of the gradient. Derived from the session count, so `==` already
+    /// covers it via `sessions`.
+    let bottomContentInset: CGFloat
+    /// Snapshot of `scrollRequest`'s value at construction, compared in `==`.
+    /// The binding can't be compared there: both sides read the same live
+    /// state storage, so old-vs-new is always equal and the gate would
+    /// swallow the request.
+    let scrollRequestID: UUID?
+    let scrollRequest: Binding<UUID?>
     let onSelect: (UUID) -> Void
+    let onDelete: (UUID) -> Void
 
     static func == (lhs: CodingAgentRecentList, rhs: CodingAgentRecentList) -> Bool {
         lhs.sessions == rhs.sessions
             && lhs.selectedSessionID == rhs.selectedSessionID
             && lhs.isAgentSelected == rhs.isAgentSelected
             && lhs.workingSessionIDs == rhs.workingSessionIDs
+            // A pending scroll request must defeat the gate so the inner
+            // AppList's onChange sees it (same trap as SessionListContent).
+            && lhs.scrollRequestID == rhs.scrollRequestID
     }
 
     var body: some View {
-        VStack(spacing: 3) {
-            ForEach(sessions) { session in
-                CodingAgentRecentRow(
-                    session: session,
-                    isSelected: isAgentSelected && selectedSessionID == session.id,
-                    isRunning: workingSessionIDs.contains(session.id),
-                    onSelect: { onSelect(session.id) }
-                )
-                .equatable()
-            }
+        AppList(
+            sections: [AppListSection(id: "recents", title: nil, items: sessions)],
+            selection: .single(selectionBinding),
+            rowHorizontalPadding: 0,
+            rowVerticalPadding: 0,
+            listHorizontalInset: 0,
+            bottomContentInset: bottomContentInset,
+            scrollRequest: scrollRequest
+        ) { session in
+            CodingAgentRecentRow(
+                session: session,
+                isRunning: workingSessionIDs.contains(session.id),
+                onDelete: { onDelete(session.id) }
+            )
+            .equatable()
         }
+    }
+
+    /// AppList paints selection from this binding; reads resolve against the
+    /// agent tab being current (no highlight while another tab is selected),
+    /// writes route through the view model's session selection.
+    private var selectionBinding: Binding<UUID?> {
+        Binding(
+            get: { isAgentSelected ? selectedSessionID : nil },
+            set: { if let id = $0 { onSelect(id) } }
+        )
     }
 }
 
 /// Compact one-line session row for the collapsed panel: title and a live
-/// status slot (typing dots while running, bell when waiting). No project icon
-/// — the panel header's project selector already says where you are.
+/// status slot (typing dots while running, bell when waiting; a hover swaps it
+/// for the delete affordance). No project icon — the panel header's project
+/// selector already says where you are. Selection/hover chrome and the tap
+/// come from the enclosing `AppList` row.
 struct CodingAgentRecentRow: View, Equatable {
     let session: PiAgentSessionRecord
-    let isSelected: Bool
     let isRunning: Bool
-    let onSelect: () -> Void
+    let onDelete: () -> Void
+
+    /// Fixed so the collapsed panel can size its visible window exactly.
+    static let rowHeight: CGFloat = 33
 
     // Closures intentionally excluded: when the value inputs match, the retained
     // instance's closure captured the same session id, so it stays correct.
     static func == (lhs: CodingAgentRecentRow, rhs: CodingAgentRecentRow) -> Bool {
         lhs.session == rhs.session
-            && lhs.isSelected == rhs.isSelected
             && lhs.isRunning == rhs.isRunning
     }
 
     @State private var isHovering = false
 
     var body: some View {
-        Button(action: onSelect) {
-            HStack(spacing: 8) {
-                Text(session.displayTitle)
-                    .font(AppTheme.Font.footnote.weight(.medium))
-                    .fontWidth(.expanded)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+        HStack(spacing: 8) {
+            Text(session.displayTitle)
+                .font(AppTheme.Font.footnote.weight(.medium))
+                .fontWidth(.expanded)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
 
-                Spacer(minLength: 6)
+            Spacer(minLength: 6)
 
-                if isRunning {
-                    PiAgentTypingIndicator()
-                } else if session.needsAttention {
-                    Image(systemName: "bell.fill")
-                        .font(AppTheme.Font.caption.weight(.semibold))
-                        .foregroundStyle(AppTheme.brandAccent)
-                        .help("Pi Agent finished and needs review")
-                        .accessibilityLabel("Needs review")
-                }
+            ZStack(alignment: .trailing) {
+                statusSlot
+                    .opacity(isHovering ? 0 : 1)
+                    .allowsHitTesting(false)
+                deleteButton
+                    .opacity(isHovering ? 1 : 0)
+                    .allowsHitTesting(isHovering)
             }
-            // 8 (card) + 6 here = 14pt content inset, aligned with the header.
-            .padding(.horizontal, 6)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(rowFill)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .animation(.easeInOut(duration: 0.15), value: isHovering)
         }
-        .buttonStyle(.plain)
+        // 8 (card) + 6 here = 14pt content inset, aligned with the header.
+        .padding(.horizontal, 6)
+        .frame(height: Self.rowHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .help(session.displayTitle)
     }
 
-    private var rowFill: Color {
-        if isSelected {
-            return AppTheme.brandAccent.opacity(0.22)
+    @ViewBuilder
+    private var statusSlot: some View {
+        if isRunning {
+            PiAgentTypingIndicator()
+        } else if session.needsAttention {
+            Image(systemName: "bell.fill")
+                .font(AppTheme.Font.caption.weight(.semibold))
+                .foregroundStyle(AppTheme.brandAccent)
+                .help("Pi Agent finished and needs review")
+                .accessibilityLabel("Needs review")
         }
-        if isHovering {
-            return Color.primary.opacity(0.06)
+    }
+
+    private var deleteButton: some View {
+        Button(action: onDelete) {
+            Image(systemName: "trash")
+                .font(AppTheme.Font.caption.weight(.semibold))
         }
-        return .clear
+        .appSmallSecondaryButton()
+        .help("Delete session")
+        .accessibilityLabel("Delete session")
     }
 }

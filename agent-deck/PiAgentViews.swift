@@ -2143,6 +2143,14 @@ private struct SessionListContent: View, Equatable {
     let workingSessionIDs: Set<UUID>
     let generatingTitleIDs: Set<UUID>
     let activityByID: [UUID: PiAgentSessionGitActivity]
+    /// Snapshot of `scrollRequest`'s value at construction, compared in `==`.
+    /// The binding itself can't be compared: both sides read the same live
+    /// state storage, so old-vs-new is always equal and the gate would
+    /// swallow the request.
+    var scrollRequestID: UUID? = nil
+    /// Forwarded to `AppList` so the owner can bring the selected session back
+    /// into view when this list becomes the visible one (panel expand).
+    var scrollRequest: Binding<UUID?> = .constant(nil)
 
     @Binding var selection: Set<UUID>
     let onSelect: (PiAgentSessionRecord) -> Void
@@ -2160,6 +2168,10 @@ private struct SessionListContent: View, Equatable {
         else if lhs.workingSessionIDs != rhs.workingSessionIDs { diff = "workingSessionIDs" }
         else if lhs.generatingTitleIDs != rhs.generatingTitleIDs { diff = "generatingTitleIDs" }
         else if lhs.activityByID != rhs.activityByID { diff = "activityByID" }
+        // A pending scroll request must defeat the equatable gate, or the
+        // inner AppList's onChange never sees the new value and the jump to
+        // the selected row silently doesn't happen.
+        else if lhs.scrollRequestID != rhs.scrollRequestID { diff = "scrollRequest" }
         else { diff = nil }
 #if DEBUG
         if let diff {
@@ -2188,7 +2200,11 @@ private struct SessionListContent: View, Equatable {
             cornerRadius: AppTheme.Chat.subCardCornerRadius,
             rowHorizontalPadding: 0,
             rowVerticalPadding: 0,
-            listHorizontalInset: 6
+            listHorizontalInset: 6,
+            // Past the 34pt fade below, so the last session can scroll clear
+            // of the gradient instead of always sitting dimmed in it.
+            bottomContentInset: 36,
+            scrollRequest: scrollRequest
         ) { session in
             row(session)
         }
@@ -2262,6 +2278,10 @@ struct CodingAgentExpandedPanel: View {
     @State private var pendingDeleteSessionIDs: Set<UUID> = []
     @State private var isDeleteSessionsAlertPresented = false
     @State private var sessionActivityCache: [UUID: PiAgentSessionGitActivity] = [:]
+    /// Set when the panel becomes the visible one so the list jumps to the
+    /// current session (which may have been picked from the collapsed recents
+    /// while this list sat hidden at a stale scroll offset).
+    @State private var sessionScrollRequest: UUID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -2282,6 +2302,8 @@ struct CodingAgentExpandedPanel: View {
                     workingSessionIDs: workingVisibleSessionIDs,
                     generatingTitleIDs: viewModel.piAgentTitleGeneratingSessionIDs,
                     activityByID: visibleSessionActivityByID,
+                    scrollRequestID: sessionScrollRequest,
+                    scrollRequest: $sessionScrollRequest,
                     selection: $selectedSessionIDs,
                     onSelect: { session in
                         renamingSessionID = nil
@@ -2307,6 +2329,10 @@ struct CodingAgentExpandedPanel: View {
             syncVisibleSessionSelection()
             syncMultiSelectionToSelectedSession()
             rebuildSessionActivityCache()
+            if isActive { sessionScrollRequest = store.selectedSession?.id }
+        }
+        .onChange(of: isActive) { _, active in
+            if active { sessionScrollRequest = store.selectedSession?.id }
         }
         .onChange(of: store.sessionListRevision) { _, _ in rebuildVisibleSessions() }
         .onChange(of: sessionSearchText) { _, _ in rebuildVisibleSessions() }
@@ -2893,7 +2919,9 @@ struct PiAgentScreen: View {
                 }
             }
             .padding(.vertical, 18)
-            .padding(.horizontal, 18)
+            // 14 keeps the title flush with the session rows' text (6 AppList
+            // inset + 8 row padding).
+            .padding(.horizontal, 14)
 
             if scopedSessions.isEmpty {
                 AppEmptyState(

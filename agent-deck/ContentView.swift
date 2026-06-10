@@ -21,10 +21,13 @@ enum PanelTransition {
 /// animation over already-laid-out trees — no teardown/rebuild (which re-ran
 /// the session caches' onAppear mid-animation) and no cross-fade rendering two
 /// heavy trees from scratch. Motion and fade run on separate scoped curves so
-/// the layers hand off without the dead "both translucent" dip. The corner
-/// radius morphs 16→0 as the panel scales up from the card's position — the
-/// container-transform read without matchedGeometryEffect, which would run
-/// layout on the heavy session list every animation frame.
+/// the layers hand off without the dead "both translucent" dip.
+///
+/// Animate ONLY scale/offset/opacity here: CoreAnimation interpolates those
+/// without re-rendering content. An animated clipShape radius morph was tried
+/// and reverted — an animatable shape makes SwiftUI rebuild the panel's
+/// display list every frame (40-70ms hitches in NSHostingView.layout/render),
+/// the same reason matchedGeometryEffect (per-frame layout) is out.
 private struct CodingAgentPanelLayers<Nav: View, Panel: View>: View {
     var viewModel: AppViewModel
     @ViewBuilder var nav: () -> Nav
@@ -44,7 +47,6 @@ private struct CodingAgentPanelLayers<Nav: View, Panel: View>: View {
                 .allowsHitTesting(!isPanelExpanded)
 
             panel(isPanelExpanded)
-                .clipShape(RoundedRectangle(cornerRadius: isPanelExpanded ? 0 : 16, style: .continuous))
                 .scaleEffect(isPanelExpanded ? 1 : 0.94, anchor: .bottom)
                 .offset(y: isPanelExpanded ? 0 : 52)
                 .animation(PanelTransition.move, value: isPanelExpanded)
@@ -281,7 +283,8 @@ struct AppInitialLoadWindowCover: NSViewRepresentable {
         /// When the cover became visible, so a too-fast launch still shows the
         /// splash for at least `minimumOnScreen` before it fades.
         private var shownAt: Date?
-        private let minimumOnScreen: TimeInterval = 1.0
+        /// Long enough for the splash animation (2.5s) to finish its lockup.
+        private let minimumOnScreen: TimeInterval = 2.8
         /// Failsafe: the cover blocks the *entire* window — toolbar and the
         /// traffic-light close/minimize buttons included. If the initial refresh
         /// never reports complete (an unforeseen hang or error path that skips
@@ -984,9 +987,14 @@ struct ContentView: View {
             isDisabled: { item in
                 item == .instructions && viewModel.selectedProjectPath == nil
             },
-            // Arrow-key selection would silently change tabs (and collapse the
-            // panel) while the expanded session list covers the nav rows.
-            keyboardNavigation: !viewModel.isCodingAgentPanelExpanded
+            // Constant on purpose: tying this to the panel-expansion flag handed
+            // AppList a changed parameter on every toggle, forcing a full nav
+            // re-diff (a per-toggle hitch). Arrow keys while the panel covers
+            // the nav aren't silent anyway — selection collapses the panel.
+            keyboardNavigation: true,
+            // Past the 34pt fade below, so the last row ("Models") can scroll
+            // clear of the gradient instead of always sitting dimmed in it.
+            bottomContentInset: 36
         ) { item in
             SidebarNavigationRow(
                 item: item,

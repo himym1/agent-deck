@@ -545,13 +545,6 @@ struct AppInitialLoadOverlay: View {
     /// Barely-there idle float so the splash feels alive without jittering.
     @State private var floating = false
 
-    /// The app icon the user currently has selected (Default vs Alternate), so the
-    /// splash matches their Dock icon. Falls back to the live application icon.
-    private var appIcon: NSImage? {
-        let choice = AppIconChoice.choice(forStoredName: AppSettingsStore.shared.settings.selectedAppIconName)
-        return NSImage(named: choice.assetName) ?? NSApplication.shared.applicationIconImage
-    }
-
     var body: some View {
         ZStack {
             Rectangle()
@@ -570,28 +563,24 @@ struct AppInitialLoadOverlay: View {
                 .animation(.easeInOut(duration: 6).repeatForever(autoreverses: true), value: floating)
                 .allowsHitTesting(false)
 
-            VStack(spacing: 22) {
-                if let appIcon {
-                    Image(nsImage: appIcon)
-                        .resizable()
-                        .interpolation(.high)
-                        .scaledToFit()
-                        .frame(width: 76, height: 76)
-                        .shadow(color: AppTheme.brandAccent.opacity(0.28), radius: 22, y: 8)
-                        .scaleEffect(entered ? 1 : 0.86)
-                        // Gentle idle float, separate from the entrance scale.
-                        .offset(y: floating ? -3 : 3)
-                        .animation(.easeInOut(duration: 2.8).repeatForever(autoreverses: true), value: floating)
-                }
+            // The brand splash animation: fleet of paper planes + wordmark
+            // type-on, playing once and holding its final lockup. Centered in
+            // the window; the loading status is pinned to the bottom edge so the
+            // two never fight over the middle.
+            SplashAnimationView()
+                .frame(width: 380, height: 380)
+                .allowsHitTesting(false)
+                .opacity(entered ? 1 : 0)
 
-                VStack(spacing: 14) {
-                    Text(message)
-                        .font(AppTheme.Font.callout.weight(.semibold))
-                        .foregroundStyle(AppTheme.mutedText)
-                    AppIndeterminateBar()
-                        .frame(width: 168)
-                }
+            VStack(spacing: 14) {
+                Text(message)
+                    .font(AppTheme.Font.callout.weight(.semibold))
+                    .foregroundStyle(AppTheme.mutedText)
+                AppIndeterminateBar()
+                    .frame(width: 168)
             }
+            .frame(maxHeight: .infinity, alignment: .bottom)
+            .padding(.bottom, 48)
             .opacity(entered ? 1 : 0)
         }
         .onAppear {

@@ -374,7 +374,7 @@ struct PiAgentSessionRow: View, Equatable {
     @FocusState private var isTitleFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .center, spacing: 8) {
                 titleView
                     .layoutPriority(1)
@@ -436,8 +436,10 @@ struct PiAgentSessionRow: View, Equatable {
         }
         .saturation(seenAppearanceAmount)
         .opacity(seenContentOpacity)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 11)
+        // 6 (AppList inset) + 8 = 14pt from the panel edge, left-aligning the
+        // title with the header's project icon.
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .trailing) {
             ZStack(alignment: .trailing) {
@@ -448,7 +450,7 @@ struct PiAgentSessionRow: View, Equatable {
                     .opacity(isRowHovered ? 1 : 0)
                     .allowsHitTesting(isRowHovered)
             }
-            .padding(.trailing, 12)
+            .padding(.trailing, 8)
             .animation(.easeInOut(duration: 0.15), value: isRowHovered)
         }
         .contentShape(Rectangle())
@@ -556,7 +558,7 @@ struct PiAgentSessionRow: View, Equatable {
                 .lineLimit(1)
                 // Match the non-editing title height so entering rename never
                 // changes the row height (keeps the list height stable).
-                .frame(height: 30, alignment: .center)
+                .frame(height: 18, alignment: .center)
                 .focused($isTitleFocused)
                 .onSubmit(commitRename)
                 .onExitCommand { resetRenameState() }
@@ -567,14 +569,10 @@ struct PiAgentSessionRow: View, Equatable {
         } else {
             HStack(alignment: .center, spacing: 5) {
                 Text(sessionTitle)
-                    .lineLimit(2)
+                    .lineLimit(1)
                     .minimumScaleFactor(0.9)
-                    .fixedSize(horizontal: false, vertical: true)
                     .allowsTightening(true)
-                    .lineSpacing(-2)
                     .truncationMode(.tail)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxHeight: 30, alignment: .center)
                     .contentTransition(.numericText())
                     .opacity(isGeneratingTitle ? 0.62 : 1)
                     .animation(isGeneratingTitle ? .easeInOut(duration: 0.85).repeatForever(autoreverses: true) : .default, value: isGeneratingTitle)
@@ -586,14 +584,14 @@ struct PiAgentSessionRow: View, Equatable {
             .font(AppTheme.Font.footnote.weight(.medium))
             .fontWidth(.expanded)
             .foregroundStyle(.primary)
-            // Fixed (not min/max) so the row's height never depends on whether the
-            // title wraps to two lines. Measuring a wrapping title requires a full
-            // text layout pass; with a stable height the row is cheap to measure, so
-            // the LazyVStack no longer pays a measurement storm when the list
-            // re-evaluates (selection changes, streaming badge updates). 30pt is the
-            // existing two-line cap, so two-line titles are unaffected and one-line
-            // titles simply center in the same box the max already reserved.
-            .frame(height: 30, alignment: .center)
+            // Fixed (not min/max) so the row's height never depends on the title's
+            // text layout. Measuring a wrapping title requires a full text layout
+            // pass; with a single line in a stable box the row is cheap to measure,
+            // so the LazyVStack doesn't pay a measurement storm when the list
+            // re-evaluates (selection changes, streaming badge updates). 18pt hugs
+            // one line of the footnote title, so the row carries no dead space
+            // above or below it.
+            .frame(height: 18, alignment: .center)
             .contentShape(Rectangle())
             .onHover { isTitleHovered = $0 }
             .onTapGesture(perform: onBeginRename)

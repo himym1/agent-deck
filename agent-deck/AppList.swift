@@ -101,6 +101,16 @@ struct AppList<Item: Identifiable & Hashable, RowContent: View>: View {
     var rowVerticalPadding: CGFloat = AppListMetrics.rowVerticalPadding
     /// Outer inset between the chip and the list's scroll-area edges.
     var listHorizontalInset: CGFloat = AppListMetrics.listHorizontalInset
+    /// Padding below the last row, inside the scroll content. Raise it past a
+    /// `bottomEdgeFade`'s height when one overlays the list, so the last row
+    /// can scroll clear of the gradient instead of always sitting dimmed in it.
+    var bottomContentInset: CGFloat = 4
+    /// On-demand scroll-to-row request. Set the bound value to an item id to
+    /// bring that row into view; the list performs the scroll (unanimated,
+    /// centered) and resets the binding to `nil`. Unlike a `scrollPosition`
+    /// binding there is no continuous position tracking, so leaving this at
+    /// the default costs nothing.
+    var scrollRequest: Binding<Item.ID?> = .constant(nil)
 
     @ViewBuilder let row: (Item) -> RowContent
 
@@ -126,53 +136,66 @@ struct AppList<Item: Identifiable & Hashable, RowContent: View>: View {
         //   - The first-section id is cached so we don't re-equate per row.
         let selectionSnapshot = SelectionSnapshot(selection: selection)
         let firstSectionID = sections.first?.id
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: AppListMetrics.rowSpacing) {
-                ForEach(sections) { section in
-                    if let title = section.title {
-                        AppListSectionHeaderView(title: title, info: section.info)
-                            .padding(.top, firstSectionID == section.id ? AppTheme.Split.contentTopInset : 16)
-                            .padding(.bottom, 2)
-                    }
-
-                    if section.items.isEmpty {
-                        if let message = section.emptyMessage {
-                            AppListEmptyRow(message: message)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: AppListMetrics.rowSpacing) {
+                    ForEach(sections) { section in
+                        if let title = section.title {
+                            AppListSectionHeaderView(title: title, info: section.info)
+                                .padding(.top, firstSectionID == section.id ? AppTheme.Split.contentTopInset : 16)
+                                .padding(.bottom, 2)
                         }
-                    } else {
-                        ForEach(section.items) { item in
-                            AppListRow(
-                                isSelected: selectionSnapshot.contains(item.id),
-                                isDisabled: isDisabled(item),
-                                tint: rowTint(item),
-                                cornerRadius: cornerRadius,
-                                horizontalPadding: rowHorizontalPadding,
-                                verticalPadding: rowVerticalPadding,
-                                onSelect: { handleTap(item) },
-                                content: { row(item) }
-                            )
-                            .id(item.id)
+
+                        if section.items.isEmpty {
+                            if let message = section.emptyMessage {
+                                AppListEmptyRow(message: message)
+                            }
+                        } else {
+                            ForEach(section.items) { item in
+                                AppListRow(
+                                    isSelected: selectionSnapshot.contains(item.id),
+                                    isDisabled: isDisabled(item),
+                                    tint: rowTint(item),
+                                    cornerRadius: cornerRadius,
+                                    horizontalPadding: rowHorizontalPadding,
+                                    verticalPadding: rowVerticalPadding,
+                                    onSelect: { handleTap(item) },
+                                    content: { row(item) }
+                                )
+                                .id(item.id)
+                            }
                         }
                     }
                 }
+                .padding(.horizontal, listHorizontalInset)
+                .padding(.bottom, bottomContentInset)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, listHorizontalInset)
-            .padding(.bottom, 4)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // `.never`, not `.hidden`: `.hidden` still lets AppKit briefly *flash* the
+            // overlay scroller when the content size changes — which a list hits as its
+            // rows lay out on appear (most visible on the Skills list, whose warning
+            // strip + sections grow the content height). `.never` suppresses the
+            // reservation entirely so there's no flash. `.hideNativeScrollers()` then
+            // guarantees no scroller even when macOS is set to always show scroll bars.
+            .scrollIndicators(.never)
+            .hideNativeScrollers()
+            .modifier(AppListKeyboardNavigation(
+                enabled: keyboardNavigation,
+                isFocused: $isFocused,
+                onMove: moveSelection
+            ))
+            .onAppear { performScrollRequest(with: proxy) }
+            .onChange(of: scrollRequest.wrappedValue) { _, _ in performScrollRequest(with: proxy) }
         }
-        // `.never`, not `.hidden`: `.hidden` still lets AppKit briefly *flash* the
-        // overlay scroller when the content size changes — which a list hits as its
-        // rows lay out on appear (most visible on the Skills list, whose warning
-        // strip + sections grow the content height). `.never` suppresses the
-        // reservation entirely so there's no flash. `.hideNativeScrollers()` then
-        // guarantees no scroller even when macOS is set to always show scroll bars.
-        .scrollIndicators(.never)
-        .hideNativeScrollers()
-        .modifier(AppListKeyboardNavigation(
-            enabled: keyboardNavigation,
-            isFocused: $isFocused,
-            onMove: moveSelection
-        ))
+    }
+
+    /// Consumes a pending `scrollRequest`: jumps to the row (unanimated, so it
+    /// never fights a panel transition) and clears the binding. Unknown ids
+    /// (e.g. a selection filtered out of the current list) are a no-op.
+    private func performScrollRequest(with proxy: ScrollViewProxy) {
+        guard let id = scrollRequest.wrappedValue else { return }
+        proxy.scrollTo(id, anchor: .center)
+        scrollRequest.wrappedValue = nil
     }
 
     private func handleTap(_ item: Item) {
