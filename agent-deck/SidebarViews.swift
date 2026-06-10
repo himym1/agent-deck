@@ -64,6 +64,10 @@ struct SidebarTitleBar: View {
                     Text(word)
                         .font(AppFonts.kemcoPixelBold(size: 18))
                         .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        // Never wrap mid-word at narrow widths; the sidebar's
+                        // min column width is sized to fit the full title.
+                        .fixedSize()
                 }
             }
             .accessibilityElement(children: .combine)

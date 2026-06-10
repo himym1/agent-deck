@@ -567,9 +567,6 @@ struct ContentView: View {
                         isActive: isPanelExpanded,
                         onCollapse: { viewModel.isCodingAgentPanelExpanded = false }
                     )
-                    .padding(.horizontal, 16)
-                    .padding(.top, 10)
-                    .padding(.bottom, 14)
                     .scaleEffect(isPanelExpanded ? 1 : 0.96, anchor: .bottom)
                     .offset(y: isPanelExpanded ? 0 : 44)
                     .animation(PanelTransition.move, value: isPanelExpanded)
@@ -578,9 +575,10 @@ struct ContentView: View {
                     .allowsHitTesting(isPanelExpanded)
                 }
             }
-            .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
+            // Min width fits the pixel title + refresh/gear without wrapping.
+            .frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.clear, ignoresSafeAreaEdges: .all)
-            .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 320)
+            .navigationSplitViewColumnWidth(min: 260, ideal: 280, max: 320)
             .perfScene("Sidebar")
         } detail: {
             detailSplitView
@@ -714,7 +712,8 @@ struct ContentView: View {
                 selectedProject: selectedProject,
                 projectFilterText: $projectFilterText,
                 isSearchDebouncing: projectSearchIsDebouncing,
-                onSelectProject: { viewModel.setSelectedProject($0?.url) }
+                onSelectProject: { viewModel.setSelectedProject($0?.url) },
+                sessionSearchText: piAgentSessionSearchText
             )
             .padding(.horizontal, 16)
             .padding(.top, 8)

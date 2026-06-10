@@ -1,5 +1,23 @@
 import SwiftUI
 
+/// Single definition of what "session matches the search query" means, shared
+/// by the expanded panel's full list and the collapsed panel's recents so the
+/// toolbar search filters both identically.
+extension PiAgentSessionRecord {
+    func matchesSessionSearch(_ query: String) -> Bool {
+        [
+            title,
+            projectName,
+            projectPath,
+            repository ?? "",
+            issueNumber.map(String.init) ?? "",
+            lastSummary ?? ""
+        ]
+        .joined(separator: " ")
+        .localizedCaseInsensitiveContains(query)
+    }
+}
+
 /// Header row shared by both states of the Coding Agent pull-up panel: the
 /// project selector (icon + name + picker glyph opening the project popover),
 /// live status badges, a per-state trailing slot (new-session controls,
@@ -196,6 +214,9 @@ struct CodingAgentCollapsedPanel: View {
     @Binding var projectFilterText: String
     let isSearchDebouncing: Bool
     let onSelectProject: (DiscoveredProject?) -> Void
+    /// The same toolbar search the expanded list filters on, so searching
+    /// narrows the recents too.
+    let sessionSearchText: String
 
     /// Cached so `body` never reads `store.sessions` directly — `touchSession`
     /// mutates that array many times per second during streaming. Rebuilt only
@@ -203,7 +224,7 @@ struct CodingAgentCollapsedPanel: View {
     /// the expanded panel's `cachedVisibleSessions`.
     @State private var recentSessions: [PiAgentSessionRecord] = []
 
-    private static let maxRecents = 3
+    private static let maxRecents = 6
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -242,6 +263,8 @@ struct CodingAgentCollapsedPanel: View {
         .onAppear(perform: rebuildRecents)
         .onChange(of: store.sessionListRevision) { _, _ in rebuildRecents() }
         .onChange(of: viewModel.selectedProjectPath) { _, _ in rebuildRecents() }
+        .onChange(of: sessionSearchText) { _, _ in rebuildRecents() }
+        .onChange(of: viewModel.showPiAgentAttentionOnly) { _, _ in rebuildRecents() }
     }
 
     private var workingRecentSessionIDs: Set<UUID> {
@@ -249,11 +272,18 @@ struct CodingAgentCollapsedPanel: View {
     }
 
     private func rebuildRecents() {
-        let scoped: [PiAgentSessionRecord]
+        var scoped: [PiAgentSessionRecord]
         if let path = viewModel.selectedProjectPath {
             scoped = store.sessions.filter { $0.projectPath == path }
         } else {
             scoped = store.sessions
+        }
+        if viewModel.showPiAgentAttentionOnly {
+            scoped = scoped.filter(\.needsAttention)
+        }
+        let query = sessionSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty {
+            scoped = scoped.filter { $0.matchesSessionSearch(query) }
         }
         let next = Array(
             scoped

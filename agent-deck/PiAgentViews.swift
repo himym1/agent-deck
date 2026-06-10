@@ -2267,7 +2267,7 @@ struct CodingAgentExpandedPanel: View {
         VStack(alignment: .leading, spacing: 0) {
             header
                 .padding(.horizontal, 14)
-                .padding(.top, 10)
+                .padding(.top, 12)
                 .padding(.bottom, 10)
 
             if !hasAnyScopedSessions {
@@ -2299,11 +2299,9 @@ struct CodingAgentExpandedPanel: View {
                 .equatable()
             }
         }
-        // No inner padding around the list: AppList's own inset + the row's
-        // 18pt content padding keep session rows at the rhythm they had when
-        // the list was full-bleed in the sidebar.
+        // Full-bleed: the card chrome belongs to the collapsed state only —
+        // expanding sheds the container so the list gets the whole sidebar.
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .appContentSurface(cornerRadius: 16)
         .onAppear {
             rebuildVisibleSessions()
             syncVisibleSessionSelection()
@@ -2401,18 +2399,7 @@ struct CodingAgentExpandedPanel: View {
         let query = sessionSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let scopedSource = scoped ?? scopedSessions
         let source = viewModel.showPiAgentAttentionOnly ? scopedSource.filter(\.needsAttention) : scopedSource
-        let filtered = query.isEmpty ? source : source.filter { session in
-            [
-                session.title,
-                session.projectName,
-                session.projectPath,
-                session.repository ?? "",
-                session.issueNumber.map(String.init) ?? "",
-                session.lastSummary ?? ""
-            ]
-            .joined(separator: " ")
-            .localizedCaseInsensitiveContains(query)
-        }
+        let filtered = query.isEmpty ? source : source.filter { $0.matchesSessionSearch(query) }
         return filtered.sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
     }
 
@@ -2455,9 +2442,20 @@ struct CodingAgentExpandedPanel: View {
     }
 
     private func syncMultiSelectionToSelectedSession() {
-        let next: Set<UUID> = store.selectedSession.map { [$0.id] } ?? []
-        if next != selectedSessionIDs { selectedSessionIDs = next }
-        lastSelectedSessionID = store.selectedSession?.id
+        guard let selectedID = store.selectedSession?.id else {
+            if !selectedSessionIDs.isEmpty { selectedSessionIDs = [] }
+            lastSelectedSessionID = nil
+            return
+        }
+        // A list click has already written the (possibly multi) selection,
+        // including the session it just made current — collapsing to a single
+        // here was what killed ⌘/⇧ multi-select the instant it was made. Only
+        // reset when the current session jumped OUTSIDE the set (keyboard
+        // shortcuts, notification taps, new drafts).
+        if !selectedSessionIDs.contains(selectedID) {
+            selectedSessionIDs = [selectedID]
+        }
+        lastSelectedSessionID = selectedID
     }
 
     private func pruneMultiSelectionToVisibleSessions() {
@@ -2474,8 +2472,16 @@ struct CodingAgentExpandedPanel: View {
         } else if modifiers.contains(.shift), let anchorID = lastSelectedSessionID, let anchorIndex = visibleSessionIDs.firstIndex(of: anchorID), let targetIndex = visibleSessionIDs.firstIndex(of: session.id) {
             selectedSessionIDs.formUnion(visibleSessionIDs[min(anchorIndex, targetIndex)...max(anchorIndex, targetIndex)])
         } else if modifiers.contains(.command) {
-            if selectedSessionIDs.contains(session.id), selectedSessionIDs.count > 1 { selectedSessionIDs.remove(session.id) }
-            else { selectedSessionIDs.insert(session.id) }
+            if selectedSessionIDs.contains(session.id), selectedSessionIDs.count > 1 {
+                selectedSessionIDs.remove(session.id)
+                // Hand the store a session that's still selected — re-selecting
+                // the one just deselected would make the sync re-add it.
+                let fallbackID = selectedSessionIDs.first
+                lastSelectedSessionID = fallbackID
+                if let fallbackID { viewModel.selectPiAgentSession(fallbackID) }
+                return
+            }
+            selectedSessionIDs.insert(session.id)
         }
         lastSelectedSessionID = session.id
         viewModel.selectPiAgentSession(session.id)
@@ -4912,12 +4918,21 @@ struct PiAgentScreen: View {
     }
 
     private func syncMultiSelectionToSelectedSession() {
-        let next: Set<UUID> = store.selectedSession.map { [$0.id] } ?? []
         // Only write @State when it actually changes — an unconditional assign
         // re-evaluates the whole screen body (and re-runs the transcript's
         // updateNSView) on every sidebar refresh, including streaming pulses.
-        if next != selectedSessionIDs { selectedSessionIDs = next }
-        lastSelectedSessionID = store.selectedSession?.id
+        guard let selectedID = store.selectedSession?.id else {
+            if !selectedSessionIDs.isEmpty { selectedSessionIDs = [] }
+            lastSelectedSessionID = nil
+            return
+        }
+        // A list click has already written the (possibly multi) selection —
+        // collapsing to a single here was what killed ⌘/⇧ multi-select. Only
+        // reset when the current session jumped OUTSIDE the set.
+        if !selectedSessionIDs.contains(selectedID) {
+            selectedSessionIDs = [selectedID]
+        }
+        lastSelectedSessionID = selectedID
     }
 
     private func pruneMultiSelectionToVisibleSessions() {
@@ -4944,9 +4959,14 @@ struct PiAgentScreen: View {
         } else if modifiers.contains(.command) {
             if selectedSessionIDs.contains(session.id), selectedSessionIDs.count > 1 {
                 selectedSessionIDs.remove(session.id)
-            } else {
-                selectedSessionIDs.insert(session.id)
+                // Hand the store a session that's still selected — re-selecting
+                // the one just deselected would make the sync re-add it.
+                let fallbackID = selectedSessionIDs.first
+                lastSelectedSessionID = fallbackID
+                if let fallbackID { viewModel.selectPiAgentSession(fallbackID) }
+                return
             }
+            selectedSessionIDs.insert(session.id)
         }
         lastSelectedSessionID = session.id
         viewModel.selectPiAgentSession(session.id)

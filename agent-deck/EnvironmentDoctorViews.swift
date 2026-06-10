@@ -640,10 +640,15 @@ struct DoctorScreen: View {
     // MARK: - GitHub Access
 
     private var githubAccessSection: some View {
+        // Connected: avatar centered against the title+detail block, so the
+        // few points of height difference split evenly instead of hanging off
+        // the bottom (and a wrapping detail line stays balanced too).
+        // Disconnected: top-aligned, the Connect button makes the text column
+        // much taller and the small glyph belongs beside the title.
         AppCard(title: "GitHub") {
-            HStack(alignment: .top, spacing: 14) {
+            HStack(alignment: effectiveGitHubAccount == nil ? .top : .center, spacing: 14) {
                 if let account = effectiveGitHubAccount {
-                    SidebarGitHubAvatarView(url: githubAvatarURL(for: account), size: 32)
+                    SidebarGitHubAvatarView(url: githubAvatarURL(for: account), size: 40)
                         .overlay(alignment: .bottomTrailing) {
                             Circle()
                                 .fill(githubStatusColor)
