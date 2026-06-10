@@ -1653,11 +1653,6 @@ struct ContentView: View {
             ExtensionsScreen(viewModel: viewModel)
         case .doctor:
             DoctorScreen(viewModel: viewModel)
-        #if DEBUG
-        case .debugTranscript:
-            TranscriptDebugScreen()
-                .environment(viewModel)
-        #endif
         }
     }
 
