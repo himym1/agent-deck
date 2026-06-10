@@ -49,99 +49,10 @@ struct SidebarNavigationRow: View {
 }
 
 
-/// Compact Pi Agent control that lives in the sidebar's bottom bar. Selection
-/// is signaled primarily by the icon color (muted → brand gradient), with a
-/// faint chip wash + stroke as the secondary cue. Running sessions render the
-/// typing-dots animation inline; sessions needing input render a red badge in
-/// the top-trailing corner. Full status copy is exposed via tooltip.
-struct PiAgentSidebarChip: View {
-    let isSelected: Bool
-    let runningSessionCount: Int
-    let needsAttentionCount: Int
-    let action: () -> Void
-
-    private var hasRunningSessions: Bool { runningSessionCount > 0 }
-    private var hasAttention: Bool { needsAttentionCount > 0 }
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image("pi")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Color.secondary)
-                    .frame(width: 12, height: 12)
-                    .accessibilityHidden(true)
-
-                Text("Coding Agent")
-                    .font(.callout.weight(.semibold))
-                    .fontWidth(.expanded)
-                    .foregroundStyle(.primary)
-
-                if hasRunningSessions || hasAttention {
-                    HStack(spacing: 8) {
-                        if hasRunningSessions {
-                            PiAgentTypingIndicator()
-                        }
-
-                        if hasAttention {
-                            Text(badgeText)
-                                .font(.system(size: 10, weight: .bold))
-                                .monospacedDigit()
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, needsAttentionCount > 9 ? 5 : 4)
-                                .frame(minWidth: 14, minHeight: 14)
-                                .background(Capsule(style: .continuous).fill(Color.red))
-                                .accessibilityLabel("\(needsAttentionCount) Pi Agent notification\(needsAttentionCount == 1 ? "" : "s")")
-                        }
-                    }
-                    .padding(.leading, 4)
-                }
-            }
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(statusText)
-        .accessibilityLabel("Pi Agent")
-        .accessibilityHint(accessibilityHint)
-    }
-
-    private var statusText: String {
-        if hasAttention {
-            let remainingRunningCount = max(0, runningSessionCount - needsAttentionCount)
-            let waitingText = needsAttentionCount == 1 ? "1 waiting" : "\(needsAttentionCount) waiting"
-            if remainingRunningCount > 0 {
-                let runningText = remainingRunningCount == 1 ? "1 running" : "\(remainingRunningCount) running"
-                return "\(waitingText) · \(runningText)"
-            }
-            return needsAttentionCount == 1 ? "1 session waiting" : "\(needsAttentionCount) sessions waiting"
-        }
-
-        if hasRunningSessions {
-            return runningSessionCount == 1 ? "1 session running" : "\(runningSessionCount) sessions running"
-        }
-
-        return isSelected ? "Ready to code" : "Click to start coding"
-    }
-
-    private var accessibilityHint: String {
-        if hasAttention {
-            return needsAttentionCount == 1 ? "1 Pi Agent session is waiting" : "\(needsAttentionCount) Pi Agent sessions are waiting"
-        }
-        if hasRunningSessions {
-            return runningSessionCount == 1 ? "1 Pi Agent session is running" : "\(runningSessionCount) Pi Agent sessions are running"
-        }
-        return "Open Pi Agent sessions"
-    }
-
-    private var badgeText: String {
-        needsAttentionCount > 99 ? "99+" : "\(needsAttentionCount)"
-    }
-}
-
-
 struct SidebarProjectGitHubCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openSettings) private var openSettings
+    @EnvironmentObject private var updater: UpdaterService
     var viewModel: AppViewModel
     let projects: [DiscoveredProject]
     let selectedProject: DiscoveredProject?
@@ -247,6 +158,50 @@ struct SidebarProjectGitHubCard: View {
                 .help("Refresh GitHub status, project scans, and repo data")
                 .accessibilityLabel("Refresh GitHub and projects")
                 .disabled(viewModel.githubIsRefreshingEverything)
+            }
+
+            Divider()
+                .opacity(0.7)
+
+            HStack(spacing: 8) {
+                HStack(alignment: .center, spacing: 7) {
+                    ForEach(AppBrand.titleWords, id: \.self) { word in
+                        Text(word)
+                            .font(AppFonts.kemcoPixelBold(size: 11))
+                    }
+                }
+                .foregroundStyle(AppTheme.mutedText)
+                .accessibilityLabel(AppBrand.displayName)
+
+                Spacer(minLength: 8)
+
+                if updater.updateAvailable {
+                    Button {
+                        updater.checkForUpdates()
+                    } label: {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .imageScale(.medium)
+                            .foregroundStyle(AppTheme.brandAccent)
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(updater.availableVersion.map { "Update to version \($0)" } ?? "Update available")
+                    .accessibilityLabel("Install update")
+                }
+
+                Button {
+                    openSettings()
+                } label: {
+                    Image(systemName: "gearshape")
+                        .imageScale(.medium)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Settings…")
+                .accessibilityLabel("Settings")
             }
         }
         .padding(14)
@@ -476,48 +431,6 @@ struct SidebarGitHubAvatarView: View {
                 .fill(AppTheme.contentSubtleFill)
         )
         .clipShape(Circle())
-    }
-}
-
-
-/// Sidebar bottom bar per Apple HIG — app-level chrome that doesn't fit in the
-/// sidebar's toolbar (which would collapse into the overflow chevron). Hosts
-/// the Pi Agent chip (primary entry into the Agent screen) on the left and the
-/// Settings gear on the right.
-struct SidebarBottomBar: View {
-    var viewModel: AppViewModel
-    @Environment(\.openSettings) private var openSettings
-
-    var body: some View {
-        HStack(spacing: 8) {
-            PiAgentSidebarChip(
-                isSelected: viewModel.selectedSidebarItem == .agent,
-                runningSessionCount: viewModel.piAgentRunningSessionCount,
-                needsAttentionCount: viewModel.piAgentNeedsAttentionCount,
-                action: { viewModel.openPiAgentScreen() }
-            )
-
-            Spacer()
-
-            Button {
-                openSettings()
-            } label: {
-                Image(systemName: "gearshape")
-                    .imageScale(.medium)
-                    .foregroundStyle(AppTheme.mutedText)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Settings…")
-            .accessibilityLabel("Settings")
-        }
-        // Whole-row tap (except over the nested Settings button) opens Pi Agent —
-        // expands the click target so users don't have to land on the small chip.
-        // Inner Buttons take gesture priority, so Settings still works on its own.
-        .contentShape(Rectangle())
-        .onTapGesture {
-            viewModel.openPiAgentScreen()
-        }
     }
 }
 

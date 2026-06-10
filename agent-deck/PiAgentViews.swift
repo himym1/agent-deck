@@ -2250,18 +2250,21 @@ private struct SessionListContent: View, Equatable {
     }
 }
 
-struct PiAgentSidebarSessionsView: View {
+/// Expanded state of the Coding Agent pull-up panel: the full searchable
+/// session list that overlays the upper nav sections when the panel is pulled
+/// up (see `mainContent`'s sidebar ZStack).
+struct CodingAgentExpandedPanel: View {
     let viewModel: AppViewModel
     let store: PiAgentSessionStore
     @Binding var sessionSearchText: String
-    /// True only while this sidebar is the visible one. Both sidebars are kept
-    /// permanently mounted (ZStack in `mainContent`) so the push transition is a
-    /// cheap opacity/offset animation rather than a teardown/rebuild — but that
-    /// means this view also stays alive while the Resources sidebar is showing.
-    /// `isActive` gates the only per-streaming-tick work (the git-activity parse)
-    /// so the hidden sidebar costs nothing during a streaming run.
+    /// True only while the panel is expanded. Both panel states are kept
+    /// permanently mounted (ZStack in `mainContent`) so the pull-up is a cheap
+    /// opacity/offset animation rather than a teardown/rebuild — but that means
+    /// this view also stays alive while collapsed. `isActive` gates the only
+    /// per-streaming-tick work (the git-activity parse) so the hidden panel
+    /// costs nothing during a streaming run.
     let isActive: Bool
-    let onBackToResources: () -> Void
+    let onCollapse: () -> Void
 
     @State private var cachedVisibleSessions: [PiAgentSessionRecord] = []
     @State private var hasBuiltVisibleSessions = false
@@ -2351,58 +2354,24 @@ struct PiAgentSidebarSessionsView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                AppCircleIconButton(
-                    style: .neutral,
-                    size: 30,
-                    help: "Resources",
-                    action: onBackToResources
-                ) {
-                    Image(systemName: "chevron.left")
+        CodingAgentPanelHeader(
+            viewModel: viewModel,
+            isExpanded: true,
+            onToggle: onCollapse
+        ) {
+            if selectedSessionIDs.count > 1 {
+                Button(role: .destructive) { requestDeleteSessions(selectedSessionIDs) } label: {
+                    Image(systemName: "trash.fill")
+                        .font(AppTheme.Font.body.weight(.semibold))
+                        .foregroundStyle(Color.red)
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(Color.red.opacity(0.12)))
                 }
-                .accessibilityLabel("Show resources")
-
-                Text("Coding Agent")
-                    .font(.title2.bold())
-                    .fontWidth(.expanded)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                if selectedSessionIDs.count > 1 {
-                    Button(role: .destructive) { requestDeleteSessions(selectedSessionIDs) } label: {
-                        Image(systemName: "trash.fill")
-                            .font(AppTheme.Font.body.weight(.semibold))
-                            .foregroundStyle(Color.red)
-                            .frame(width: 30, height: 30)
-                            .background(Circle().fill(Color.red.opacity(0.12)))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Delete selected sessions")
-                }
-                if viewModel.appSettings.nativeSubagentsEnabledForNewSessions {
-                    PiAgentNewSessionSplitButton(
-                        viewModel: viewModel,
-                        projects: piAgentNewSessionProjects,
-                        selectedProject: viewModel.selectedDiscoveredProject,
-                        onNewSession: { viewModel.createPiAgentDraftForSelectedProject() },
-                        onNewSessionForProject: { viewModel.createPiAgentDraft(for: $0) }
-                    )
-                } else if viewModel.selectedDiscoveredProject == nil {
-                    PiAgentAddSessionMenuButton(
-                        projects: piAgentNewSessionProjects,
-                        selectedProject: viewModel.selectedDiscoveredProject,
-                        action: { viewModel.createPiAgentDraftForSelectedProject() },
-                        onSelectProject: { viewModel.createPiAgentDraft(for: $0) }
-                    )
-                } else {
-                    PiAgentAddSessionButton(action: { viewModel.createPiAgentDraftForSelectedProject() })
-                }
+                .buttonStyle(.plain)
+                .help("Delete selected sessions")
             }
+            CodingAgentNewSessionControls(viewModel: viewModel)
         }
-    }
-
-    private var piAgentNewSessionProjects: [DiscoveredProject] {
-        viewModel.enabledProjects.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private var scopedSessions: [PiAgentSessionRecord] {

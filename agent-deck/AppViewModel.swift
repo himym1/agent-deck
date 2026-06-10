@@ -66,6 +66,11 @@ final class AppViewModel: NSObject {
         didSet { clearAgentUniverseCache() }
     }
     var selectedSidebarItem: SidebarItem = .agent
+    /// Whether the Coding Agent pull-up panel covers the upper sidebar (full
+    /// session list) or sits collapsed below RUNTIME (recent sessions only).
+    /// Defaults true so the app launches agent-first. Collapsed by selecting
+    /// any other sidebar item (see `ContentView.handleSidebarSelectionChange`).
+    var isCodingAgentPanelExpanded = true
     var selectedAgentID: EffectiveAgentRecord.ID?
     var selectedSkillID: SkillRecord.ID?
     /// Skills whose deletion file I/O has finished but for which a fresh
@@ -2362,6 +2367,7 @@ final class AppViewModel: NSObject {
 
     func openPiAgentScreen() {
         selectedSidebarItem = .agent
+        isCodingAgentPanelExpanded = true
         if piAgentSessionStore.selectedSession?.id != nil {
             ensurePiAgentModelCatalogLoaded()
         }

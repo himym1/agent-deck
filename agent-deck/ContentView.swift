@@ -523,33 +523,50 @@ struct ContentView: View {
     @ViewBuilder
     private var mainContent: some View {
         let warnings = sidebarWarningSnapshot
-        let isAgentSidebar = viewModel.selectedSidebarItem == .agent
+        let isPanelExpanded = viewModel.isCodingAgentPanelExpanded
         NavigationSplitView(columnVisibility: $navigationColumnVisibility) {
-            // Both sidebars stay permanently mounted in a ZStack so switching is a
-            // pure opacity/offset animation over already-laid-out trees — no
-            // teardown/rebuild (which re-ran the session caches' onAppear mid-
-            // animation) and no cross-fade rendering two heavy trees from scratch.
-            // The hidden layer doesn't re-layout (SessionListContent is .equatable).
-            ZStack(alignment: .topLeading) {
-                resourcesSidebar(warnings: warnings)
-                    .opacity(isAgentSidebar ? 0 : 1)
-                    // Eases out to the left as the agent sessions push in.
-                    .offset(x: isAgentSidebar ? -32 : 0)
-                    .allowsHitTesting(!isAgentSidebar)
+            VStack(spacing: 0) {
+                // Both states of the Coding Agent pull-up panel stay permanently
+                // mounted in a ZStack so expanding is a pure opacity/offset
+                // animation over already-laid-out trees — no teardown/rebuild
+                // (which re-ran the session caches' onAppear mid-animation) and no
+                // cross-fade rendering two heavy trees from scratch. The hidden
+                // layer doesn't re-layout (SessionListContent is .equatable).
+                ZStack(alignment: .topLeading) {
+                    navigationSidebarLayer(warnings: warnings)
+                        .opacity(isPanelExpanded ? 0 : 1)
+                        // Eases up and out as the session list pushes up from below.
+                        .offset(y: isPanelExpanded ? -24 : 0)
+                        .allowsHitTesting(!isPanelExpanded)
 
-                PiAgentSidebarSessionsView(
+                    CodingAgentExpandedPanel(
+                        viewModel: viewModel,
+                        store: viewModel.piAgentSessionStore,
+                        sessionSearchText: $piAgentSessionSearchText,
+                        isActive: isPanelExpanded,
+                        onCollapse: { viewModel.isCodingAgentPanelExpanded = false }
+                    )
+                    // Sits just below the fold when collapsed, slides home on expand.
+                    .opacity(isPanelExpanded ? 1 : 0)
+                    .offset(y: isPanelExpanded ? 0 : 32)
+                    .allowsHitTesting(isPanelExpanded)
+                }
+                .animation(SidebarTransition.curve, value: isPanelExpanded)
+
+                SidebarProjectGitHubCard(
                     viewModel: viewModel,
-                    store: viewModel.piAgentSessionStore,
-                    sessionSearchText: $piAgentSessionSearchText,
-                    isActive: isAgentSidebar,
-                    onBackToResources: { viewModel.selectedSidebarItem = .projects }
+                    projects: filteredProjects,
+                    selectedProject: selectedProject,
+                    selectedProjectPath: viewModel.selectedProjectPath,
+                    filterText: $projectFilterText,
+                    isSearchDebouncing: projectFilterText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != debouncedProjectFilterText,
+                    onSelectProject: { viewModel.setSelectedProject($0?.url) },
+                    onChooseProject: { viewModel.chooseProjectRoot() }
                 )
-                .opacity(isAgentSidebar ? 1 : 0)
-                // Sits just off the trailing edge when inactive, slides home on enter.
-                .offset(x: isAgentSidebar ? 0 : 32)
-                .allowsHitTesting(isAgentSidebar)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 14)
             }
-            .animation(SidebarTransition.curve, value: isAgentSidebar)
             .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.clear, ignoresSafeAreaEdges: .all)
             .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 320)
@@ -663,52 +680,23 @@ struct ContentView: View {
         }
     }
 
-    /// The default ("Resources") sidebar: brand title, section list, project
-    /// picker and bottom bar. Extracted so it can live as a permanently-mounted
-    /// ZStack layer alongside the agent sessions sidebar (see `mainContent`).
+    /// The navigation layer of the sidebar: section list + the collapsed Coding
+    /// Agent panel. Extracted so it can live as a permanently-mounted ZStack
+    /// layer underneath the expanded panel (see `mainContent`).
     @ViewBuilder
-    private func resourcesSidebar(warnings: [SidebarItem: Bool]) -> some View {
+    private func navigationSidebarLayer(warnings: [SidebarItem: Bool]) -> some View {
         VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 12) {
-                ForEach(AppBrand.titleWords, id: \.self) { word in
-                    Text(word)
-                        .font(AppFonts.kemcoPixelBold(size: 18))
-                        .foregroundStyle(.primary)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.top, 10)
-            .padding(.bottom, 18)
-
             sidebarSectionsList(warnings: warnings)
+                .padding(.top, 10)
 
             Spacer(minLength: 0)
 
-            SidebarProjectGitHubCard(
+            CodingAgentCollapsedPanel(
                 viewModel: viewModel,
-                projects: filteredProjects,
-                selectedProject: selectedProject,
-                selectedProjectPath: viewModel.selectedProjectPath,
-                filterText: $projectFilterText,
-                isSearchDebouncing: projectFilterText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != debouncedProjectFilterText,
-                onSelectProject: { viewModel.setSelectedProject($0?.url) },
-                onChooseProject: { viewModel.chooseProjectRoot() }
+                store: viewModel.piAgentSessionStore
             )
             .padding(.horizontal, 16)
             .padding(.top, 8)
-
-            VStack(spacing: 0) {
-                Divider()
-                    .opacity(0.7)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 10)
-
-                SidebarBottomBar(viewModel: viewModel)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 10)
-                    .padding(.bottom, 14)
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
@@ -949,7 +937,9 @@ struct ContentView: View {
             isDisabled: { item in
                 item == .instructions && viewModel.selectedProjectPath == nil
             },
-            keyboardNavigation: true
+            // Arrow-key selection would silently change tabs (and collapse the
+            // panel) while the expanded session list covers the nav rows.
+            keyboardNavigation: !viewModel.isCodingAgentPanelExpanded
         ) { item in
             SidebarNavigationRow(
                 item: item,
@@ -1659,6 +1649,10 @@ struct ContentView: View {
     private func handleSidebarSelectionChange(_ newValue: SidebarItem) {
         if newValue == .agent {
             viewModel.acknowledgeVisibleSelectedPiAgentSession()
+        } else if viewModel.isCodingAgentPanelExpanded {
+            // The expanded panel covers the nav list, so any non-agent selection
+            // (commands, programmatic jumps) must reveal it again.
+            viewModel.isCodingAgentPanelExpanded = false
         }
     }
 
