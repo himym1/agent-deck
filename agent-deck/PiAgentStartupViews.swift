@@ -450,10 +450,12 @@ struct PiAgentSessionSubagentPickerCard: View {
     var body: some View {
         // 1:1 agent chats never delegate to other subagents — the user IS the
         // supervisor, and the runner does not install the `managed_subagent`
-        // bridge for these sessions. Hide the picker entirely so it doesn't
-        // imply a capability the session doesn't have.
+        // bridge for these sessions. The picker's job is done, so it collapses
+        // to a summary of the binding with an undo, instead of a list that
+        // would imply a capability the session doesn't have.
         if session.isAgentBound {
-            EmptyView()
+            boundSummaryCard
+                .transition(.opacity.combined(with: .move(edge: .top)))
         } else {
             let data = resolve()
             let isHidden = data.rows.isEmpty && data.addable.isEmpty
@@ -518,83 +520,68 @@ struct PiAgentSessionSubagentPickerCard: View {
     }
 
     private func agentList(_ data: Resolved) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 2) {
             ForEach(data.rows, id: \.name) { agent in
                 agentRow(agent, checked: data.selection.contains(agent.name), selection: data.selection)
             }
-            HStack(spacing: 14) {
-                Button {
-                    isAddSheetPresented = true
-                } label: {
-                    Label("Add agents…", systemImage: "plus.circle")
-                        .font(.caption.weight(.medium))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Self.accent)
-                .disabled(data.addable.isEmpty)
-                .opacity(data.addable.isEmpty ? 0.4 : 1)
-
-                if data.hasExplicitSelection {
-                    Button("Reset to default") {
-                        viewModel.setAgentSelection(nil, for: session.id)
-                    }
-                    .buttonStyle(.plain)
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.top, 4)
+            PiAgentPickerAddRow(
+                isEnabled: !data.addable.isEmpty,
+                showsReset: data.hasExplicitSelection,
+                onAdd: { isAddSheetPresented = true },
+                onReset: { viewModel.setAgentSelection(nil, for: session.id) }
+            )
         }
     }
 
     private func agentRow(_ agent: EffectiveAgentRecord, checked: Bool, selection: Set<String>) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Button {
-                apply(selection, name: agent.name, include: !checked)
-            } label: {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: checked ? "checkmark.circle.fill" : "circle")
-                        .font(.body)
-                        .foregroundStyle(checked ? Self.accent : AppTheme.mutedText)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(agent.name)
-                            .font(.callout.weight(.medium))
-                            .foregroundStyle(.primary)
-                        if let detail = description(for: agent) {
-                            Text(detail)
-                                .font(.caption)
-                                .foregroundStyle(AppTheme.mutedText)
-                                .lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    Spacer(minLength: 0)
+        PiAgentSubagentPickerRow(
+            agent: agent,
+            checked: checked,
+            avatarURL: viewModel.agentImageStore.imageURL(for: agent.name),
+            description: description(for: agent),
+            onToggle: { apply(selection, name: agent.name, include: !checked) },
+            onStartDirectChat: {
+                withAnimation(.easeOut(duration: 0.22)) {
+                    viewModel.bindPiAgentDraft(session.id, to: agent)
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+        )
+    }
 
-            chatDirectlyButton(agent)
+    /// Replaces the picker once the draft is bound: avatar + what changed +
+    /// the way back. Mirrors the picker header's layout so the swap reads as
+    /// the card changing state, not a different component.
+    private var boundSummaryCard: some View {
+        AppRowCard {
+            HStack(spacing: 10) {
+                boundAgentAvatar
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("1:1 chat with \(session.agentName ?? "agent")")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text("Only this agent replies, with its own prompt and tools")
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                }
+                Spacer(minLength: 0)
+                Button {
+                    withAnimation(.easeOut(duration: 0.22)) {
+                        viewModel.unbindPiAgentDraft(session.id)
+                    }
+                } label: {
+                    Text("Switch back")
+                        .font(.caption.weight(.semibold))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Self.accent)
+                .help("Turn this back into a regular session with Deck agents")
+            }
         }
     }
 
-    @ViewBuilder
-    private func chatDirectlyButton(_ agent: EffectiveAgentRecord) -> some View {
-        if let project = viewModel.projectByPath[session.projectPath] {
-            Button {
-                viewModel.startAgentSession(agent: agent, project: project, initialInstruction: nil)
-            } label: {
-                Image(systemName: "paperplane")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Self.accent)
-                    .frame(width: 22, height: 22)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Start a 1:1 chat with \(agent.name)")
-            .disabled(agent.resolved.disabled == true)
-        }
+    private var boundAgentAvatar: some View {
+        PiAgentPickerAvatar(imageURL: session.agentName.flatMap { viewModel.agentImageStore.imageURL(for: $0) })
     }
 
     private func description(for agent: EffectiveAgentRecord) -> String? {
@@ -607,6 +594,175 @@ struct PiAgentSessionSubagentPickerCard: View {
         var updated = selection
         if include { updated.insert(name) } else { updated.remove(name) }
         viewModel.setAgentSelection(updated, for: session.id)
+    }
+}
+
+/// 28pt circular agent avatar with a paperplane placeholder, shared by the
+/// picker rows and the bound-session summary so the bind animation reads as
+/// the row's avatar moving up into the header.
+private struct PiAgentPickerAvatar: View {
+    let imageURL: URL?
+
+    var body: some View {
+        if let imageURL, let nsImage = AgentImageLoader.image(at: imageURL) {
+            Image(nsImage: nsImage)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 28, height: 28)
+                .clipShape(Circle())
+        } else {
+            Circle()
+                .fill(PiAgentSessionSubagentPickerCard.accent.opacity(0.14))
+                .frame(width: 28, height: 28)
+                .overlay {
+                    Image(systemName: "paperplane")
+                        .font(.caption)
+                        .foregroundStyle(PiAgentSessionSubagentPickerCard.accent)
+                }
+        }
+    }
+}
+
+/// One agent in the picker card: check + avatar + name/description, with a
+/// soft hover fill. The 1:1 action is a small glass capsule revealed on row
+/// hover only — same treatment as the session rows' hover delete — labeled
+/// so it doesn't rely on the paperplane glyph alone. Unchecked rows render
+/// desaturated and dimmed, matching the session list's "seen" treatment.
+private struct PiAgentSubagentPickerRow: View {
+    let agent: EffectiveAgentRecord
+    let checked: Bool
+    let avatarURL: URL?
+    let description: String?
+    let onToggle: () -> Void
+    let onStartDirectChat: () -> Void
+
+    @State private var isHovered = false
+
+    private static let accent = PiAgentSessionSubagentPickerCard.accent
+
+    var body: some View {
+        // The chat button sits inline (not overlaid) so its space is always
+        // reserved and the description never runs underneath it; the outer
+        // `.center` alignment keeps it vertically centered however many lines
+        // the description wraps to.
+        HStack(alignment: .center, spacing: 10) {
+            Button(action: onToggle) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+                        .font(.body)
+                        .foregroundStyle(checked ? Self.accent : AppTheme.mutedText)
+                        .contentTransition(.symbolEffect(.replace))
+                        .frame(width: 20, height: 28)
+                    PiAgentPickerAvatar(imageURL: avatarURL)
+                        .saturation(checked ? 1 : 0)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(agent.name)
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(.primary)
+                        if let description {
+                            Text(description)
+                                .font(.caption)
+                                .foregroundStyle(AppTheme.mutedText)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .opacity(checked ? 1 : 0.66)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            chatButton
+                .opacity(isHovered ? 1 : 0)
+                .allowsHitTesting(isHovered)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(AppTheme.contentSubtleFill)
+                .opacity(isHovered ? 1 : 0)
+        )
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
+        .onHover { isHovered = $0 }
+    }
+
+    private var chatButton: some View {
+        Button(action: onStartDirectChat) {
+            HStack(spacing: 5) {
+                Image(systemName: "paperplane")
+                    .font(AppTheme.Font.caption.weight(.semibold))
+                Text("1:1 chat")
+                    .font(AppTheme.Font.caption.weight(.semibold))
+            }
+            .padding(.vertical, 3)
+            .padding(.horizontal, 1)
+        }
+        .appSmallSecondaryButton()
+        .help("Make this a 1:1 chat with \(agent.name)")
+        .accessibilityLabel("Start a 1:1 chat with \(agent.name)")
+        .disabled(agent.resolved.disabled == true)
+    }
+}
+
+/// Trailing list row of the picker: "Add agents…" styled like the agent rows
+/// (plus circle in the avatar column, hover fill) so it reads as part of the
+/// list, with "Reset to default" tucked into the same row's trailing edge.
+private struct PiAgentPickerAddRow: View {
+    let isEnabled: Bool
+    let showsReset: Bool
+    let onAdd: () -> Void
+    let onReset: () -> Void
+
+    @State private var isHovered = false
+
+    private static let accent = PiAgentSessionSubagentPickerCard.accent
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Button(action: onAdd) {
+                HStack(alignment: .center, spacing: 10) {
+                    // Empty check column so the plus circle lines up under the
+                    // agent avatars.
+                    Color.clear
+                        .frame(width: 20, height: 28)
+                    Circle()
+                        .fill(Self.accent.opacity(0.14))
+                        .frame(width: 28, height: 28)
+                        .overlay {
+                            Image(systemName: "plus")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Self.accent)
+                        }
+                    Text("Add agents…")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(Self.accent)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!isEnabled)
+            .opacity(isEnabled ? 1 : 0.4)
+
+            if showsReset {
+                Button("Reset to default", action: onReset)
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(AppTheme.contentSubtleFill)
+                .opacity(isHovered && isEnabled ? 1 : 0)
+        )
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
+        .onHover { isHovered = $0 }
     }
 }
 

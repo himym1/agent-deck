@@ -5681,6 +5681,40 @@ final class AppViewModel: NSObject {
         piAgentRunner.startAgentSession(agent: agent, project: project, initialInstruction: initialInstruction)
     }
 
+    /// Picker-card entry point: bind a not-yet-launched draft to a single
+    /// agent, turning it into a 1:1 chat in place instead of spawning a
+    /// separate session. Pi hasn't launched yet, so this is a pure record
+    /// mutation — the first send picks up the agent's system prompt and
+    /// tools via `boundAgent(for:)`.
+    func bindPiAgentDraft(_ sessionID: UUID, to agent: EffectiveAgentRecord) {
+        guard agent.resolved.disabled != true else {
+            piAgentRunnerSurfaceError(message: "Agent '\(agent.name)' is disabled.")
+            return
+        }
+        piAgentSessionStore.updateSession(sessionID) { record in
+            guard record.status == .draft, record.piSessionFile == nil else { return }
+            record.kind = .agent
+            record.agentName = agent.name
+            if !record.isTitleUserEdited {
+                record.title = "Chat · \(agent.name)"
+            }
+        }
+    }
+
+    /// "Switch back" in the picker card: revert a bound draft to a regular
+    /// project session. Only meaningful before the first message — once Pi
+    /// has a session file the binding is baked into the conversation.
+    func unbindPiAgentDraft(_ sessionID: UUID) {
+        piAgentSessionStore.updateSession(sessionID) { record in
+            guard record.status == .draft, record.piSessionFile == nil, record.kind == .agent else { return }
+            record.kind = .project
+            record.agentName = nil
+            if !record.isTitleUserEdited {
+                record.title = "Draft · \(record.projectName)"
+            }
+        }
+    }
+
     /// Mutates a session's `agentName` and reruns it. Used by the "Switch
     /// agent…" affordance shown in the transcript header when the original
     /// agent disappears.

@@ -124,7 +124,15 @@ struct PiAgentNewSessionSplitButton: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Button { isAgentPickerPresented.toggle() } label: {
+            Button {
+                // Re-resolve at click time: the button stays mounted from app
+                // launch (both panel layers are permanent), so the cached
+                // resolution can predate project discovery. The onChange
+                // triggers keep it live while the popover is open; this
+                // guarantees it's right when the popover opens.
+                refresh()
+                isAgentPickerPresented.toggle()
+            } label: {
                 Image(systemName: "paperplane")
                     .imageScale(.medium)
                     .fontWeight(.bold)
@@ -225,7 +233,7 @@ private struct PiAgentChatWithAgentPopover: View {
     var body: some View {
         AppPopoverContainer(
             title: "Start a 1:1 session",
-            subtitle: project.map { "Pick an agent in \($0.repositoryDisplayName)." } ?? "No project available."
+            subtitle: project.map { "Pick an agent in \($0.repositoryDisplayName)." }
         ) {
             if let project, !agents.isEmpty {
                 AppPopoverScrollList {

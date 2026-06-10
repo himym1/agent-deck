@@ -178,22 +178,15 @@ struct CodingAgentStatusBadges: View {
     }
 }
 
-/// New-session controls shared by the collapsed and expanded panel headers:
-/// the glass split capsule when Deck agents are enabled, otherwise the project
-/// picker `+` (no scoped project) or the plain `+`.
+/// New-session control shared by the collapsed and expanded panel headers:
+/// the project picker `+` when no project is scoped, otherwise the plain `+`.
+/// Starting a 1:1 agent chat lives in the draft's Deck-agents card, next to
+/// the agents themselves, so the header stays a single button.
 struct CodingAgentNewSessionControls: View {
     let viewModel: AppViewModel
 
     var body: some View {
-        if viewModel.appSettings.nativeSubagentsEnabledForNewSessions {
-            PiAgentNewSessionSplitButton(
-                viewModel: viewModel,
-                projects: orderedProjects,
-                selectedProject: viewModel.selectedDiscoveredProject,
-                onNewSession: { viewModel.createPiAgentDraftForSelectedProject() },
-                onNewSessionForProject: { viewModel.createPiAgentDraft(for: $0) }
-            )
-        } else if viewModel.selectedDiscoveredProject == nil {
+        if viewModel.selectedDiscoveredProject == nil {
             PiAgentAddSessionMenuButton(
                 projects: orderedProjects,
                 selectedProject: viewModel.selectedDiscoveredProject,
