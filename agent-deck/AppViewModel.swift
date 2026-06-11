@@ -312,6 +312,9 @@ final class AppViewModel: NSObject {
     private var githubProjectBoardCacheKey: String?
     private var githubProjectBoardFetchedAt: Date?
     private var pendingPiAgentNotificationTasks: [UUID: Task<Void, Never>] = [:]
+    /// In-flight first-send worktree provisioning, shared per session so a
+    /// rapid second send awaits the same task instead of provisioning twice.
+    @ObservationIgnored private var worktreeProvisionTasksBySessionID: [UUID: Task<Void, Never>] = [:]
     private var artifactCleanupTask: Task<Void, Never>?
     private var didShutdown = false
 
@@ -2244,13 +2247,12 @@ final class AppViewModel: NSObject {
                 selectPiAgentSession(existing.id)
                 ensurePiAgentModelCatalogLoaded()
             } else {
-                let created = piAgentSessionStore.createSession(
+                _ = piAgentSessionStore.createSession(
                     kind: .project,
                     title: "Project agent · \(project.name)",
                     project: project,
                     repository: project.gitHubRemote?.nameWithOwner
                 )
-                provisionWorktreeIfEnabledFireAndForget(for: created.id, project: project)
                 ensurePiAgentModelCatalogLoaded()
             }
         } else {
@@ -2264,13 +2266,12 @@ final class AppViewModel: NSObject {
 
     func createPiAgentDraft(for project: DiscoveredProject) {
         selectedSidebarItem = .agent
-        let created = piAgentSessionStore.createSession(
+        _ = piAgentSessionStore.createSession(
             kind: .project,
             title: "Draft · \(project.name)",
             project: project,
             repository: project.gitHubRemote?.nameWithOwner
         )
-        provisionWorktreeIfEnabledFireAndForget(for: created.id, project: project)
         ensurePiAgentModelCatalogLoaded()
     }
 
@@ -2313,7 +2314,7 @@ final class AppViewModel: NSObject {
             return
         }
         selectedSidebarItem = .agent
-        let created = piAgentSessionStore.createSession(
+        _ = piAgentSessionStore.createSession(
             kind: .issue,
             title: detail.item.title,
             project: project,
@@ -2321,7 +2322,6 @@ final class AppViewModel: NSObject {
             issueNumber: detail.item.number,
             issueURL: detail.item.url
         )
-        provisionWorktreeIfEnabledFireAndForget(for: created.id, project: project)
         ensurePiAgentModelCatalogLoaded()
         piAgentPendingComposerText = PiIssuePromptBuilder.issueDraft(detail: detail, project: project)
         piAgentPendingIssueAttachment = PiAgentIssueAttachment(detail: detail)
@@ -3943,8 +3943,10 @@ final class AppViewModel: NSObject {
 
     /// Creates a session worktree for the given project if the user opted in via
     /// settings. Posts a status entry to the session's transcript on success or
-    /// failure. Callers should await this before starting the agent if they want
-    /// Pi to launch in the worktree on the very first turn.
+    /// failure. Called lazily, right before the session's first message launches
+    /// Pi — drafts stay pure records until then, so abandoning one never leaves
+    /// a worktree or branch behind. Callers must await this before starting the
+    /// agent so Pi launches in the worktree on the very first turn.
     func provisionWorktreeIfEnabled(for sessionID: UUID, project: DiscoveredProject) async {
         guard appSettings.piAgentSessionsUseWorktree else { return }
         guard project.isGitRepository else {
@@ -3964,15 +3966,38 @@ final class AppViewModel: NSObject {
         }
     }
 
-    private func provisionWorktreeIfEnabledFireAndForget(for sessionID: UUID, project: DiscoveredProject) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.provisionWorktreeIfEnabled(for: sessionID, project: project)
-        }
-    }
-
     func sendPiAgentMessage(_ text: String, mode: PiAgentInputMode, transcriptText: String? = nil, images: [PiAgentImageAttachment] = [], pasteAttachments: [PiAgentPasteAttachment] = [], issueAttachment: PiAgentIssueAttachment? = nil) {
         guard let session = piAgentSessionStore.selectedSession else { return }
+        // Worktree isolation materializes on the first message, reading the
+        // global setting at send time. Until then the draft is a pure record,
+        // so the user can change their mind (or the setting) freely. The
+        // provisioning task is shared per session: a second send racing the
+        // first awaits the same task instead of provisioning twice, which
+        // would tear down the in-progress worktree (creation clears leftovers
+        // at the session's target path).
+        if session.status == .draft,
+           session.piSessionFile == nil,
+           session.worktreePath == nil,
+           !piAgentRunner.isRunning(sessionID: session.id),
+           appSettings.piAgentSessionsUseWorktree,
+           let project = projectByPath[session.projectPath] {
+            let provisionTask = worktreeProvisionTasksBySessionID[session.id] ?? Task { @MainActor [weak self] in
+                await self?.provisionWorktreeIfEnabled(for: session.id, project: project)
+            }
+            worktreeProvisionTasksBySessionID[session.id] = provisionTask
+            Task { @MainActor [weak self] in
+                await provisionTask.value
+                guard let self else { return }
+                self.worktreeProvisionTasksBySessionID.removeValue(forKey: session.id)
+                guard let refreshed = self.piAgentSessionStore.sessions.first(where: { $0.id == session.id }) else { return }
+                self.deliverPiAgentMessage(text, mode: mode, transcriptText: transcriptText, images: images, pasteAttachments: pasteAttachments, issueAttachment: issueAttachment, session: refreshed)
+            }
+            return
+        }
+        deliverPiAgentMessage(text, mode: mode, transcriptText: transcriptText, images: images, pasteAttachments: pasteAttachments, issueAttachment: issueAttachment, session: session)
+    }
+
+    private func deliverPiAgentMessage(_ text: String, mode: PiAgentInputMode, transcriptText: String?, images: [PiAgentImageAttachment], pasteAttachments: [PiAgentPasteAttachment], issueAttachment: PiAgentIssueAttachment?, session: PiAgentSessionRecord) {
         let visibleText = (transcriptText ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
         let effectiveText: String
         if let issueAttachment {
