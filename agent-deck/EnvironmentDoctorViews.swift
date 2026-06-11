@@ -484,9 +484,8 @@ struct DoctorScreen: View {
     /// Method-aware hint: a brew-owned pi updates via brew, anything else via
     /// Pi's own updater. Matches what the in-app update actually runs.
     private var piUpdateCommandHint: String {
-        (piRuntimeStatus?.resolvedPath?.hasPrefix("/opt/homebrew/") == true)
-            ? "brew upgrade pi-coding-agent"
-            : "pi update pi"
+        guard let path = piRuntimeStatus?.resolvedPath else { return "pi update pi" }
+        return PiAutoInstaller.isHomebrewOwned(piPath: path) ? "brew upgrade pi-coding-agent" : "pi update pi"
     }
 
     private func runPiAutoTask(isUpdate: Bool) {

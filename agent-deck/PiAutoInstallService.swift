@@ -71,8 +71,16 @@ final class PiAutoInstaller {
             phase = .failed(message: "pi is not installed.")
             return false
         }
-        let method: PiInstallMethod = piURL.path.hasPrefix("/opt/homebrew/") ? .homebrew : .piSelfUpdate
+        let method: PiInstallMethod = Self.isHomebrewOwned(piPath: piURL.path) ? .homebrew : .piSelfUpdate
         return await run(method: method, isUpdate: true)
+    }
+
+    /// True when the resolved pi binary belongs to the Homebrew formula. The
+    /// path prefix alone can't tell: npm's global prefix often lives under
+    /// /opt/homebrew too (Homebrew-installed node), and only the formula's
+    /// binaries resolve into the pi-coding-agent Cellar keg.
+    nonisolated static func isHomebrewOwned(piPath: String) -> Bool {
+        URL(fileURLWithPath: piPath).resolvingSymlinksInPath().path.contains("/Cellar/pi-coding-agent/")
     }
 
     func reset() {
