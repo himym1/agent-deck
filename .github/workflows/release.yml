@@ -16,6 +16,10 @@ jobs:
   release:
     name: Build, sign, notarize, publish
     runs-on: macos-26
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.tag.outputs.tag }}
+      sha256: ${{ steps.shasum.outputs.sha256 }}
 
     steps:
       - name: Resolve tag
@@ -234,6 +238,29 @@ jobs:
           xcrun stapler staple "$DMG"
           spctl --assess --type open --context context:primary-signature -v "$DMG"
 
+      - name: Stable-name copy and checksums
+        # Must run AFTER stapling: the staple rewrites the DMG, so hashes taken
+        # earlier would not match what users download. The stable-named copy
+        # (identical bytes) gives the website and install script a permanent
+        # `releases/latest/download/Agent-Deck.dmg` URL; the .sha256 files let
+        # the install script and the Homebrew cask verify downloads.
+        id: shasum
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          cp "$DMG" "build/release/Agent-Deck.dmg"
+          # Bare filenames inside the .sha256 files so `shasum -c` works from
+          # any directory containing the download.
+          (
+            cd build/release
+            shasum -a 256 "Agent-Deck-${VERSION}.dmg" > "Agent-Deck-${VERSION}.dmg.sha256"
+            shasum -a 256 "Agent-Deck.dmg" > "Agent-Deck.dmg.sha256"
+            cat ./*.sha256
+          )
+          echo "STABLE_DMG=build/release/Agent-Deck.dmg" >> "$GITHUB_ENV"
+          echo "sha256=$(cut -d' ' -f1 < "build/release/Agent-Deck-${VERSION}.dmg.sha256")" >> "$GITHUB_OUTPUT"
+
       - name: Sign update with Sparkle EdDSA key
         id: edsig
         env:
@@ -292,7 +319,7 @@ jobs:
           gh release create "$TAG" \
             --title "Agent Deck $VERSION" \
             --notes-file release-notes.md \
-            "$DMG"
+            "$DMG" "$STABLE_DMG" "${DMG}.sha256" "${STABLE_DMG}.sha256"
 
       - name: Publish appcast item asset
         # Instead of committing docs/appcast.xml back to main (which polluted
@@ -367,3 +394,103 @@ jobs:
 
           # --clobber so re-running a release for the same tag overwrites cleanly.
           gh release upload "$TAG" appcast-item.xml --clobber
+
+  bump-cask:
+    # Keeps `brew install --cask a-streetcoder/tap/agent-deck` pointing at the
+    # release that just shipped. Regenerates the whole cask file from a template
+    # (idempotent; also bootstraps Casks/agent-deck.rb if the tap is empty).
+    # Skips with a warning when the TAP_PUSH_TOKEN secret is missing so a
+    # missing token never blocks a release.
+    name: Bump Homebrew cask
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check tap token
+        id: token
+        env:
+          TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::TAP_PUSH_TOKEN secret not set - skipping Homebrew cask bump. Create a fine-grained PAT with Contents read/write on a-streetcoder/homebrew-tap and add it as the TAP_PUSH_TOKEN secret."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out tap
+        if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@v5
+        with:
+          repository: a-streetcoder/homebrew-tap
+          token: ${{ secrets.TAP_PUSH_TOKEN }}
+
+      - name: Rewrite cask
+        if: steps.token.outputs.present == 'true'
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          SHA256: ${{ needs.release.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p Casks
+          # Quoted heredoc keeps Ruby's #{version} interpolation literal; the
+          # placeholders are substituted afterwards with sed.
+          cat > Casks/agent-deck.rb <<'RUBY'
+          cask "agent-deck" do
+            version "__VERSION__"
+            sha256 "__SHA256__"
+
+            url "https://github.com/a-streetcoder/agent-deck/releases/download/v#{version}/Agent-Deck-#{version}.dmg",
+                verified: "github.com/a-streetcoder/agent-deck/"
+            name "Agent Deck"
+            desc "Workspace for the Pi coding agent"
+            homepage "https://agentdeck.site/"
+
+            livecheck do
+              url "https://github.com/a-streetcoder/agent-deck"
+              strategy :github_latest
+            end
+
+            # The app updates itself through Sparkle; this keeps a plain
+            # `brew upgrade` from fighting the in-app updater.
+            auto_updates true
+            depends_on formula: "pi-coding-agent"
+            depends_on macos: ">= :tahoe"
+            depends_on arch: :arm64
+
+            app "Agent Deck.app"
+
+            zap trash: [
+              "~/Library/Application Support/Agent Deck",
+              "~/Library/Caches/streetcoding.agent-deck",
+              "~/Library/HTTPStorages/streetcoding.agent-deck",
+              "~/Library/Preferences/streetcoding.agent-deck.plist",
+              "~/Library/Saved Application State/streetcoding.agent-deck.savedState",
+            ]
+
+            caveats <<~EOS
+              Agent Deck uses the Pi CLI. Homebrew installed (or verified) the
+              pi-coding-agent formula as a dependency. If you already had Pi from
+              npm or pi.dev's installer, the Homebrew copy may shadow it depending
+              on PATH; Agent Deck's Doctor shows exactly which pi the app uses.
+            EOS
+          end
+          RUBY
+          sed -i "s/__VERSION__/${VERSION}/; s/__SHA256__/${SHA256}/" Casks/agent-deck.rb
+          cat Casks/agent-deck.rb
+
+      - name: Commit and push
+        if: steps.token.outputs.present == 'true'
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "agent-deck-release-bot"
+          git config user.email "noreply@github.com"
+          git add Casks/agent-deck.rb
+          if git diff --cached --quiet; then
+            echo "Cask already at ${VERSION}; nothing to push."
+            exit 0
+          fi
+          git commit -m "agent-deck ${VERSION}"
+          # Daily releases can race a manual tap edit; rebase-and-retry once.
+          git push || { git pull --rebase && git push; }
