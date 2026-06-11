@@ -2615,7 +2615,11 @@ final class AppViewModel: NSObject {
             guard let self else { return }
 
             do {
-                let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert])
+                // .badge is required even though the Dock count is set via
+                // NSDockTile.badgeLabel: once an app registers for notifications,
+                // the Dock only draws its badge when the per-app "Badge
+                // application icon" setting is authorized.
+                let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge])
                 guard granted else { return }
 
                 let content = UNMutableNotificationContent()
