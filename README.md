@@ -31,25 +31,23 @@ Agent Deck does not replace Pi or embed its own agent runtime. It launches the i
 
 ## Install
 
-Download the latest signed and notarized `.dmg` from [Releases](https://github.com/a-streetcoder/agent-deck/releases/latest) and drag Agent Deck to `/Applications`. Updates ship through Sparkle — you'll see a native macOS update dialog when a new version is available.
-
-> Requires macOS 26 (Tahoe) and Apple Silicon. The [Pi CLI](https://github.com/earendil-works/pi) must be installed and discoverable — Agent Deck's built-in **Doctor** walks you through it on first launch.
-
-### Build from source
+With [Homebrew](https://brew.sh) — installs Agent Deck and the [Pi CLI](https://github.com/earendil-works/pi) in one command:
 
 ```bash
-git clone https://github.com/a-streetcoder/agent-deck.git
-cd agent-deck
-open agent-deck.xcodeproj
+brew install --cask a-streetcoder/tap/agent-deck
 ```
 
-Then build the `agent-deck` scheme from Xcode 26.4+. Or from the command line:
+Or with the install script — sets up Pi if it's missing, verifies the download checksum, and copies the app to `/Applications`:
 
 ```bash
-xcodebuild -project agent-deck.xcodeproj -scheme agent-deck \
-  -configuration Debug -destination 'platform=macOS' \
-  CODE_SIGNING_ALLOWED=NO build
+curl -fsSL https://agentdeck.site/install.sh | bash
 ```
+
+Or [download the latest signed and notarized DMG](https://github.com/a-streetcoder/agent-deck/releases/latest) and drag Agent Deck to `/Applications`. If Pi isn't installed yet, onboarding installs it for you with one click.
+
+Whichever path you choose, updates ship through Sparkle — you'll see a native macOS update dialog when a new version is available.
+
+> Requires macOS 26 (Tahoe) and Apple Silicon.
 
 ## Design guarantees
 
@@ -158,8 +156,28 @@ Contributor invariants and UI conventions live in [`docs/agent-guidelines/`](doc
 ## Requirements
 
 - macOS 26 (Tahoe) on Apple Silicon
-- Xcode 26.4+ for building from source
-- A working install of the Pi CLI
+- A working install of the Pi CLI (the Homebrew cask, the install script, and onboarding all set it up for you)
+- Xcode 26.4+ only if you build from source
+
+## Contributing
+
+Build from source:
+
+```bash
+git clone https://github.com/a-streetcoder/agent-deck.git
+cd agent-deck
+open agent-deck.xcodeproj
+```
+
+Then build the `agent-deck` scheme from Xcode 26.4+. Or from the command line:
+
+```bash
+xcodebuild -project agent-deck.xcodeproj -scheme agent-deck \
+  -configuration Debug -destination 'platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO build
+```
+
+Contributor invariants and UI conventions live in [`docs/agent-guidelines/`](docs/agent-guidelines/).
 
 ## License
 
