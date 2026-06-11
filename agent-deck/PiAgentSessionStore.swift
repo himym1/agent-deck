@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import Foundation
 import Observation
+import os
 
 @MainActor
 @Observable
@@ -40,7 +41,34 @@ final class PiAgentSessionStore {
     /// Live, RPC-derived activity for sessions with a turn in flight. Not persisted —
     /// it only describes the current process and is cleared when a turn ends.
     private(set) var processingActivityBySessionID: [UUID: PiAgentProcessingActivity] = [:]
-    var selectedSessionID: UUID?
+    var selectedSessionID: UUID? {
+        didSet {
+#if DEBUG
+            // Names every selection mutation with a stack so churn (e.g. the
+            // create-draft flicker) can be attributed to its writer. The console
+            // line stays short; the full mangled stack goes to a /tmp file for
+            // offline demangling (the Observation setter wrapper eats the first
+            // several frames, so the real caller sits deep).
+            guard oldValue != selectedSessionID else { return }
+            let old = oldValue.map { String($0.uuidString.prefix(8)) } ?? "nil"
+            let new = selectedSessionID.map { String($0.uuidString.prefix(8)) } ?? "nil"
+            Self.selectionLog.error("STORE-SELECT \(old, privacy: .public) -> \(new, privacy: .public) (full stack in /tmp/agentdeck-select-trace.txt)")
+            let stack = Thread.callStackSymbols.dropFirst(2).prefix(16).joined(separator: "\n")
+            let line = "STORE-SELECT \(old) -> \(new)\n\(stack)\n\n"
+            if let data = line.data(using: .utf8) {
+                let url = URL(fileURLWithPath: "/tmp/agentdeck-select-trace.txt")
+                if let handle = try? FileHandle(forWritingTo: url) {
+                    handle.seekToEndOfFile(); handle.write(data); try? handle.close()
+                } else {
+                    try? data.write(to: url)
+                }
+            }
+#endif
+        }
+    }
+#if DEBUG
+    private static let selectionLog = Logger(subsystem: "streetcoding.agent-deck", category: "SessionListPerf")
+#endif
     var lastError: String?
     var newSessionSubagentsEnabled = true
     /// Fired once after the async init load has applied the persisted sessions.

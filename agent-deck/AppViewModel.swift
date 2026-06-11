@@ -2386,6 +2386,27 @@ final class AppViewModel: NSObject {
         acknowledgePiAgentSession(id)
     }
 
+    /// The ONE authority for "is the selected session still valid" — keeps the
+    /// selection when the session exists in the current PROJECT scope, otherwise
+    /// moves it to the first scoped session. Validity deliberately ignores
+    /// per-panel view filters (search text, attention-only): every session list
+    /// delegates here, so two mounted panels with different filters can never
+    /// fight over the global selection (captured: each panel "correcting" the
+    /// selection into its own filtered scope, ping-ponging the transcript
+    /// through session switches that read as flickering).
+    func reconcileSelectedSessionWithProjectScope() {
+        let store = piAgentSessionStore
+        let scoped = selectedProjectPath.map { path in
+            store.sessions.filter { $0.projectPath == path }
+        } ?? store.sessions
+        if let id = store.selectedSessionID, scoped.contains(where: { $0.id == id }) { return }
+        if let first = scoped.min(by: { PiAgentSessionRecord.sessionListPrecedes($0, $1) }) {
+            store.select(first.id)
+        } else {
+            store.clearSelection()
+        }
+    }
+
     /// Repairs a session's transcript from Pi's session file when it becomes the
     /// visible session — on click, on keyboard nav, and on the selection restored
     /// at launch. Cheap and self-guarding (once per session, only when there's
@@ -4469,6 +4490,12 @@ final class AppViewModel: NSObject {
         }
 
         piAgentSessionStore.deleteSessions(sessionIDs)
+        // The store's deletion clamp picks the GLOBALLY first session (it has no
+        // notion of project scope); reconcile to the scoped choice in the same
+        // runloop turn so the UI only ever observes the final selection — without
+        // this, launch-time draft pruning briefly selected an out-of-scope
+        // session and the correction read as an extra transcript switch.
+        reconcileSelectedSessionWithProjectScope()
 
         for cleanup in worktreeCleanups {
             let projectURL = URL(fileURLWithPath: cleanup.projectPath, isDirectory: true)

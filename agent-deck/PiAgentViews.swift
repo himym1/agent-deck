@@ -1143,17 +1143,22 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 // linger pinned to absent ids.
                 purgeCellCache(keeping: Set(nextIDs))
                 for (id, revision) in nextRevisions { contentRevisionByID[id] = revision }
-                // In-session row REMOVALS (re-run rewind, visibility toggles) land
-                // as a hard cut: rows vanish, content below snaps up, the follow-up
-                // rows pop in. Cover the whole reflow with a brief crossfade of the
-                // transcript so it reads as one smooth transition. Never during a
-                // session switch (it has its own scroll choreography) or streaming.
-                if !isSessionSwitch, !streamingUpdate, !removedIDs.isEmpty, let layer = scrollView?.layer {
+                // Structural cuts land hard: in-session row REMOVALS (re-run
+                // rewind, visibility toggles) snap content up, and a SESSION
+                // SWITCH wipes the table and re-tiles the new transcript from
+                // rough height estimates before corrections land. Cover both
+                // with a brief crossfade of the transcript so they read as one
+                // smooth transition. Session switches only fade when replacing
+                // visible content (a first fill fades in via SwiftUI already);
+                // never during streaming.
+                let coverSwitch = isSessionSwitch && tableView.numberOfRows > 0
+                let coverRemoval = !isSessionSwitch && !streamingUpdate && !removedIDs.isEmpty
+                if coverSwitch || coverRemoval, let layer = scrollView?.layer {
                     let fade = CATransition()
                     fade.type = .fade
-                    fade.duration = 0.28
+                    fade.duration = coverSwitch ? 0.2 : 0.28
                     fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                    layer.add(fade, forKey: "transcript-removal-fade")
+                    layer.add(fade, forKey: "transcript-structural-fade")
                 }
                 applySnapshot(ids: nextIDs) { [weak self] in
                     guard let self else { return }
@@ -1682,6 +1687,34 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             noteHeightsChanged(forIDs: ids)
         }
 
+        /// A session switch pins to a bottom computed from ESTIMATE heights; the
+        /// visible cells then measure asynchronously and every correction
+        /// re-tiles and re-snaps the bottom over the next frames — the "new
+        /// transcript settles into place" jumpiness. Measure the rows that
+        /// landed in the viewport NOW and re-pin in the same pass, so the first
+        /// painted frame is already at final heights (the later async reports
+        /// match and no-op). Two passes because the first re-tile changes which
+        /// rows are visible at the bottom.
+        private func settleVisibleRowsAfterSessionSwitch() {
+            guard let tableView, let scrollView else { return }
+            for _ in 0 ..< 2 {
+                // Force the table to vend cells for the freshly-scrolled-to rect
+                // before measuring; rows without live cells are skipped otherwise.
+                tableView.layoutSubtreeIfNeeded()
+                let visible = tableView.rows(in: tableView.visibleRect)
+                guard visible.length > 0 else { return }
+                var ids = Set<String>()
+                for row in visible.location ..< visible.location + visible.length where row < orderedIDs.count {
+                    ids.insert(orderedIDs[row])
+                }
+                let retileIDs = measureChangedCellsSynchronously(ids)
+                guard !retileIDs.isEmpty else { return }
+                flushPendingHeightWorkSynchronously()
+                noteHeightsChanged(forIDs: retileIDs)
+                performScrollToBottom(scrollView, animated: false)
+            }
+        }
+
         private func captureScrollAnchor() -> ScrollAnchor? {
             guard let tableView, let scrollView else { return nil }
             let originY = scrollView.contentView.bounds.origin.y
@@ -1734,6 +1767,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 pendingScrollWork = nil
                 pendingScrollSettle = false
                 performScrollToBottom(scrollView, animated: false)
+                settleVisibleRowsAfterSessionSwitch()
             } else if explicitScroll {
                 // User-requested jumps (send, jump-to-latest) re-arm follow intent.
                 isAutoFollowing = true
@@ -2587,8 +2621,11 @@ struct CodingAgentExpandedPanel: View {
     }
 
     private func syncVisibleSessionSelection() {
-        if let selectedID = store.selectedSession?.id, visibleSessions.contains(where: { $0.id == selectedID }) { return }
-        if let first = visibleSessions.first { store.select(first.id) } else { store.clearSelection() }
+        // Selection validity is owned by ONE canonical rule on the view model
+        // (project scope only — never this panel's search/attention filters).
+        // Panels asserting selection from their own filtered scope fought each
+        // other and ping-ponged the transcript through session switches.
+        viewModel.reconcileSelectedSessionWithProjectScope()
     }
 
     private func syncMultiSelectionToSelectedSession() {
@@ -3174,9 +3211,11 @@ struct PiAgentScreen: View {
             Divider()
 
             VStack(spacing: 12) {
+                // Shown for every draft, including subagents-off — the card
+                // renders dimmed with its switch so agents can be turned back
+                // on right here instead of from the Agents screen.
                 if let session = store.selectedSession,
-                   session.status == .draft,
-                   session.subagentsEnabled {
+                   session.status == .draft {
                     PiAgentSessionSubagentPickerCard(viewModel: viewModel, session: session)
                         .id(session.id)
                 }
@@ -5076,16 +5115,10 @@ struct PiAgentScreen: View {
     }
 
     private func syncVisibleSessionSelection() {
-        if let selectedID = store.selectedSession?.id,
-           visibleSessions.contains(where: { $0.id == selectedID }) {
-            return
-        }
-
-        if let firstVisible = visibleSessions.first {
-            store.select(firstVisible.id)
-        } else {
-            store.clearSelection()
-        }
+        // Selection validity is owned by ONE canonical rule on the view model
+        // (project scope only — never this panel's search/attention filters).
+        // See the sidebar panel's twin for the ping-pong this replaces.
+        viewModel.reconcileSelectedSessionWithProjectScope()
     }
 
     private func syncMultiSelectionToSelectedSession() {

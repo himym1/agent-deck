@@ -1000,7 +1000,7 @@ final class NativeMarkdownTextContainer: NSView {
     /// inline markdown parsed) and hands them to `MarkdownTableView`, which lays the
     /// grid out by hand with equal columns and self-measured row heights. An
     /// `NSGridView` of auto-sizing text views does NOT constrain column widths here,
-    /// so cells stacked into one tall column — manual layout (the osaurus approach)
+    /// so cells stacked into one tall column — manual layout
     /// is what actually wraps cells into proper columns.
     private static func tableBlock(_ table: MarkdownTable) -> NSView {
         let bodyFont = NSFont.preferredFont(forTextStyle: .body)
@@ -1302,7 +1302,7 @@ final class NativeMarkdownTextContainer: NSView {
     }
 }
 
-/// Native GFM table laid out by hand (the osaurus approach): equal-width columns,
+/// Native GFM table laid out by hand: equal-width columns,
 /// each cell a text view measured at the column width, a hairline under the header,
 /// and a self height-constraint so the host stack's `fittingSize` includes it.
 /// `NSGridView` was tried first but doesn't constrain column widths against the

@@ -457,8 +457,13 @@ struct PiAgentSessionSubagentPickerCard: View {
             boundSummaryCard
                 .transition(.opacity.combined(with: .move(edge: .top)))
         } else {
-            let data = resolve()
-            let isHidden = data.rows.isEmpty && data.addable.isEmpty
+            // ONE persistent card across on/off: toggling the switch only dims
+            // the content in place. Branching to a separate "off" card view
+            // here would replay the card's enter/exit transition on every flip,
+            // which reads as the card reloading.
+            let enabled = session.subagentsEnabled
+            let data = enabled ? resolve() : nil
+            let isHidden = enabled && data?.rows.isEmpty == true && data?.addable.isEmpty == true
             // Fade in on cold start: the universe is briefly empty while the
             // first project scan runs, then populates. Softens that handoff.
             Group {
@@ -468,7 +473,7 @@ struct PiAgentSessionSubagentPickerCard: View {
                     AppRowCard {
                         VStack(alignment: .leading, spacing: 0) {
                             header(data)
-                            if isExpanded {
+                            if isExpanded, let data {
                                 Divider().padding(.vertical, 10)
                                 agentList(data)
                             }
@@ -476,10 +481,10 @@ struct PiAgentSessionSubagentPickerCard: View {
                     }
                     .sheet(isPresented: $isAddSheetPresented) {
                         PiAgentAddAgentsSheet(
-                            addable: data.addable,
+                            addable: data?.addable ?? [],
                             description: description(for:),
                             onAdd: { names in
-                                var updated = data.selection
+                                var updated = data?.selection ?? []
                                 for name in names { updated.insert(name) }
                                 viewModel.setAgentSelection(updated, for: session.id)
                             }
@@ -492,31 +497,73 @@ struct PiAgentSessionSubagentPickerCard: View {
         }
     }
 
-    private func header(_ data: Resolved) -> some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "paperplane")
-                    .foregroundStyle(Self.accent)
-                    .frame(width: 18)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Deck agents for this session")
-                        .font(.callout.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Text(data.subtitle)
-                        .font(.caption)
-                        .foregroundStyle(AppTheme.mutedText)
+    /// One header for both states — same view identity, so flipping the switch
+    /// dims the content in place instead of swapping (and re-transitioning) the
+    /// card. `data` is nil when Deck agents are off; only the switch keeps full
+    /// strength there, as the way back on.
+    private func header(_ data: Resolved?) -> some View {
+        let enabled = data != nil
+        return HStack(spacing: 10) {
+            Button {
+                guard enabled else { return }
+                withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "paperplane")
+                        .foregroundStyle(Self.accent)
+                        .frame(width: 18)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Deck agents for this session")
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text(data?.subtitle ?? "Off, Pi will not delegate in this session")
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.mutedText)
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.down")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppTheme.mutedText)
-                    .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .opacity(enabled ? 1 : 0.45)
+            .saturation(enabled ? 1 : 0.4)
+            enabledSwitch
+            if enabled {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.mutedText)
+                        .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .buttonStyle(.plain)
+    }
+
+    /// Per-session on/off, themed like every other switch in the app. A draft's
+    /// toggle acts as the session default: it flips this draft AND the default
+    /// for new sessions, so the preference sticks for the next session instead
+    /// of silently resetting (the launcher consumes `subagentsEnabled` at first
+    /// send to decide whether Pi gets the Deck agent tools at all).
+    private var enabledSwitch: some View {
+        Toggle("Deck agents", isOn: Binding(
+            get: { session.subagentsEnabled },
+            set: { newValue in
+                if !newValue { isExpanded = false }
+                withAnimation(.easeOut(duration: 0.22)) {
+                    viewModel.setSubagentsEnabledForSelectedDraftAndNewSessions(newValue)
+                }
+            }
+        ))
+        .appSwitch()
+        .labelsHidden()
+        .controlSize(.small)
+        .help(session.subagentsEnabled
+            ? "Deck agents are on. Applies to this session and as the default for new sessions"
+            : "Deck agents are off. Applies to this session and as the default for new sessions")
     }
 
     private func agentList(_ data: Resolved) -> some View {
