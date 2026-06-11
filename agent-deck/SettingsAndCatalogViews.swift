@@ -309,6 +309,7 @@ struct ModelsScreen: View {
                 defaultModelCard
                 defaultThinkingCard
             }
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -351,7 +352,7 @@ struct ModelsScreen: View {
             }
             .padding(.top, 2)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
@@ -370,7 +371,7 @@ struct ModelsScreen: View {
                     Text("Default Thinking")
                         .font(.headline)
                         .fontWidth(.expanded)
-                    Text("Applies to new sessions by default using the same catalog-wide thinking options as before.")
+                    Text("Thinking level used for new Pi Agent sessions.")
                         .font(.caption)
                         .foregroundStyle(AppTheme.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -391,7 +392,7 @@ struct ModelsScreen: View {
             }
             .padding(.top, 2)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
