@@ -237,8 +237,8 @@ struct EffectiveEnvRow {
 
 struct DoctorScreen: View {
     var viewModel: AppViewModel
-    @Environment(\.scenePhase) private var scenePhase
     @State private var setupItems: [SetupCheckItem] = []
+    @State private var piInstaller = PiAutoInstaller()
     @State private var piRuntimeStatus: PiAgentRuntimeStatus?
     @State private var isRefreshingSetup = true
     @State private var webFetchStatus = WebFetchDependencyService().status()
@@ -310,14 +310,15 @@ struct DoctorScreen: View {
             }
             refreshWebFetchStatus()
         }
-        .onChange(of: scenePhase) { _, newPhase in
+        // Re-check the Pi version when the app regains focus so an in-terminal
+        // install or `pi update pi` is reflected without a manual refresh click.
+        // scenePhase never fires on macOS focus changes, so listen to AppKit's
+        // activation notification directly. Only the cheap Pi status fetch
+        // re-runs here; the broader Setup Checks still belong to the explicit
+        // refresh button to avoid spawning subprocesses on every focus change.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             if skipLiveChecksForPreview { return }
-            // Re-check the Pi version when the app regains focus so that an
-            // in-terminal `pi update pi` is reflected without a manual refresh click.
-            // We only re-run the cheap Pi status fetch here; the broader Setup Checks
-            // still belong to the explicit refresh button to avoid spawning subprocesses
-            // on every focus change.
-            guard newPhase == .active else { return }
+            guard !piInstaller.isRunning else { return }
             refreshWebFetchStatus()
             Task { await refreshPiRuntimeStatus() }
         }
@@ -398,12 +399,18 @@ struct DoctorScreen: View {
                 }
 
                 if let status = piRuntimeStatus {
+                    if let path = status.resolvedPath {
+                        Text(path)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(AppTheme.mutedText)
+                            .textSelection(.enabled)
+                    }
                     if !status.isInstalled {
-                        piCommandChip("npm install -g @earendil-works/pi-coding-agent", buttonLabel: "Install in Terminal") { viewModel.openPiInstallInTerminal() }
+                        piAutoInstallControls(isUpdate: false)
                     } else {
                         switch status.updateState {
                         case .some(.updateAvailable):
-                            piCommandChip("pi update pi", buttonLabel: "Update in Terminal") { viewModel.openPiSelfUpdateInTerminal() }
+                            piAutoInstallControls(isUpdate: true)
                         case let .some(.unableToCheck(reason)):
                             Text(reason)
                                 .font(.caption.monospaced())
@@ -426,6 +433,82 @@ struct DoctorScreen: View {
             if let action {
                 Button(buttonLabel, action: action)
                     .appPrimaryButton()
+            }
+        }
+    }
+
+    /// One-click in-app Pi install/update with live progress; the copyable
+    /// command and the Terminal flow stay available as explicit fallbacks.
+    @ViewBuilder
+    private func piAutoInstallControls(isUpdate: Bool) -> some View {
+        switch piInstaller.phase {
+        case .running(let method, let runningIsUpdate):
+            HStack(spacing: 8) {
+                AppSpinner()
+                    .controlSize(.small)
+                Text(runningIsUpdate
+                    ? "Updating Pi via \(method.displayName)…"
+                    : "Installing Pi via \(method.displayName)… this can take a few minutes.")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+            }
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 8) {
+                Text(message)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(AppTheme.mutedText)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Button("Try Again") { runPiAutoTask(isUpdate: isUpdate) }
+                        .appPrimaryButton()
+                    Button(isUpdate ? "Update in Terminal" : "Install in Terminal") {
+                        if isUpdate {
+                            viewModel.openPiSelfUpdateInTerminal()
+                        } else {
+                            viewModel.openPiInstallInTerminal()
+                        }
+                    }
+                    .appSecondaryButton()
+                }
+            }
+        case .idle, .succeeded:
+            HStack(spacing: 8) {
+                DoctorCopyCommandButton(command: isUpdate ? piUpdateCommandHint : "npm install -g --ignore-scripts @earendil-works/pi-coding-agent")
+                Button(isUpdate ? "Update Pi" : "Install Pi") { runPiAutoTask(isUpdate: isUpdate) }
+                    .appPrimaryButton()
+            }
+        }
+    }
+
+    /// Method-aware hint: a brew-owned pi updates via brew, anything else via
+    /// Pi's own updater. Matches what the in-app update actually runs.
+    private var piUpdateCommandHint: String {
+        (piRuntimeStatus?.resolvedPath?.hasPrefix("/opt/homebrew/") == true)
+            ? "brew upgrade pi-coding-agent"
+            : "pi update pi"
+    }
+
+    private func runPiAutoTask(isUpdate: Bool) {
+        if skipLiveChecksForPreview { return }
+        Task {
+            if isUpdate {
+                if await piInstaller.update() {
+                    await refreshSetupChecks()
+                    piInstaller.reset()
+                }
+            } else {
+                switch await piInstaller.install() {
+                case true?:
+                    await refreshSetupChecks()
+                    piInstaller.reset()
+                case false?:
+                    break // the card shows the failure detail with retry + Terminal
+                case nil:
+                    // No Homebrew and no npm: Terminal runs Pi's official
+                    // installer, which can also set up Node interactively.
+                    viewModel.openPiInstallInTerminal()
+                }
             }
         }
     }
@@ -582,7 +665,11 @@ struct DoctorScreen: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                if item.status != .passed, item.action != nil || item.secondaryAction != nil {
+                if item.id == "pi-cli", item.status != .passed {
+                    // Same one-click installer as the Pi Runtime card, so the
+                    // row shows live progress instead of a dead button.
+                    piAutoInstallControls(isUpdate: false)
+                } else if item.status != .passed, item.action != nil || item.secondaryAction != nil {
                     HStack(spacing: 8) {
                         if let action = item.action {
                             Button(action.buttonTitle) { performSetupAction(action) }
@@ -613,7 +700,7 @@ struct DoctorScreen: View {
             viewModel.useSuggestedProjectsRootDirectory(replacingExisting: replacing)
             Task { await refreshSetupChecks() }
         case .installPi:
-            viewModel.openPiInstallInTerminal()
+            runPiAutoTask(isUpdate: false)
         case .connectProvider:
             isConnectProviderPresented = true // re-checks on sheet dismiss
         case .setupGitHub:

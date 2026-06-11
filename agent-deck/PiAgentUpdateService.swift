@@ -11,12 +11,17 @@ struct PiAgentRuntimeStatus: Hashable {
     let currentVersion: String?
     let updateState: UpdateState?
     let detail: String
+    /// Filesystem path of the `pi` binary the app actually runs. Shown in the
+    /// Doctor so "which pi am I using" stays answerable when more than one
+    /// install exists (brew formula next to an npm global, for example).
+    let resolvedPath: String?
 
     static let missing = PiAgentRuntimeStatus(
         isInstalled: false,
         currentVersion: nil,
         updateState: nil,
-        detail: "Install Pi and make sure `pi` is available from your login shell."
+        detail: "Pi powers every coding session and is not installed yet. It can be installed for you with one click.",
+        resolvedPath: nil
     )
 }
 
@@ -36,7 +41,8 @@ struct PiAgentUpdateService {
     }
 
     func loadStatus() async -> PiAgentRuntimeStatus {
-        let piCommand = piResolver.resolve()?.path ?? "pi"
+        let resolvedPath = piResolver.resolve()?.path
+        let piCommand = resolvedPath ?? "pi"
 
         let currentVersion: String
         do {
@@ -65,21 +71,24 @@ struct PiAgentUpdateService {
                     isInstalled: true,
                     currentVersion: currentVersion,
                     updateState: .updateAvailable(latestVersion: latestVersion),
-                    detail: "A newer Pi agent release is available."
+                    detail: "A newer Pi agent release is available.",
+                    resolvedPath: resolvedPath
                 )
             }
             return PiAgentRuntimeStatus(
                 isInstalled: true,
                 currentVersion: currentVersion,
                 updateState: .upToDate,
-                detail: "Pi is installed and up to date."
+                detail: "Pi is installed and up to date.",
+                resolvedPath: resolvedPath
             )
         } catch {
             return PiAgentRuntimeStatus(
                 isInstalled: true,
                 currentVersion: currentVersion,
                 updateState: .unableToCheck(error.localizedDescription),
-                detail: "Pi is installed, but the latest release could not be checked."
+                detail: "Pi is installed, but the latest release could not be checked.",
+                resolvedPath: resolvedPath
             )
         }
     }

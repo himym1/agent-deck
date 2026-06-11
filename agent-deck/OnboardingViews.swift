@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import TourKit
 
@@ -49,6 +50,7 @@ struct WelcomeOnboardingSheet: View {
     @State private var phase: Phase = .tour
     @State private var setupItemsTask: Task<[SetupCheckItem], Never>?
     @State private var setupItems: [SetupCheckItem] = []
+    @State private var finalCheckTask: Task<[SetupCheckItem], Never>?
 
     private enum Phase {
         case tour
@@ -78,11 +80,15 @@ struct WelcomeOnboardingSheet: View {
                     viewModel: viewModel,
                     setupItems: setupItems,
                     onBack: { phase = .setup },
-                    onFinish: { _ in phase = .finalInfo }
+                    onFinish: { _ in
+                        startFinalSetupRecheck()
+                        phase = .finalInfo
+                    }
                 )
             case .finalInfo:
                 OnboardingFinalView(
                     setupItems: setupItems,
+                    freshItemsTask: finalCheckTask,
                     onBack: { phase = .preferences },
                     onFinish: { target in onFinish(target) }
                 )
@@ -117,6 +123,30 @@ struct WelcomeOnboardingSheet: View {
         return .init()
     }
 
+    /// The setup results shown on the final screen were captured when the user
+    /// left the Setup step; anything they fixed since (a Terminal Pi install, a
+    /// provider connected from Models) would otherwise route them to Doctor on
+    /// stale data. Kick off one fresh pass so the final routing reflects reality.
+    /// Demo runs skip this: their state only changes via the debug toggles,
+    /// which are already captured in the items handed over at Continue.
+    private func startFinalSetupRecheck() {
+        guard !setupSimulation.isActive else { return }
+        let projectRootPaths = viewModel.configuredProjectsRootPaths
+        let githubAccount = viewModel.currentGitHubAccount
+        let selectedProjectPath = viewModel.selectedProjectPath
+        let hasConfirmedProjectsRootPaths = viewModel.hasConfirmedProjectsRootPaths
+        let suggestedProjectsRootPath = viewModel.suggestedProjectsRootPath
+        finalCheckTask = Task {
+            await SetupDependencyService().loadItems(
+                projectRootPaths: projectRootPaths,
+                githubAccount: githubAccount,
+                selectedProjectPath: selectedProjectPath,
+                hasConfirmedProjectsRootPaths: hasConfirmedProjectsRootPaths,
+                suggestedProjectsRootPath: suggestedProjectsRootPath
+            )
+        }
+    }
+
     private func preloadSetupChecksIfNeeded() {
         guard setupItemsTask == nil, !setupSimulation.isActive else { return }
         let projectRootPaths = viewModel.configuredProjectsRootPaths
@@ -140,40 +170,62 @@ struct WelcomeOnboardingSheet: View {
 /// highlights where the Coding Agent lives in the sidebar, and smart-routes the
 /// primary action to Doctor (if anything is broken) or Pi Agent (if ready to code).
 struct OnboardingFinalView: View {
-    let setupItems: [SetupCheckItem]
+    /// One fresh re-run of the setup checks started when this screen was
+    /// entered. The seeded items route correctly the moment the screen shows;
+    /// when the fresh pass lands, the routing upgrades in place (so a Pi
+    /// installed mid-onboarding counts without blocking the button on a
+    /// worst-case 12s model probe).
+    let freshItemsTask: Task<[SetupCheckItem], Never>?
     let onBack: () -> Void
     let onFinish: (SidebarItem?) -> Void
+    @State private var items: [SetupCheckItem]
+
+    init(
+        setupItems: [SetupCheckItem],
+        freshItemsTask: Task<[SetupCheckItem], Never>? = nil,
+        onBack: @escaping () -> Void,
+        onFinish: @escaping (SidebarItem?) -> Void
+    ) {
+        _items = State(initialValue: setupItems)
+        self.freshItemsTask = freshItemsTask
+        self.onBack = onBack
+        self.onFinish = onFinish
+    }
 
     private var canStartCoding: Bool {
         piPassed && modelsPassed && projectPassed
     }
 
-    private var needsDoctor: Bool {
-        setupItems.contains { $0.status == .failed }
-    }
-
     private var piPassed: Bool {
-        setupItems.first { $0.id == "pi-cli" }?.status == .passed
+        items.first { $0.id == "pi-cli" }?.status == .passed
     }
 
     private var modelsPassed: Bool {
-        setupItems.first { $0.id == "pi-models" }?.status == .passed
+        items.first { $0.id == "pi-models" }?.status == .passed
     }
 
     private var projectPassed: Bool {
-        setupItems.first { $0.id == "project-root" }?.status == .passed
+        items.first { $0.id == "project-root" }?.status == .passed
     }
 
+    /// Land the user in the one place that fixes what's still missing, instead
+    /// of a blanket Doctor handoff: a broken Pi is Doctor territory, missing
+    /// models are fixed in Models (Connect a provider), a missing projects
+    /// folder in Projects, and a fully green setup goes straight to coding.
     private var primaryTarget: SidebarItem {
         if canStartCoding { return .agent }
-        if needsDoctor { return .doctor }
+        if !piPassed { return .doctor }
+        if !modelsPassed { return .models }
+        if !projectPassed { return .projects }
         return .doctor
     }
 
     private var primaryButtonTitle: String {
         if canStartCoding { return "Start Coding" }
-        if needsDoctor { return "Review Setup" }
-        return "Open Doctor"
+        if !piPassed { return "Review Setup" }
+        if !modelsPassed { return "Connect a Provider" }
+        if !projectPassed { return "Choose Projects Folder" }
+        return "Review Setup"
     }
 
     var body: some View {
@@ -231,6 +283,11 @@ struct OnboardingFinalView: View {
         }
         .frame(width: 660, height: 560)
         .background(AppTheme.windowBackground)
+        .task {
+            if let freshItemsTask {
+                items = await freshItemsTask.value
+            }
+        }
     }
 
     private func infoCard(icon: String, title: String, detail: String, usePiSymbol: Bool = false) -> some View {
@@ -274,10 +331,10 @@ struct SetupChecklistView: View {
     @State private var isRefreshing = true
     @State private var loginService = PiProviderLoginService()
     @State private var showingConnectProvider = false
+    @State private var piInstaller = PiAutoInstaller()
     /// Demo only: when active, the checks run against forced install states
     /// (so the demo is 1:1 with the real service code). `.init()` = real checks.
     @State private var simulation: SetupSimulation
-    @Environment(\.scenePhase) private var scenePhase
 
     fileprivate init(
         viewModel: AppViewModel,
@@ -315,8 +372,12 @@ struct SetupChecklistView: View {
                 await loadInitialItems()
             }
         }
-        .onChange(of: scenePhase) { _, newPhase in
-            guard newPhase == .active else { return }
+        // Re-check when the user comes back from Terminal (after installing Pi
+        // or signing in to GitHub there). scenePhase never fires on macOS focus
+        // changes, so listen to AppKit's activation notification directly; the
+        // subscription lives and dies with this view, so nothing else churns.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            guard !isRefreshing, !piInstaller.isRunning else { return }
             Task { await refresh() }
         }
     }
@@ -460,7 +521,9 @@ struct SetupChecklistView: View {
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if item.status != .passed, item.action != nil || item.secondaryAction != nil {
+                if item.id == "pi-cli", item.status != .passed {
+                    piInstallControls
+                } else if item.status != .passed, item.action != nil || item.secondaryAction != nil {
                     HStack(spacing: 8) {
                         if let action = item.action {
                             Button(action.buttonTitle) { perform(action) }
@@ -530,6 +593,64 @@ struct SetupChecklistView: View {
     }
     #endif
 
+    /// The Pi row's action area: a one-click in-app install with live progress,
+    /// failure detail with retry, and Terminal as the explicit fallback.
+    @ViewBuilder
+    private var piInstallControls: some View {
+        switch piInstaller.phase {
+        case .running(let method, _):
+            HStack(spacing: 8) {
+                AppSpinner()
+                    .controlSize(.small)
+                Text("Installing Pi via \(method.displayName)… this can take a few minutes.")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+            }
+            .padding(.top, 2)
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 8) {
+                Text(message)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(AppTheme.mutedText)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Button("Try Again") { runPiAutoInstall() }
+                        .appPrimaryButton()
+                    Button("Install in Terminal") { viewModel.openPiInstallInTerminal() }
+                        .appSecondaryButton()
+                }
+            }
+            .padding(.top, 2)
+        case .idle, .succeeded:
+            HStack(spacing: 8) {
+                Button(SetupCheckAction.installPi.buttonTitle) { runPiAutoInstall() }
+                    .appPrimaryButton()
+            }
+            .padding(.top, 2)
+        }
+    }
+
+    private func runPiAutoInstall() {
+        // Demo rows are simulated; never run a real installer from them.
+        #if DEBUG
+        if simulation.isActive { return }
+        #endif
+        Task {
+            switch await piInstaller.install() {
+            case true?:
+                await refresh()
+                piInstaller.reset()
+            case false?:
+                break // the row shows the failure detail with retry + Terminal
+            case nil:
+                // No Homebrew and no npm: Terminal runs Pi's official installer,
+                // which can also set up Node interactively.
+                viewModel.openPiInstallInTerminal()
+            }
+        }
+    }
+
     private func perform(_ action: SetupCheckAction) {
         // First-run setup: replace the auto-seeded default rather than
         // appending, so picking a custom folder yields a single-entry list
@@ -543,7 +664,7 @@ struct SetupChecklistView: View {
             viewModel.useSuggestedProjectsRootDirectory(replacingExisting: replacing)
             Task { await refresh() }
         case .installPi:
-            viewModel.openPiInstallInTerminal()
+            runPiAutoInstall()
         case .connectProvider:
             showingConnectProvider = true // in-place; back returns to the checklist
         case .setupGitHub:
@@ -591,7 +712,7 @@ enum SetupCheckAction: Hashable {
         switch self {
         case .chooseProjectRoot: "Choose Folder…"
         case .useSuggestedProjectRoot: "Use Suggested Folder"
-        case .installPi: "Install in Terminal"
+        case .installPi: "Install Pi"
         case .connectProvider: "Connect a provider"
         case .setupGitHub: "Set up GitHub"
         }
@@ -687,7 +808,7 @@ struct SetupDependencyService {
     private func piItem(installed: Bool) -> SetupCheckItem {
         installed
             ? SetupCheckItem(id: "pi-cli", title: "Pi", detail: "Pi is installed and available to \(AppBrand.displayName).", status: .passed, recovery: nil)
-            : SetupCheckItem(id: "pi-cli", title: "Pi", detail: "Install Pi and make sure `pi` is available from your login shell.", status: .failed, recovery: "After installing, verify `pi --help` works in Terminal.", action: .installPi)
+            : SetupCheckItem(id: "pi-cli", title: "Pi", detail: "Pi powers every coding session and is not installed yet. \(AppBrand.displayName) can install it for you.", status: .failed, recovery: nil, action: .installPi)
     }
 
     // MARK: Models

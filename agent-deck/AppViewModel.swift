@@ -2691,8 +2691,23 @@ final class AppViewModel: NSObject {
         let scriptURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("agent-deck-pi-install-\(operationID.uuidString)")
             .appendingPathExtension("command")
+        // Pi's official installer handles every machine state, including
+        // missing Node (it offers to set Node up interactively, which works
+        // here because Terminal provides a real TTY). Download to a file
+        // before running so the installer's prompts read from the terminal,
+        // never from a pipe. Never reinstall over a working pi.
         let installCommand = """
-        npm install -g @earendil-works/pi-coding-agent || { echo "npm not found. Install Node.js first."; }
+        if command -v pi >/dev/null 2>&1; then
+          echo "Pi is already installed at $(command -v pi)."
+        else
+          PI_INSTALLER="$(mktemp -t agent-deck-pi-installer)"
+          if curl -fsSL https://pi.dev/install.sh -o "$PI_INSTALLER"; then
+            sh "$PI_INSTALLER" || echo "Installer failed. See https://pi.dev for manual instructions."
+          else
+            echo "Could not download the Pi installer. Check your network, or see https://pi.dev."
+          fi
+          rm -f "$PI_INSTALLER"
+        fi
         echo ""
         echo "Press any key to close."
         read -k 1
