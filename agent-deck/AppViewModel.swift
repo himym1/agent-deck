@@ -2430,16 +2430,6 @@ final class AppViewModel: NSObject {
         acknowledgePiAgentSession(sessionID)
     }
 
-    var piAgentNeedsAttentionCount: Int {
-        piAgentSessionStore.sessions.count(where: \.needsAttention)
-    }
-
-    var piAgentRunningSessionCount: Int {
-        piAgentSessionStore.sessions.filter { session in
-            !session.needsAttention && piAgentSessionIsWorking(session)
-        }.count
-    }
-
     func piAgentSessionIsWorking(_ session: PiAgentSessionRecord) -> Bool {
         session.status.isActive || piAgentSessionHasActiveSubagent(session.id)
     }

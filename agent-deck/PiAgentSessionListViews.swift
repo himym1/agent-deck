@@ -504,7 +504,7 @@ struct PiAgentSessionRow: View, Equatable {
     private var attentionStatusSlot: some View {
         ZStack(alignment: .trailing) {
             if isRunning {
-                activeStatusLabel
+                PiAgentTypingIndicator()
                     .transition(.opacity)
             } else if session.needsAttention {
                 needsAttentionBell
@@ -513,17 +513,6 @@ struct PiAgentSessionRow: View, Equatable {
         }
         .animation(.snappy(duration: 0.24), value: isRunning)
         .animation(.snappy(duration: 0.24), value: session.needsAttention)
-    }
-
-    private var activeStatusLabel: some View {
-        Text("ACTIVE")
-            .font(AppTheme.Font.smallLabel)
-            .tracking(1.2)
-            .foregroundStyle(AppTheme.brandAccent.opacity(0.72))
-            .padding(.horizontal, 5)
-            .padding(.vertical, 3)
-            .background(Capsule(style: .continuous).fill(AppTheme.contentFill.opacity(0.72)))
-            .accessibilityHidden(true)
     }
 
     private var needsAttentionBell: some View {

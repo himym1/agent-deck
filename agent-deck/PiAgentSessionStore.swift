@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import Observation
@@ -1235,6 +1236,19 @@ final class PiAgentSessionStore {
 
     private func bumpSessionListRevision() {
         sessionListRevision &+= 1
+        refreshDockAttentionBadge()
+    }
+
+    /// Dock badge mirrors the per-row bells: how many sessions finished and
+    /// are waiting for review. Driven from the revision bump rather than a
+    /// view so it stays correct while the app is in the background, which is
+    /// exactly when sessions go needs-attention.
+    private func refreshDockAttentionBadge() {
+        let count = sessions.count(where: \.needsAttention)
+        let label = count > 0 ? "\(count)" : nil
+        if NSApp.dockTile.badgeLabel != label {
+            NSApp.dockTile.badgeLabel = label
+        }
     }
 
     private func touchSession(_ id: UUID, bumpUpdatedAt: Bool) {

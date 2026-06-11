@@ -95,8 +95,6 @@ struct CodingAgentPanelHeader<Trailing: View>: View {
                 )
             }
 
-            CodingAgentStatusBadges(viewModel: viewModel)
-
             Spacer(minLength: 8)
 
             trailing
@@ -136,45 +134,6 @@ struct CodingAgentPanelHeader<Trailing: View>: View {
             return remote.owner
         }
         return selectedProject?.path ?? selectedProjectPath ?? ""
-    }
-}
-
-/// The ONLY sidebar view that reads the session-derived counts: they touch
-/// `store.sessions`, which mutates at streaming cadence, so confining the read
-/// to this leaf keeps the streaming pulse off the nav list and the badge card.
-struct CodingAgentStatusBadges: View {
-    let viewModel: AppViewModel
-
-    var body: some View {
-        let runningCount = viewModel.piAgentRunningSessionCount
-        let attentionCount = viewModel.piAgentNeedsAttentionCount
-        if runningCount > 0 || attentionCount > 0 {
-            HStack(spacing: 8) {
-                if runningCount > 0 {
-                    PiAgentTypingIndicator()
-                }
-                if attentionCount > 0 {
-                    Text(attentionCount > 99 ? "99+" : "\(attentionCount)")
-                        .font(.system(size: 10, weight: .bold))
-                        .monospacedDigit()
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, attentionCount > 9 ? 5 : 4)
-                        .frame(minWidth: 14, minHeight: 14)
-                        .background(Capsule(style: .continuous).fill(Color.red))
-                        .accessibilityLabel("\(attentionCount) session\(attentionCount == 1 ? "" : "s") waiting")
-                }
-            }
-            .help(helpText(running: runningCount, attention: attentionCount))
-        }
-    }
-
-    private func helpText(running: Int, attention: Int) -> String {
-        let waitingText = attention == 1 ? "1 session waiting" : "\(attention) sessions waiting"
-        let runningText = running == 1 ? "1 session running" : "\(running) sessions running"
-        if attention > 0 && running > 0 {
-            return "\(waitingText), \(runningText)"
-        }
-        return attention > 0 ? waitingText : runningText
     }
 }
 
@@ -386,6 +345,7 @@ private struct CodingAgentRecentList: View, Equatable {
         ) { session in
             CodingAgentRecentRow(
                 session: session,
+                isSelected: isAgentSelected && session.id == selectedSessionID,
                 isRunning: workingSessionIDs.contains(session.id),
                 onDelete: { onDelete(session.id) }
             )
@@ -411,6 +371,7 @@ private struct CodingAgentRecentList: View, Equatable {
 /// come from the enclosing `AppList` row.
 struct CodingAgentRecentRow: View, Equatable {
     let session: PiAgentSessionRecord
+    let isSelected: Bool
     let isRunning: Bool
     let onDelete: () -> Void
 
@@ -421,6 +382,7 @@ struct CodingAgentRecentRow: View, Equatable {
     // instance's closure captured the same session id, so it stays correct.
     static func == (lhs: CodingAgentRecentRow, rhs: CodingAgentRecentRow) -> Bool {
         lhs.session == rhs.session
+            && lhs.isSelected == rhs.isSelected
             && lhs.isRunning == rhs.isRunning
     }
 
@@ -434,6 +396,8 @@ struct CodingAgentRecentRow: View, Equatable {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
+                // Same seen-inactive dimming as the expanded rows.
+                .opacity(isSelected || isRunning || session.needsAttention ? 1 : 0.58)
 
             Spacer(minLength: 6)
 
