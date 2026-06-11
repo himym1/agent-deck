@@ -42,12 +42,15 @@ import SwiftUI
 /// One section in an `AppList`. `id` must be stable across renders.
 /// - `title` — `nil` to render the section with no header.
 /// - `info` — optional help-popover text rendered as a `?` next to the title.
+/// - `accessory` — optional control rendered at the trailing edge of the
+///   header row (e.g. a bulk action over the section's items).
 /// - `items` — the rows. If empty and `emptyMessage` is set, that row renders
 ///   in place of the items as a secondary-color placeholder.
 struct AppListSection<Item: Identifiable & Hashable>: Identifiable {
     let id: String
     let title: String?
     let info: String?
+    let accessory: AnyView?
     let items: [Item]
     let emptyMessage: String?
 
@@ -55,12 +58,14 @@ struct AppListSection<Item: Identifiable & Hashable>: Identifiable {
         id: String,
         title: String? = nil,
         info: String? = nil,
+        accessory: AnyView? = nil,
         items: [Item],
         emptyMessage: String? = nil
     ) {
         self.id = id
         self.title = title
         self.info = info
+        self.accessory = accessory
         self.items = items
         self.emptyMessage = emptyMessage
     }
@@ -141,7 +146,7 @@ struct AppList<Item: Identifiable & Hashable, RowContent: View>: View {
                 LazyVStack(alignment: .leading, spacing: AppListMetrics.rowSpacing) {
                     ForEach(sections) { section in
                         if let title = section.title {
-                            AppListSectionHeaderView(title: title, info: section.info)
+                            AppListSectionHeaderView(title: title, info: section.info, accessory: section.accessory)
                                 .padding(.top, firstSectionID == section.id ? AppTheme.Split.contentTopInset : 16)
                                 .padding(.bottom, 2)
                         }
@@ -423,6 +428,7 @@ private struct AppListEmptyRow: View {
 private struct AppListSectionHeaderView: View {
     let title: String
     let info: String?
+    let accessory: AnyView?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -434,6 +440,9 @@ private struct AppListSectionHeaderView: View {
                 AppHelpButton(title: title, text: info)
             }
             Spacer(minLength: 0)
+            if let accessory {
+                accessory
+            }
         }
         .padding(.horizontal, 10)
     }

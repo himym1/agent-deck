@@ -7,6 +7,7 @@ struct MemoryScreen: View {
     @State private var selectedRecordID: String?
     @State private var isNewMemoryPresented = false
     @State private var recordPendingDeletion: AgentMemoryRecord?
+    @State private var isStaleCleanupPresented = false
     /// Cached derivations of `memoryStore.records(projectPath:)`. Re-computed
     /// only when one of the input drivers changes — not on every body eval.
     /// Without this, every observable read of `memoryStore` would re-walk the
@@ -55,6 +56,15 @@ struct MemoryScreen: View {
         } message: { record in
             Text("Delete \"\(record.title.isEmpty ? "Untitled Memory" : record.title)\"? The memory file is removed from disk and agents stop recalling it.")
         }
+        .alert("Delete Stale Memories?", isPresented: $isStaleCleanupPresented) {
+            Button("Delete", role: .destructive) {
+                deleteStaleMemories()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            let count = staleVisibleCount
+            Text("Delete \(count) stale memor\(count == 1 ? "y" : "ies")? The memory files are removed from disk.")
+        }
         .task(id: cacheKey) { recomputeCachedLayout() }
         .task {
             if viewModel.appSettings.agentMemoryEnabled { memoryStore.warmEmbedder() }
@@ -98,6 +108,7 @@ struct MemoryScreen: View {
                     id: status.rawValue,
                     title: status.displayName,
                     info: status.sectionInfo,
+                    accessory: status == .stale ? AnyView(staleCleanupButton) : nil,
                     items: items
                 ))
             }
@@ -113,6 +124,36 @@ struct MemoryScreen: View {
 
         cachedLayout = (sections, visible, !current.isEmpty)
         ensureSelection()
+    }
+
+    /// Trailing control on the Stale section header: deletes every visible
+    /// stale memory after confirmation. Mirrors `AppHelpButton`'s quiet inline
+    /// affordance so the header stays calm.
+    private var staleCleanupButton: some View {
+        Button {
+            isStaleCleanupPresented = true
+        } label: {
+            Image(systemName: "trash")
+                .imageScale(.small)
+                .foregroundStyle(AppTheme.mutedText)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Delete all stale memories")
+        .help("Delete all stale memories")
+    }
+
+    private var staleVisibleCount: Int {
+        cachedLayout.visible.count { $0.status == .stale }
+    }
+
+    private func deleteStaleMemories() {
+        for record in cachedLayout.visible where record.status == .stale {
+            if selectedRecordID == record.id {
+                selectedRecordID = nil
+            }
+            viewModel.deleteAgentMemory(record.id)
+        }
     }
 
     private var emptyLibraryMessage: String {
