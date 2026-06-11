@@ -411,6 +411,16 @@ struct AppInitialLoadWindowCover: NSViewRepresentable {
 }
 
 final class ScrollerHidingProbe: NSView {
+    /// The scroll view suppression last landed on. Once set and still alive in
+    /// this window with its `HiddenScroller`s in place, `suppressScrollers()`
+    /// is a no-op — without this, every SwiftUI update of an `AppList` (body
+    /// re-eval, hover churn, resize animation frames) re-queued the retry
+    /// ladder below, each pass walking the entire window view hierarchy.
+    private weak var suppressedScrollView: NSScrollView?
+    /// True while the retry ladder is in flight, so overlapping triggers
+    /// (viewDidMoveToWindow + updateNSView on the same pass) coalesce.
+    private var isRetryLadderScheduled = false
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         suppressScrollers()
@@ -422,17 +432,32 @@ final class ScrollerHidingProbe: NSView {
     }
 
     func suppressScrollers() {
+        // Already pinned to a live scroll view in this window — nothing to do.
+        if let scrollView = suppressedScrollView,
+           scrollView.window === window,
+           scrollView.verticalScroller is HiddenScroller {
+            return
+        }
+        // Pin is stale (target deallocated, moved windows, or lost its hidden
+        // scroller) — drop it so the ladder below re-targets.
+        suppressedScrollView = nil
+        guard !isRetryLadderScheduled else { return }
+        isRetryLadderScheduled = true
         // The target scroll view may not be laid out yet on the first pass, so
         // retry across the next few runloop turns until it turns up.
-        for delay in [0.0, 0.1, 0.3, 0.6, 1.0] {
+        let delays: [TimeInterval] = [0.0, 0.1, 0.3, 0.6, 1.0]
+        for (index, delay) in delays.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.applySuppression()
+                guard let self else { return }
+                if self.suppressedScrollView == nil { self.applySuppression() }
+                if index == delays.count - 1 { self.isRetryLadderScheduled = false }
             }
         }
     }
 
     private func applySuppression() {
         guard let scrollView = targetScrollView() else { return }
+        suppressedScrollView = scrollView
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
         scrollView.scrollerInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)

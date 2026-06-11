@@ -115,8 +115,9 @@ struct SkillsScreen: View {
     @State private var cachedLayout: (
         sections: [AppListSection<SkillRecord>],
         inactiveByID: [SkillRecord.ID: Bool],
-        managedSkills: [SkillRecord]
-    ) = ([], [:], [])
+        managedSkills: [SkillRecord],
+        repositoryBySkillID: [SkillRecord.ID: ImportedSkillRepository]
+    ) = ([], [:], [], [:])
 
     var body: some View {
         skillsScreenWithSheets
@@ -234,6 +235,11 @@ struct SkillsScreen: View {
             scheduleSelectionSynchronization()
         }
         .onChange(of: viewModel.selectedDiscoveredProject) { _, _ in
+            cachedLayout = recomputeLayout()
+        }
+        // Catches repository sync / update-check results (hasKnownUpdate),
+        // which change row badges without touching the skill records.
+        .onChange(of: viewModel.appSettings.importedSkillRepositories) { _, _ in
             cachedLayout = recomputeLayout()
         }
         .onChange(of: viewModel.selectedSkillID) { _, _ in scheduleSelectionSynchronization() }
@@ -373,7 +379,8 @@ struct SkillsScreen: View {
     private func recomputeLayout() -> (
         sections: [AppListSection<SkillRecord>],
         inactiveByID: [SkillRecord.ID: Bool],
-        managedSkills: [SkillRecord]
+        managedSkills: [SkillRecord],
+        repositoryBySkillID: [SkillRecord.ID: ImportedSkillRepository]
     ) {
         let metadataByID = viewModel.cachedSkillMetadataByID
         let allRecords = viewModel.allVisibleSkillRecords
@@ -383,13 +390,34 @@ struct SkillsScreen: View {
         let preferred = grouped.values.compactMap(preferredSkillRecord)
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
+        // Repository membership for every listed skill, resolved once per
+        // layout rebuild. `importedRepository(for:)` standardizes two URLs per
+        // repo per call — running it per row per body eval made list renders
+        // O(skills × repos) in URL allocations. Standardize each clone path
+        // once, each skill path once, then it's plain prefix matching.
+        let repositories = viewModel.appSettings.importedSkillRepositories
+        let clonePathsByRepoID: [(repository: ImportedSkillRepository, clonePath: String)] = repositories.map {
+            ($0, URL(fileURLWithPath: $0.clonePath, isDirectory: true).standardizedFileURL.path)
+        }
+        func repository(for skill: SkillRecord) -> ImportedSkillRepository? {
+            guard !clonePathsByRepoID.isEmpty else { return nil }
+            let skillPath = URL(fileURLWithPath: skill.filePath).standardizedFileURL.path
+            return clonePathsByRepoID.first {
+                skillPath == $0.clonePath || skillPath.hasPrefix($0.clonePath + "/")
+            }?.repository
+        }
+        var repositoryBySkillID: [SkillRecord.ID: ImportedSkillRepository] = [:]
+        for skill in preferred {
+            if let repository = repository(for: skill) { repositoryBySkillID[skill.id] = repository }
+        }
+
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let managed: [SkillRecord]
         if query.isEmpty {
             managed = preferred
         } else {
             managed = preferred.filter { skill in
-                let repository = viewModel.importedRepository(for: skill)
+                let repository = repositoryBySkillID[skill.id]
                 return [
                     skill.name,
                     skill.description ?? "",
@@ -463,7 +491,7 @@ struct SkillsScreen: View {
             }
         }
 
-        return (sections, inactiveByID, managed)
+        return (sections, inactiveByID, managed, repositoryBySkillID)
     }
 
     /// Selection-aware list context menu. A single right-clicked skill gets the
@@ -1118,7 +1146,7 @@ struct SkillsScreen: View {
         let hasWarnings = metadata.hasWarnings
         let iconName = hasWarnings ? "exclamationmark.triangle.fill" : skillIcon(skill)
         let iconColor: Color = hasWarnings ? .orange : skillColor(isAssigned: isActive)
-        let repository = viewModel.importedRepository(for: skill)
+        let repository = cachedLayout.repositoryBySkillID[skill.id]
         let hasUpdate = repository?.hasKnownUpdate == true
         let canRename = viewModel.canRenameSkill(skill)
         return SkillListRowView(

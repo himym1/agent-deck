@@ -445,12 +445,91 @@ private struct AgentWarningPopover: View {
     }
 }
 
+/// Agent catalog row. Owns its own hover `@State` so a hover on row A only
+/// invalidates row A — pre-extraction the pane owned a `hoveredAgentID` and
+/// every visible row (plus the avatar's `fileExists` disk stat) re-evaluated
+/// on every hover change, which fires continuously while scrolling under the
+/// cursor. Mirrors `SkillListRowView`.
+private struct AgentListRow: View {
+    let agent: EffectiveAgentRecord
+    let imageStore: AgentImageStore
+    let fallbackSystemImage: String
+    let avatarColor: Color
+    let isMuted: Bool
+    let warnings: [DiagnosticWarning]
+    let skillIssues: [AgentSkillVisibilityIssue]
+    @Binding var warningPopoverAgentID: String?
+    let onEdit: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        let hasWarningDetails = !warnings.isEmpty || !skillIssues.isEmpty
+        HStack(alignment: .center, spacing: 10) {
+            AgentAvatarView(
+                imageURL: imageStore.imageURL(for: agent.name),
+                fallbackSystemImage: fallbackSystemImage,
+                color: avatarColor,
+                size: 40
+            )
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(agent.name)
+                        .font(.headline)
+                        .fontWidth(.expanded)
+                        .foregroundStyle(.primary)
+                        .strikethrough(agent.resolved.disabled == true, color: AppTheme.mutedText)
+                        .lineLimit(1)
+
+                    if hasWarningDetails {
+                        Button {
+                            warningPopoverAgentID = agent.id
+                        } label: {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .imageScale(.small)
+                                .accessibilityLabel("Agent warnings")
+                        }
+                        .buttonStyle(.plain)
+                        .popover(isPresented: Binding(
+                            get: { warningPopoverAgentID == agent.id },
+                            set: { if !$0 { warningPopoverAgentID = nil } }
+                        )) {
+                            AgentWarningPopover(agent: agent, warnings: warnings, skillIssues: skillIssues)
+                        }
+                    }
+                }
+
+                Text(agent.resolved.description.isEmpty ? "No description" : agent.resolved.description)
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 0)
+
+            Button(action: onEdit) {
+                Text("Edit")
+                    .font(.caption.weight(.semibold))
+            }
+            .appSmallSecondaryButton()
+            .opacity(isHovered ? 1 : 0)
+            .help("Edit agent")
+            .animation(.easeInOut(duration: 0.15), value: isHovered)
+        }
+        .onHover { isHovered = $0 }
+        .padding(.vertical, 6)
+        .opacity(isMuted ? 0.62 : 1)
+        .saturation(isMuted ? 0.25 : 1)
+    }
+}
+
 private struct AgentLibraryPane: View {
     var viewModel: AppViewModel
     @Binding var searchText: String
     let onEditAgent: (EffectiveAgentRecord) -> Void
     @State private var warningPopoverAgentID: String?
-    @State private var hoveredAgentID: String?
     @State private var pendingDeleteAgentID: EffectiveAgentRecord.ID?
     // Local mirror for the `List` selection — the macOS `List` writes its
     // selection back during the SwiftUI update pass, so it binds to this
@@ -742,72 +821,20 @@ private struct AgentLibraryPane: View {
         // the list O(N²) to render.
         let warnings = viewModel.warnings(for: agent)
         let skillIssues = viewModel.explicitSkillVisibilityIssues(for: agent)
-        let hasWarningDetails = !warnings.isEmpty || !skillIssues.isEmpty
-        let warningColor: Color = .orange
         let isMuted = inactive || agent.resolved.disabled == true || agentIsUnusedLibraryAgent(agent)
         let filePath = agent.sourcePath ?? agent.projectOverride?.settingsPath ?? agent.userOverride?.settingsPath
 
-        return HStack(alignment: .center, spacing: 10) {
-            AgentAvatarView(
-                imageURL: imageStore.imageURL(for: agent.name),
-                fallbackSystemImage: icon(for: agent),
-                color: color(for: agent),
-                size: 40
-            )
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(agent.name)
-                        .font(.headline)
-                        .fontWidth(.expanded)
-                        .foregroundStyle(.primary)
-                        .strikethrough(agent.resolved.disabled == true, color: AppTheme.mutedText)
-                        .lineLimit(1)
-
-                    if hasWarningDetails {
-                        Button {
-                            warningPopoverAgentID = agent.id
-                        } label: {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(warningColor)
-                                .imageScale(.small)
-                                .accessibilityLabel("Agent warnings")
-                        }
-                        .buttonStyle(.plain)
-                        .popover(isPresented: Binding(
-                            get: { warningPopoverAgentID == agent.id },
-                            set: { if !$0 { warningPopoverAgentID = nil } }
-                        )) {
-                            AgentWarningPopover(agent: agent, warnings: warnings, skillIssues: skillIssues)
-                        }
-                    }
-                }
-
-                Text(agent.resolved.description.isEmpty ? "No description" : agent.resolved.description)
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-                    .lineLimit(2)
-            }
-
-            Spacer(minLength: 0)
-
-            Button {
-                onEditAgent(agent)
-            } label: {
-                Text("Edit")
-                    .font(.caption.weight(.semibold))
-            }
-            .appSmallSecondaryButton()
-            .opacity(hoveredAgentID == agent.id ? 1 : 0)
-            .help("Edit agent")
-            .animation(.easeInOut(duration: 0.15), value: hoveredAgentID == agent.id)
-        }
-        .onHover { hovering in
-            hoveredAgentID = hovering ? agent.id : nil
-        }
-        .padding(.vertical, 6)
-        .opacity(isMuted ? 0.62 : 1)
-        .saturation(isMuted ? 0.25 : 1)
+        return AgentListRow(
+            agent: agent,
+            imageStore: imageStore,
+            fallbackSystemImage: icon(for: agent),
+            avatarColor: color(for: agent),
+            isMuted: isMuted,
+            warnings: warnings,
+            skillIssues: skillIssues,
+            warningPopoverAgentID: $warningPopoverAgentID,
+            onEdit: { onEditAgent(agent) }
+        )
         .contextMenu {
             Button {
                 openFile(filePath)

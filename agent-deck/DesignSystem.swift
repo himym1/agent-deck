@@ -1001,17 +1001,42 @@ struct SplitView<ListPane: View, DetailPane: View>: View {
     @ViewBuilder var detail: () -> DetailPane
 
     var body: some View {
-        GeometryReader { geo in
-            let listWidth = geo.size.width * AppTheme.Split.listFraction
-            HStack(spacing: 0) {
-                list()
-                    .frame(width: listWidth)
-                    .frame(maxHeight: .infinity)
-                detail()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .frame(width: geo.size.width, height: geo.size.height)
+        SplitPaneLayout(listFraction: AppTheme.Split.listFraction) {
+            list()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            detail()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+}
+
+/// Places exactly two children side by side: the first at `listFraction` of
+/// the available width, the second filling the rest.
+///
+/// A `Layout` instead of the previous `GeometryReader` on purpose: a
+/// GeometryReader re-evaluates its *body* whenever its size changes, so the
+/// sidebar show/hide animation (which resizes the detail column every frame)
+/// re-built both panes' entire view trees per frame — every realized list row
+/// re-diffed at display refresh rate. A `Layout` only re-places the existing
+/// children on resize; their bodies are never touched.
+private struct SplitPaneLayout: Layout {
+    let listFraction: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 2 else { return }
+        let listWidth = (bounds.width * listFraction).rounded()
+        subviews[0].place(
+            at: CGPoint(x: bounds.minX, y: bounds.minY),
+            proposal: ProposedViewSize(width: listWidth, height: bounds.height)
+        )
+        subviews[1].place(
+            at: CGPoint(x: bounds.minX + listWidth, y: bounds.minY),
+            proposal: ProposedViewSize(width: bounds.width - listWidth, height: bounds.height)
+        )
     }
 }
 

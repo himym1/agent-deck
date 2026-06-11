@@ -2278,6 +2278,14 @@ struct CodingAgentExpandedPanel: View {
     @State private var pendingDeleteSessionIDs: Set<UUID> = []
     @State private var isDeleteSessionsAlertPresented = false
     @State private var sessionActivityCache: [UUID: PiAgentSessionGitActivity] = [:]
+    /// Per-session memo of the last activity parse, keyed by the store's
+    /// `gitActivityRevision` it was computed at. That revision bumps exactly
+    /// when a commit/push/merge entry lands, so a memo entry parsed at the
+    /// current revision can never be stale. `rebuildSessionActivityCache`
+    /// re-parses only on actual git events — without this, every panel expand
+    /// re-scanned every visible transcript synchronously on the main thread,
+    /// right as the expand animation's first frames rendered.
+    @State private var activityParseMemo: [UUID: (revision: Int, activity: PiAgentSessionGitActivity)] = [:]
     /// Set when the panel becomes the visible one so the list jumps to the
     /// current session (which may have been picked from the collapsed recents
     /// while this list sat hidden at a stale scroll offset).
@@ -2329,7 +2337,11 @@ struct CodingAgentExpandedPanel: View {
             syncVisibleSessionSelection()
             syncMultiSelectionToSelectedSession()
             rebuildSessionActivityCache()
-            if isActive { sessionScrollRequest = store.selectedSession?.id }
+            // Pre-position even while hidden: the jump realizes the LazyVStack
+            // rows between the stale offset and the target NOW, off the expand
+            // animation's critical path. Expanding then animates over an
+            // already-positioned, already-realized list.
+            sessionScrollRequest = store.selectedSession?.id
         }
         .onChange(of: isActive) { _, active in
             if active { sessionScrollRequest = store.selectedSession?.id }
@@ -2341,7 +2353,12 @@ struct CodingAgentExpandedPanel: View {
             rebuildVisibleSessions()
             syncVisibleSessionSelection()
         }
-        .onChange(of: store.selectedSession?.id) { _, _ in syncMultiSelectionToSelectedSession() }
+        .onChange(of: store.selectedSession?.id) { _, _ in
+            syncMultiSelectionToSelectedSession()
+            // Track selection while hidden (collapsed-recents clicks) so the
+            // scroll-to-selection happens during the click, not at expand time.
+            if !isActive { sessionScrollRequest = store.selectedSession?.id }
+        }
         .onChange(of: visibleSessionIDs) { _, _ in
             syncVisibleSessionSelection()
             pruneMultiSelectionToVisibleSessions()
@@ -2519,10 +2536,28 @@ struct CodingAgentExpandedPanel: View {
         // suspenders against the `visibleSessionIDs` trigger firing while hidden.
         guard isActive else { return }
         var fresh: [UUID: PiAgentSessionGitActivity] = [:]
+        var memo = activityParseMemo
+        var memoChanged = false
+        let revision = store.gitActivityRevision
         for session in visibleSessions {
-            let activity = piAgentSessionGitActivity(from: store.transcriptsBySessionID[session.id] ?? [])
+            let activity: PiAgentSessionGitActivity
+            if let cached = memo[session.id], cached.revision == revision {
+                activity = cached.activity
+            } else {
+                activity = piAgentSessionGitActivity(from: store.transcriptsBySessionID[session.id] ?? [])
+                memo[session.id] = (revision, activity)
+                memoChanged = true
+            }
             if activity.hasCommit || activity.hasPush || activity.hasMerge { fresh[session.id] = activity }
         }
+        // Drop memo entries for sessions no longer visible so the dictionary
+        // can't grow unboundedly across project/search switches.
+        if memo.count > visibleSessions.count * 2 {
+            let visibleIDs = Set(visibleSessions.map(\.id))
+            memo = memo.filter { visibleIDs.contains($0.key) }
+            memoChanged = true
+        }
+        if memoChanged { activityParseMemo = memo }
         if fresh != sessionActivityCache { sessionActivityCache = fresh }
     }
 }
