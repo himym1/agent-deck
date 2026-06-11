@@ -341,6 +341,9 @@ final class AppViewModel: NSObject {
             projectRootURL = URL(fileURLWithPath: selectedProjectPath, isDirectory: true).standardizedFileURL
         }
         piAgentSessionStore.newSessionSubagentsEnabled = appSettings.nativeSubagentsEnabledForNewSessions
+        piAgentSessionStore.onLoadApplied = { [weak self] in
+            self?.pruneNeverStartedDraftSessions()
+        }
         writeOpenAIFastModeConfig()
         configurePiAgentIdleParking()
         warmMemoryEmbedder()
@@ -4344,6 +4347,21 @@ final class AppViewModel: NSObject {
 
     func deletePiAgentSession(_ sessionID: UUID) {
         deletePiAgentSessions([sessionID])
+    }
+
+    /// Launch-time cleanup: drop drafts that were created but never sent a
+    /// message (no Pi session file). Composer text is not persisted across
+    /// relaunches, so these records are empty shells — without this they
+    /// accumulate one per abandoned "new session". Routed through the normal
+    /// delete path so any eagerly provisioned worktrees are reclaimed too.
+    private func pruneNeverStartedDraftSessions() {
+        let staleIDs = Set(
+            piAgentSessionStore.sessions
+                .filter { $0.status == .draft && $0.piSessionFile == nil }
+                .map(\.id)
+        )
+        guard !staleIDs.isEmpty else { return }
+        deletePiAgentSessions(staleIDs)
     }
 
     func deletePiAgentSessions(_ sessionIDs: Set<UUID>) {

@@ -42,6 +42,11 @@ final class PiAgentSessionStore {
     var selectedSessionID: UUID?
     var lastError: String?
     var newSessionSubagentsEnabled = true
+    /// Fired once after the async init load has applied the persisted sessions.
+    /// AppViewModel hooks launch-time maintenance here (pruning never-started
+    /// drafts) so cleanup runs against the loaded records, not the empty
+    /// first-frame state.
+    var onLoadApplied: (() -> Void)?
 
     private var composerTextDraftsBySessionID: [UUID: String] = [:]
     private var composerImageDraftsBySessionID: [UUID: [PiAgentImageAttachment]] = [:]
@@ -124,6 +129,7 @@ final class PiAgentSessionStore {
             )
             self?.applyLoadedPersistedState(loaded)
             self?.loadTask = nil
+            self?.onLoadApplied?()
         }
     }
 
