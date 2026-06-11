@@ -416,6 +416,22 @@ extension PiSubagentRunRecord {
     }
 }
 
+/// The attachments a user transcript entry recorded at send time (stored in the
+/// entry's `rawJSON` by the runner). Decoded for chip rendering and for re-run,
+/// which must resend the message with its original attachments intact.
+struct PiAgentUserEntryAttachments: Codable {
+    var images: [PiAgentImageAttachment]?
+    var pastes: [PiAgentPasteAttachment]?
+    var issue: PiAgentIssueAttachment?
+}
+
+extension PiAgentTranscriptEntry {
+    var userAttachments: PiAgentUserEntryAttachments? {
+        guard role == .user, let rawJSON, let data = rawJSON.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(PiAgentUserEntryAttachments.self, from: data)
+    }
+}
+
 struct PiAgentImageAttachment: Identifiable, Codable, Hashable {
     let id: UUID
     var name: String

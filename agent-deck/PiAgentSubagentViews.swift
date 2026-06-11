@@ -667,20 +667,7 @@ struct PiNativeSubagentRunCard: View {
         }
     }
 
-    private var statusColor: Color {
-        switch effectiveStatus {
-        case .queued, .starting, .running:
-            return .blue
-        case .blocked:
-            return .orange
-        case .completed:
-            return .green
-        case .failed:
-            return .red
-        case .stopped, .disconnected:
-            return .secondary
-        }
-    }
+    private var statusColor: Color { effectiveStatus.themedColor }
 }
 
 /// Task preview shared by the single-run and parallel-child subagent cards.
@@ -712,6 +699,23 @@ private struct PiSubagentTaskPreview: View {
                 .stroke(AppTheme.contentStroke, lineWidth: 1)
         )
         .help(task)
+    }
+}
+
+extension PiSubagentRunStatus {
+    /// The one themed status→color mapping, shared by the native cards and every
+    /// SwiftUI surface (fallback card, run/transcript sheets). Active states take
+    /// the theme accent (the app's "activity" color), blocked the tool amber,
+    /// completed the diff-added green, failed the error red — so run status
+    /// follows the active theme instead of fixed system colors.
+    @MainActor var themedColor: Color {
+        switch self {
+        case .queued, .starting, .running: return AppTheme.brandAccent
+        case .blocked: return AppTheme.roleTool
+        case .completed: return AppTheme.diffAdded
+        case .failed: return AppTheme.roleError
+        case .stopped, .disconnected: return AppTheme.mutedText
+        }
     }
 }
 
@@ -905,15 +909,7 @@ struct PiNativeSubagentGraphSheet: View {
         return "\(seconds / 60)m \(seconds % 60)s"
     }
 
-    private func color(for status: PiSubagentRunStatus) -> Color {
-        switch status {
-        case .queued, .starting, .running: return .blue
-        case .blocked: return .orange
-        case .completed: return .green
-        case .failed: return .red
-        case .stopped, .disconnected: return .secondary
-        }
-    }
+    private func color(for status: PiSubagentRunStatus) -> Color { status.themedColor }
 }
 
 struct PiNativeSubagentTranscriptSheet: View {
@@ -1024,15 +1020,7 @@ struct PiNativeSubagentTranscriptSheet: View {
         }
     }
 
-    private var statusColor: Color {
-        switch run.status {
-        case .queued, .starting, .running: return .blue
-        case .blocked: return .orange
-        case .completed: return .green
-        case .failed: return .red
-        case .stopped, .disconnected: return AppTheme.mutedText
-        }
-    }
+    private var statusColor: Color { run.status.themedColor }
 }
 
 struct PiNativeSubagentRunSheet: View {

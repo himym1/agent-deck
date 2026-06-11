@@ -16,9 +16,11 @@ import os
 
 /// Fork affordance for a user-question bubble: the single "Fork as Pi session"
 /// action plus an optional list of agents for the "Fork as 1:1 agent chat…"
-/// submenu. Carries closures, so the enclosing payload isn't Equatable.
+/// submenu, plus the re-run action (fork at this message and send it
+/// immediately). Carries closures, so the enclosing payload isn't Equatable.
 struct ForkModel {
     let onForkSession: () -> Void
+    let onRerun: () -> Void
     let agentOptions: [ForkAgentOption]
 }
 
@@ -150,6 +152,8 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
     private let copyIcon = NSImageView()
     private let forkGlass = NSGlassEffectView()
     private let forkIcon = NSImageView()
+    private let rerunGlass = NSGlassEffectView()
+    private let rerunIcon = NSImageView()
     private var copiedResetWork: DispatchWorkItem?
     private var trackingArea: NSTrackingArea?
 
@@ -390,6 +394,7 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
 
         // Buttons: presence, order, and which gutter they float in.
         forkGlass.isHidden = payload.fork == nil
+        rerunGlass.isHidden = payload.fork == nil
         configureButtonStack(side: payload.copySide, hasFork: payload.fork != nil)
 
         applyChromeColors()
@@ -455,6 +460,7 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
         // AppCopyIconButton / AppForkIconButton (.foregroundStyle(.primary)).
         copyIcon.contentTintColor = .labelColor
         forkIcon.contentTintColor = .labelColor
+        rerunIcon.contentTintColor = .labelColor
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -509,6 +515,7 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
     private func setupButtons() {
         glassIcon(copyGlass, copyIcon, symbol: "doc.on.doc", help: "Copy message", action: #selector(copyTapped))
         glassIcon(forkGlass, forkIcon, symbol: "arrow.trianglehead.branch", help: "Fork session…", action: #selector(forkTapped))
+        glassIcon(rerunGlass, rerunIcon, symbol: "arrow.clockwise", help: "Re-run from here (rewinds the conversation and resends this message)", action: #selector(rerunTapped))
         buttonStack.translatesAutoresizingMaskIntoConstraints = false
         buttonStack.orientation = .horizontal
         buttonStack.spacing = 4
@@ -524,17 +531,23 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
     private var buttonStackSideC: NSLayoutConstraint?
 
     /// Rebuilds the button stack order/edge and floats it in the gutter beside
-    /// the card: leading copy → [fork][copy] to the LEFT of the card; trailing
-    /// copy → [copy][fork] to the RIGHT of the card (fork always outboard).
+    /// the card: leading copy → [rerun][fork][copy] to the LEFT of the card;
+    /// trailing copy → [copy][fork][rerun] to the RIGHT (rerun always outboard).
     private func configureButtonStack(side: NativeBubblePayload.CopySide, hasFork: Bool) {
         buttonStack.arrangedSubviews.forEach { buttonStack.removeArrangedSubview($0); $0.removeFromSuperview() }
         switch side {
         case .leading:
-            if hasFork { buttonStack.addArrangedSubview(forkGlass) }
+            if hasFork {
+                buttonStack.addArrangedSubview(rerunGlass)
+                buttonStack.addArrangedSubview(forkGlass)
+            }
             buttonStack.addArrangedSubview(copyGlass)
         case .trailing:
             buttonStack.addArrangedSubview(copyGlass)
-            if hasFork { buttonStack.addArrangedSubview(forkGlass) }
+            if hasFork {
+                buttonStack.addArrangedSubview(forkGlass)
+                buttonStack.addArrangedSubview(rerunGlass)
+            }
         }
         buttonStackSideC?.isActive = false
         switch side {
@@ -591,6 +604,8 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
         menu.addItem(parent)
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: forkGlass.bounds.height + 2), in: forkGlass)
     }
+
+    @objc private func rerunTapped() { payload?.fork?.onRerun() }
 
     @objc private func forkPiSessionSelected() { payload?.fork?.onForkSession() }
 

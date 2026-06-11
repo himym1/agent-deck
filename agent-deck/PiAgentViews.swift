@@ -598,6 +598,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         tableView.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
 
         let scrollView = NSScrollView()
+        // Layer-backed so row-removal reflows (re-run rewind, visibility toggles)
+        // can crossfade via a CATransition on this layer.
+        scrollView.wantsLayer = true
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = false
         scrollView.hasHorizontalScroller = false
@@ -825,6 +828,24 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         // Bucket key for `measuredHeightByID`. Rounding to a whole point keeps
         // sub-pixel width jitter during a scroll from spilling into a new bucket.
         private var widthBucket: Int { Int(contentWidth.rounded()) }
+
+#if DEBUG
+        // Height-pipeline trace for the subagent run-card crop: logs, for
+        // subagent rows only, what heightOfRow serves, what the cell reports,
+        // and what actually re-tiles — so one reproduction names the broken
+        // link. Low-volume: served values are logged only when they change.
+        private var subagentServedHeightMemo: [String: CGFloat] = [:]
+        fileprivate func isSubagentItem(_ id: String) -> Bool {
+            guard let item = itemByID[id], case .native(let spec) = item.kind else { return false }
+            return spec.typeID == ObjectIdentifier(PiAgentNativeSubagentRunCardView.self)
+                || spec.typeID == ObjectIdentifier(PiAgentNativeSubagentParallelCardView.self)
+        }
+        private func traceSubagentHeight(_ message: @autoclosure () -> String, id: String) {
+            guard isSubagentItem(id) else { return }
+            let line = message()
+            TranscriptScrollProfiler.logger.error("SUBAGENT-H \(line, privacy: .public)")
+        }
+#endif
         private let estimatedRowHeight: CGFloat = 120
         private let heightChangeEpsilon: CGFloat = 0.5
         // One-frame debounce so a burst of cell measurements during a single
@@ -1122,6 +1143,18 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 // linger pinned to absent ids.
                 purgeCellCache(keeping: Set(nextIDs))
                 for (id, revision) in nextRevisions { contentRevisionByID[id] = revision }
+                // In-session row REMOVALS (re-run rewind, visibility toggles) land
+                // as a hard cut: rows vanish, content below snaps up, the follow-up
+                // rows pop in. Cover the whole reflow with a brief crossfade of the
+                // transcript so it reads as one smooth transition. Never during a
+                // session switch (it has its own scroll choreography) or streaming.
+                if !isSessionSwitch, !streamingUpdate, !removedIDs.isEmpty, let layer = scrollView?.layer {
+                    let fade = CATransition()
+                    fade.type = .fade
+                    fade.duration = 0.28
+                    fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    layer.add(fade, forKey: "transcript-removal-fade")
+                }
                 applySnapshot(ids: nextIDs) { [weak self] in
                     guard let self else { return }
                     // Visible cells whose content changed (same id, new revision) are NOT
@@ -1509,11 +1542,25 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// content's intrinsic height. Updates the cache and (debounced) tells
         /// the table to re-tile the row when the height actually changed.
         func reportMeasuredHeight(_ rawHeight: CGFloat, forItemID itemID: String) {
+            // Reports can land from cells queued before a session switch or a
+            // structural apply — for an item the transcript no longer has. Caching
+            // that height would poison the entry for the id's NEXT appearance
+            // (captured: a transient status-row report under a subagent card's id
+            // wrote ~56 over the card's real 157 during a switch). Drop them; the
+            // id's next live cell re-reports through this same path.
+            guard itemByID[itemID] != nil else { return }
             let height = ceil(rawHeight)
             let bucket = widthBucket
             let priorMeasured = measuredHeightByID[itemID]?[bucket]
             measuredHeightByID[itemID, default: [:]][bucket] = height
             estimateByID.removeValue(forKey: itemID)
+#if DEBUG
+            traceSubagentHeight(
+                "report id=\(itemID.suffix(6)) h=\(Int(height)) bucket=\(bucket) "
+                + "prior=\(priorMeasured.map { Int($0) } ?? -1) "
+                + "noted=\(lastNotedHeight[itemID].map { Int($0) } ?? -1)",
+                id: itemID)
+#endif
             // Re-tile only when AppKit's *laid-out* height is genuinely stale.
             // The baseline is what the table currently has tiled (lastNotedHeight),
             // not the cache — falling back to the prior measurement, then the
@@ -1522,6 +1569,11 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // laid-out height actually changing.
             let baseline = lastNotedHeight[itemID] ?? priorMeasured ?? estimatedRowHeight
             let delta = abs(baseline - height)
+#if DEBUG
+            if delta <= heightChangeEpsilon {
+                traceSubagentHeight("report SWALLOWED id=\(itemID.suffix(6)) h=\(Int(height)) baseline=\(Int(baseline))", id: itemID)
+            }
+#endif
             guard delta > heightChangeEpsilon else { return }
             pendingHeightIDs.insert(itemID)
             guard pendingHeightWork == nil else { return }
@@ -1548,6 +1600,15 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     // reportMeasuredHeight already wrote the fresh height into
                     // measuredHeightByID before scheduling this call.
                     if let h = measuredHeightByID[id]?[widthBucket] { lastNotedHeight[id] = h }
+#if DEBUG
+                    traceSubagentHeight(
+                        "retile id=\(id.suffix(6)) row=\(row) h=\(self.measuredHeightByID[id]?[self.widthBucket].map { Int($0) } ?? -1)",
+                        id: id)
+#endif
+                } else {
+#if DEBUG
+                    traceSubagentHeight("retile MISSED id=\(id.suffix(6)) (row not found)", id: id)
+#endif
                 }
             }
             guard !rows.isEmpty else { return }
@@ -1877,11 +1938,32 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
             guard row < orderedIDs.count else { return estimatedRowHeight }
             let id = orderedIDs[row]
+            // Whatever this method returns IS what AppKit tiles the row at, so it
+            // is the one true baseline for "does a fresh measurement need a
+            // re-tile". Recording it here keeps `lastNotedHeight` honest across
+            // session switches and snapshot applies, where AppKit re-tiles every
+            // row through this path without going near `noteHeightsChanged`.
+            // (Captured failure: switch away + back left lastNotedHeight at the
+            // old 157 while the table re-tiled from a poisoned 56 cache entry —
+            // the cell's correct 157 report then matched the stale baseline and
+            // was swallowed, leaving the subagent card cropped for the whole run.)
             // Prefer a real measurement for the current width — it survives
             // width changes and session switches, so a revisited row lays out at
             // its exact height with no reflow.
-            if let measured = measuredHeightByID[id]?[widthBucket] { return measured }
-            if let estimate = estimateByID[id] { return estimate }
+            if let measured = measuredHeightByID[id]?[widthBucket] {
+#if DEBUG
+                traceServedHeight(id: id, source: "measured", value: measured)
+#endif
+                lastNotedHeight[id] = measured
+                return measured
+            }
+            if let estimate = estimateByID[id] {
+#if DEBUG
+                traceServedHeight(id: id, source: "estimate", value: estimate)
+#endif
+                lastNotedHeight[id] = estimate
+                return estimate
+            }
             // No measurement yet — use the item's fast estimator so the table can lay
             // the row out close to its natural size without triggering a SwiftUI pass.
             // The cell measures precisely as it renders and reports back via
@@ -1889,10 +1971,23 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             if let item = itemByID[id] {
                 let est = item.estimatedHeight(contentWidth)
                 estimateByID[id] = est
+#if DEBUG
+                traceServedHeight(id: id, source: "fresh-estimate", value: est)
+#endif
+                lastNotedHeight[id] = est
                 return est
             }
             return estimatedRowHeight
         }
+
+#if DEBUG
+        private func traceServedHeight(id: String, source: String, value: CGFloat) {
+            guard isSubagentItem(id), subagentServedHeightMemo[id] != value else { return }
+            subagentServedHeightMemo[id] = value
+            TranscriptScrollProfiler.logger.error(
+                "SUBAGENT-H serve id=\(id.suffix(6), privacy: .public) \(source, privacy: .public)=\(Int(value)) bucket=\(self.widthBucket)")
+        }
+#endif
     }
 
     /// Clip view for the transcript scroll view. The transcript never scrolls
@@ -2086,6 +2181,12 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 guard let row = self.nativeRow, let spec = self.nativeRowSpec,
                       let itemID = self.configuredItemID, self.configuredWidth > 1 else { return }
                 let h = self.configuredTopInset + spec.measure(row, self.configuredWidth) + self.configuredBottomInset
+#if DEBUG
+                if row is PiAgentNativeSubagentRunCardView || row is PiAgentNativeSubagentParallelCardView {
+                    TranscriptScrollProfiler.logger.error(
+                        "SUBAGENT-H cellmeasure(async) id=\(itemID.suffix(6), privacy: .public) h=\(Int(h)) w=\(Int(self.configuredWidth)) last=\(Int(self.lastIntrinsicHeight))")
+                }
+#endif
                 guard h > 0, h.isFinite, abs(h - self.lastIntrinsicHeight) > 0.5 else { return }
                 self.lastIntrinsicHeight = h
                 self.onMeasuredHeight?(itemID, h)
@@ -2101,6 +2202,12 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             guard let row = nativeRow, let spec = nativeRowSpec, configuredWidth > 1 else { return -1 }
             row.layoutSubtreeIfNeeded()
             let h = configuredTopInset + spec.measure(row, configuredWidth) + configuredBottomInset
+#if DEBUG
+            if row is PiAgentNativeSubagentRunCardView || row is PiAgentNativeSubagentParallelCardView {
+                TranscriptScrollProfiler.logger.error(
+                    "SUBAGENT-H cellmeasure(forced) id=\(self.configuredItemID?.suffix(6) ?? "?", privacy: .public) h=\(Int(h)) w=\(Int(self.configuredWidth))")
+            }
+#endif
             guard h > 0, h.isFinite else { return -1 }
             lastIntrinsicHeight = h
             return h
@@ -3568,6 +3675,7 @@ struct PiAgentScreen: View {
         }
         return ForkModel(
             onForkSession: { [viewModel] in viewModel.forkPiAgentSession(from: question) },
+            onRerun: { [viewModel] in viewModel.rerunPiAgentSession(from: question) },
             agentOptions: agentOptions
         )
     }

@@ -348,13 +348,15 @@ final class PiAgentNativeSupervisorCardView: NSView, PiAgentNativeRowContent {
 
         titleIcon.translatesAutoresizingMaskIntoConstraints = false
         titleIcon.image = NSImage(systemSymbolName: "questionmark.bubble", accessibilityDescription: nil)
-        titleIcon.contentTintColor = .systemOrange
+        // Blocked/attention tint follows the theme (same hue the run cards use
+        // for the blocked status), not a fixed system orange.
+        titleIcon.contentTintColor = AppTheme.ns(AppTheme.roleTool)
         titleIcon.imageScaling = .scaleProportionallyUpOrDown
         titleIcon.setContentHuggingPriority(.required, for: .horizontal)
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = NSFont.preferredFont(forTextStyle: .headline)
-        titleLabel.textColor = .systemOrange
+        titleLabel.textColor = AppTheme.ns(AppTheme.roleTool)
         titleLabel.lineBreakMode = .byTruncatingTail
 
         message.onToggle = { [weak self] in self?.onIntrinsicHeightChange?() }

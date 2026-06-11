@@ -360,8 +360,8 @@ struct PiAgentCurrentPlanCard: View {
         switch status {
         case .todo: return AppTheme.mutedText
         case .inProgress: return AppTheme.brandAccent
-        case .done: return .green
-        case .blocked: return .orange
+        case .done: return AppTheme.diffAdded
+        case .blocked: return AppTheme.roleTool
         case .skipped: return AppTheme.mutedText
         }
     }
@@ -437,15 +437,7 @@ private struct PiAgentActivitySubagentRow: View {
         }
     }
 
-    private func color(for status: PiSubagentRunStatus) -> Color {
-        switch status {
-        case .queued, .starting, .running: return .blue
-        case .blocked: return .orange
-        case .completed: return .green
-        case .failed: return .red
-        case .stopped, .disconnected: return AppTheme.mutedText
-        }
-    }
+    private func color(for status: PiSubagentRunStatus) -> Color { status.themedColor }
 }
 
 @MainActor
@@ -639,9 +631,9 @@ private enum PiAgentActivityStatus: Hashable {
 
     var color: Color {
         switch self {
-        case .running: return .blue
-        case .completed: return .green
-        case .failed: return .red
+        case .running: return AppTheme.brandAccent
+        case .completed: return AppTheme.diffAdded
+        case .failed: return AppTheme.roleError
         }
     }
 }
@@ -835,7 +827,7 @@ private struct PiAgentActivityRow: View {
                 HStack(alignment: .top, spacing: 9) {
                     Image(systemName: item.kind.icon)
                         .font(AppTheme.Font.caption.weight(.semibold))
-                        .foregroundStyle(item.status == .failed ? .red : AppTheme.mutedText)
+                        .foregroundStyle(item.status == .failed ? AppTheme.roleError : AppTheme.mutedText)
                         .frame(width: 18, height: 18)
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
@@ -1170,21 +1162,21 @@ private nonisolated struct PiAgentDiffLine: Hashable, Sendable {
         return "\(prefix)\(number)"
     }
 
-    var background: Color {
+    @MainActor var background: Color {
         switch prefix {
-        case "+": return Color.green.opacity(0.14)
-        case "-": return Color.red.opacity(0.14)
+        case "+": return AppTheme.diffAdded.opacity(0.14)
+        case "-": return AppTheme.diffRemoved.opacity(0.14)
         default: return Color.clear
         }
     }
 
-    var textColor: Color {
+    @MainActor var textColor: Color {
         switch prefix {
-        case "+": return .green
-        case "-": return .red
+        case "+": return AppTheme.diffAdded
+        case "-": return AppTheme.diffRemoved
         default: return .secondary
         }
     }
 
-    var gutterColor: Color { textColor.opacity(prefix == " " ? 0.75 : 1) }
+    @MainActor var gutterColor: Color { textColor.opacity(prefix == " " ? 0.75 : 1) }
 }

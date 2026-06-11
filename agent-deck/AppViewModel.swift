@@ -4008,7 +4008,7 @@ final class AppViewModel: NSObject {
 
     private func deliverPiAgentMessage(_ text: String, mode: PiAgentInputMode, transcriptText: String?, images: [PiAgentImageAttachment], pasteAttachments: [PiAgentPasteAttachment], issueAttachment: PiAgentIssueAttachment?, session: PiAgentSessionRecord) {
         let visibleText = (transcriptText ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
-        let effectiveText: String
+        var effectiveText: String
         if let issueAttachment {
             effectiveText = PiIssuePromptBuilder.rpcMessage(
                 userText: text,
@@ -4024,12 +4024,32 @@ final class AppViewModel: NSObject {
             piAgentRunner.compact(session: session, customInstructions: instructions)
             return
         }
+        // A 1:1 agent chat forked from a session starts with NO replayed history
+        // (the agent's system prompt is incompatible with the parent's), so the
+        // agent would have amnesia about the conversation it was forked from.
+        // Embed the captured parent transcript into the FIRST message's RPC text
+        // as foreign context; the visible transcript keeps just the user's text.
+        var displayOverride = transcriptText
+        if session.kind == .agent,
+           let snapshot = session.forkedFromTranscriptSnapshot, !snapshot.isEmpty,
+           !piAgentSessionStore.transcript(for: session.id).contains(where: { $0.role == .user }) {
+            displayOverride = displayOverride ?? text
+            effectiveText = """
+            <forked_conversation_context>
+            This chat was forked from a previous conversation. The transcript of that conversation follows as background context. It is not your own dialogue history; treat it as information the user expects you to know.
+
+            \(snapshot)
+            </forked_conversation_context>
+
+            \(effectiveText)
+            """
+        }
         schedulePiAgentTitleGenerationIfNeeded(for: session, firstMessage: visibleText.isEmpty ? effectiveText.trimmingCharacters(in: .whitespacesAndNewlines) : visibleText)
         if !piAgentRunner.isRunning(sessionID: session.id), mode == .prompt {
-            piAgentRunner.resume(session: session, initialPrompt: effectiveText, transcriptText: transcriptText, images: images, pasteAttachments: pasteAttachments, issueAttachment: issueAttachment)
+            piAgentRunner.resume(session: session, initialPrompt: effectiveText, transcriptText: displayOverride, images: images, pasteAttachments: pasteAttachments, issueAttachment: issueAttachment)
             return
         }
-        piAgentRunner.send(effectiveText, mode: mode, to: session.id, transcriptText: transcriptText, images: images, pasteAttachments: pasteAttachments, issueAttachment: issueAttachment)
+        piAgentRunner.send(effectiveText, mode: mode, to: session.id, transcriptText: displayOverride, images: images, pasteAttachments: pasteAttachments, issueAttachment: issueAttachment)
     }
 
     private func schedulePiAgentTitleUpdateIfNeeded(sessionID: UUID, plan: PiSessionPlanRecord) {
@@ -4132,7 +4152,34 @@ final class AppViewModel: NSObject {
         piAgentRunner.fork(
             sessionID: entry.sessionID,
             userMessageText: entry.text,
-            userMessageIndex: index
+            userMessageIndex: index,
+            sourceEntryID: entry.id
+        )
+    }
+
+    /// Re-run the conversation from a user message, in place: the session
+    /// rewinds to just before that message (Pi branches its append-only session
+    /// file; the dropped turns survive in the parent file on disk) and the
+    /// message is resent immediately — same session row, no new fork session.
+    /// The resend reuses Pi's recorded text for the message plus the entry's
+    /// recorded attachments, so the rerun is exactly the original send.
+    func rerunPiAgentSession(from entry: PiAgentTranscriptEntry) {
+        guard entry.role == .user else { return }
+        let transcript = piAgentSessionStore.transcript(for: entry.sessionID)
+        let userEntries = transcript.filter { $0.role == .user }
+        guard let index = userEntries.firstIndex(where: { $0.id == entry.id }) else { return }
+        let attachments = entry.userAttachments
+        piAgentRunner.fork(
+            sessionID: entry.sessionID,
+            userMessageText: entry.text,
+            userMessageIndex: index,
+            sourceEntryID: entry.id,
+            rerun: .init(
+                transcriptText: entry.text,
+                images: attachments?.images ?? [],
+                pasteAttachments: attachments?.pastes ?? [],
+                issueAttachment: attachments?.issue
+            )
         )
     }
 
@@ -4154,7 +4201,8 @@ final class AppViewModel: NSObject {
         _ = piAgentSessionStore.forkSessionAsAgentChat(
             from: parent,
             agent: agent,
-            composerSeed: entry.text
+            composerSeed: entry.text,
+            cutBeforeEntryID: entry.id
         )
     }
 

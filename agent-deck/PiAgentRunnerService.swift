@@ -97,9 +97,27 @@ final class PiAgentRunnerService {
     /// on open this launch — keeps the on-view disk read to once per session.
     private var rehydratedFromDiskSessionIDs: Set<UUID> = []
     private var pendingThinkingLevelsBySessionID: [UUID: PendingThinkingLevel] = [:]
+    /// Re-run: everything needed to resend the forked message exactly as it was
+    /// originally sent — the display text and the recorded attachments (images
+    /// must re-attach; pastes/issue content is already inline in Pi's recorded
+    /// text but is needed for faithful transcript chips).
+    struct RerunDelivery {
+        var transcriptText: String?
+        var images: [PiAgentImageAttachment] = []
+        var pasteAttachments: [PiAgentPasteAttachment] = []
+        var issueAttachment: PiAgentIssueAttachment?
+    }
+
     private struct ForkProgress {
         let userMessageText: String
         let userMessageIndex: Int
+        /// The Agent Deck transcript entry being forked at. Re-run truncates the
+        /// local transcript here; a normal fork cuts its recap snapshot here so
+        /// the fork-origin card shows exactly the inherited history.
+        let sourceEntryID: UUID?
+        /// Non-nil = re-run: once the fork materializes, send the forked user
+        /// message immediately instead of parking it in the composer.
+        let rerun: RerunDelivery?
         var phase: Phase
         var getForkMessagesSent: Bool
         enum Phase {
@@ -455,7 +473,7 @@ final class PiAgentRunnerService {
     /// so the parent is no longer live), then materialize an Agent Deck record
     /// for the new session via store.forkSession — which auto-selects it and
     /// pre-fills its composer with the user-message text.
-    func fork(sessionID: UUID, userMessageText: String, userMessageIndex: Int) {
+    func fork(sessionID: UUID, userMessageText: String, userMessageIndex: Int, sourceEntryID: UUID? = nil, rerun: RerunDelivery? = nil) {
         guard let session = store.sessions.first(where: { $0.id == sessionID }) else { return }
         guard forkProgressBySessionID[sessionID] == nil else {
             store.append(.init(sessionID: sessionID, role: .status, title: "Fork", text: "A fork is already in progress for this session."))
@@ -464,6 +482,8 @@ final class PiAgentRunnerService {
         let progress = ForkProgress(
             userMessageText: userMessageText,
             userMessageIndex: userMessageIndex,
+            sourceEntryID: sourceEntryID,
+            rerun: rerun,
             phase: .fetchingMessages,
             getForkMessagesSent: false
         )
@@ -536,12 +556,42 @@ final class PiAgentRunnerService {
             return
         }
         let sessionId = event.data?["sessionId"]?.stringValue
+        let sourceEntryID = progress.sourceEntryID
+        let rerun = progress.rerun
         forkProgressBySessionID[sessionID] = nil
-        completeFork(parentSessionID: sessionID, newSessionFile: sessionFile, newSessionId: sessionId, composerSeed: forkText)
+        completeFork(parentSessionID: sessionID, newSessionFile: sessionFile, newSessionId: sessionId, composerSeed: forkText, sourceEntryID: sourceEntryID, rerun: rerun)
     }
 
-    private func completeFork(parentSessionID: UUID, newSessionFile: String, newSessionId: String?, composerSeed: String) {
+    private func completeFork(parentSessionID: UUID, newSessionFile: String, newSessionId: String?, composerSeed: String, sourceEntryID: UUID? = nil, rerun: RerunDelivery? = nil) {
         guard let parent = store.sessions.first(where: { $0.id == parentSessionID }) else { return }
+
+        if let rerun, let sourceEntryID {
+            // In-place re-run: the running pi process has already rebound itself
+            // to the branched session file, so the SAME session record rebinds to
+            // it too — same row, same client, conversation rewound to just before
+            // the chosen message. The dropped tail survives on disk in the parent
+            // session file. Resend Pi's own recorded text for the message
+            // (byte-identical prompt) with the original entry's attachments.
+            store.rewindSession(
+                parentSessionID,
+                fromEntryID: sourceEntryID,
+                newPiSessionFile: newSessionFile,
+                newPiSessionId: newSessionId
+            )
+            if !composerSeed.isEmpty {
+                send(
+                    composerSeed,
+                    mode: .prompt,
+                    to: parentSessionID,
+                    transcriptText: rerun.transcriptText,
+                    images: rerun.images,
+                    pasteAttachments: rerun.pasteAttachments,
+                    issueAttachment: rerun.issueAttachment
+                )
+            }
+            return
+        }
+
         // Pi has rebound its runtime to the new session in-process. Stop the parent
         // client (without writing a "Stopped" status to the parent transcript — Pi
         // didn't actually stop, it forked). If the user re-selects the parent later,
@@ -551,7 +601,10 @@ final class PiAgentRunnerService {
             from: parent,
             newPiSessionFile: newSessionFile,
             newPiSessionId: newSessionId,
-            composerSeed: composerSeed
+            composerSeed: composerSeed,
+            // Snapshot only the inherited history — turns at/after the forked
+            // message never carried over and must not appear in the recap card.
+            cutBeforeEntryID: sourceEntryID
         )
     }
 

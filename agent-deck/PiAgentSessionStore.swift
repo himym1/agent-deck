@@ -304,10 +304,11 @@ final class PiAgentSessionStore {
         from parent: PiAgentSessionRecord,
         newPiSessionFile: String,
         newPiSessionId: String?,
-        composerSeed: String
+        composerSeed: String,
+        cutBeforeEntryID: UUID? = nil
     ) -> PiAgentSessionRecord {
         let now = Date()
-        let snapshot = parentTranscriptPlainText(parentID: parent.id)
+        let snapshot = parentTranscriptPlainText(parentID: parent.id, cutBeforeEntryID: cutBeforeEntryID)
         let title = "Fork of \(parent.title)"
         let record = PiAgentSessionRecord(
             id: UUID(),
@@ -393,10 +394,11 @@ final class PiAgentSessionStore {
     func forkSessionAsAgentChat(
         from parent: PiAgentSessionRecord,
         agent: EffectiveAgentRecord,
-        composerSeed: String
+        composerSeed: String,
+        cutBeforeEntryID: UUID? = nil
     ) -> PiAgentSessionRecord {
         let now = Date()
-        let snapshot = parentTranscriptPlainText(parentID: parent.id)
+        let snapshot = parentTranscriptPlainText(parentID: parent.id, cutBeforeEntryID: cutBeforeEntryID)
         let title = "Chat · \(agent.name)"
         let record = PiAgentSessionRecord(
             id: UUID(),
@@ -472,14 +474,18 @@ final class PiAgentSessionStore {
         return record
     }
 
-    /// Renders the parent transcript as plain text for the fork-origin card popover.
-    /// Includes user prompts, assistant replies, and thinking turns; skips status,
-    /// tool, error, stderr, and raw noise. Survives parent deletion because the
-    /// result is stored on the forked record.
-    private func parentTranscriptPlainText(parentID: UUID) -> String {
+    /// Renders the parent transcript as plain text for the fork-origin card popover
+    /// and the agent-chat context injection. Includes user prompts, assistant
+    /// replies, and thinking turns; skips status, tool, error, stderr, and raw
+    /// noise. Survives parent deletion because the result is stored on the forked
+    /// record. `cutBeforeEntryID` truncates at the forked-at message, so the
+    /// snapshot reflects exactly the history the fork inherited — not the parent
+    /// turns past the fork point, which never carried over.
+    private func parentTranscriptPlainText(parentID: UUID, cutBeforeEntryID: UUID? = nil) -> String {
         let entries = transcript(for: parentID)
         var lines: [String] = []
         for entry in entries {
+            if let cutBeforeEntryID, entry.id == cutBeforeEntryID { break }
             let trimmed = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
             switch entry.role {
@@ -871,6 +877,27 @@ final class PiAgentSessionStore {
         requests[index].updatedAt = Date()
         supervisorRequestsBySessionID[parentSessionID] = requests.sorted { $0.updatedAt > $1.updatedAt }
         touchSession(parentSessionID, bumpUpdatedAt: true)
+    }
+
+    /// In-place re-run rewind: drop `fromEntryID` and everything after it from
+    /// the session's transcript, and rebind the record to the branched Pi
+    /// session file the running pi process has already switched to. The session
+    /// row, title, worktree, and client all stay — only the conversation tail
+    /// disappears (it survives on disk in the parent session file).
+    func rewindSession(_ sessionID: UUID, fromEntryID: UUID, newPiSessionFile: String, newPiSessionId: String?) {
+        loadTranscriptIfNeeded(sessionID)
+        guard transcriptsBySessionID[sessionID] != nil else { return }
+        modifyTranscriptEntries(for: sessionID) { entries in
+            guard let index = entries.firstIndex(where: { $0.id == fromEntryID }) else { return }
+            entries.removeSubrange(index...)
+        }
+        updateSession(sessionID) { record in
+            record.piSessionFile = newPiSessionFile
+            record.piSessionId = newPiSessionId
+        }
+        persistTranscript(sessionID)
+        bumpTranscriptRevision(sessionID)
+        touchSession(sessionID, bumpUpdatedAt: true)
     }
 
     func append(_ entry: PiAgentTranscriptEntry) {

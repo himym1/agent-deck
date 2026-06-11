@@ -634,6 +634,8 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
     private let copyIcon = NSImageView()
     private let forkGlass = NSGlassEffectView()
     private let forkIcon = NSImageView()
+    private let rerunGlass = NSGlassEffectView()
+    private let rerunIcon = NSImageView()
     private var copiedResetWork: DispatchWorkItem?
     private var trackingArea: NSTrackingArea?
 
@@ -839,6 +841,7 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
         if !chipViews.isEmpty { layoutChipRow(innerWidth: chipInnerWidth(), apply: true) }
 
         forkGlass.isHidden = payload.fork == nil
+        rerunGlass.isHidden = payload.fork == nil
         configureButtonStack(hasFork: payload.fork != nil)
         applyChromeColors()
         needsLayout = true
@@ -1027,6 +1030,7 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
     private func setupButtons() {
         glassIcon(copyGlass, copyIcon, symbol: "doc.on.doc", help: "Copy message", action: #selector(copyTapped))
         glassIcon(forkGlass, forkIcon, symbol: "arrow.trianglehead.branch", help: "Fork session…", action: #selector(forkTapped))
+        glassIcon(rerunGlass, rerunIcon, symbol: "arrow.clockwise", help: "Re-run from here (rewinds the conversation and resends this message)", action: #selector(rerunTapped))
         buttonStack.translatesAutoresizingMaskIntoConstraints = false
         buttonStack.orientation = .horizontal
         buttonStack.spacing = 4
@@ -1040,12 +1044,17 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
         ])
     }
 
-    /// Order: [fork][copy] to the LEFT of the card (fork outboard).
+    /// Order: [rerun][fork][copy] to the LEFT of the card (rerun outboard).
     private func configureButtonStack(hasFork: Bool) {
         buttonStack.arrangedSubviews.forEach { buttonStack.removeArrangedSubview($0); $0.removeFromSuperview() }
-        if hasFork { buttonStack.addArrangedSubview(forkGlass) }
+        if hasFork {
+            buttonStack.addArrangedSubview(rerunGlass)
+            buttonStack.addArrangedSubview(forkGlass)
+        }
         buttonStack.addArrangedSubview(copyGlass)
     }
+
+    @objc private func rerunTapped() { payload?.fork?.onRerun() }
 
     @objc private func copyTapped() {
         guard let text = payload?.copyText else { return }

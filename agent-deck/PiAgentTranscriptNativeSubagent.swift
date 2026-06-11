@@ -55,7 +55,12 @@ struct NativeSubagentParallelPayload {
 private final class PiAgentNativeSubagentGlyph: NSView {
     private let bgLayer = CAShapeLayer()
     private let strokeLayer = CAShapeLayer()
-    private let ringLayer = CAShapeLayer()
+    // Activity ring: a conic ("angular") gradient masked to a circular stroke —
+    // bright at the head, fading along the tail (the comet the SwiftUI original
+    // drew with AngularGradient). The whole gradient layer rotates; the render
+    // server composites it, so the spin costs the main thread nothing.
+    private let ringGradient = CAGradientLayer()
+    private let ringMask = CAShapeLayer()
     private let avatar = NSImageView()
 
     override init(frame frameRect: NSRect) {
@@ -63,25 +68,29 @@ private final class PiAgentNativeSubagentGlyph: NSView {
         wantsLayer = true
         layer?.addSublayer(bgLayer)
         layer?.addSublayer(strokeLayer)
-        layer?.addSublayer(ringLayer)
+        layer?.addSublayer(ringGradient)
         strokeLayer.fillColor = NSColor.clear.cgColor
         strokeLayer.lineWidth = 1
-        ringLayer.fillColor = NSColor.clear.cgColor
-        ringLayer.lineWidth = 2
-        ringLayer.lineCap = .round
-        ringLayer.strokeStart = 0
-        ringLayer.strokeEnd = 0.22
+        ringGradient.type = .conic
+        ringGradient.startPoint = CGPoint(x: 0.5, y: 0.5)
+        ringGradient.endPoint = CGPoint(x: 0.5, y: 0)
+        ringMask.fillColor = NSColor.clear.cgColor
+        ringMask.strokeColor = NSColor.white.cgColor
+        ringMask.lineWidth = 2
+        ringGradient.mask = ringMask
         avatar.translatesAutoresizingMaskIntoConstraints = false
         avatar.imageScaling = .scaleProportionallyUpOrDown
         avatar.wantsLayer = true
-        avatar.layer?.cornerRadius = 17
+        // 28pt inside the 34pt glyph, like the SwiftUI original — the activity
+        // ring spins at the glyph edge, so a full-bleed avatar would hide it.
+        avatar.layer?.cornerRadius = 14
         avatar.layer?.masksToBounds = true
         addSubview(avatar)
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: 34),
             heightAnchor.constraint(equalToConstant: 34),
-            avatar.widthAnchor.constraint(equalToConstant: 34),
-            avatar.heightAnchor.constraint(equalToConstant: 34),
+            avatar.widthAnchor.constraint(equalToConstant: 28),
+            avatar.heightAnchor.constraint(equalToConstant: 28),
             avatar.centerXAnchor.constraint(equalTo: centerXAnchor),
             avatar.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
@@ -92,8 +101,15 @@ private final class PiAgentNativeSubagentGlyph: NSView {
     func configure(color: NSColor, isActive: Bool, avatarURL: URL?) {
         bgLayer.fillColor = color.withAlphaComponent(isActive ? 0.12 : 0.08).cgColor
         strokeLayer.strokeColor = color.withAlphaComponent(isActive ? 0.30 : 0.16).cgColor
-        ringLayer.strokeColor = color.cgColor
-        ringLayer.isHidden = !isActive
+        // Comet profile: transparent tail rising to a bright head.
+        ringGradient.colors = [
+            color.withAlphaComponent(0).cgColor,
+            color.withAlphaComponent(0.10).cgColor,
+            color.withAlphaComponent(0.95).cgColor,
+            color.cgColor
+        ]
+        ringGradient.locations = [0, 0.35, 0.92, 1]
+        ringGradient.isHidden = !isActive
         if let nsImage = AgentImageLoader.image(at: avatarURL) {
             avatar.image = nsImage
             avatar.imageScaling = .scaleProportionallyUpOrDown
@@ -104,27 +120,37 @@ private final class PiAgentNativeSubagentGlyph: NSView {
             avatar.imageScaling = .scaleNone
             avatar.contentTintColor = color
         }
-        if isActive { startSpin() } else { ringLayer.removeAnimation(forKey: "spin") }
+        if isActive { startSpin() } else { ringGradient.removeAnimation(forKey: "spin") }
         needsLayout = true
     }
 
     private func startSpin() {
-        guard ringLayer.animation(forKey: "spin") == nil else { return }
+        guard ringGradient.animation(forKey: "spin") == nil else { return }
         let spin = CABasicAnimation(keyPath: "transform.rotation.z")
+        // Positive z-rotation reads CLOCKWISE here: the glyph view is flipped
+        // (top-left origin), which visually inverts CA's rotation direction.
+        // Clockwise also keeps the conic comet's bright head leading its tail.
         spin.fromValue = 0; spin.toValue = 2 * Double.pi
-        spin.duration = 6; spin.repeatCount = .infinity
-        ringLayer.add(spin, forKey: "spin")
+        spin.duration = 1.4; spin.repeatCount = .infinity
+        ringGradient.add(spin, forKey: "spin")
     }
 
     override func layout() {
         super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         let circle = CGPath(ellipseIn: bounds.insetBy(dx: 0.5, dy: 0.5), transform: nil)
         bgLayer.path = circle; strokeLayer.path = circle
         bgLayer.frame = bounds; strokeLayer.frame = bounds
-        ringLayer.frame = bounds
-        ringLayer.path = CGPath(ellipseIn: bounds.insetBy(dx: 2, dy: 2), transform: nil)
-        ringLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-        ringLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        ringGradient.frame = bounds
+        ringGradient.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        ringGradient.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        ringMask.frame = CGRect(origin: .zero, size: bounds.size)
+        ringMask.path = CGPath(ellipseIn: bounds.insetBy(dx: 1.5, dy: 1.5), transform: nil)
+        CATransaction.commit()
+        // CA drops repeating animations when the layer leaves the tree (cell
+        // scrolled offscreen and back) — re-arm if the run is still active.
+        if !ringGradient.isHidden { startSpin() }
     }
 }
 
@@ -382,8 +408,58 @@ final class PiAgentNativeAgentBlockView: NSView {
         tokensLabel.stringValue = payload.tokensText ?? ""
         tokensLabel.isHidden = (payload.tokensText?.isEmpty ?? true)
         metaLabel.attributedStringValue = metaLine(payload)
+        setStatusShimmer(payload.isActive)
         task.configure(source: payload.task)
         rebuildButtons(payload.actions)
+    }
+
+    // MARK: Status shimmer (active runs)
+
+    /// While the run is active, a soft highlight sweeps across the status line —
+    /// the "Codex shimmer". Implemented as a repeating CABasicAnimation on a
+    /// gradient mask over the label's own layer, so the animation is composited
+    /// entirely by the render server: zero main-thread work per frame, no layout,
+    /// no SwiftUI invalidation. The base alpha keeps the text readable; only the
+    /// moving band brightens to full.
+    private func setStatusShimmer(_ active: Bool) {
+        guard active else {
+            metaLabel.layer?.mask = nil
+            return
+        }
+        metaLabel.wantsLayer = true
+        if metaLabel.layer?.mask == nil {
+            let gradient = CAGradientLayer()
+            gradient.startPoint = CGPoint(x: 0, y: 0.5)
+            gradient.endPoint = CGPoint(x: 1, y: 0.5)
+            let base = NSColor.white.withAlphaComponent(0.55).cgColor
+            gradient.colors = [base, NSColor.white.cgColor, base]
+            gradient.locations = [0, 0.5, 1]
+            metaLabel.layer?.mask = gradient
+        }
+        startShimmerSweepIfNeeded()
+    }
+
+    /// (Re)attach the sweep animation. CA drops repeating animations whenever the
+    /// layer leaves the layer tree (cell scrolled offscreen, window changes), so
+    /// `layout()` re-arms it — same pattern as the glyph's spin.
+    private func startShimmerSweepIfNeeded() {
+        guard let mask = metaLabel.layer?.mask, mask.animation(forKey: "shimmer") == nil else { return }
+        let sweep = CABasicAnimation(keyPath: "locations")
+        sweep.fromValue = [-1.0, -0.5, 0.0]
+        sweep.toValue = [1.0, 1.5, 2.0]
+        sweep.duration = 1.6
+        sweep.repeatCount = .infinity
+        mask.add(sweep, forKey: "shimmer")
+    }
+
+    override func layout() {
+        super.layout()
+        guard let mask = metaLabel.layer?.mask else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        mask.frame = metaLabel.layer?.bounds ?? .zero
+        CATransaction.commit()
+        startShimmerSweepIfNeeded()
     }
 
     private func metaLine(_ payload: NativeAgentBlockPayload) -> NSAttributedString {
@@ -645,14 +721,11 @@ enum NativeSubagentFactory {
         run.mode == .parallel && (run.children?.isEmpty == false)
     }
 
+    /// Bridges the shared themed status mapping to AppKit for the native cards —
+    /// the glyph ring, status word, and fills all follow the active theme.
+    @MainActor
     static func statusColor(_ status: PiSubagentRunStatus) -> NSColor {
-        switch status {
-        case .queued, .starting, .running: return .systemBlue
-        case .blocked: return .systemOrange
-        case .completed: return .systemGreen
-        case .failed: return .systemRed
-        case .stopped, .disconnected: return .secondaryLabelColor
-        }
+        AppTheme.ns(status.themedColor)
     }
 
     static func nonEmpty(_ value: String?) -> String? {

@@ -109,7 +109,7 @@ enum NativeBubblePreviewDebug {
             role: .user, headerTitle: "You", iconSymbol: "person.crop.circle",
             markdownSource: listQuestion, bodyPrefix: nil, copyText: listQuestion,
             copySide: .leading, isThreadChild: false, isUserHugged: true,
-            fork: ForkModel(onForkSession: {}, agentOptions: [])
+            fork: ForkModel(onForkSession: {}, onRerun: {}, agentOptions: [])
         ), width: rowWidth)
 
         let rows: [(String, NSView, CGFloat)] = [
