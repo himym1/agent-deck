@@ -31,13 +31,7 @@ Agent Deck does not replace Pi or embed its own agent runtime. It launches the i
 
 ## Install
 
-With [Homebrew](https://brew.sh) — installs Agent Deck and the [Pi CLI](https://github.com/earendil-works/pi) in one command:
-
-```bash
-brew install --cask a-streetcoder/tap/agent-deck
-```
-
-Or with the install script — sets up Pi if it's missing, verifies the download checksum, and copies the app to `/Applications`:
+One command installs everything on a fresh Mac — the [Pi CLI](https://github.com/earendil-works/pi) if it's missing (and Node if Pi needs it), then the app itself, with the download checksum verified and Agent Deck copied to `/Applications`:
 
 ```bash
 curl -fsSL https://agentdeck.site/install.sh | bash
@@ -156,7 +150,7 @@ Contributor invariants and UI conventions live in [`docs/agent-guidelines/`](doc
 ## Requirements
 
 - macOS 26 (Tahoe) on Apple Silicon
-- A working install of the Pi CLI (the Homebrew cask, the install script, and onboarding all set it up for you)
+- A working install of the Pi CLI (the install script and onboarding both set it up for you)
 - Xcode 26.4+ only if you build from source
 
 ## Contributing
