@@ -9,6 +9,13 @@ on:
         description: 'Version tag (e.g. v1.7 or v1.7.1)'
         required: true
 
+# One release build per tag: duplicate triggers (GitHub occasionally delivers
+# a tag push twice) would race their --clobber asset uploads and could publish
+# one run's DMG with the other run's checksum.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write   # gh release create + push the appcast commit
 
