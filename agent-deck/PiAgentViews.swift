@@ -86,6 +86,12 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
 
     private var updateTask: Task<Void, Never>?
     private var lastSessionID: UUID?
+    /// The session whose entries the cache currently holds. The transcript host
+    /// stamps this onto the items it builds, so the coordinator can refuse to
+    /// apply content built from one session to a table targeting another (the
+    /// "new title, old transcript" pass SwiftUI produces on every switch,
+    /// because onChange handlers run after the first re-render).
+    var contentSessionID: UUID? { lastSessionID }
     private var lastRevision = -1
     private var lastThreadSignature: [UUID] = []
     private var lastAutoScrollTurnEntryID: UUID?
@@ -159,6 +165,16 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
         updateTask?.cancel()
 
         if isSessionSwitch {
+            publish(rawEntries)
+            return
+        }
+
+        // First content for an empty transcript — the lazy decode landing right
+        // after a session switch. The coordinator is holding the previous
+        // session's rows until this publish, so it must not sit out the
+        // streaming coalesce window below; land it now.
+        if entries.isEmpty, !rawEntries.isEmpty {
+            updateTask?.cancel()
             publish(rawEntries)
             return
         }
@@ -531,7 +547,11 @@ private struct PiAgentTranscriptBlockDescriptor {
 private struct PiAgentTranscriptHost: View {
     @ObservedObject var cache: PiAgentTranscriptRenderCache
     let sessionID: UUID?
-    let isTranscriptLoading: Bool
+    /// Read LIVE (like `makeItems`), never captured as a value: the host
+    /// re-evaluates on render-cache pulses without the parent re-running, and a
+    /// stale captured flag kept the switch "hold" active one SwiftUI round-trip
+    /// after the transcript had already decoded — a visible lag on every switch.
+    let isTranscriptLoading: () -> Bool
     let bottomScrollRequest: Int
     let makeItems: () -> [PiAgentAppKitTranscriptItem]
     let onPinnedToBottomChange: (Bool) -> Void
@@ -542,7 +562,8 @@ private struct PiAgentTranscriptHost: View {
         PiAgentAppKitTranscriptView(
             items: makeItems(),
             sessionID: sessionID,
-            isTranscriptLoading: isTranscriptLoading,
+            itemsSessionID: cache.contentSessionID,
+            isTranscriptLoading: isTranscriptLoading(),
             renderRevision: cache.renderRevision,
             streamingRevision: cache.streamingRevision,
             autoScrollTurnRevision: cache.autoScrollTurnRevision,
@@ -557,6 +578,9 @@ private struct PiAgentTranscriptHost: View {
 private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
     let items: [PiAgentAppKitTranscriptItem]
     let sessionID: UUID?
+    /// Which session the render cache's content belonged to when `items` were
+    /// built. Differs from `sessionID` during the switch transition passes.
+    let itemsSessionID: UUID?
     let isTranscriptLoading: Bool
     let renderRevision: Int
     let streamingRevision: Int
@@ -638,6 +662,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         context.coordinator.apply(
             items: items,
             sessionID: sessionID,
+            itemsSessionID: itemsSessionID,
             isTranscriptLoading: isTranscriptLoading,
             renderRevision: renderRevision,
             streamingRevision: streamingRevision,
@@ -657,6 +682,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             coordinator.apply(
                 items: items,
                 sessionID: sessionID,
+                itemsSessionID: itemsSessionID,
                 isTranscriptLoading: isTranscriptLoading,
                 renderRevision: renderRevision,
                 streamingRevision: streamingRevision,
@@ -834,23 +860,6 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         // sub-pixel width jitter during a scroll from spilling into a new bucket.
         private var widthBucket: Int { Int(contentWidth.rounded()) }
 
-#if DEBUG
-        // Height-pipeline trace for the subagent run-card crop: logs, for
-        // subagent rows only, what heightOfRow serves, what the cell reports,
-        // and what actually re-tiles — so one reproduction names the broken
-        // link. Low-volume: served values are logged only when they change.
-        private var subagentServedHeightMemo: [String: CGFloat] = [:]
-        fileprivate func isSubagentItem(_ id: String) -> Bool {
-            guard let item = itemByID[id], case .native(let spec) = item.kind else { return false }
-            return spec.typeID == ObjectIdentifier(PiAgentNativeSubagentRunCardView.self)
-                || spec.typeID == ObjectIdentifier(PiAgentNativeSubagentParallelCardView.self)
-        }
-        private func traceSubagentHeight(_ message: @autoclosure () -> String, id: String) {
-            guard isSubagentItem(id) else { return }
-            let line = message()
-            TranscriptScrollProfiler.logger.error("SUBAGENT-H \(line, privacy: .public)")
-        }
-#endif
         private let estimatedRowHeight: CGFloat = 120
         private let heightChangeEpsilon: CGFloat = 0.5
         // One-frame debounce so a burst of cell measurements during a single
@@ -1063,6 +1072,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         func apply(
             items: [PiAgentAppKitTranscriptItem],
             sessionID: UUID?,
+            itemsSessionID: UUID?,
             isTranscriptLoading: Bool,
             renderRevision: Int,
             streamingRevision: Int,
@@ -1072,14 +1082,20 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             guard let tableView, scrollView != nil else { return }
             let wasFollowing = isAutoFollowing
             let isSessionSwitch = self.sessionID != sessionID
-            // Switching to a session whose transcript is still decoding would
-            // swap the visible transcript for a placeholder, then swap again
-            // when the load lands a beat later — old content, blank flash, new
-            // content: the "blinking" on session change. Hold the OLD content
-            // on screen until the new transcript is ready, then switch once.
-            // Cold start (nothing on screen yet) still shows the loading card.
-            if isSessionSwitch, isTranscriptLoading, !orderedIDs.isEmpty {
-                return
+            // A switch must apply EXACTLY ONCE, with the right content. Two
+            // transition passes try to sneak in earlier and each used to render
+            // as a visible step:
+            //  1. The first re-render after a selection change still carries the
+            //     PREVIOUS session's cache content (SwiftUI runs onChange — which
+            //     publishes the new session — only after this pass). Items built
+            //     from another session never apply to this one.
+            //  2. The new transcript may still be decoding off disk; applying
+            //     would show the loading placeholder, then the content. Hold the
+            //     old rows until the decode lands (cold start, with nothing on
+            //     screen yet, still shows the loading card).
+            if isSessionSwitch, !orderedIDs.isEmpty {
+                if let itemsSessionID, let sessionID, itemsSessionID != sessionID { return }
+                if isTranscriptLoading { return }
             }
             let structuralUpdate = lastRenderRevision != renderRevision
             let streamingUpdate = lastStreamingRevision != streamingRevision
@@ -1572,13 +1588,6 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             let priorMeasured = measuredHeightByID[itemID]?[bucket]
             measuredHeightByID[itemID, default: [:]][bucket] = height
             estimateByID.removeValue(forKey: itemID)
-#if DEBUG
-            traceSubagentHeight(
-                "report id=\(itemID.suffix(6)) h=\(Int(height)) bucket=\(bucket) "
-                + "prior=\(priorMeasured.map { Int($0) } ?? -1) "
-                + "noted=\(lastNotedHeight[itemID].map { Int($0) } ?? -1)",
-                id: itemID)
-#endif
             // Re-tile only when AppKit's *laid-out* height is genuinely stale.
             // The baseline is what the table currently has tiled (lastNotedHeight),
             // not the cache — falling back to the prior measurement, then the
@@ -1587,11 +1596,6 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // laid-out height actually changing.
             let baseline = lastNotedHeight[itemID] ?? priorMeasured ?? estimatedRowHeight
             let delta = abs(baseline - height)
-#if DEBUG
-            if delta <= heightChangeEpsilon {
-                traceSubagentHeight("report SWALLOWED id=\(itemID.suffix(6)) h=\(Int(height)) baseline=\(Int(baseline))", id: itemID)
-            }
-#endif
             guard delta > heightChangeEpsilon else { return }
             pendingHeightIDs.insert(itemID)
             guard pendingHeightWork == nil else { return }
@@ -1618,15 +1622,6 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     // reportMeasuredHeight already wrote the fresh height into
                     // measuredHeightByID before scheduling this call.
                     if let h = measuredHeightByID[id]?[widthBucket] { lastNotedHeight[id] = h }
-#if DEBUG
-                    traceSubagentHeight(
-                        "retile id=\(id.suffix(6)) row=\(row) h=\(self.measuredHeightByID[id]?[self.widthBucket].map { Int($0) } ?? -1)",
-                        id: id)
-#endif
-                } else {
-#if DEBUG
-                    traceSubagentHeight("retile MISSED id=\(id.suffix(6)) (row not found)", id: id)
-#endif
                 }
             }
             guard !rows.isEmpty else { return }
@@ -1681,6 +1676,24 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 // rect(ofRow:) must see the new heights before we re-anchor.
                 tableView.layoutSubtreeIfNeeded()
                 restoreScrollAnchor(anchor)
+            } else if willAutoFollow, let scrollView,
+                      let bottomMostChangedRow = rows.max(),
+                      tableView.rect(ofRow: bottomMostChangedRow).maxY < scrollView.contentView.bounds.minY + 1 {
+                // Pinned to the bottom while rows ABOVE the viewport corrected
+                // (estimate → real heights after a session switch into a large
+                // transcript). The re-tile just shifted the content under the
+                // viewport; the deferred scrollToBottom below would re-pin a
+                // runloop turn later — one visible frame of mis-position, the
+                // "content jiggles after switching" artifact. Above-viewport
+                // corrections never need the streaming glide, so re-pin
+                // synchronously inside this same transaction instead.
+                tableView.layoutSubtreeIfNeeded()
+                if let documentView = scrollView.documentView {
+                    let clipView = scrollView.contentView
+                    let maxY = max(0, documentView.bounds.height - clipView.bounds.height)
+                    clipView.scroll(to: NSPoint(x: 0, y: maxY))
+                    scrollView.reflectScrolledClipView(clipView)
+                }
             }
             isProgrammaticScroll = wasProgrammatic
             CATransaction.commit()
@@ -1998,16 +2011,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // width changes and session switches, so a revisited row lays out at
             // its exact height with no reflow.
             if let measured = measuredHeightByID[id]?[widthBucket] {
-#if DEBUG
-                traceServedHeight(id: id, source: "measured", value: measured)
-#endif
                 lastNotedHeight[id] = measured
                 return measured
             }
             if let estimate = estimateByID[id] {
-#if DEBUG
-                traceServedHeight(id: id, source: "estimate", value: estimate)
-#endif
                 lastNotedHeight[id] = estimate
                 return estimate
             }
@@ -2018,23 +2025,11 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             if let item = itemByID[id] {
                 let est = item.estimatedHeight(contentWidth)
                 estimateByID[id] = est
-#if DEBUG
-                traceServedHeight(id: id, source: "fresh-estimate", value: est)
-#endif
                 lastNotedHeight[id] = est
                 return est
             }
             return estimatedRowHeight
         }
-
-#if DEBUG
-        private func traceServedHeight(id: String, source: String, value: CGFloat) {
-            guard isSubagentItem(id), subagentServedHeightMemo[id] != value else { return }
-            subagentServedHeightMemo[id] = value
-            TranscriptScrollProfiler.logger.error(
-                "SUBAGENT-H serve id=\(id.suffix(6), privacy: .public) \(source, privacy: .public)=\(Int(value)) bucket=\(self.widthBucket)")
-        }
-#endif
     }
 
     /// Clip view for the transcript scroll view. The transcript never scrolls
@@ -2228,12 +2223,6 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 guard let row = self.nativeRow, let spec = self.nativeRowSpec,
                       let itemID = self.configuredItemID, self.configuredWidth > 1 else { return }
                 let h = self.configuredTopInset + spec.measure(row, self.configuredWidth) + self.configuredBottomInset
-#if DEBUG
-                if row is PiAgentNativeSubagentRunCardView || row is PiAgentNativeSubagentParallelCardView {
-                    TranscriptScrollProfiler.logger.error(
-                        "SUBAGENT-H cellmeasure(async) id=\(itemID.suffix(6), privacy: .public) h=\(Int(h)) w=\(Int(self.configuredWidth)) last=\(Int(self.lastIntrinsicHeight))")
-                }
-#endif
                 guard h > 0, h.isFinite, abs(h - self.lastIntrinsicHeight) > 0.5 else { return }
                 self.lastIntrinsicHeight = h
                 self.onMeasuredHeight?(itemID, h)
@@ -2249,12 +2238,6 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             guard let row = nativeRow, let spec = nativeRowSpec, configuredWidth > 1 else { return -1 }
             row.layoutSubtreeIfNeeded()
             let h = configuredTopInset + spec.measure(row, configuredWidth) + configuredBottomInset
-#if DEBUG
-            if row is PiAgentNativeSubagentRunCardView || row is PiAgentNativeSubagentParallelCardView {
-                TranscriptScrollProfiler.logger.error(
-                    "SUBAGENT-H cellmeasure(forced) id=\(self.configuredItemID?.suffix(6) ?? "?", privacy: .public) h=\(Int(h)) w=\(Int(self.configuredWidth))")
-            }
-#endif
             guard h > 0, h.isFinite else { return -1 }
             lastIntrinsicHeight = h
             return h
@@ -2719,24 +2702,6 @@ struct CodingAgentExpandedPanel: View {
     }
 }
 
-/// Opaque cover shown over the transcript during a session switch — matches the
-/// transcript canvas so the rows settling underneath are hidden, with a centered
-/// spinner. The cover lifts once the table has applied + snapped to the bottom.
-private struct PiAgentTranscriptSettleCover: View {
-    var body: some View {
-        ZStack {
-            Rectangle().fill(AppTheme.windowBackground)
-            VStack(spacing: 10) {
-                AppSpinner()
-                Text("Loading transcript")
-                    .font(.system(size: 12))
-                    .foregroundStyle(AppTheme.mutedText)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
 struct PiAgentScreen: View {
     var viewModel: AppViewModel
     var store: PiAgentSessionStore
@@ -2817,7 +2782,6 @@ struct PiAgentScreen: View {
     // True briefly after a session switch while the transcript table applies its
     // new rows and snaps to the bottom; drives the opaque settle cover so the
     // top-to-bottom render is never visible. See `activeSessionColumn`.
-    @State private var transcriptSettling = false
 
     // Keep long sessions cheap to relayout when side panels open; older visible items remain accessible separately.
     private let recentTranscriptTimelineItemLimit = 50
@@ -2895,11 +2859,18 @@ struct PiAgentScreen: View {
             showArchivedPreCompactionTranscript = false
             isEarlierTranscriptSheetPresented = false
             syncRuntimeFooterSnapshot()
-            requestSelectedTranscriptLoadAfterViewUpdate()
+            // Load + publish SYNCHRONOUSLY, like onAppear already does. Deferring
+            // these behind Task.yield let the transcript host render a full pass
+            // with the new session id but the OLD session's cache content (and
+            // with the loading flag still false, which defeated the switch hold) —
+            // the new content then landed one runloop turn later as a second
+            // visible step. Warm sessions now publish in this same observation
+            // turn, so the switch applies once, with the right content.
+            store.requestSelectedTranscriptLoad()
+            scheduleTranscriptCacheUpdate()
             viewModel.rehydratePiAgentTranscriptIfNeeded(newID)
             Task { @MainActor in
                 await Task.yield()
-                scheduleTranscriptCacheUpdate()
                 viewModel.prepareRepoChangesForSelectedPiAgentSession()
             }
         }
@@ -3187,13 +3158,12 @@ struct PiAgentScreen: View {
                     .padding(.horizontal, 18)
                     .transcriptEdgeFade()
 
-                // Opaque cover during a session switch so the table building and
-                // settling its rows (top-to-bottom render) is never seen — the user
-                // sees the loading card, then the finished transcript already pinned.
-                if transcriptSettling {
-                    PiAgentTranscriptSettleCover()
-                        .transition(.opacity)
-                }
+                // NOTE: the old opaque "settle cover" (spinner shown over the
+                // transcript on every session switch) is gone. The switch is now
+                // correct on its first frame — the coordinator holds the previous
+                // transcript until the new one is decoded, then measures the
+                // visible rows synchronously before pinning — so hiding the table
+                // behind a spinner only ADDED a flash of loading state per click.
 
                 // Sits ON TOP of the edge fade (added after it) so the pill
                 // itself is never faded out. Isolated in its own view that observes
@@ -3203,22 +3173,6 @@ struct PiAgentScreen: View {
                     requestTranscriptBottomScroll()
                 }
             }
-            // Cover on session change; lift once the table has had a beat to apply
-            // the new rows and snap to the bottom (after any disk load completes).
-            .onChange(of: store.selectedSession?.id, initial: true) { _, newID in
-                if newID != nil { transcriptSettling = true }
-            }
-            .task(id: store.selectedSession?.id) {
-                guard store.selectedSession != nil else { transcriptSettling = false; return }
-                while store.isSelectedTranscriptLoading {
-                    try? await Task.sleep(for: .milliseconds(16))
-                    if Task.isCancelled { return }
-                }
-                try? await Task.sleep(for: .milliseconds(90))
-                guard !Task.isCancelled else { return }
-                withAnimation(.easeOut(duration: 0.18)) { transcriptSettling = false }
-            }
-
             PiAgentProcessingIndicatorBar(message: stabilizedProcessingMessage)
 
             Divider()
@@ -3309,7 +3263,7 @@ struct PiAgentScreen: View {
         PiAgentTranscriptHost(
             cache: transcriptCache,
             sessionID: store.selectedSession?.id,
-            isTranscriptLoading: store.isSelectedTranscriptLoading,
+            isTranscriptLoading: { [store] in store.isSelectedTranscriptLoading },
             bottomScrollRequest: transcriptBottomScrollRequest,
             makeItems: { appKitTranscriptItems },
             onPinnedToBottomChange: { isPinnedToBottom in

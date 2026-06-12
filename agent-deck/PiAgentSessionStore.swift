@@ -2,7 +2,6 @@ import AppKit
 import Combine
 import Foundation
 import Observation
-import os
 
 @MainActor
 @Observable
@@ -41,34 +40,7 @@ final class PiAgentSessionStore {
     /// Live, RPC-derived activity for sessions with a turn in flight. Not persisted —
     /// it only describes the current process and is cleared when a turn ends.
     private(set) var processingActivityBySessionID: [UUID: PiAgentProcessingActivity] = [:]
-    var selectedSessionID: UUID? {
-        didSet {
-#if DEBUG
-            // Names every selection mutation with a stack so churn (e.g. the
-            // create-draft flicker) can be attributed to its writer. The console
-            // line stays short; the full mangled stack goes to a /tmp file for
-            // offline demangling (the Observation setter wrapper eats the first
-            // several frames, so the real caller sits deep).
-            guard oldValue != selectedSessionID else { return }
-            let old = oldValue.map { String($0.uuidString.prefix(8)) } ?? "nil"
-            let new = selectedSessionID.map { String($0.uuidString.prefix(8)) } ?? "nil"
-            Self.selectionLog.error("STORE-SELECT \(old, privacy: .public) -> \(new, privacy: .public) (full stack in /tmp/agentdeck-select-trace.txt)")
-            let stack = Thread.callStackSymbols.dropFirst(2).prefix(16).joined(separator: "\n")
-            let line = "STORE-SELECT \(old) -> \(new)\n\(stack)\n\n"
-            if let data = line.data(using: .utf8) {
-                let url = URL(fileURLWithPath: "/tmp/agentdeck-select-trace.txt")
-                if let handle = try? FileHandle(forWritingTo: url) {
-                    handle.seekToEndOfFile(); handle.write(data); try? handle.close()
-                } else {
-                    try? data.write(to: url)
-                }
-            }
-#endif
-        }
-    }
-#if DEBUG
-    private static let selectionLog = Logger(subsystem: "streetcoding.agent-deck", category: "SessionListPerf")
-#endif
+    var selectedSessionID: UUID?
     var lastError: String?
     var newSessionSubagentsEnabled = true
     /// Fired once after the async init load has applied the persisted sessions.
@@ -107,7 +79,10 @@ final class PiAgentSessionStore {
     private var pendingPersistTranscriptTask: Task<Void, Never>?
     // Transcripts always load on demand; only `configureTranscriptMemory` (tests) changes these.
     private var lazyTranscriptLoadingEnabled = true
-    private var transcriptCacheLimit = 10
+    // Sized so a typical working set (plus the prewarmed neighbors of each
+    // selection) stays decoded — at 10, cycling a dozen sessions evicted and
+    // re-decoded on every visit, which is what made each switch hold briefly.
+    private var transcriptCacheLimit = 24
     // Transcripts larger than this decode on the background loader instead of
     // synchronously on the main actor, to avoid a switch-time hitch.
     private static let maxSyncDecodeTranscriptBytes = 256 * 1024
@@ -316,10 +291,29 @@ final class PiAgentSessionStore {
         selectedSessionID = id
         if lazyTranscriptLoadingEnabled {
             requestTranscriptLoad(for: id)
+            prewarmNeighborTranscripts(of: id)
         } else {
             _ = transcript(for: id)
         }
         saveStructuralChange()
+    }
+
+    /// Kick background decodes for the sessions adjacent to the selection in
+    /// list order (same project scope), so stepping through sessions — clicks
+    /// down the sidebar, or cycling with the next/previous shortcuts — lands on
+    /// an already-decoded transcript and the switch swaps with no hold at all.
+    /// `requestTranscriptLoad` no-ops for transcripts that are already warm.
+    private func prewarmNeighborTranscripts(of id: UUID) {
+        guard let selected = sessions.first(where: { $0.id == id }) else { return }
+        let scoped = sessions
+            .filter { $0.projectPath == selected.projectPath }
+            .sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
+        guard let index = scoped.firstIndex(where: { $0.id == id }) else { return }
+        for offset in [1, -1, 2] {
+            let neighbor = index + offset
+            guard scoped.indices.contains(neighbor) else { continue }
+            requestTranscriptLoad(for: scoped[neighbor].id)
+        }
     }
 
     /// Materializes a forked session record inheriting the parent's settings.
