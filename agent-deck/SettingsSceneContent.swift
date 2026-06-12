@@ -52,8 +52,6 @@ struct SettingsSceneContent: View {
             AutomationsSettingsTab(viewModel: viewModel)
         case .performance:
             PerformanceSettingsTab(viewModel: viewModel)
-        case .subagents:
-            SubagentsSettingsTab(viewModel: viewModel)
         case .commands:
             CommandsSettingsTab(viewModel: viewModel)
         case .shortcuts:
@@ -81,7 +79,6 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case agent = "Agent"
     case automations = "Automations"
     case performance = "Performance"
-    case subagents = "Deck agents"
     case commands = "Commands"
     case shortcuts = "Shortcuts"
 
@@ -94,7 +91,6 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .agent: return "sparkles.rectangle.stack"
         case .automations: return "wand.and.stars"
         case .performance: return "speedometer"
-        case .subagents: return "slider.horizontal.3"
         case .commands: return "terminal"
         case .shortcuts: return "keyboard"
         }
@@ -1609,46 +1605,6 @@ private extension AgentDeckShortcutItem {
         case " ": return "Space"
         default: return key.uppercased()
         }
-    }
-}
-
-// MARK: - Subagents
-
-private struct SubagentsSettingsTab: View {
-    var viewModel: AppViewModel
-
-    var body: some View {
-        SettingsForm {
-            SettingsSection {
-                SettingsToggleRow(
-                    title: "New sessions:",
-                    label: "Enable Deck agents by default",
-                    note: "Applies to newly created Pi Agent drafts and sessions. After the first message starts Pi, the session footer becomes read-only.",
-                    isOn: newSessionsSubagentsBinding
-                )
-
-                SettingsToggleRow(
-                    title: "Builtins:",
-                    label: "Disable all builtins globally",
-                    note: "Per-agent quick controls in the Agents screen also apply globally for now.",
-                    isOn: userDisableBuiltinsBinding
-                )
-            }
-        }
-    }
-
-    private var userDisableBuiltinsBinding: Binding<Bool> {
-        Binding(
-            get: { viewModel.userDisableBuiltins },
-            set: { viewModel.setDisableBuiltins($0, scope: .global) }
-        )
-    }
-
-    private var newSessionsSubagentsBinding: Binding<Bool> {
-        Binding(
-            get: { viewModel.areSubagentsEnabledForNewSessions },
-            set: { viewModel.setSubagentsEnabledForNewSessions($0) }
-        )
     }
 }
 
