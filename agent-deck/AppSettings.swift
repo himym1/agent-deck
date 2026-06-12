@@ -166,9 +166,9 @@ struct AppSettings: Codable, Hashable {
     var agentMemoryInjectionCharacterBudget: Int = 6_000
     var agentMemoryRetentionDays: Int = 120
     var showContextSmartZoneHint: Bool = false
-    var autoGeneratePiAgentSessionTitles: Bool = FoundationModelAutomationService.isAvailable()
-    var autoUpdatePiAgentSessionTitles: Bool = FoundationModelAutomationService.isAvailable()
-    var piAgentTitleGenerationModelIdentifier: String? = FoundationModelAutomationService.isAvailable() ? FoundationModelAutomationService.identifier : nil
+    var autoGeneratePiAgentSessionTitles: Bool = true
+    var autoUpdatePiAgentSessionTitles: Bool = true
+    var piAgentTitleGenerationModelIdentifier: String?
     var piAgentGitAutomationEnabled: Bool = false
     var piAgentGitAutomationRequiresConfirmation: Bool = true
     var piAgentCommitMessageModelIdentifier: String?
@@ -272,11 +272,9 @@ struct AppSettings: Codable, Hashable {
         agentMemoryInjectionCharacterBudget = max(try container.decodeIfPresent(Int.self, forKey: .agentMemoryInjectionCharacterBudget) ?? 6_000, 1_000)
         agentMemoryRetentionDays = max(try container.decodeIfPresent(Int.self, forKey: .agentMemoryRetentionDays) ?? 120, 1)
         showContextSmartZoneHint = try container.decodeIfPresent(Bool.self, forKey: .showContextSmartZoneHint) ?? false
-        let foundationModelAvailable = FoundationModelAutomationService.isAvailable()
-        autoGeneratePiAgentSessionTitles = try container.decodeIfPresent(Bool.self, forKey: .autoGeneratePiAgentSessionTitles) ?? foundationModelAvailable
-        autoUpdatePiAgentSessionTitles = try container.decodeIfPresent(Bool.self, forKey: .autoUpdatePiAgentSessionTitles) ?? foundationModelAvailable
+        autoGeneratePiAgentSessionTitles = try container.decodeIfPresent(Bool.self, forKey: .autoGeneratePiAgentSessionTitles) ?? true
+        autoUpdatePiAgentSessionTitles = try container.decodeIfPresent(Bool.self, forKey: .autoUpdatePiAgentSessionTitles) ?? true
         piAgentTitleGenerationModelIdentifier = try container.decodeIfPresent(String.self, forKey: .piAgentTitleGenerationModelIdentifier)
-            ?? (foundationModelAvailable ? FoundationModelAutomationService.identifier : nil)
         piAgentGitAutomationEnabled = try container.decodeIfPresent(Bool.self, forKey: .piAgentGitAutomationEnabled) ?? false
         piAgentGitAutomationRequiresConfirmation = try container.decodeIfPresent(Bool.self, forKey: .piAgentGitAutomationRequiresConfirmation) ?? true
         piAgentCommitMessageModelIdentifier = try container.decodeIfPresent(String.self, forKey: .piAgentCommitMessageModelIdentifier)

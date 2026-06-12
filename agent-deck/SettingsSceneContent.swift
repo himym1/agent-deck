@@ -1063,7 +1063,7 @@ private struct AutomationsSettingsTab: View {
                 SettingsToggleRow(
                     title: "Session titles:",
                     label: "Generate titles with AI",
-                    note: "Off by default. When enabled, the first draft prompt starts a hidden one-turn Pi session with no session persistence, extensions, skills, or tools.",
+                    note: "On by default. The first draft prompt starts a hidden one-turn Pi session with no session persistence, extensions, skills, or tools.",
                     isOn: autoGenerateSessionTitlesBinding
                 )
 
@@ -1078,7 +1078,7 @@ private struct AutomationsSettingsTab: View {
                 SettingsPickerRow(
                     title: "Title model:",
                     selection: titleGenerationModelBinding,
-                    note: "Choose a cheap, fast text model."
+                    note: "Uses your Pi default model unless you pick a cheaper, faster one here."
                 ) {
                     Text("Default model").tag("")
                     ForEach(viewModel.automationAvailableModels, id: \.identifier) { model in

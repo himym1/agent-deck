@@ -5194,7 +5194,7 @@ final class AppViewModel: NSObject {
            let selected = automationAvailableModels.first(where: { $0.identifier == identifier }) {
             return selected
         }
-        return foundationAutomationModel ?? defaultPiAgentModel() ?? enabledAvailableModels.first
+        return defaultPiAgentModel() ?? foundationAutomationModel ?? enabledAvailableModels.first
     }
 
     func piAgentCommitMessageModel() -> AvailableModel? {
