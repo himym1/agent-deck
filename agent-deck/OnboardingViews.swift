@@ -1148,7 +1148,7 @@ struct OnboardingPreferencesView: View {
                 .font(.caption)
                 .foregroundStyle(AppTheme.mutedText)
             Picker("", selection: commitMessageModelBinding) {
-                Text("Choose model…").tag("")
+                Text("Default model").tag("")
                 ForEach(viewModel.automationAvailableModels, id: \.identifier) { model in
                     Text(model.displayName).tag(model.identifier)
                 }

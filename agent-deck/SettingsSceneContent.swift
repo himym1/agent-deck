@@ -1091,7 +1091,7 @@ private struct AutomationsSettingsTab: View {
                 SettingsToggleRow(
                     title: "Git actions:",
                     label: "Enable Commit / Push toolbar actions",
-                    note: "Off by default. When enabled with a model selected, Pi Agent shows native Commit, Push, and Commit & Push toolbar actions.",
+                    note: "On by default. Pi Agent shows native Commit, Push, and Commit & Push toolbar actions.",
                     isOn: gitAutomationEnabledBinding
                 )
 
@@ -1106,13 +1106,14 @@ private struct AutomationsSettingsTab: View {
                 SettingsPickerRow(
                     title: "Commit model:",
                     selection: commitMessageModelBinding,
-                    note: "Required. Apple Foundation Model runs locally; other models use a hidden no-thinking Pi helper session."
+                    note: "Uses your Pi default model unless you pick a cheaper, faster one here. Apple Foundation Model runs locally; other models use a hidden no-thinking Pi helper session."
                 ) {
-                    Text("Choose model…").tag("")
+                    Text("Default model").tag("")
                     ForEach(viewModel.automationAvailableModels, id: \.identifier) { model in
                         Text(model.displayName).tag(model.identifier)
                     }
                 }
+                .disabled(!viewModel.appSettings.piAgentGitAutomationEnabled)
 
                 if viewModel.automationAvailableModels.isEmpty {
                     HStack(spacing: 8) {
@@ -1150,7 +1151,7 @@ private struct AutomationsSettingsTab: View {
                 SettingsToggleRow(
                     title: "Agent avatars:",
                     label: "Generate Image Playground prompts with AI",
-                    note: "Off by default. When enabled, Agent Deck uses the agent frontmatter to draft a short prompt before generating an avatar with Image Playground. When disabled, it uses a simple fallback prompt.",
+                    note: "On by default. Agent Deck uses the agent frontmatter to draft a short prompt before generating an avatar with Image Playground. When disabled, it uses a simple fallback prompt.",
                     isOn: agentAvatarPromptAutomationBinding
                 )
 

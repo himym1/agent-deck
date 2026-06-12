@@ -5120,11 +5120,8 @@ final class AppViewModel: NSObject {
 
     func setPiAgentGitAutomationEnabled(_ isEnabled: Bool) {
         guard appSettingsController.setPiAgentGitAutomationEnabled(isEnabled) else { return }
-        if isEnabled,
-           appSettingsController.piAgentCommitMessageModelIdentifier == nil,
-           foundationAutomationModel != nil {
-            _ = appSettingsController.setPiAgentCommitMessageModelIdentifier(FoundationModelAutomationService.identifier)
-        }
+        // No model auto-pick on enable: a nil identifier means "Default model"
+        // (the user's Pi default), same as every other automation.
         syncAppSettings()
     }
 
@@ -5150,11 +5147,7 @@ final class AppViewModel: NSObject {
 
     func setAutoGenerateAgentAvatarPrompts(_ isEnabled: Bool) {
         guard appSettingsController.setAutoGenerateAgentAvatarPrompts(isEnabled) else { return }
-        if isEnabled,
-           appSettingsController.agentAvatarPromptModelIdentifier == nil,
-           foundationAutomationModel != nil {
-            _ = appSettingsController.setAgentAvatarPromptModelIdentifier(FoundationModelAutomationService.identifier)
-        }
+        // No model auto-pick on enable: nil identifier = "Default model".
         syncAppSettings()
     }
 
@@ -5198,10 +5191,14 @@ final class AppViewModel: NSObject {
     }
 
     func piAgentCommitMessageModel() -> AvailableModel? {
-        guard appSettings.piAgentGitAutomationEnabled,
-              let identifier = appSettings.piAgentCommitMessageModelIdentifier,
-              let selected = automationAvailableModels.first(where: { $0.identifier == identifier }) else { return nil }
-        return selected
+        guard appSettings.piAgentGitAutomationEnabled else { return nil }
+        if let identifier = appSettings.piAgentCommitMessageModelIdentifier,
+           let selected = automationAvailableModels.first(where: { $0.identifier == identifier }) {
+            return selected
+        }
+        // No explicit pick = follow the user's Pi default model, like every
+        // other automation (the picker's "Default model" option).
+        return defaultPiAgentModel() ?? foundationAutomationModel ?? enabledAvailableModels.first
     }
 
     func agentAvatarPromptGenerationModel() -> AvailableModel? {
@@ -5209,7 +5206,10 @@ final class AppViewModel: NSObject {
            let selected = automationAvailableModels.first(where: { $0.identifier == identifier }) {
             return selected
         }
-        return foundationAutomationModel ?? defaultPiAgentModel() ?? enabledAvailableModels.first
+        // The picker labels the nil choice "Default model" — resolve it as the
+        // user's Pi default first (it used to silently prefer Apple Foundation
+        // Models, contradicting the label).
+        return defaultPiAgentModel() ?? foundationAutomationModel ?? enabledAvailableModels.first
     }
 
     func generateAgentAvatarPrompt(for agent: EffectiveAgentRecord) async throws -> String {

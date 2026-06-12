@@ -169,12 +169,15 @@ struct AppSettings: Codable, Hashable {
     var autoGeneratePiAgentSessionTitles: Bool = true
     var autoUpdatePiAgentSessionTitles: Bool = true
     var piAgentTitleGenerationModelIdentifier: String?
-    var piAgentGitAutomationEnabled: Bool = false
+    // Model automations all start ON with a nil model identifier, which every
+    // resolver reads as "follow the user's Pi default model" (the Automations
+    // pickers' "Default model" option).
+    var piAgentGitAutomationEnabled: Bool = true
     var piAgentGitAutomationRequiresConfirmation: Bool = true
     var piAgentCommitMessageModelIdentifier: String?
     var piAgentSessionsUseWorktree: Bool = false
     var piAgentSessionsKeepWorktreeAfterMerge: Bool = true
-    var autoGenerateAgentAvatarPrompts: Bool = false
+    var autoGenerateAgentAvatarPrompts: Bool = true
     var agentAvatarPromptModelIdentifier: String?
     var skillDescriptionModelIdentifier: String?
     var disabledProviders: Set<String> = []
@@ -275,12 +278,12 @@ struct AppSettings: Codable, Hashable {
         autoGeneratePiAgentSessionTitles = try container.decodeIfPresent(Bool.self, forKey: .autoGeneratePiAgentSessionTitles) ?? true
         autoUpdatePiAgentSessionTitles = try container.decodeIfPresent(Bool.self, forKey: .autoUpdatePiAgentSessionTitles) ?? true
         piAgentTitleGenerationModelIdentifier = try container.decodeIfPresent(String.self, forKey: .piAgentTitleGenerationModelIdentifier)
-        piAgentGitAutomationEnabled = try container.decodeIfPresent(Bool.self, forKey: .piAgentGitAutomationEnabled) ?? false
+        piAgentGitAutomationEnabled = try container.decodeIfPresent(Bool.self, forKey: .piAgentGitAutomationEnabled) ?? true
         piAgentGitAutomationRequiresConfirmation = try container.decodeIfPresent(Bool.self, forKey: .piAgentGitAutomationRequiresConfirmation) ?? true
         piAgentCommitMessageModelIdentifier = try container.decodeIfPresent(String.self, forKey: .piAgentCommitMessageModelIdentifier)
         piAgentSessionsUseWorktree = try container.decodeIfPresent(Bool.self, forKey: .piAgentSessionsUseWorktree) ?? false
         piAgentSessionsKeepWorktreeAfterMerge = try container.decodeIfPresent(Bool.self, forKey: .piAgentSessionsKeepWorktreeAfterMerge) ?? true
-        autoGenerateAgentAvatarPrompts = try container.decodeIfPresent(Bool.self, forKey: .autoGenerateAgentAvatarPrompts) ?? false
+        autoGenerateAgentAvatarPrompts = try container.decodeIfPresent(Bool.self, forKey: .autoGenerateAgentAvatarPrompts) ?? true
         agentAvatarPromptModelIdentifier = try container.decodeIfPresent(String.self, forKey: .agentAvatarPromptModelIdentifier)
         skillDescriptionModelIdentifier = try container.decodeIfPresent(String.self, forKey: .skillDescriptionModelIdentifier)
         disabledProviders = try container.decodeIfPresent(Set<String>.self, forKey: .disabledProviders) ?? []
