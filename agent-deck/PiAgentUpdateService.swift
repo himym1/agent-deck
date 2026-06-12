@@ -26,6 +26,11 @@ struct PiAgentRuntimeStatus: Hashable {
 }
 
 struct PiAgentUpdateService {
+    private struct InstalledRuntime {
+        let version: String
+        let resolvedPath: String?
+    }
+
     private struct LatestVersionResponse: Decodable {
         let version: String
         let packageName: String?
@@ -41,28 +46,11 @@ struct PiAgentUpdateService {
     }
 
     func loadStatus() async -> PiAgentRuntimeStatus {
-        let resolvedPath = piResolver.resolve()?.path
-        let piCommand = resolvedPath ?? "pi"
-
-        let currentVersion: String
-        do {
-            let result = try await commandRunner.run(
-                piCommand,
-                arguments: ["--version"],
-                currentDirectoryURL: nil,
-                timeout: 6,
-                environment: nil
-            )
-            guard result.exitCode == 0 else {
-                return .missing
-            }
-            let rawVersion = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            let resolvedVersion = rawVersion.isEmpty ? result.stderr.trimmingCharacters(in: .whitespacesAndNewlines) : rawVersion
-            guard !resolvedVersion.isEmpty else { return .missing }
-            currentVersion = resolvedVersion
-        } catch {
+        guard let installed = await loadInstalledRuntime() else {
             return .missing
         }
+        let currentVersion = installed.version
+        let resolvedPath = installed.resolvedPath
 
         do {
             let latestVersion = try await latestVersion(currentVersion: currentVersion)
@@ -90,6 +78,34 @@ struct PiAgentUpdateService {
                 detail: "Pi is installed, but the latest release could not be checked.",
                 resolvedPath: resolvedPath
             )
+        }
+    }
+
+    /// Cheap local-only probe used while an installer is settling. It avoids
+    /// repeating the remote latest-version request on every retry.
+    func loadCurrentVersion() async -> String? {
+        await loadInstalledRuntime()?.version
+    }
+
+    private func loadInstalledRuntime() async -> InstalledRuntime? {
+        let resolvedPath = piResolver.resolve()?.path
+        let piCommand = resolvedPath ?? "pi"
+
+        do {
+            let result = try await commandRunner.run(
+                piCommand,
+                arguments: ["--version"],
+                currentDirectoryURL: nil,
+                timeout: 6,
+                environment: nil
+            )
+            guard result.exitCode == 0 else { return nil }
+            let rawVersion = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedVersion = rawVersion.isEmpty ? result.stderr.trimmingCharacters(in: .whitespacesAndNewlines) : rawVersion
+            guard !resolvedVersion.isEmpty else { return nil }
+            return InstalledRuntime(version: resolvedVersion, resolvedPath: resolvedPath)
+        } catch {
+            return nil
         }
     }
 

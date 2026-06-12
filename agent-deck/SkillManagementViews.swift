@@ -194,14 +194,10 @@ struct SkillsScreen: View {
             }
         } detail: {
             if viewModel.hasCompletedInitialRefresh {
-                // `lazy: true` — AppPage wraps cards in a vertical ScrollView; a plain
-                // VStack measures every card up front, so a wide one reports a ~1500pt
-                // ideal width that balloons this pane. A LazyVStack only sums on-screen
-                // cards, bounding that ideal.
                 AppPage(
                     selectedWarning?.title ?? skillDetailTitle,
                     subtitle: selectedWarning?.subtitle ?? skillDetailSubtitle,
-                    lazy: true
+                    constrainsContentToViewport: true
                 ) {
                     skillDetailContent
                 }

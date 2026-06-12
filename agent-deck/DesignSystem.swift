@@ -1048,17 +1048,43 @@ struct AppPage<Content: View>: View {
     /// large markdown document) so navigating to the page doesn't pay that cost up
     /// front. Defaults to false so every existing page is byte-for-byte unchanged.
     let lazy: Bool
+    /// Measures the viewport and gives eager content an explicit width. Use when
+    /// a page must avoid LazyVStack virtualization but may contain long,
+    /// intrinsically wide content.
+    let constrainsContentToViewport: Bool
     @ViewBuilder let content: Content
 
-    init(_ title: String, subtitle: String? = nil, lazy: Bool = false, @ViewBuilder content: () -> Content) {
+    init(
+        _ title: String,
+        subtitle: String? = nil,
+        lazy: Bool = false,
+        constrainsContentToViewport: Bool = false,
+        @ViewBuilder content: () -> Content
+    ) {
         self.title = title
         self.subtitle = subtitle
         self.lazy = lazy
+        self.constrainsContentToViewport = constrainsContentToViewport
         self.content = content()
     }
 
     var body: some View {
-        if lazy {
+        if constrainsContentToViewport {
+            GeometryReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
+                        content
+                    }
+                    .frame(
+                        width: max(0, proxy.size.width - (AppTheme.pagePadding * 2)),
+                        alignment: .leading
+                    )
+                    .padding(AppTheme.pagePadding)
+                }
+                .scrollIndicators(.never)
+                .hideNativeScrollers()
+            }
+        } else if lazy {
             // 1:1 with the GitHub Issues detail (`GitHubIssueDetailView.detailContent`),
             // which lays out symmetrically at every window width: a plain
             // `ScrollView(showsIndicators:)` (no `.contentMargins` / `.scrollIndicators`

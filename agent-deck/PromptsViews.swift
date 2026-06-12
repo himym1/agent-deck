@@ -475,15 +475,11 @@ struct PromptsScreen: View {
     }
 
     private func promptDetail(_ prompt: PromptTemplateRecord) -> some View {
-        // `lazy: true` is load-bearing for layout, not just perf. AppPage wraps its
-        // cards in a vertical ScrollView, which passes its content's *horizontal*
-        // ideal width straight through. With a plain VStack (lazy: false) every card
-        // is measured up front, so a wide one (long path / markdown) reports a huge
-        // ideal width that balloons this pane; the enclosing HSplitView then sizes to
-        // that oversized fitting width. A LazyVStack reports a bounded ideal
-        // (off-screen cards aren't summed), keeping the split's fitting width under
-        // the available width. AgentDetailView uses lazy: true for the same reason.
-        AppPage(prompt.invocation, subtitle: prompt.description.isEmpty ? nil : prompt.description, lazy: true) {
+        AppPage(
+            prompt.invocation,
+            subtitle: prompt.description.isEmpty ? nil : prompt.description,
+            constrainsContentToViewport: true
+        ) {
             AppCard {
                 promptHeaderEditor(prompt)
 

@@ -492,13 +492,16 @@ struct DoctorScreen: View {
         if skipLiveChecksForPreview { return }
         Task {
             if isUpdate {
+                let previousVersion = piRuntimeStatus?.currentVersion
                 if await piInstaller.update() {
+                    await waitForPiRuntimeChange(afterVersion: previousVersion)
                     await refreshSetupChecks()
                     piInstaller.reset()
                 }
             } else {
                 switch await piInstaller.install() {
                 case true?:
+                    await waitForPiRuntimeChange(afterVersion: nil)
                     await refreshSetupChecks()
                     piInstaller.reset()
                 case false?:
@@ -508,6 +511,24 @@ struct DoctorScreen: View {
                     // installer, which can also set up Node interactively.
                     viewModel.openPiInstallInTerminal()
                 }
+            }
+        }
+    }
+
+    /// Some update methods replace a symlink or package directory just after
+    /// their command exits. The first immediate `pi --version` can therefore
+    /// still see the previous executable. Poll briefly so the Doctor card
+    /// settles in place instead of requiring navigation to trigger another
+    /// status check.
+    @MainActor
+    private func waitForPiRuntimeChange(afterVersion previousVersion: String?) async {
+        let retryDelays: [Duration] = [.milliseconds(750), .seconds(1), .seconds(2)]
+        let updateService = PiAgentUpdateService()
+        for delay in retryDelays {
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            if await updateService.loadCurrentVersion() != previousVersion {
+                return
             }
         }
     }
