@@ -294,15 +294,7 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
         cardLeadingC.isActive = true
     }
 
-    // A recycled/freshly-vended cell can be DRAWN before a layout pass applies
-    // the card's new leading constant (set in configure) — so the card paints at
-    // its previous x and only snaps to the right spot when something later forces
-    // layout (e.g. hover). Laying out here, right before the view draws, guarantees
-    // the card is at its correct position in the painted frame. Cheap when clean.
-    override func viewWillDraw() {
-        settleLayoutImmediately()
-        super.viewWillDraw()
-    }
+
 
     override func layout() {
         super.layout()

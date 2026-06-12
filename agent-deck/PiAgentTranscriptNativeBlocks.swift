@@ -231,10 +231,7 @@ class PiAgentNativeCardRowView: NSView, PiAgentNativeRowContent {
 
     // MARK: Settle (cell-reuse: paint at the final geometry on first draw)
 
-    override func viewWillDraw() {
-        settleLayoutImmediately()
-        super.viewWillDraw()
-    }
+
 
     func settleLayoutImmediately() {
         cardSurface.layer?.removeAllAnimations()

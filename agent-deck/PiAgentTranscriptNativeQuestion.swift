@@ -935,10 +935,7 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
         if !chipViews.isEmpty { layoutChipRow(innerWidth: chipInnerWidth(), apply: true) }
     }
 
-    override func viewWillDraw() {
-        settleLayoutImmediately()
-        super.viewWillDraw()
-    }
+
 
     func settleLayoutImmediately() {
         cardView.layer?.removeAllAnimations()
