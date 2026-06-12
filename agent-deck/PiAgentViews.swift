@@ -531,6 +531,7 @@ private struct PiAgentTranscriptBlockDescriptor {
 private struct PiAgentTranscriptHost: View {
     @ObservedObject var cache: PiAgentTranscriptRenderCache
     let sessionID: UUID?
+    let isTranscriptLoading: Bool
     let bottomScrollRequest: Int
     let makeItems: () -> [PiAgentAppKitTranscriptItem]
     let onPinnedToBottomChange: (Bool) -> Void
@@ -541,6 +542,7 @@ private struct PiAgentTranscriptHost: View {
         PiAgentAppKitTranscriptView(
             items: makeItems(),
             sessionID: sessionID,
+            isTranscriptLoading: isTranscriptLoading,
             renderRevision: cache.renderRevision,
             streamingRevision: cache.streamingRevision,
             autoScrollTurnRevision: cache.autoScrollTurnRevision,
@@ -555,6 +557,7 @@ private struct PiAgentTranscriptHost: View {
 private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
     let items: [PiAgentAppKitTranscriptItem]
     let sessionID: UUID?
+    let isTranscriptLoading: Bool
     let renderRevision: Int
     let streamingRevision: Int
     let autoScrollTurnRevision: Int
@@ -635,6 +638,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         context.coordinator.apply(
             items: items,
             sessionID: sessionID,
+            isTranscriptLoading: isTranscriptLoading,
             renderRevision: renderRevision,
             streamingRevision: streamingRevision,
             autoScrollTurnRevision: autoScrollTurnRevision,
@@ -653,6 +657,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             coordinator.apply(
                 items: items,
                 sessionID: sessionID,
+                isTranscriptLoading: isTranscriptLoading,
                 renderRevision: renderRevision,
                 streamingRevision: streamingRevision,
                 autoScrollTurnRevision: autoScrollTurnRevision,
@@ -1058,6 +1063,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         func apply(
             items: [PiAgentAppKitTranscriptItem],
             sessionID: UUID?,
+            isTranscriptLoading: Bool,
             renderRevision: Int,
             streamingRevision: Int,
             autoScrollTurnRevision: Int,
@@ -1066,6 +1072,15 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             guard let tableView, scrollView != nil else { return }
             let wasFollowing = isAutoFollowing
             let isSessionSwitch = self.sessionID != sessionID
+            // Switching to a session whose transcript is still decoding would
+            // swap the visible transcript for a placeholder, then swap again
+            // when the load lands a beat later — old content, blank flash, new
+            // content: the "blinking" on session change. Hold the OLD content
+            // on screen until the new transcript is ready, then switch once.
+            // Cold start (nothing on screen yet) still shows the loading card.
+            if isSessionSwitch, isTranscriptLoading, !orderedIDs.isEmpty {
+                return
+            }
             let structuralUpdate = lastRenderRevision != renderRevision
             let streamingUpdate = lastStreamingRevision != streamingRevision
             let explicitScroll = lastAutoScrollTurnRevision != autoScrollTurnRevision || lastBottomScrollRequest != bottomScrollRequest
@@ -1143,22 +1158,20 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 // linger pinned to absent ids.
                 purgeCellCache(keeping: Set(nextIDs))
                 for (id, revision) in nextRevisions { contentRevisionByID[id] = revision }
-                // Structural cuts land hard: in-session row REMOVALS (re-run
-                // rewind, visibility toggles) snap content up, and a SESSION
-                // SWITCH wipes the table and re-tiles the new transcript from
-                // rough height estimates before corrections land. Cover both
-                // with a brief crossfade of the transcript so they read as one
-                // smooth transition. Session switches only fade when replacing
-                // visible content (a first fill fades in via SwiftUI already);
-                // never during streaming.
-                let coverSwitch = isSessionSwitch && tableView.numberOfRows > 0
-                let coverRemoval = !isSessionSwitch && !streamingUpdate && !removedIDs.isEmpty
-                if coverSwitch || coverRemoval, let layer = scrollView?.layer {
+                // In-session row REMOVALS (re-run rewind, visibility toggles)
+                // land as a hard cut: rows vanish, content below snaps up, the
+                // follow-up rows pop in. Cover that reflow with a brief
+                // crossfade. Session switches deliberately do NOT fade: the
+                // swap is correct on its first frame (hold-until-loaded +
+                // synchronous viewport settle), and an instant swap reads
+                // cleaner than a transition — a fade can stall visibly when
+                // the switch itself drops frames. Never during streaming.
+                if !isSessionSwitch, !streamingUpdate, !removedIDs.isEmpty, let layer = scrollView?.layer {
                     let fade = CATransition()
                     fade.type = .fade
-                    fade.duration = coverSwitch ? 0.2 : 0.28
+                    fade.duration = 0.28
                     fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                    layer.add(fade, forKey: "transcript-structural-fade")
+                    layer.add(fade, forKey: "transcript-removal-fade")
                 }
                 applySnapshot(ids: nextIDs) { [weak self] in
                     guard let self else { return }
@@ -3296,6 +3309,7 @@ struct PiAgentScreen: View {
         PiAgentTranscriptHost(
             cache: transcriptCache,
             sessionID: store.selectedSession?.id,
+            isTranscriptLoading: store.isSelectedTranscriptLoading,
             bottomScrollRequest: transcriptBottomScrollRequest,
             makeItems: { appKitTranscriptItems },
             onPinnedToBottomChange: { isPinnedToBottom in
