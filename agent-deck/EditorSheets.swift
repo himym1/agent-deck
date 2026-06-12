@@ -913,7 +913,7 @@ struct AgentEditorSheet: View {
 
                             LabeledContent {
                                 Menu("Choose Skill") {
-                                    ForEach(availableSkills, id: \.self) { skill in
+                                    ForEach(selectableSkills, id: \.self) { skill in
                                         Button(skill) { addSkill(skill) }
                                     }
                                 }
@@ -1156,6 +1156,10 @@ struct AgentEditorSheet: View {
 
     private var selectedToolValues: [String] {
         (draft.config.tools ?? []) + (draft.config.mcpDirectTools ?? []).map { "mcp:\($0)" }
+    }
+
+    private var selectableSkills: [String] {
+        availableSkills.filter { !draft.config.skills.contains($0) }
     }
 
     private func addTool(_ tool: String) {

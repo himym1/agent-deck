@@ -2221,7 +2221,7 @@ private struct AgentEditSheet: View {
 
                         configRow("Add Skill") {
                             Menu("Choose Skill") {
-                                ForEach(availableSkills, id: \.self) { skill in
+                                ForEach(selectableSkills, id: \.self) { skill in
                                     Button(skill) {
                                         addSkill(skill)
                                     }
@@ -2421,6 +2421,10 @@ private struct AgentEditSheet: View {
     private var selectedToolValues: [String] {
         ((draft?.config.tools ?? []) + (draft?.config.mcpDirectTools ?? []).map { "mcp:\($0)" })
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    private var selectableSkills: [String] {
+        availableSkills.filter { !(draft?.config.skills.contains($0) ?? false) }
     }
 
     private func optionalStringBinding(for keyPath: WritableKeyPath<AgentConfig, String?>) -> Binding<String> {
