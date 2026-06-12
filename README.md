@@ -34,8 +34,10 @@ Agent Deck does not replace Pi or embed its own agent runtime. It launches the i
 One command installs everything on a fresh Mac — the [Pi CLI](https://github.com/earendil-works/pi) if it's missing (and Node if Pi needs it), then the app itself, with the download checksum verified and Agent Deck copied to `/Applications`:
 
 ```bash
-curl -fsSL https://agentdeck.site/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/a-streetcoder/agent-deck/main/install.sh | bash
 ```
+
+The script is [`install.sh`](install.sh) in this repository — read it (and its history) before piping it to your shell.
 
 Or [download the latest signed and notarized DMG](https://github.com/a-streetcoder/agent-deck/releases/latest) and drag Agent Deck to `/Applications`. If Pi isn't installed yet, onboarding installs it for you with one click.
 
