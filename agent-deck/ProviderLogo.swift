@@ -18,7 +18,7 @@ nonisolated enum ProviderLogo {
         case "azure-openai-responses", "openai", "openai-codex":
             return "openai"
         case "github-copilot":
-            return "github"
+            return "copilot"
         case "kimi-coding", "moonshotai", "moonshotai-cn":
             return "kimi"
         case "minimax", "minimax-cn":
