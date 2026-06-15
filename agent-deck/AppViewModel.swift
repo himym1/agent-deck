@@ -5130,6 +5130,11 @@ final class AppViewModel: NSObject {
         syncAppSettings()
     }
 
+    func setPiAgentAutoUpdateEnabled(_ isEnabled: Bool) {
+        guard appSettingsController.setPiAgentAutoUpdateEnabled(isEnabled) else { return }
+        syncAppSettings()
+    }
+
     func setPiAgentCommitMessageModelIdentifier(_ identifier: String?) {
         guard appSettingsController.setPiAgentCommitMessageModelIdentifier(identifier) else { return }
         syncAppSettings()

@@ -177,6 +177,10 @@ struct AppSettings: Codable, Hashable {
     var piAgentCommitMessageModelIdentifier: String?
     var piAgentSessionsUseWorktree: Bool = false
     var piAgentSessionsKeepWorktreeAfterMerge: Bool = true
+    /// When on, the app silently updates Pi to the latest release once per
+    /// launch if a newer version is available. Off by default: auto-updating a
+    /// shared CLI binary is opt-in.
+    var piAgentAutoUpdateEnabled: Bool = false
     var autoGenerateAgentAvatarPrompts: Bool = true
     var agentAvatarPromptModelIdentifier: String?
     var skillDescriptionModelIdentifier: String?
@@ -228,6 +232,7 @@ struct AppSettings: Codable, Hashable {
         case piAgentCommitMessageModelIdentifier
         case piAgentSessionsUseWorktree
         case piAgentSessionsKeepWorktreeAfterMerge
+        case piAgentAutoUpdateEnabled
         case autoGenerateAgentAvatarPrompts
         case agentAvatarPromptModelIdentifier
         case skillDescriptionModelIdentifier
@@ -283,6 +288,7 @@ struct AppSettings: Codable, Hashable {
         piAgentCommitMessageModelIdentifier = try container.decodeIfPresent(String.self, forKey: .piAgentCommitMessageModelIdentifier)
         piAgentSessionsUseWorktree = try container.decodeIfPresent(Bool.self, forKey: .piAgentSessionsUseWorktree) ?? false
         piAgentSessionsKeepWorktreeAfterMerge = try container.decodeIfPresent(Bool.self, forKey: .piAgentSessionsKeepWorktreeAfterMerge) ?? true
+        piAgentAutoUpdateEnabled = try container.decodeIfPresent(Bool.self, forKey: .piAgentAutoUpdateEnabled) ?? false
         autoGenerateAgentAvatarPrompts = try container.decodeIfPresent(Bool.self, forKey: .autoGenerateAgentAvatarPrompts) ?? true
         agentAvatarPromptModelIdentifier = try container.decodeIfPresent(String.self, forKey: .agentAvatarPromptModelIdentifier)
         skillDescriptionModelIdentifier = try container.decodeIfPresent(String.self, forKey: .skillDescriptionModelIdentifier)

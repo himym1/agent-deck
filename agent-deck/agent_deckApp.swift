@@ -48,6 +48,12 @@ final class AgentDeckAppDelegate: NSObject, NSApplicationDelegate, UNUserNotific
                 updater.checkForUpdatesInBackground()
             }
         }
+        // If the user opted into Pi auto-update (Doctor toggle), silently bring
+        // Pi to the latest release once per launch. Off the launch path and a
+        // no-op when disabled, Pi is missing, or already current.
+        Task.detached(priority: .background) {
+            await PiAgentAutoUpdater.shared.runIfEnabled()
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

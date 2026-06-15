@@ -238,7 +238,9 @@ struct EffectiveEnvRow {
 struct DoctorScreen: View {
     var viewModel: AppViewModel
     @State private var setupItems: [SetupCheckItem] = []
-    @State private var piInstaller = PiAutoInstaller()
+    /// Shared with the launch auto-updater so manual and automatic updates use
+    /// one installer, one `isRunning` guard, and one `phase`.
+    private var piInstaller = PiAgentAutoUpdater.shared.installer
     @State private var piRuntimeStatus: PiAgentRuntimeStatus?
     @State private var isRefreshingSetup = true
     @State private var webFetchStatus = WebFetchDependencyService().status()
@@ -419,10 +421,39 @@ struct DoctorScreen: View {
                         case .some(.upToDate), .none:
                             EmptyView()
                         }
+
+                        Divider()
+                            .padding(.top, 2)
+                        piAutoUpdateToggleRow
                     }
                 }
             }
             .padding(.vertical, 10)
+        }
+    }
+
+    /// Opt-in: when on, the app silently updates Pi to the latest release on
+    /// launch (same shared installer and method-aware path as the "Update Pi"
+    /// button above, so an in-flight launch update shows through those controls).
+    private var piAutoUpdateToggleRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Automatically update Pi")
+                    .font(.callout.weight(.medium))
+                Text("Check for a newer Pi release on launch and install it in the background.")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 8)
+
+            Toggle("", isOn: Binding(
+                get: { viewModel.appSettings.piAgentAutoUpdateEnabled },
+                set: { viewModel.setPiAgentAutoUpdateEnabled($0) }
+            ))
+            .labelsHidden()
+            .appSwitch()
         }
     }
 
