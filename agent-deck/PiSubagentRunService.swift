@@ -22,6 +22,13 @@ final class PiSubagentRunService {
     var onMemoryWrite: ((UUID, UUID, String?, AgentMemoryWriteBridgeRequest) async -> String)?
     var onMemoryMarkStale: ((UUID, UUID, String?, AgentMemoryStaleBridgeRequest) async -> String)?
     var onMemorySearch: ((UUID, UUID, String?, AgentMemorySearchBridgeRequest) async -> String)?
+    /// Injects the native MCP bridge + scoped catalog into a delegated Deck agent
+    /// (mirrors `childMemoryArgumentsProvider`). Returns `[]` when the agent has no
+    /// assigned MCP servers or MCP is off.
+    var childMCPArgumentsProvider: ((PiAgentSessionRecord, EffectiveAgentRecord) async -> [String])?
+    /// Routes a delegated agent's `mcp` proxy call to the app's connection manager,
+    /// scoped to that agent's assigned servers.
+    var onMCPBridgeRequest: ((UUID, UUID, String?, PiMCPBridgeRequest) async -> String)?
 
     init(store: PiAgentSessionStore) {
         self.store = store
@@ -80,12 +87,17 @@ final class PiSubagentRunService {
             }
         }
         let memoryExtensionURL = AppSettingsStore.shared.settings.agentMemoryEnabled ? try? PiNativeSubagentBridgeExtensions.memoryExtensionURL() : nil
+        // Resolved up front (before --tools) so a restrictive agent allowlist can
+        // include the `mcp` tool when the bridge is injected; the args themselves are
+        // appended below, before the user extensions.
+        let mcpArguments = await childMCPArgumentsProvider?(parentSession, agent) ?? []
         extraArguments.append(contentsOf: PiAgentLaunchArgumentBuilder.toolArguments(.init(
             agent: agent,
             includeSupervisorTool: wantsSupervisorTool && bridgeWarnings.isEmpty,
             includeMemoryTools: memoryExtensionURL != nil,
             includeExaTools: PiNativeSubagentBridgeExtensions.isExaConfigured(environment: environment),
-            includeFallbackWebFetchTool: !PiNativeSubagentBridgeExtensions.isExaConfigured(environment: environment) && WebFetchDependencyService().status().isInstalled
+            includeFallbackWebFetchTool: !PiNativeSubagentBridgeExtensions.isExaConfigured(environment: environment) && WebFetchDependencyService().status().isInstalled,
+            includeMCPTool: !mcpArguments.isEmpty
         )))
         // `--no-extensions` is already seeded at the top; the agent's authored
         // extensions append without re-emitting it.
@@ -111,6 +123,10 @@ final class PiSubagentRunService {
         } else {
             bridgeWarnings.append("\(AppBrand.displayName) could not write the system prompt audit extension.")
         }
+        // Native MCP bridge + scoped catalog (the agent's assigned `mcpServers`), so an
+        // agent's MCP assignment works under delegation. Appended here, before the
+        // user-selected extensions below, so the `mcp` tool wins any name clash.
+        extraArguments.append(contentsOf: mcpArguments)
         // User-selected Pi extensions load LAST so Agent Deck bridges register first and win conflicts.
         extraArguments.append(contentsOf: PiAgentLaunchArgumentBuilder.userSelectedExtensionArguments(
             settings: AppSettingsStore.shared.settings,
@@ -127,7 +143,7 @@ final class PiSubagentRunService {
         let modelSelection = PiSubagentLaunchPlanner.modelSelection(for: agent, parentSession: parentSession)
         let modelArgument = modelSelection.modelArgument
         let modelDisplayName = modelSelection.displayName
-        let tools = displayTools(for: agent, includeSupervisorTool: bridgeWarnings.isEmpty, includeMemoryTools: memoryExtensionURL != nil)
+        let tools = displayTools(for: agent, includeSupervisorTool: bridgeWarnings.isEmpty, includeMemoryTools: memoryExtensionURL != nil, includeMCPTool: !mcpArguments.isEmpty)
         let resolvedReadFirstPaths = sanitizedReadFirstPaths(agentReads: agent.resolved.defaultReads ?? [], requestReads: readFirstPaths, projectRoot: URL(fileURLWithPath: parentSession.worktreePath ?? parentSession.projectPath))
         try childInput(agent: agent, task: trimmedTask, readFirstPaths: resolvedReadFirstPaths).write(
             to: artifactDirectory.appendingPathComponent("input.md"),
@@ -930,13 +946,14 @@ final class PiSubagentRunService {
         max(0, Int((end.timeIntervalSince(start) * 1000).rounded()))
     }
 
-    private func displayTools(for agent: EffectiveAgentRecord, includeSupervisorTool: Bool, includeMemoryTools: Bool) -> [String] {
+    private func displayTools(for agent: EffectiveAgentRecord, includeSupervisorTool: Bool, includeMemoryTools: Bool, includeMCPTool: Bool) -> [String] {
         PiAgentLaunchArgumentBuilder.resolvedTools(.init(
             agent: agent,
             includeSupervisorTool: includeSupervisorTool,
             includeMemoryTools: includeMemoryTools,
             includeExaTools: true,
-            includeFallbackWebFetchTool: true
+            includeFallbackWebFetchTool: true,
+            includeMCPTool: includeMCPTool
         ))
     }
 
@@ -1109,6 +1126,10 @@ final class PiSubagentRunService {
             handleMemorySearchBridgeRequest(event, requestID: requestID, rawLine: rawLine, runID: runID, parentSessionID: parentSessionID)
             return
         }
+        if title == "AGENT_DECK_BRIDGE mcp", let requestID = event.id {
+            handleMCPBridgeRequest(event, requestID: requestID, rawLine: rawLine, runID: runID, parentSessionID: parentSessionID)
+            return
+        }
         guard title == "AGENT_DECK_BRIDGE contact_supervisor", let requestID = event.id else {
             store.appendSubagentTranscript(.init(sessionID: parentSessionID, role: .status, title: title, text: event.message?.compactDescription ?? "Extension UI request", rawJSON: rawLine), runID: runID, parentSessionID: parentSessionID)
             return
@@ -1153,6 +1174,20 @@ final class PiSubagentRunService {
         } else {
             store.append(.init(sessionID: parentSessionID, role: .status, title: requestTitle, text: message))
             clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: "Acknowledged.")
+        }
+    }
+
+    private func handleMCPBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, runID: UUID, parentSessionID: UUID) {
+        guard let payload = bridgePayload(from: event),
+              let request = try? JSONDecoder().decode(PiMCPBridgeRequest.self, from: Data(payload.utf8)) else {
+            clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) could not parse the mcp request.")
+            return
+        }
+        let agentName = store.subagentRuns(for: parentSessionID).first(where: { $0.id == runID })?.agentName
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let result = await self.onMCPBridgeRequest?(parentSessionID, runID, agentName, request) ?? "\(AppBrand.displayName)'s MCP bridge is not available."
+            self.clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: result)
         }
     }
 

@@ -48,6 +48,20 @@ final class TranscriptScrollProfiler {
         #endif
     }()
 
+    /// Extra-chatty per-pulse attribution traces (itemsBuild/apply-work trigger
+    /// lines, session-list re-eval). OFF by default — they fire every streaming tick
+    /// and drown the console. Opt in while chasing a specific churn bug:
+    /// `defaults write streetcoding.agent-deck TranscriptVerboseTrace -bool YES`.
+    /// The hitch/hang signal (gesture summaries, dropped-frame samples) is never
+    /// gated by this, so the console stays useful for jank hunting when it's off.
+    static let verboseTrace: Bool = {
+        #if DEBUG
+        return UserDefaults.standard.bool(forKey: "TranscriptVerboseTrace")
+        #else
+        return false
+        #endif
+    }()
+
     // A 60 Hz frame is 16.67 ms. Treat a gap between consecutive user-driven
     // bounds ticks above this as a dropped frame ("hitch") — the main thread
     // couldn't service the scroll in time.
@@ -101,9 +115,11 @@ final class TranscriptScrollProfiler {
         let dt = (CACurrentMediaTime() - t) * 1000
         let n = (bodyCounters[label] ?? 0) + 1
         bodyCounters[label] = n
-        // Log if slow, OR every 20th call (so cadence is always visible even
-        // when each call is cheap).
-        if dt > 2 || n % 20 == 0 {
+        // Only surface calls slow enough to plausibly drop a frame (a 60Hz frame is
+        // 16.7ms). The old "every 20th call" cadence + 2ms floor logged routine
+        // sub-frame work every streaming tick, which buried the real hitches. Cheap
+        // calls stay silent unless `verboseTrace` is on.
+        if dt > 8 || (verboseTrace && dt > 2) {
             logger.info("\(label, privacy: .public) \(dt, format: .fixed(precision: 1))ms (call #\(n))")
         }
         return r

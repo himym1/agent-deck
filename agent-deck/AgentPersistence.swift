@@ -127,6 +127,9 @@ struct AgentPersistence {
                     result.tools = parsedTools.tools
                     result.mcpDirectTools = parsedTools.mcpDirectTools
                 }
+            case "mcpServers":
+                if rawValue.boolValue == false { result.mcpServers = nil }
+                else if let values = splitJSONArray(rawValue) { result.mcpServers = values }
             case "fallbackModels":
                 if rawValue.boolValue == false { result.fallbackModels = [] }
                 else if let values = splitJSONArray(rawValue) { result.fallbackModels = values }
@@ -185,6 +188,7 @@ struct AgentPersistence {
         if edited.disabled != base.disabled { values["disabled"] = edited.disabled ?? false }
         if edited.defaultExpectedOutcome != base.defaultExpectedOutcome { values["defaultExpectedOutcome"] = edited.defaultExpectedOutcome?.rawValue ?? false }
         if !arraysEqual(edited.skills, base.skills) { values["skills"] = edited.skills.isEmpty ? false : edited.skills }
+        if !arraysEqual(edited.mcpServers ?? [], base.mcpServers ?? []) { values["mcpServers"] = (edited.mcpServers ?? []).isEmpty ? false : (edited.mcpServers ?? []) }
         let editedToolList = joinedTools(from: edited)
         let baseToolList = joinedTools(from: base)
         if !arraysEqual(editedToolList, baseToolList) { values["tools"] = editedToolList ?? false }
@@ -336,6 +340,7 @@ struct AgentPersistence {
         if let thinking = config.thinking, thinking != "off" { lines.append("thinking: \(thinking)") }
         lines.append("systemPromptMode: \(config.systemPromptMode ?? defaultSystemPromptMode(name: config.name))")
         if let skills = joinComma(config.skills) { lines.append("skills: \(skills)") }
+        if let mcpServers = joinComma(config.mcpServers) { lines.append("mcpServers: \(mcpServers)") }
         if let extensions = config.extensions { lines.append("extensions: \(joinComma(extensions) ?? "")") }
         if let output = config.output { lines.append("output: \(output)") }
         if let defaultExpectedOutcome = config.defaultExpectedOutcome { lines.append("defaultExpectedOutcome: \(defaultExpectedOutcome.rawValue)") }

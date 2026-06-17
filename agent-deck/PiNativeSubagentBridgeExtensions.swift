@@ -14,6 +14,9 @@ struct PiNativeSubagentBridgeExtensions {
         "answer_supervisor_request"
     ]
     nonisolated static let childSupervisorToolName = "contact_supervisor"
+    /// Single proxy tool the native MCP bridge registers. The model reaches every
+    /// assigned MCP server tool through this one tool (list / search / describe / call).
+    nonisolated static let mcpProxyToolName = "mcp"
 
     /// Every tool name Agent Deck may register through its built-in bridge extensions.
     /// Used to detect potential conflicts with user-supplied Pi extensions. Some bridges
@@ -26,6 +29,7 @@ struct PiNativeSubagentBridgeExtensions {
         names.insert(askUserToolName)
         names.formUnion(parentSubagentToolNames)
         names.insert(childSupervisorToolName)
+        names.insert(mcpProxyToolName)
         return names
     }()
 
@@ -79,6 +83,13 @@ struct PiNativeSubagentBridgeExtensions {
             summary: "Lets the agent delegate work to your Deck agents and coordinate plans and supervision.",
             toolNames: parentSubagentToolNames.sorted(),
             condition: "When Deck agents are enabled"
+        ),
+        BridgeDescriptor(
+            id: "mcp",
+            displayName: "MCP",
+            summary: "Lets the agent call tools from your assigned MCP servers through a single proxy tool.",
+            toolNames: [mcpProxyToolName],
+            condition: "When MCP is enabled and at least one server is assigned"
         )
     ]
 
@@ -99,7 +110,8 @@ struct PiNativeSubagentBridgeExtensions {
         memoryEnabled: Bool,
         exaConfigured: Bool,
         fallbackWebFetchAvailable: Bool,
-        subagentsActive: Bool
+        subagentsActive: Bool,
+        mcpActive: Bool = false
     ) -> [InjectedBridge] {
         var bridges: [InjectedBridge] = [
             InjectedBridge(id: "ask_user", displayName: "Ask User", toolNames: [askUserToolName])
@@ -109,6 +121,9 @@ struct PiNativeSubagentBridgeExtensions {
         }
         if subagentsActive {
             bridges.append(InjectedBridge(id: "deck_agents", displayName: "Deck agents", toolNames: parentSubagentToolNames.sorted()))
+        }
+        if mcpActive {
+            bridges.append(InjectedBridge(id: "mcp", displayName: "MCP", toolNames: [mcpProxyToolName]))
         }
         if exaConfigured {
             bridges.append(InjectedBridge(id: "web_exa", displayName: "Web search (Exa)", toolNames: exaToolNames.sorted()))
@@ -132,6 +147,10 @@ struct PiNativeSubagentBridgeExtensions {
 
     static func askUserExtensionURL(fileManager: FileManager = .default) throws -> URL {
         try writeExtension(named: "agent-deck-ask-user-bridge.ts", content: askUserExtensionSource, fileManager: fileManager)
+    }
+
+    static func mcpExtensionURL(fileManager: FileManager = .default) throws -> URL {
+        try writeExtension(named: "agent-deck-mcp-bridge.ts", content: mcpExtensionSource, fileManager: fileManager)
     }
 
     static func parentExtensionURL(fileManager: FileManager = .default) throws -> URL {
@@ -445,6 +464,69 @@ struct PiNativeSubagentBridgeExtensions {
                         content: [{ type: "text", text: `User answered: ${formatResponseSummary(result.response)}` }],
                         details: { question, context, options, response: result.response, cancelled: false }
                     };
+                }
+            });
+        }
+        """
+
+    private static let mcpExtensionSource = """
+        import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+        import { Type } from "typebox";
+
+        // Single proxy tool for every assigned MCP server. The model addresses a tool
+        // as "server/tool" (or passes server + tool separately). Agent Deck holds the
+        // real MCP connections natively; this bridge just forwards the request and
+        // returns the result string.
+        export default function (pi: ExtensionAPI) {
+            pi.registerTool({
+                name: "mcp",
+                label: "MCP",
+                description: "Access tools from your assigned MCP servers. List servers with mcp({}); search with mcp({ search: \\"text\\" }); inspect with mcp({ describe: \\"server/tool\\" }); call with mcp({ tool: \\"server/tool\\", args: { ... } }). The available tools are listed in the system prompt under MCP.",
+                promptSnippet: "Call tools exposed by assigned MCP servers via a single proxy (list/search/describe/call)",
+                promptGuidelines: [
+                    "Call MCP tools with mcp({ tool: \\"server/tool\\", args: { ... } }); args is the tool's input object.",
+                    "If you are unsure which tool to use, first run mcp({ search: \\"keywords\\" }) or mcp({}) to list servers.",
+                    "Use mcp({ describe: \\"server/tool\\" }) to see a tool's full input schema before calling it."
+                ],
+                parameters: Type.Object({
+                    tool: Type.Optional(Type.String({ description: "Tool to call, as \\"server/tool\\" or just \\"tool\\" when server is given." })),
+                    server: Type.Optional(Type.String({ description: "Server name, when not encoded in tool." })),
+                    args: Type.Optional(Type.Any({ description: "Arguments object passed to the tool." })),
+                    search: Type.Optional(Type.String({ description: "Search assigned MCP tools by keyword." })),
+                    describe: Type.Optional(Type.String({ description: "Show a tool's description and input schema, as \\"server/tool\\"." }))
+                }, { additionalProperties: false }),
+                async execute(toolCallId, params, signal, onUpdate, ctx) {
+                    const p = params as any;
+                    let action = "list";
+                    let tool: string | undefined;
+                    let query: string | undefined;
+                    if (typeof p.search === "string" && p.search.trim()) {
+                        action = "search";
+                        query = String(p.search).trim();
+                    } else if (typeof p.describe === "string" && p.describe.trim()) {
+                        action = "describe";
+                        tool = String(p.describe).trim();
+                    } else if (typeof p.tool === "string" && p.tool.trim()) {
+                        action = "call";
+                        tool = String(p.tool).trim();
+                    }
+                    const payload = JSON.stringify({
+                        bridge: "agent_deck_mcp",
+                        action,
+                        toolCallId,
+                        server: typeof p.server === "string" && p.server.trim() ? String(p.server).trim() : undefined,
+                        tool,
+                        query,
+                        args: p.args
+                    });
+                    if (signal?.aborted) {
+                        return { content: [{ type: "text", text: "MCP call cancelled." }] };
+                    }
+                    if (action === "call") {
+                        onUpdate?.({ content: [{ type: "text", text: `Calling ${tool}…` }] });
+                    }
+                    const result = await ctx.ui.editor("AGENT_DECK_BRIDGE mcp", payload);
+                    return { content: [{ type: "text", text: result || "MCP returned no output." }] };
                 }
             });
         }

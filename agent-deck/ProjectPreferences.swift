@@ -11,6 +11,7 @@ struct ProjectPreference: Codable, Hashable, Identifiable, Sendable {
     var assignedAgentNames: Set<String>
     var assignedSkillNames: Set<String>
     var assignedPromptTemplateNames: Set<String>
+    var assignedMcpServerNames: Set<String>
 
     var id: String { path }
 
@@ -19,10 +20,10 @@ struct ProjectPreference: Codable, Hashable, Identifiable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case path, isEnabled, isFavorite, isHidden, customIconPath, assignedAgentNames, assignedSkillNames, assignedPromptTemplateNames
+        case path, isEnabled, isFavorite, isHidden, customIconPath, assignedAgentNames, assignedSkillNames, assignedPromptTemplateNames, assignedMcpServerNames
     }
 
-    init(path: String, isEnabled: Bool, isFavorite: Bool, isHidden: Bool, customIconPath: String?, assignedAgentNames: Set<String> = [], assignedSkillNames: Set<String> = [], assignedPromptTemplateNames: Set<String> = []) {
+    init(path: String, isEnabled: Bool, isFavorite: Bool, isHidden: Bool, customIconPath: String?, assignedAgentNames: Set<String> = [], assignedSkillNames: Set<String> = [], assignedPromptTemplateNames: Set<String> = [], assignedMcpServerNames: Set<String> = []) {
         self.path = path
         self.isEnabled = isEnabled
         self.isFavorite = isFavorite
@@ -31,6 +32,7 @@ struct ProjectPreference: Codable, Hashable, Identifiable, Sendable {
         self.assignedAgentNames = assignedAgentNames
         self.assignedSkillNames = assignedSkillNames
         self.assignedPromptTemplateNames = assignedPromptTemplateNames
+        self.assignedMcpServerNames = assignedMcpServerNames
     }
 
     init(from decoder: Decoder) throws {
@@ -43,6 +45,7 @@ struct ProjectPreference: Codable, Hashable, Identifiable, Sendable {
         assignedAgentNames = try container.decodeIfPresent(Set<String>.self, forKey: .assignedAgentNames) ?? []
         assignedSkillNames = try container.decodeIfPresent(Set<String>.self, forKey: .assignedSkillNames) ?? []
         assignedPromptTemplateNames = try container.decodeIfPresent(Set<String>.self, forKey: .assignedPromptTemplateNames) ?? []
+        assignedMcpServerNames = try container.decodeIfPresent(Set<String>.self, forKey: .assignedMcpServerNames) ?? []
     }
 }
 
@@ -124,6 +127,16 @@ final class ProjectPreferencesStore {
                 preference.assignedPromptTemplateNames.insert(promptName)
             } else {
                 preference.assignedPromptTemplateNames.remove(promptName)
+            }
+        }
+    }
+
+    func setAssignedMcpServer(_ serverName: String, assigned: Bool, for path: String) {
+        update(path) { preference in
+            if assigned {
+                preference.assignedMcpServerNames.insert(serverName)
+            } else {
+                preference.assignedMcpServerNames.remove(serverName)
             }
         }
     }
@@ -260,7 +273,9 @@ final class ProjectPreferencesStore {
         try? fileManager.removeItem(atPath: path)
     }
 
-    private static func loadPreferences(from defaults: UserDefaults, key: String) -> [String: ProjectPreference] {
+    // Internal (not private) so a regression test can exercise the reconstruction
+    // path directly — this is where a per-project assigned-set field was once dropped.
+    static func loadPreferences(from defaults: UserDefaults, key: String) -> [String: ProjectPreference] {
         guard let data = defaults.data(forKey: key),
               let preferences = try? JSONDecoder().decode([ProjectPreference].self, from: data) else {
             return [:]
@@ -276,7 +291,8 @@ final class ProjectPreferencesStore {
                 customIconPath: preference.customIconPath,
                 assignedAgentNames: preference.assignedAgentNames,
                 assignedSkillNames: preference.assignedSkillNames,
-                assignedPromptTemplateNames: preference.assignedPromptTemplateNames
+                assignedPromptTemplateNames: preference.assignedPromptTemplateNames,
+                assignedMcpServerNames: preference.assignedMcpServerNames
             ))
         })
     }

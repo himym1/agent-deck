@@ -147,9 +147,14 @@ final class PiRPCClient: @unchecked Sendable {
               let line = String(data: data, encoding: .utf8) else { return }
 #if DEBUG
         let type = command["type"] as? String ?? "unknown"
-        let requestID = command["id"] as? String ?? "extension-ui"
-        let streamingBehavior = command["streamingBehavior"] as? String ?? ""
-        Self.logger.info("Sending RPC command type=\(type, privacy: .public) id=\(requestID, privacy: .public) hasMessage=\(command["message"] != nil) hasImages=\(command["images"] != nil) streamingBehavior=\(streamingBehavior, privacy: .public)")
+        // Routine polling fires several times a second during streaming and drowns the
+        // meaningful commands (prompt/abort/set_session_name/extension responses). Skip it.
+        let routinePolling: Set<String> = ["get_state", "get_session_stats", "get_commands"]
+        if !routinePolling.contains(type) {
+            let requestID = command["id"] as? String ?? "extension-ui"
+            let streamingBehavior = command["streamingBehavior"] as? String ?? ""
+            Self.logger.info("Sending RPC command type=\(type, privacy: .public) id=\(requestID, privacy: .public) hasMessage=\(command["message"] != nil) hasImages=\(command["images"] != nil) streamingBehavior=\(streamingBehavior, privacy: .public)")
+        }
 #endif
         process.writeJSONLine(line)
     }

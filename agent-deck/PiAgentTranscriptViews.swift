@@ -361,6 +361,95 @@ struct PiAgentTranscriptActivity: Identifiable, Hashable {
         default: return false
         }
     }
+    /// The native MCP proxy tool. Every assigned MCP server is reached through this
+    /// one tool, so the activity's per-call breakdown (server/tool) lives in `args`.
+    nonisolated var isMCPActivity: Bool { name.lowercased() == "mcp" }
+
+    /// Whether this activity holds at least one real MCP tool *call* (action == call,
+    /// i.e. an args.tool address) — as opposed to only list/search/describe
+    /// introspection. The dedicated card renders only when this is true, so visibility
+    /// gating MUST use this (not just the name) or the row toggles between a real card
+    /// and a 0-height spacer mid-stream. Cheap: the RPC event is render-cached.
+    @MainActor
+    var hasMCPCall: Bool {
+        guard isMCPActivity else { return false }
+        return entries.contains { entry in
+            guard let tool = PiAgentTranscriptActivity.toolArgs(from: entry)?["tool"]?.stringValue else { return false }
+            return !tool.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+
+    /// One resolved MCP tool call, parsed from an `mcp` proxy entry's args/result.
+    /// Built once in the items pass (see `NativeToolGroupModel.make`) so the card is
+    /// a dumb renderer.
+    struct MCPCall: Identifiable, Hashable {
+        var id: UUID
+        var server: String
+        var tool: String
+        var argsPreview: String?
+        var resultPreview: String?
+        var isError: Bool
+    }
+
+    /// The actual tool calls in this `mcp` activity (action == call), each with its
+    /// server/tool address, a compact args preview, and a result preview. List /
+    /// search / describe introspection entries (no `tool` arg) are skipped — the card
+    /// surfaces real tool invocations only.
+    @MainActor
+    func mcpCalls() -> [MCPCall] {
+        entries.compactMap { entry in
+            let args = PiAgentTranscriptActivity.toolArgs(from: entry)
+            guard let rawTool = args?["tool"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !rawTool.isEmpty,
+                  let address = MCPConnectionManager.resolveAddress(rawTool, serverHint: args?["server"]?.stringValue)
+            else { return nil }
+
+            let resultText = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isError = entry.role == .error
+                || resultText.hasPrefix("MCP tool reported an error")
+                || resultText.hasPrefix("MCP call failed")
+
+            return MCPCall(
+                id: entry.id,
+                server: address.server,
+                tool: address.tool,
+                argsPreview: PiAgentTranscriptActivity.mcpArgsPreview(args?["args"]),
+                resultPreview: resultText.isEmpty ? nil : resultText,
+                isError: isError
+            )
+        }
+    }
+
+    /// A compact, single-line preview of a tool's arguments object (keys + scalar
+    /// values), for the card's call row. Returns nil for an empty/absent args object.
+    nonisolated static func mcpArgsPreview(_ value: JSONValue?) -> String? {
+        guard let value else { return nil }
+        switch value {
+        case let .object(object) where !object.isEmpty:
+            let parts = object.keys.sorted().map { key -> String in
+                "\(key): \(mcpScalarPreview(object[key]))"
+            }
+            return parts.joined(separator: ", ")
+        case .object:
+            return nil
+        default:
+            let scalar = mcpScalarPreview(value)
+            return scalar.isEmpty ? nil : scalar
+        }
+    }
+
+    nonisolated private static func mcpScalarPreview(_ value: JSONValue?) -> String {
+        switch value {
+        case let .string(string): return string
+        case let .number(number):
+            return number == number.rounded() ? String(Int(number)) : String(number)
+        case let .bool(bool): return bool ? "true" : "false"
+        case let .array(items): return "[\(items.count)]"
+        case .object: return "{…}"
+        case .null, .none: return ""
+        }
+    }
 
     @MainActor
     static func make(from entries: [PiAgentTranscriptEntry]) -> [PiAgentTranscriptActivity] {
@@ -1219,10 +1308,14 @@ struct PiAgentTranscriptThreadCard: View {
         _ group: PiAgentThreadToolGroup,
         visibility: PiAgentTranscriptVisibilitySettings
     ) -> Bool {
-        var hasWeb = false, hasEditable = false
+        var hasWeb = false, hasEditable = false, hasMCP = false
         for activity in group.activities {
             if activity.isWebActivity {
                 hasWeb = true
+            } else if activity.hasMCPCall {
+                // Name-based would over-report (list/describe have no card) and the
+                // row would flicker between a card and a spacer; gate on a real call.
+                hasMCP = true
             } else {
                 let name = activity.name.lowercased()
                 if name == "edit" || name == "write" { hasEditable = true }
@@ -1230,6 +1323,7 @@ struct PiAgentTranscriptThreadCard: View {
         }
         return (visibility.showWebActivity && hasWeb)
             || (visibility.showDiffs && hasEditable)
+            || (visibility.showMCPCards && hasMCP)
     }
 
     private static func shouldShowStatusEntry(
@@ -1620,6 +1714,90 @@ struct PiAgentNativeFullDiffSheet: View {
         }
         .padding(AppTheme.pagePadding)
         .frame(minWidth: 780, idealWidth: 920, minHeight: 520, idealHeight: 680)
+    }
+}
+
+/// Modal showing an MCP tool's full response, opened by the transcript MCP card's
+/// "View" button. Mirrors `PiAgentNativeFullDiffSheet`'s chrome (title + Copy +
+/// Done), with the body pretty-printed when the response is JSON.
+struct PiAgentNativeMCPResultSheet: View {
+    let server: String
+    let tool: String
+    let text: String
+    let onDone: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(server)/\(tool)")
+                        .font(AppTheme.Font.headline.weight(.semibold))
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                    Text("MCP response")
+                        .font(AppTheme.Font.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                }
+                Spacer(minLength: 0)
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                }
+                Button("Done", action: onDone)
+                    .keyboardShortcut(.cancelAction)
+            }
+            PiAgentMCPResultTextView(text: text)
+        }
+        .padding(AppTheme.pagePadding)
+        .frame(minWidth: 620, idealWidth: 820, minHeight: 440, idealHeight: 620)
+    }
+}
+
+struct PiAgentMCPResultTextView: View {
+    let text: String
+    @State private var rendered: String = ""
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            Text(rendered.isEmpty ? text : rendered)
+                .font(AppTheme.Font.caption.monospaced())
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+        }
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.textContentFill))
+        .overlay(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).stroke(AppTheme.contentStroke, lineWidth: 1))
+        .task(id: text) {
+            rendered = Self.formatted(text)
+        }
+    }
+
+    /// Renders a response for display: a pure-JSON body is pretty-printed; an error
+    /// like `MCP call failed: … [ {…} ]` keeps its leading message and pretty-prints
+    /// the embedded JSON below it; anything else shows verbatim.
+    static func formatted(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let whole = prettyJSON(trimmed) { return whole }
+        if let jsonStart = trimmed.firstIndex(where: { $0 == "{" || $0 == "[" }) {
+            let prefix = trimmed[..<jsonStart].trimmingCharacters(in: .whitespacesAndNewlines)
+            if let body = prettyJSON(String(trimmed[jsonStart...])) {
+                return prefix.isEmpty ? body : "\(prefix)\n\n\(body)"
+            }
+        }
+        return trimmed
+    }
+
+    /// Pretty-prints `raw` when the whole string parses as JSON; nil otherwise.
+    static func prettyJSON(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("{") || trimmed.hasPrefix("[") else { return nil }
+        guard let data = trimmed.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let pretty = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else {
+            return nil
+        }
+        return String(decoding: pretty, as: UTF8.self)
     }
 }
 

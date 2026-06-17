@@ -675,6 +675,7 @@ struct ProjectsScreen: View {
     @State private var debouncedSearchText = ""
     @State private var agentsRecapProject: DiscoveredProject?
     @State private var skillsRecapProject: DiscoveredProject?
+    @State private var mcpRecapProject: DiscoveredProject?
     @State private var projectPendingRemoval: DiscoveredProject?
     @State private var projectDeleteError: String?
     /// Cached visible-project layout. Without this, the body would walk
@@ -711,6 +712,12 @@ struct ProjectsScreen: View {
             ProjectSkillsRecapSheet(
                 project: project,
                 recap: viewModel.skillRecap(for: project)
+            )
+        }
+        .sheet(item: $mcpRecapProject) { project in
+            ProjectMcpServersRecapSheet(
+                project: project,
+                recap: viewModel.mcpRecap(for: project)
             )
         }
         .alert("Remove project?", isPresented: removeProjectAlertBinding, presenting: projectPendingRemoval) { project in
@@ -931,6 +938,16 @@ struct ProjectsScreen: View {
             }
             .buttonStyle(.plain)
             .help("Show skills for this project")
+
+            Button {
+                mcpRecapProject = project
+            } label: {
+                Image(systemName: "powerplug")
+                    .foregroundStyle(AppTheme.mutedText)
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.plain)
+            .help("Show MCP servers for this project")
 
             Button(role: .destructive) {
                 projectPendingRemoval = project
@@ -1794,6 +1811,133 @@ private struct ProjectSkillsRecapSheet: View {
                             .foregroundStyle(.orange)
                         Text(name)
                             .font(.caption.weight(.semibold))
+                    }
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AppTheme.contentFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+}
+
+private struct ProjectMcpServersRecapSheet: View {
+    let project: DiscoveredProject
+    let recap: ProjectMcpServerRecap
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                ProjectIconView(imageURL: project.iconFileURL, symbolName: project.fallbackSymbolName, size: 34, assetName: project.projectType.assetName)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Project MCP Servers")
+                        .font(.headline)
+                        .fontWidth(.expanded)
+                    Text(project.repositoryDisplayName)
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                Button("Done") {
+                    dismiss()
+                }
+            }
+            .padding(18)
+
+            Divider()
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("These are the MCP servers Agent Deck advertises to parent Pi sessions for this project. The agent reaches their tools through the `mcp` proxy tool. Requires MCP enabled in Runtime → MCP.")
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if recap.hasResolvedServers {
+                        if !recap.defaultServers.isEmpty {
+                            serverRecapSection(title: "All Projects", servers: recap.defaultServers, color: .blue)
+                        }
+
+                        if !recap.projectServers.isEmpty {
+                            serverRecapSection(title: "Project", servers: recap.projectServers, color: .green)
+                        }
+                    } else {
+                        ContentUnavailableView(
+                            "No MCP Servers",
+                            systemImage: "powerplug",
+                            description: Text("No MCP servers are assigned to this project. Assign them in Runtime → MCP.")
+                        )
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 32)
+                    }
+
+                    if !recap.unresolvedNames.isEmpty {
+                        unresolvedSection
+                    }
+                }
+                .padding(18)
+            }
+        }
+        .frame(width: 520, height: 560)
+    }
+
+    private func serverRecapSection(title: String, servers: [MCPServerRecapItem], color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline)
+                .fontWidth(.expanded)
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(servers) { server in
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "powerplug")
+                            .foregroundStyle(color)
+                            .frame(width: 18)
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(server.name)
+                                .font(.subheadline.weight(.semibold))
+                            if let detail = server.detail, !detail.isEmpty {
+                                Text(detail)
+                                    .font(.caption)
+                                    .foregroundStyle(AppTheme.mutedText)
+                                    .lineLimit(1)
+                            }
+                        }
+
+                        Spacer(minLength: 0)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(AppTheme.contentFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+            }
+        }
+    }
+
+    private var unresolvedSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Needs Attention")
+                .font(.headline)
+                .fontWidth(.expanded)
+
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(recap.unresolvedNames, id: \.self) { name in
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text(name)
+                            .font(.caption.weight(.semibold))
+                        Spacer(minLength: 0)
+                        Text("not in mcp.json")
+                            .font(.caption2)
+                            .foregroundStyle(AppTheme.mutedText)
                     }
                 }
             }

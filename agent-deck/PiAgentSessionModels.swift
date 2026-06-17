@@ -153,6 +153,17 @@ struct PiNativeAskOption: Codable, Hashable {
     var description: String?
 }
 
+/// A request from the `mcp` proxy bridge. `action` is one of list / search /
+/// describe / call. The bridge derives the action from which key the model passed,
+/// and may address a tool as `"server/tool"` or via separate `server` + `tool`.
+struct PiMCPBridgeRequest: Codable, Hashable {
+    var action: String
+    var server: String?
+    var tool: String?
+    var query: String?
+    var args: JSONValue?
+}
+
 struct PiSessionPlanBridgeItem: Codable, Hashable {
     var id: String?
     var title: String
@@ -677,6 +688,9 @@ struct PiAgentContextEstimateBuilder {
         let toolsStart = lower.range(of: "available tools:").locationOrNil
         let projectStart = lower.range(of: "# project context").locationOrNil
         let skillsStart = skillsRange?.location
+        // The injected MCP catalog (an appended block). Bounded by the blank line that
+        // separates it from the next appended section (memory, APPEND_SYSTEM, …).
+        let mcpStart = lower.range(of: "mcp tools (call through").locationOrNil
 
         func nextBoundary(after start: Int, candidates: [Int?]) -> Int {
             candidates.compactMap { $0 }.filter { $0 > start }.min() ?? fullLength
@@ -687,21 +701,26 @@ struct PiAgentContextEstimateBuilder {
             ranges.append((
                 "promptTools",
                 "Tool descriptions",
-                NSRange(location: toolsStart, length: nextBoundary(after: toolsStart, candidates: [projectStart, skillsStart]) - toolsStart)
+                NSRange(location: toolsStart, length: nextBoundary(after: toolsStart, candidates: [projectStart, skillsStart, mcpStart]) - toolsStart)
             ))
         }
         if let projectStart {
             ranges.append((
                 "promptProjectContext",
                 "Project context",
-                NSRange(location: projectStart, length: nextBoundary(after: projectStart, candidates: [skillsStart]) - projectStart)
+                NSRange(location: projectStart, length: nextBoundary(after: projectStart, candidates: [skillsStart, mcpStart]) - projectStart)
             ))
         }
         if let skillsRange {
             ranges.append(("promptSkills", "Skill catalog", skillsRange))
         }
+        if let mcpStart {
+            let searchRange = NSRange(location: mcpStart, length: fullLength - mcpStart)
+            let blankLine = prompt.range(of: "\n\n", options: [], range: searchRange).locationOrNil
+            ranges.append(("promptMCP", "MCP catalog", NSRange(location: mcpStart, length: (blankLine ?? fullLength) - mcpStart)))
+        }
 
-        let firstSectionStart = [toolsStart, projectStart, skillsStart].compactMap { $0 }.min() ?? fullLength
+        let firstSectionStart = [toolsStart, projectStart, skillsStart, mcpStart].compactMap { $0 }.min() ?? fullLength
         if firstSectionStart > 0 {
             ranges.append(("promptCore", "Core instructions", NSRange(location: 0, length: firstSectionStart)))
         }

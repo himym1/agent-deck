@@ -283,6 +283,13 @@ final class AppViewModel: NSObject {
     @ObservationIgnored private var agentUniverseCacheByProjectPath: [String: [EffectiveAgentRecord]] = [:]
     private let piSessionTitleGenerator = PiSessionTitleGenerationService()
     let projectServerService = ProjectServerService()
+    /// App-shared MCP server connections. Survives across sessions; torn down at quit.
+    let mcpConnectionManager = MCPConnectionManager()
+    /// Cached catalog of all configured MCP tools, refreshed off-main. Read synchronously
+    /// by the launch-time catalog provider, so it must never be recomputed in a view body.
+    @ObservationIgnored private var mcpCatalogSnapshot: [MCPCatalogEntry] = []
+    @ObservationIgnored private var mcpConfiguredServerNames: Set<String> = []
+    @ObservationIgnored private var mcpLastRefreshKey: String?
     private var globalSnapshot: ScanSnapshot = .empty {
         didSet { clearAgentUniverseCache() }
     }
@@ -391,6 +398,13 @@ final class AppViewModel: NSObject {
         piAgentRunner.nativeSubagentCatalogProvider = { [weak self] session in
             self?.nativeSubagentCatalogPrompt(for: session)
         }
+        piAgentRunner.mcpCatalogProvider = { [weak self] session in
+            self?.mcpCatalogPrompt(for: session)
+        }
+        piAgentRunner.onMCPBridgeRequest = { [weak self] sessionID, request, completion in
+            guard let self else { completion("\(AppBrand.displayName)'s MCP bridge is not available."); return }
+            self.handleMCPBridge(sessionID: sessionID, request: request, completion: completion)
+        }
         piAgentRunner.parentSkillArgumentsProvider = { [weak self] projectURL in
             try self?.parentSkillArguments(for: projectURL) ?? []
         }
@@ -417,6 +431,12 @@ final class AppViewModel: NSObject {
         }
         nativeSubagentRunner.childMemoryArgumentsProvider = { [weak self] parentSession, agent, task in
             await self?.childMemoryArguments(for: parentSession, agent: agent, task: task) ?? []
+        }
+        nativeSubagentRunner.childMCPArgumentsProvider = { [weak self] parentSession, agent in
+            await self?.childMCPArguments(for: parentSession, agent: agent) ?? []
+        }
+        nativeSubagentRunner.onMCPBridgeRequest = { [weak self] parentSessionID, _, agentName, request in
+            await self?.handleSubagentMCPBridge(parentSessionID: parentSessionID, agentName: agentName, request: request) ?? "\(AppBrand.displayName)'s MCP bridge is not available."
         }
         nativeSubagentRunner.onMemoryWrite = { [weak self] parentSessionID, runID, agentName, request in
             await self?.handleSubagentMemoryWrite(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request) ?? "\(AppBrand.displayName) memory is not available."
@@ -671,6 +691,11 @@ final class AppViewModel: NSObject {
             let newSnapshot = makeAggregateSnapshot()
             if snapshot != newSnapshot { snapshot = newSnapshot }
         }
+
+        // Keep MCP connections + catalog aligned with the active project. The call is
+        // a no-op when the (mcpEnabled, project) key is unchanged, so frequent
+        // file-watch refreshes don't re-spawn servers.
+        refreshMCPConfigurationIfNeeded(projectURL: projectRootURL)
 
         // A fresh snapshot is authoritative. Drop pending deletions no longer
         // present (deletion confirmed); keep IDs still present so a stale
@@ -3401,6 +3426,329 @@ final class AppViewModel: NSObject {
         return "Session plan updated (`\(plan.id.uuidString)`):\n\(text)"
     }
 
+    // MARK: - MCP bridge
+
+    private static let mcpCatalogToolCap = 60
+    private static let mcpResultCharacterCap = 50_000
+
+    /// Reloads `mcp.json`, reconnects the manager, and rebuilds the cached catalog when
+    /// the (mcpEnabled, project) key changes. No-op otherwise so file-watch refreshes
+    /// don't churn server processes. Pass `forced: true` after the user edits config.
+    func refreshMCPConfigurationIfNeeded(projectURL: URL?, forced: Bool = false) {
+        configureMCPBrandIcon()
+        let enabled = appSettings.mcpEnabled
+        let key = "\(enabled)#\(projectURL?.path ?? "")"
+        if !forced, key == mcpLastRefreshKey { return }
+        mcpLastRefreshKey = key
+
+        Task { [weak self] in
+            guard let self else { return }
+            // Bind OAuth token resolution so remote (http) transports authorize.
+            await self.mcpConnectionManager.setAuthTokenProvider { server in
+                await MCPOAuthService.shared.accessToken(for: server)
+            }
+            // Catalog = every configured server, merged across all mcp.json locations.
+            // Always surface their names (cheap) so the agent picker works even before
+            // MCP is turned on.
+            let configured = await Task.detached { MCPConfigLoader().load(projectRoot: projectURL).servers }.value
+            let names = Set(configured.map(\.name))
+            self.mcpConfiguredServerNames = names
+            guard enabled else {
+                await self.mcpConnectionManager.configure(servers: [])
+                self.mcpCatalogSnapshot = []
+                return
+            }
+            await self.mcpConnectionManager.configure(servers: configured)
+            // Discover every server's tools; per-session scoping is applied when the
+            // catalog is rendered (mcpCatalogPrompt) and on each bridge call.
+            self.mcpCatalogSnapshot = await self.mcpConnectionManager.discoverCatalog(serverNames: names)
+        }
+    }
+
+    /// Configured MCP server names available for assignment (cached; reflects the
+    /// active project's merged `mcp.json`). Sorted for stable UI.
+    var availableMCPServerNames: [String] { mcpConfiguredServerNames.sorted() }
+
+    /// Probes a server (connect + list tools) for the management UI's test button.
+    func probeMCPServer(_ entry: MCPServerEntry) async -> MCPProbeResult {
+        await mcpConnectionManager.probe(entry: entry)
+    }
+
+    /// Tears down all MCP connections. Called at app termination.
+    func shutdownMCP() async {
+        await mcpConnectionManager.shutdown()
+    }
+
+    // MARK: MCP OAuth (per-server Connect / Sign out)
+
+    /// Runs the OAuth Connect flow for a remote server (opens the browser). Returns an
+    /// error message on failure, or nil on success.
+    func connectMCPServer(_ entry: MCPServerEntry) async -> String? {
+        guard let url = entry.config.url, !url.isEmpty else { return "This server has no URL to connect to." }
+        do {
+            try await MCPOAuthService.shared.connect(serverName: entry.name, serverURLString: url)
+            refreshMCPConfigurationIfNeeded(projectURL: projectRootURL, forced: true)
+            return nil
+        } catch {
+            return (error as? MCPError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Signs out a remote server (drops stored tokens).
+    func disconnectMCPServer(_ name: String) async {
+        await MCPOAuthService.shared.disconnect(serverName: name)
+        refreshMCPConfigurationIfNeeded(projectURL: projectRootURL, forced: true)
+    }
+
+    /// Whether a remote server currently has stored OAuth tokens.
+    func mcpServerIsConnected(_ name: String) async -> Bool {
+        await MCPAuthStore.shared.isConnected(name)
+    }
+
+    /// Renders the app icon to a small base64 PNG once, so the OAuth loopback success
+    /// page can show the brand mark. Cheap + idempotent (runs on the main actor).
+    private func configureMCPBrandIcon() {
+        guard MCPLoopbackServer.brandIconDataURI == nil else { return }
+        guard let icon = NSApp.applicationIconImage ?? NSImage(named: NSImage.applicationIconName) else { return }
+        let size = NSSize(width: 96, height: 96)
+        let resized = NSImage(size: size)
+        resized.lockFocus()
+        icon.draw(in: NSRect(origin: .zero, size: size))
+        resized.unlockFocus()
+        guard let tiff = resized.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else { return }
+        MCPLoopbackServer.brandIconDataURI = "data:image/png;base64,\(png.base64EncodedString())"
+    }
+
+    /// Whether a discovered server can be edited/removed in-app. Only the app-owned
+    /// `~/.pi/agent/mcp.json` is writable; servers from project files or ~/.config/mcp
+    /// are shown read-only.
+    func mcpServerIsEditable(_ entry: MCPServerEntry) -> Bool {
+        URL(fileURLWithPath: entry.sourcePath).standardizedFileURL == MCPConfigLoader.writableConfigURL().standardizedFileURL
+    }
+
+    /// Adds or updates a server in the app-owned mcp.json, then refreshes connections.
+    func upsertMCPServer(name: String, config: MCPServerConfig) throws {
+        try MCPConfigWriter().upsert(name: name, config: config)
+        refreshMCPConfigurationIfNeeded(projectURL: projectRootURL, forced: true)
+    }
+
+    /// Removes a server from the app-owned mcp.json, prunes its assignments, then
+    /// refreshes connections (the configured set genuinely changed here).
+    func removeMCPServer(named name: String) throws {
+        try MCPConfigWriter().remove(name: name)
+        removeMCPServerReferences(named: name)
+        refreshMCPConfigurationIfNeeded(projectURL: projectRootURL, forced: true)
+    }
+
+    /// Drops a removed server from the "All Projects" default, every project
+    /// assignment, and any agent's `mcpServers` frontmatter — mirroring
+    /// `removeSkillReferences` so a deleted server leaves no orphaned assignments.
+    private func removeMCPServerReferences(named name: String) {
+        appSettingsController.setDefaultMcpServer(name, enabled: false)
+        appSettings = appSettingsController.settings
+
+        for projectPath in projectPreferencesStore.preferencesByPath.keys {
+            projectPreferencesStore.setAssignedMcpServer(name, assigned: false, for: projectPath)
+        }
+        applyProjectPreferenceChanges()
+
+        for agent in snapshot.effectiveAgents where (agent.resolved.mcpServers ?? []).contains(name) {
+            guard var draft = makeAgentDraft(for: agent) else { continue }
+            draft.config.mcpServers?.removeAll { $0 == name }
+            if draft.config.mcpServers?.isEmpty == true { draft.config.mcpServers = nil }
+            // Persist directly (no per-agent rescan); the trailing refresh in
+            // removeMCPServer picks up every edit.
+            try? agentPersistence.save(draft, original: agent, projectRoot: selectedProjectPath)
+        }
+    }
+
+    /// MCP servers in scope for a session: a bound-agent (1:1) session uses the agent's
+    /// assigned servers; a project session uses the global defaults unioned with the
+    /// project's assignment. Always intersected with servers that actually exist in config.
+    private func assignedMCPServerNames(for session: PiAgentSessionRecord) -> Set<String> {
+        let resolved: Set<String>
+        if let agent = boundAgent(for: session) {
+            resolved = Set(agent.resolved.mcpServers ?? [])
+        } else {
+            var names = appSettings.defaultMcpServerNames
+            names.formUnion(projectPreference(for: session.projectPath).assignedMcpServerNames)
+            resolved = names
+        }
+        return resolved.intersection(mcpConfiguredServerNames)
+    }
+
+    // MARK: MCP assignment (used by the MCP servers management UI)
+
+    /// All configured MCP server entries for the active project (merged `mcp.json`).
+    func mcpServerEntries() -> [MCPServerEntry] {
+        MCPConfigLoader().load(projectRoot: projectRootURL).servers
+    }
+
+    func mcpServer(_ name: String, isEnabledFor project: DiscoveredProject) -> Bool {
+        projectPreference(for: project.path).assignedMcpServerNames.contains(name)
+    }
+
+    func setMcpServer(_ name: String, enabled: Bool, for project: DiscoveredProject) {
+        projectPreferencesStore.setAssignedMcpServer(name, assigned: enabled, for: project.path)
+        // Assignment only changes which servers a SESSION scopes at launch; the
+        // manager's configured set (all servers) is unchanged, so there is nothing to
+        // reconfigure or reconnect. A lightweight in-memory reconcile keeps the toggle
+        // instant, exactly like skill/agent project-assignment toggles.
+        applyProjectPreferenceChanges()
+    }
+
+    func isMcpServerEnabledForAllProjects(_ name: String) -> Bool {
+        appSettings.defaultMcpServerNames.contains(name)
+    }
+
+    func setMcpServerEnabledForAllProjects(_ name: String, enabled: Bool) {
+        // Same as the per-project setter: this is an assignment default, not a config
+        // change, so the @Observable appSettings reassignment updates the UI without a
+        // manager reconnect.
+        appSettingsController.setDefaultMcpServer(name, enabled: enabled)
+        appSettings = appSettingsController.settings
+    }
+
+    func setMCPEnabled(_ enabled: Bool) {
+        appSettingsController.setMCPEnabled(enabled)
+        appSettings = appSettingsController.settings
+        refreshMCPConfigurationIfNeeded(projectURL: projectRootURL, forced: true)
+    }
+
+    /// Compact MCP tool catalog injected into the system prompt, scoped to the session's
+    /// assigned servers. Returns nil when MCP is off or nothing is assigned, so neither
+    /// the bridge nor a prompt block is injected (matching the Deck-agents catalog).
+    private func mcpCatalogPrompt(for session: PiAgentSessionRecord) -> String? {
+        mcpCatalogPrompt(forScope: assignedMCPServerNames(for: session))
+    }
+
+    /// MCP servers in scope for a delegated Deck agent: its assigned `mcpServers`,
+    /// intersected with the configured set (mirrors the bound-agent branch of
+    /// `assignedMCPServerNames`).
+    private func subagentMCPScope(parentSessionID: UUID, agentName: String?) -> Set<String> {
+        guard let agentName,
+              let parent = piAgentSessionStore.sessions.first(where: { $0.id == parentSessionID }) else { return [] }
+        let agent = (allProjectSnapshots[parent.projectPath]?.effectiveAgents ?? globalSnapshot.effectiveAgents)
+            .first { $0.name == agentName }
+            ?? selectableAgentUniverse(forProjectPath: parent.projectPath).first { $0.name == agentName }
+        return Set(agent?.resolved.mcpServers ?? []).intersection(mcpConfiguredServerNames)
+    }
+
+    /// Launch arguments injecting the native MCP bridge + a scoped catalog into a
+    /// delegated Deck agent, so an agent's assigned `mcpServers` work under delegation
+    /// exactly as they do in a 1:1 bound chat. Returns `[]` when MCP is off or the agent
+    /// has no in-scope servers (no bridge, no prompt block — like the parent path).
+    private func childMCPArguments(for parentSession: PiAgentSessionRecord, agent: EffectiveAgentRecord) async -> [String] {
+        guard appSettings.mcpEnabled else { return [] }
+        let scope = Set(agent.resolved.mcpServers ?? []).intersection(mcpConfiguredServerNames)
+        guard let catalog = mcpCatalogPrompt(forScope: scope), !catalog.isEmpty,
+              let mcpURL = try? PiNativeSubagentBridgeExtensions.mcpExtensionURL() else { return [] }
+        return ["--extension", mcpURL.path, "--append-system-prompt", catalog]
+    }
+
+    private func handleSubagentMCPBridge(parentSessionID: UUID, agentName: String?, request: PiMCPBridgeRequest) async -> String {
+        await performMCPBridge(request: request, scope: subagentMCPScope(parentSessionID: parentSessionID, agentName: agentName))
+    }
+
+    /// Compact MCP tool catalog for a given server scope. Shared by the parent-session
+    /// and delegated-Deck-agent paths.
+    private func mcpCatalogPrompt(forScope scope: Set<String>) -> String? {
+        guard appSettings.mcpEnabled else { return nil }
+        let entries = mcpCatalogSnapshot.filter { scope.contains($0.server) }
+            .sorted { $0.qualifiedName < $1.qualifiedName }
+        guard !entries.isEmpty else { return nil }
+
+        var lines: [String] = [
+            "MCP tools (call through the `mcp` proxy tool):",
+            "- Call a tool: mcp({ tool: \"server/tool\", args: { ... } })",
+            "- Discover: mcp({}) lists servers, mcp({ search: \"keywords\" }) finds tools, mcp({ describe: \"server/tool\" }) shows a tool's input schema."
+        ]
+        if entries.count <= Self.mcpCatalogToolCap {
+            lines.append("Available MCP tools:")
+            lines.append(contentsOf: entries.map { entry in
+                let desc = entry.description?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return "- \(entry.qualifiedName): \(desc?.isEmpty == false ? desc! : "(no description)")"
+            })
+        } else {
+            let counts = Dictionary(grouping: entries, by: \.server).mapValues(\.count)
+            lines.append("Available MCP servers (use mcp({ search }) to find specific tools):")
+            lines.append(contentsOf: counts.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value) tools" })
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Handles an `mcp` proxy bridge request: routes list/search/describe/call to the
+    /// native connection manager, scoped to the session's assigned servers.
+    private func handleMCPBridge(sessionID: UUID, request: PiMCPBridgeRequest, completion: @escaping (String) -> Void) {
+        let scope: Set<String>
+        if let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID }) {
+            scope = assignedMCPServerNames(for: session)
+        } else {
+            scope = mcpConfiguredServerNames
+        }
+        Task { [weak self] in
+            guard let self else { completion("\(AppBrand.displayName)'s MCP bridge is not available."); return }
+            let text = await self.performMCPBridge(request: request, scope: scope)
+            completion(text)
+        }
+    }
+
+    private func performMCPBridge(request: PiMCPBridgeRequest, scope: Set<String>) async -> String {
+        switch request.action {
+        case "search":
+            let hits = await mcpConnectionManager.search(query: request.query ?? "", serverNames: scope)
+            guard !hits.isEmpty else { return "No MCP tools matched \"\(request.query ?? "")\"." }
+            return hits.map { "- \($0.qualifiedName): \($0.description ?? "(no description)")" }.joined(separator: "\n")
+
+        case "describe":
+            guard let address = MCPConnectionManager.resolveAddress(request.tool ?? "", serverHint: request.server),
+                  scope.contains(address.server) else {
+                return "Unknown or unassigned MCP tool \"\(request.tool ?? "")\"."
+            }
+            guard let descriptor = await mcpConnectionManager.describe(server: address.server, tool: address.tool) else {
+                return "Tool \(address.server)/\(address.tool) was not found."
+            }
+            var out = "\(address.server)/\(descriptor.name): \(descriptor.description ?? "(no description)")"
+            if let schema = descriptor.inputSchema, let json = Self.prettyJSON(schema) {
+                out += "\nInput schema:\n\(json)"
+            }
+            return out
+
+        case "call":
+            guard let address = MCPConnectionManager.resolveAddress(request.tool ?? "", serverHint: request.server) else {
+                return "Specify a tool as \"server/tool\"."
+            }
+            guard scope.contains(address.server) else {
+                return "MCP server \"\(address.server)\" is not assigned to this session."
+            }
+            do {
+                let result = try await mcpConnectionManager.call(server: address.server, tool: address.tool, arguments: request.args)
+                let text = result.combinedText.isEmpty ? "(tool returned no content)" : result.combinedText
+                let prefix = result.isError == true ? "MCP tool reported an error:\n" : ""
+                return String((prefix + text).prefix(Self.mcpResultCharacterCap))
+            } catch {
+                return "MCP call failed: \(error.localizedDescription)"
+            }
+
+        default: // "list"
+            let entries = mcpCatalogSnapshot.filter { scope.contains($0.server) }
+            guard !entries.isEmpty else { return "No MCP servers are assigned to this session." }
+            let counts = Dictionary(grouping: entries, by: \.server).mapValues(\.count)
+            return counts.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value) tools" }.joined(separator: "\n")
+        }
+    }
+
+    private static func prettyJSON(_ value: JSONValue) -> String? {
+        guard let data = try? JSONEncoder().encode(value),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let pretty = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) else {
+            return nil
+        }
+        return String(decoding: pretty, as: UTF8.self)
+    }
+
     private func nativeSubagentCatalogPrompt(for session: PiAgentSessionRecord) -> String? {
         let agents = catalogAgents(for: session)
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -4163,6 +4511,30 @@ final class AppViewModel: NSObject {
     /// streaming pulse.
     func toolCallRecap(forSessionID sessionID: UUID) -> [PiAgentToolCallRecapItem] {
         NativeToolGroupModel.toolCallRecap(from: piAgentSessionStore.transcript(for: sessionID))
+    }
+
+    /// MCP usage for the Session resources popover: every server in scope at launch
+    /// (with the tools it advertised), plus the tools actually called this session.
+    /// Returns empty when MCP is off or nothing was assigned to the session.
+    func mcpSessionRecap(for session: PiAgentSessionRecord) -> [PiAgentMCPSessionRecap] {
+        guard appSettings.mcpEnabled else { return [] }
+        let scope = assignedMCPServerNames(for: session)
+        let usage = NativeToolGroupModel.mcpUsageRecap(from: piAgentSessionStore.transcript(for: session.id))
+        guard !scope.isEmpty || !usage.isEmpty else { return [] }
+
+        let advertised = Dictionary(grouping: mcpCatalogSnapshot.filter { scope.contains($0.server) }, by: \.server)
+        let usageByServer = Dictionary(uniqueKeysWithValues: usage.map { ($0.server, $0.tools) })
+        // Union: in-scope servers (even if never called) and any server actually
+        // called (in case it was assigned then later removed from config).
+        var serverNames = scope
+        serverNames.formUnion(usage.map(\.server))
+        return serverNames.sorted().map { server in
+            PiAgentMCPSessionRecap(
+                server: server,
+                advertisedToolCount: advertised[server]?.count ?? 0,
+                calledTools: usageByServer[server] ?? []
+            )
+        }
     }
 
     func forkPiAgentSession(from entry: PiAgentTranscriptEntry) {
@@ -4963,6 +5335,14 @@ final class AppViewModel: NSObject {
         piExtensionsRefreshToken &+= 1
     }
 
+    // MCP screen toolbar triggers (the toolbar lives in ContentView; the screen reacts
+    // to these via .onChange).
+    private(set) var mcpAddRequestToken = 0
+    private(set) var mcpRefreshRequestToken = 0
+
+    func requestAddMCPServer() { mcpAddRequestToken &+= 1 }
+    func requestRefreshMCPServers() { mcpRefreshRequestToken &+= 1 }
+
     func isPiExtensionEnabled(_ candidate: PiExtensionCandidate) -> Bool {
         appSettingsController.isPiExtensionEnabled(candidate)
     }
@@ -5625,6 +6005,8 @@ final class AppViewModel: NSObject {
     @objc private func handleAppWillTerminateNotification(_ notification: Notification) {
         shutdown(recordTranscript: false)
         piAgentSessionStore.flushPendingSave()
+        // Best-effort teardown of MCP server subprocesses on quit.
+        Task { await shutdownMCP() }
     }
 
     var areSubagentsEnabledForNewSessions: Bool {
@@ -6352,6 +6734,7 @@ final class AppViewModel: NSObject {
             disabled: nil,
             tools: ["read", "grep", "find", "ls", "bash"],
             mcpDirectTools: nil,
+            mcpServers: nil,
             extensions: nil,
             skills: [],
             output: nil,
@@ -7699,6 +8082,50 @@ final class AppViewModel: NSObject {
             projectSkills: projectResult.0,
             unresolvedNames: (defaultResult.1 + projectResult.1).sorted()
         )
+    }
+
+    /// MCP servers assigned to a project (global defaults + per-project), resolved
+    /// against the merged `mcp.json` so the project-row summary can list them like
+    /// skills. Synchronous config read — call on a tap, not a hot path.
+    func mcpRecap(for project: DiscoveredProject) -> ProjectMcpServerRecap {
+        let defaultNames = appSettings.defaultMcpServerNames
+        let projectNames = projectPreference(for: project.path).assignedMcpServerNames.subtracting(defaultNames)
+        let entries = MCPConfigLoader().load(projectRoot: URL(fileURLWithPath: project.path)).servers
+        let byName = Dictionary(entries.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+
+        func resolve(_ names: Set<String>) -> ([MCPServerRecapItem], [String]) {
+            var items: [MCPServerRecapItem] = []
+            var unresolved: [String] = []
+            for name in names.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }) {
+                if let entry = byName[name] {
+                    items.append(MCPServerRecapItem(name: name, detail: Self.mcpServerDetail(entry.config)))
+                } else {
+                    unresolved.append(name)
+                }
+            }
+            return (items, unresolved)
+        }
+
+        let defaultResult = resolve(defaultNames)
+        let projectResult = resolve(projectNames)
+        return ProjectMcpServerRecap(
+            defaultServers: defaultResult.0,
+            projectServers: projectResult.0,
+            unresolvedNames: (defaultResult.1 + projectResult.1).sorted()
+        )
+    }
+
+    /// A short transport/endpoint summary for an MCP server config.
+    private static func mcpServerDetail(_ config: MCPServerConfig) -> String? {
+        switch config.resolvedTransport {
+        case .stdio:
+            guard let command = config.command, !command.isEmpty else { return "Local" }
+            return "Local · \(command)"
+        case .http, .sse:
+            guard let url = config.url, !url.isEmpty else { return "Remote" }
+            let host = URL(string: url)?.host(percentEncoded: false) ?? url
+            return "Remote · \(host)"
+        }
     }
 
     func agentRecap(for project: DiscoveredProject) -> ProjectAgentRecap {

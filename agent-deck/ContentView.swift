@@ -1106,8 +1106,54 @@ struct ContentView: View {
         if viewModel.selectedSidebarItem == .models {
             modelsPrimaryToolbarContent
         }
+        runtimeToolbarItems
+    }
+
+    @ToolbarContentBuilder
+    private var runtimeToolbarItems: some ToolbarContent {
         if viewModel.selectedSidebarItem == .extensions {
             extensionsPrimaryToolbarContent
+        }
+        if viewModel.selectedSidebarItem == .mcp {
+            mcpPrimaryToolbarContent
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var mcpPrimaryToolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            ControlGroup {
+                // Button-style toggle (not a switch), mirroring Memory: the on-state
+                // renders as the native tinted glass highlight and the title shows
+                // "MCP: On/Off" so the state reads at a glance.
+                Toggle(isOn: Binding(
+                    get: { viewModel.appSettings.mcpEnabled },
+                    set: { viewModel.setMCPEnabled($0) }
+                )) {
+                    Label("Enable MCP", systemImage: SidebarItem.mcp.systemImage)
+                }
+                .toggleStyle(.button)
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(viewModel.appSettings.mcpEnabled ? AppTheme.brandAccent : .secondary)
+                .tint(AppTheme.brandAccent)
+                .help(viewModel.appSettings.mcpEnabled ? "MCP is on for new sessions. Click to turn off." : "MCP is off. Click to enable it for new sessions.")
+
+                Button {
+                    viewModel.requestRefreshMCPServers()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .toolbarNeutralChrome()
+                .help("Reload MCP servers")
+
+                Button {
+                    viewModel.requestAddMCPServer()
+                } label: {
+                    Label("Add server", systemImage: "plus")
+                }
+                .toolbarPrimaryActionChrome()
+                .help("Add an MCP server")
+            }
         }
     }
 
@@ -1729,6 +1775,8 @@ struct ContentView: View {
             )
         case .extensions:
             ExtensionsScreen(viewModel: viewModel)
+        case .mcp:
+            MCPServersScreen(viewModel: viewModel)
         case .doctor:
             DoctorScreen(viewModel: viewModel)
         }
@@ -1754,6 +1802,9 @@ struct ContentView: View {
         case .agents:
             // Same at-a-glance state as Memory, driven by the same toolbar toggle.
             return viewModel.appSettings.nativeSubagentsEnabledForNewSessions ? "Agents: On" : "Agents: Off"
+        case .mcp:
+            // Same at-a-glance state as Memory, driven by the toolbar enable toggle.
+            return viewModel.appSettings.mcpEnabled ? "MCP: On" : "MCP: Off"
         default:
             return viewModel.selectedSidebarItem.rawValue
         }

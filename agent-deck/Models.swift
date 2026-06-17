@@ -30,6 +30,9 @@ nonisolated struct AgentConfig: Hashable, Sendable {
     var disabled: Bool?
     var tools: [String]?
     var mcpDirectTools: [String]?
+    /// MCP server names assigned to this agent (native MCP bridge). Distinct from
+    /// `mcpDirectTools`, which is the external pi-mcp-adapter `mcp:tool` convention.
+    var mcpServers: [String]?
     var extensions: [String]?
     var skills: [String]
     var output: String?
@@ -53,6 +56,7 @@ nonisolated struct AgentConfig: Hashable, Sendable {
         disabled: nil,
         tools: nil,
         mcpDirectTools: nil,
+        mcpServers: nil,
         extensions: nil,
         skills: [],
         output: nil,
@@ -143,6 +147,23 @@ nonisolated struct ProjectAgentRecap: Hashable, Sendable {
     let projectAgents: [EffectiveAgentRecord]
     let otherEffectiveAgents: [EffectiveAgentRecord]
     let unresolvedNames: [String]
+}
+
+/// One MCP server in a project's assignment recap: its name plus a short
+/// transport/endpoint detail (e.g. "Local · npx" or "Remote · api.pidgeon.news").
+nonisolated struct MCPServerRecapItem: Hashable, Sendable, Identifiable {
+    let name: String
+    let detail: String?
+    var id: String { name }
+}
+
+nonisolated struct ProjectMcpServerRecap: Hashable, Sendable {
+    let defaultServers: [MCPServerRecapItem]
+    let projectServers: [MCPServerRecapItem]
+    let unresolvedNames: [String]
+
+    var hasResolvedServers: Bool { !defaultServers.isEmpty || !projectServers.isEmpty }
+    var totalAssigned: Int { defaultServers.count + projectServers.count + unresolvedNames.count }
 }
 
 nonisolated struct ExternalSkillCandidate: Identifiable, Hashable, Sendable {

@@ -81,6 +81,7 @@ struct PiAgentStartupResourcesPopover: View {
     // Snapshotted once on appear (not read in body) so an open popover doesn't
     // recompute the recap on every streaming pulse.
     @State private var toolRecap: [PiAgentToolCallRecapItem] = []
+    @State private var mcpRecap: [PiAgentMCPSessionRecap] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -92,6 +93,7 @@ struct PiAgentStartupResourcesPopover: View {
                 VStack(alignment: .leading, spacing: 14) {
                     resourceSection("Runtime", icon: "cpu", items: runtimeItems, columns: 1, showsDetails: true)
                     resourceSection("Extensions", icon: "puzzlepiece.extension", items: extensionItems, columns: 1, showsDetails: true)
+                    mcpSection
                     toolCallSection
 
                     if isEmpty {
@@ -113,7 +115,89 @@ struct PiAgentStartupResourcesPopover: View {
             }
         }
         .frame(width: AppTheme.Popover.wideWidth, height: 480)
-        .onAppear { toolRecap = viewModel.toolCallRecap(forSessionID: session.id) }
+        .onAppear {
+            toolRecap = viewModel.toolCallRecap(forSessionID: session.id)
+            mcpRecap = viewModel.mcpSessionRecap(for: session)
+        }
+    }
+
+    @ViewBuilder
+    private var mcpSection: some View {
+        if !mcpRecap.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "powerplug")
+                        .foregroundStyle(AppTheme.brandAccent)
+                        .frame(width: 18)
+                    Text("MCP")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.brandAccent)
+                    Spacer()
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(mcpRecap) { server in
+                        mcpServerRow(server)
+                        if server.id != mcpRecap.last?.id {
+                            Divider()
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func mcpServerRow(_ server: PiAgentMCPSessionRecap) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 9) {
+                Image(systemName: "server.rack")
+                    .foregroundStyle(AppTheme.mutedText)
+                    .frame(width: 17)
+                Text(server.server)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 8)
+                Text(server.advertisedToolCount == 1 ? "1 tool" : "\(server.advertisedToolCount) tools")
+                    .font(.caption2)
+                    .foregroundStyle(AppTheme.mutedText)
+            }
+
+            if server.calledTools.isEmpty {
+                Text("No tools called yet")
+                    .font(.caption2)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .padding(.leading, 26)
+            } else {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(server.calledTools) { tool in
+                        HStack(spacing: 7) {
+                            Image(systemName: tool.errorCount > 0 ? "exclamationmark.triangle" : "bolt.horizontal")
+                                .font(.caption2)
+                                .foregroundStyle(tool.errorCount > 0 ? AppTheme.roleError : AppTheme.mutedText)
+                                .frame(width: 13)
+                            Text(tool.name)
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 8)
+                            Text("\(tool.callCount)")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(AppTheme.mutedText)
+                            if tool.errorCount > 0 {
+                                Text("\(tool.errorCount)")
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(AppTheme.roleError)
+                            }
+                        }
+                    }
+                }
+                .padding(.leading, 26)
+            }
+        }
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder

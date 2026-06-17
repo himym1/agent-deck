@@ -150,6 +150,7 @@ struct AgentsScreen: View {
                 availableTools: viewModel.availableToolNames(for: availableTarget),
                 availableSkills: viewModel.availableSkillNames(for: availableTarget),
                 availableExtensions: viewModel.availableExtensionNames(for: availableTarget),
+                availableMcpServers: viewModel.availableMCPServerNames,
                 initialTab: presentation.initialTab,
                 makeDraft: { scope in viewModel.makeAgentDraft(for: agent, preferredOverrideScope: scope ?? .global) },
                 onSave: { draft in try viewModel.saveAgentDraft(draft, for: agent) }
@@ -1790,7 +1791,7 @@ fileprivate enum AgentEditTab: String, CaseIterable, Identifiable {
     case config = "Configuration"
     case prompt = "Prompt"
     case tools = "Tools"
-    case skills = "Skills"
+    case skills = "Skills & MCP"
     var id: String { rawValue }
 }
 
@@ -1806,6 +1807,7 @@ private struct AgentEditSheet: View {
     let availableTools: [String]
     let availableSkills: [String]
     let availableExtensions: [String]
+    let availableMcpServers: [String]
     let initialTab: AgentEditTab
     let makeDraft: (AgentEditingTarget.OverrideScope?) -> AgentEditorDraft?
     let onSave: (AgentEditorDraft) throws -> Void
@@ -1824,6 +1826,7 @@ private struct AgentEditSheet: View {
         availableTools: [String],
         availableSkills: [String],
         availableExtensions: [String],
+        availableMcpServers: [String] = [],
         initialTab: AgentEditTab = .config,
         makeDraft: @escaping (AgentEditingTarget.OverrideScope?) -> AgentEditorDraft?,
         onSave: @escaping (AgentEditorDraft) throws -> Void
@@ -1833,6 +1836,7 @@ private struct AgentEditSheet: View {
         self.availableTools = availableTools
         self.availableSkills = availableSkills
         self.availableExtensions = availableExtensions
+        self.availableMcpServers = availableMcpServers
         self.initialTab = initialTab
         self.makeDraft = makeDraft
         self.onSave = onSave
@@ -2240,6 +2244,34 @@ private struct AgentEditSheet: View {
                 }
             }
 
+            AppCard(title: "MCP servers") {
+                VStack(alignment: .leading, spacing: 18) {
+                    editSection {
+                        configRow("Available") {
+                            if availableMcpServers.isEmpty {
+                                Text("No MCP servers are configured. Add them in Runtime → MCP.")
+                                    .font(.caption)
+                                    .foregroundStyle(AppTheme.mutedText)
+                            } else {
+                                Menu("Choose MCP server") {
+                                    ForEach(selectableMcpServers, id: \.self) { server in
+                                        Button(server) { addMcpServer(server) }
+                                    }
+                                }
+                            }
+                        }
+
+                        configRow("Assigned") {
+                            tokenList(draft?.config.mcpServers ?? [], remove: removeMcpServer)
+                        }
+                    }
+                    Text("When this agent runs as a Deck agent, it can call tools from the MCP servers assigned here through the `mcp` proxy tool. Requires MCP enabled in Runtime → MCP.")
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             AppCard(title: "How Skills Work") {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("• Assigned skills are attached to this agent through Pi's native `--skill` support.")
@@ -2249,6 +2281,23 @@ private struct AgentEditSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+
+    private var selectableMcpServers: [String] {
+        availableMcpServers.filter { !(draft?.config.mcpServers?.contains($0) ?? false) }
+    }
+
+    private func addMcpServer(_ server: String) {
+        guard draft?.config.mcpServers?.contains(server) != true else { return }
+        var current = draft?.config.mcpServers ?? []
+        current.append(server)
+        draft?.config.mcpServers = current
+    }
+
+    private func removeMcpServer(_ server: String) {
+        guard var current = draft?.config.mcpServers else { return }
+        current.removeAll { $0 == server }
+        draft?.config.mcpServers = current.isEmpty ? nil : current
     }
 
     // MARK: Layout Helpers

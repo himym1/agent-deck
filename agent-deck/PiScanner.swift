@@ -173,7 +173,7 @@ nonisolated struct PiScanner: @unchecked Sendable {
                     filePath: url.path,
                     rawFrontmatter: document.frontmatter,
                     promptBody: document.body,
-                    parsed: AgentConfig(name: name, description: config.description, whenToUse: config.whenToUse, model: config.model, fallbackModels: config.fallbackModels, thinking: config.thinking, systemPromptMode: config.systemPromptMode, inheritSkills: config.inheritSkills, disabled: config.disabled, tools: config.tools, mcpDirectTools: config.mcpDirectTools, extensions: config.extensions, skills: config.skills, output: config.output, defaultExpectedOutcome: config.defaultExpectedOutcome, defaultReads: config.defaultReads, defaultProgress: config.defaultProgress, interactive: config.interactive, maxSubagentDepth: config.maxSubagentDepth, systemPrompt: config.systemPrompt, unknownFields: config.unknownFields)
+                    parsed: AgentConfig(name: name, description: config.description, whenToUse: config.whenToUse, model: config.model, fallbackModels: config.fallbackModels, thinking: config.thinking, systemPromptMode: config.systemPromptMode, inheritSkills: config.inheritSkills, disabled: config.disabled, tools: config.tools, mcpDirectTools: config.mcpDirectTools, mcpServers: config.mcpServers, extensions: config.extensions, skills: config.skills, output: config.output, defaultExpectedOutcome: config.defaultExpectedOutcome, defaultReads: config.defaultReads, defaultProgress: config.defaultProgress, interactive: config.interactive, maxSubagentDepth: config.maxSubagentDepth, systemPrompt: config.systemPrompt, unknownFields: config.unknownFields)
                 )
             }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -915,6 +915,7 @@ nonisolated struct PiScanner: @unchecked Sendable {
             disabled: parseBool(pop("disabled")),
             tools: frontmatter.keys.contains("tools") ? splitToolList(rawTools).tools : nil,
             mcpDirectTools: frontmatter.keys.contains("tools") ? splitToolList(rawTools).mcpDirectTools : nil,
+            mcpServers: frontmatter.keys.contains("mcpServers") ? optionalList(pop("mcpServers")) : nil,
             extensions: frontmatter.keys.contains("extensions") ? splitList(pop("extensions")) : nil,
             skills: optionalList(skillValue) ?? [],
             output: pop("output"),

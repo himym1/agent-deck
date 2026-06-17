@@ -9,6 +9,7 @@ struct PiAgentTranscriptVisibilitySettings: Codable, Hashable {
     var showPlans: Bool = true
     var showDiffs: Bool = true
     var showMemoryCards: Bool = true
+    var showMCPCards: Bool = true
 
     enum CodingKeys: String, CodingKey {
         case showShortcutsStrip
@@ -19,6 +20,7 @@ struct PiAgentTranscriptVisibilitySettings: Codable, Hashable {
         case showPlans
         case showDiffs
         case showMemoryCards
+        case showMCPCards
     }
 
     init() {}
@@ -33,6 +35,7 @@ struct PiAgentTranscriptVisibilitySettings: Codable, Hashable {
         showPlans = try container.decodeIfPresent(Bool.self, forKey: .showPlans) ?? true
         showDiffs = try container.decodeIfPresent(Bool.self, forKey: .showDiffs) ?? true
         showMemoryCards = try container.decodeIfPresent(Bool.self, forKey: .showMemoryCards) ?? true
+        showMCPCards = try container.decodeIfPresent(Bool.self, forKey: .showMCPCards) ?? true
     }
 }
 
@@ -160,6 +163,12 @@ struct AppSettings: Codable, Hashable {
     var didConfirmProjectsRootPaths: Bool = false
     var nativeSubagentsEnabledForNewSessions: Bool = true
     var nativeSubagentDelegationPolicy: NativeSubagentDelegationPolicy = .balanced
+    /// Master switch for native MCP support. Off by default; when on, sessions get the
+    /// `mcp` bridge + catalog for their assigned servers.
+    var mcpEnabled: Bool = false
+    /// MCP server names enabled for every project ("All Projects"). Per-project
+    /// additions live in `ProjectPreference.assignedMcpServerNames`.
+    var defaultMcpServerNames: Set<String> = []
     var agentMemoryEnabled: Bool = true
     var agentMemorySubagentsEnabled: Bool = true
     var agentMemoryShowTranscriptCards: Bool = true
@@ -218,6 +227,8 @@ struct AppSettings: Codable, Hashable {
         case didConfirmProjectsRootPaths
         case nativeSubagentsEnabledForNewSessions
         case nativeSubagentDelegationPolicy
+        case mcpEnabled
+        case defaultMcpServerNames
         case agentMemoryEnabled
         case agentMemorySubagentsEnabled
         case agentMemoryShowTranscriptCards
@@ -273,6 +284,8 @@ struct AppSettings: Codable, Hashable {
         projectsRootPaths = try container.decodeIfPresent([String].self, forKey: .projectsRootPaths) ?? [ProjectDiscovery.defaultRootDirectoryURL().path]
         didConfirmProjectsRootPaths = try container.decodeIfPresent(Bool.self, forKey: .didConfirmProjectsRootPaths) ?? hasStoredProjectsRootPaths
         nativeSubagentsEnabledForNewSessions = try container.decodeIfPresent(Bool.self, forKey: .nativeSubagentsEnabledForNewSessions) ?? true
+        mcpEnabled = try container.decodeIfPresent(Bool.self, forKey: .mcpEnabled) ?? false
+        defaultMcpServerNames = try container.decodeIfPresent(Set<String>.self, forKey: .defaultMcpServerNames) ?? []
         nativeSubagentDelegationPolicy = try container.decodeIfPresent(NativeSubagentDelegationPolicy.self, forKey: .nativeSubagentDelegationPolicy) ?? .balanced
         agentMemoryEnabled = try container.decodeIfPresent(Bool.self, forKey: .agentMemoryEnabled) ?? true
         agentMemorySubagentsEnabled = try container.decodeIfPresent(Bool.self, forKey: .agentMemorySubagentsEnabled) ?? true

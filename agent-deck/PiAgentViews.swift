@@ -1136,7 +1136,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 streamingUpdate ? "streaming" : nil,
                 explicitScroll ? "explicitScroll" : nil
             ].compactMap { $0 }.joined(separator: "+")
-            TranscriptScrollProfiler.logger.error("apply work — trigger: \(trigger, privacy: .public)")
+            if TranscriptScrollProfiler.verboseTrace {
+                TranscriptScrollProfiler.logger.error("apply work — trigger: \(trigger, privacy: .public)")
+            }
 #endif
 
             if isSessionSwitch || idsChanged {
@@ -2311,7 +2313,7 @@ private struct SessionListContent: View, Equatable {
         else if lhs.scrollRequestID != rhs.scrollRequestID { diff = "scrollRequest" }
         else { diff = nil }
 #if DEBUG
-        if let diff {
+        if let diff, TranscriptScrollProfiler.verboseTrace {
             if diff == "selectedSessionIDs" {
                 // Selection churn with no user click has shown up in scroll
                 // traces; print the actual delta so the mutator can be named.
@@ -3366,6 +3368,7 @@ struct PiAgentScreen: View {
         guard !previous.isEmpty else { return }
         let changed = Set(components.keys).union(previous.keys).filter { components[$0] != previous[$0] }.sorted()
         guard !changed.isEmpty else { return }
+        guard TranscriptScrollProfiler.verboseTrace else { return }
         TranscriptScrollProfiler.logger.error("itemsBuild trigger — changed inputs: \(changed.joined(separator: ","), privacy: .public)")
     }
 #endif

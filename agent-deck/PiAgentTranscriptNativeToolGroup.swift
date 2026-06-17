@@ -14,6 +14,28 @@ import SwiftUI
 struct NativeToolGroupModel {
     var web: Web?
     var diff: Diff?
+    var mcp: MCP?
+
+    /// Dedicated MCP card: every assigned-server tool call in this group, grouped
+    /// under a single "MCP" header (mirrors the web/diff sub-cards). Built from the
+    /// `mcp` proxy activity's per-call breakdown.
+    struct MCP {
+        var callCount: String
+        var hasErrors: Bool
+        var rows: [Row]
+        var hiddenCount: Int
+        struct Row {
+            var id: UUID
+            var server: String
+            var tool: String
+            /// The full response text, shown in the "View" modal (never inline).
+            var resultPreview: String?
+            var isError: Bool
+            /// A concise one-line error message (the text before any JSON body), shown
+            /// inline on error rows so the failure reads at a glance without opening View.
+            var errorSummary: String?
+        }
+    }
 
     struct Web {
         var title: String
@@ -48,7 +70,9 @@ extension NativeToolGroupModel {
         projectPath: String?
     ) -> NativeToolGroupModel? {
         let webActivities = group.activities.filter(\.isWebActivity)
-        let toolActivities = group.activities.filter { !$0.isWebActivity }
+        let mcpActivities = group.activities.filter(\.isMCPActivity)
+        // Diff/recap look only at code tools, so keep web AND mcp out of them.
+        let toolActivities = group.activities.filter { !$0.isWebActivity && !$0.isMCPActivity }
 
         var web: Web?
         if visibility.showWebActivity, !webActivities.isEmpty {
@@ -80,13 +104,54 @@ extension NativeToolGroupModel {
             }
         }
 
-        guard web != nil || diff != nil else { return nil }
-        return NativeToolGroupModel(web: web, diff: diff)
+        var mcp: MCP?
+        if visibility.showMCPCards, !mcpActivities.isEmpty {
+            let calls = mcpActivities.flatMap { $0.mcpCalls() }
+            if !calls.isEmpty {
+                let display = Array(calls.prefix(6))
+                mcp = MCP(
+                    callCount: calls.count == 1 ? "1 call" : "\(calls.count) calls",
+                    hasErrors: calls.contains { $0.isError },
+                    rows: display.map { call in
+                        MCP.Row(
+                            id: call.id,
+                            server: call.server,
+                            tool: call.tool,
+                            resultPreview: call.resultPreview,
+                            isError: call.isError,
+                            errorSummary: call.isError ? mcpErrorSummary(call.resultPreview) : nil
+                        )
+                    },
+                    hiddenCount: max(0, calls.count - display.count)
+                )
+            }
+        }
+
+        guard web != nil || diff != nil || mcp != nil else { return nil }
+        return NativeToolGroupModel(web: web, diff: diff, mcp: mcp)
     }
 
     private static func callCountText(_ activities: [PiAgentTranscriptActivity]) -> String {
         let count = activities.reduce(0) { $0 + $1.count }
         return count == 1 ? "1 call" : "\(count) calls"
+    }
+
+    /// A short, single-line error message for an error row: the human-readable text
+    /// before any JSON body (the full detail lives behind "View"). Trims a trailing
+    /// colon and collapses whitespace so it reads as one clean line.
+    private static func mcpErrorSummary(_ text: String?) -> String? {
+        guard let text, !text.isEmpty else { return nil }
+        let head: Substring
+        if let jsonStart = text.firstIndex(where: { $0 == "{" || $0 == "[" }) {
+            head = text[..<jsonStart]
+        } else {
+            head = text[...]
+        }
+        let collapsed = head
+            .split(whereSeparator: \.isNewline).joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+        let cleaned = collapsed.hasSuffix(":") ? String(collapsed.dropLast()).trimmingCharacters(in: .whitespaces) : collapsed
+        return cleaned.isEmpty ? nil : cleaned
     }
 
     private static func webTitle(for activities: [PiAgentTranscriptActivity]) -> String {
@@ -162,7 +227,8 @@ extension NativeToolGroupModel {
         let relevant = entries.filter { $0.role == .tool || ($0.role == .error && $0.title.hasPrefix("Tool: ")) }
         var order: [String] = []
         var byVerb: [String: PiAgentToolCallRecapItem] = [:]
-        for activity in PiAgentTranscriptActivity.make(from: relevant) where !activity.isWebActivity {
+        // MCP gets its own recap section (`mcpUsageRecap`); never fold it in here.
+        for activity in PiAgentTranscriptActivity.make(from: relevant) where !activity.isWebActivity && !activity.isMCPActivity {
             let verb = toolVerb(for: activity.name)
             let errors = activity.entries.filter { $0.role == .error }.count
             let success = max(0, activity.count - errors)
@@ -182,6 +248,66 @@ extension NativeToolGroupModel {
         }
         return order.compactMap { byVerb[$0] }
     }
+
+    /// Session-wide MCP usage recap for the Session resources popover: every MCP tool
+    /// actually called, grouped by server then tool, with per-tool call counts. Built
+    /// from the `mcp` proxy entries (action == call) across the whole conversation.
+    @MainActor
+    static func mcpUsageRecap(from entries: [PiAgentTranscriptEntry]) -> [PiAgentMCPUsageRecapServer] {
+        let relevant = entries.filter { $0.role == .tool || ($0.role == .error && $0.title.hasPrefix("Tool: ")) }
+        let calls = PiAgentTranscriptActivity.make(from: relevant)
+            .filter(\.isMCPActivity)
+            .flatMap { $0.mcpCalls() }
+        guard !calls.isEmpty else { return [] }
+
+        var serverOrder: [String] = []
+        var toolOrderByServer: [String: [String]] = [:]
+        var counts: [String: [String: (calls: Int, errors: Int)]] = [:]
+        for call in calls {
+            if counts[call.server] == nil { serverOrder.append(call.server) }
+            if counts[call.server]?[call.tool] == nil {
+                toolOrderByServer[call.server, default: []].append(call.tool)
+            }
+            var tally = counts[call.server]?[call.tool] ?? (0, 0)
+            tally.calls += 1
+            if call.isError { tally.errors += 1 }
+            counts[call.server, default: [:]][call.tool] = tally
+        }
+
+        return serverOrder.map { server in
+            let tools = (toolOrderByServer[server] ?? []).map { tool -> PiAgentMCPUsageRecapTool in
+                let tally = counts[server]?[tool] ?? (0, 0)
+                return PiAgentMCPUsageRecapTool(name: tool, callCount: tally.calls, errorCount: tally.errors)
+            }
+            return PiAgentMCPUsageRecapServer(server: server, tools: tools)
+        }
+    }
+}
+
+/// One MCP server's usage in the Session resources recap: the server name and the
+/// tools it was called through, each with its call/error counts.
+struct PiAgentMCPUsageRecapServer: Identifiable {
+    var id: String { server }
+    var server: String
+    var tools: [PiAgentMCPUsageRecapTool]
+}
+
+struct PiAgentMCPUsageRecapTool: Identifiable {
+    var id: String { name }
+    var name: String
+    var callCount: Int
+    var errorCount: Int
+}
+
+/// One MCP server in the Session resources popover: recorded in scope at launch
+/// (with the count of tools it advertised) plus the tools actually called this
+/// session. Mirrors the Skills section's "recorded at startup" listing, then adds
+/// the live usage breakdown.
+struct PiAgentMCPSessionRecap: Identifiable {
+    var id: String { server }
+    var server: String
+    var advertisedToolCount: Int
+    var calledTools: [PiAgentMCPUsageRecapTool]
 }
 
 /// One row in the Session resources "Tool calls" recap: a tool's display verb,
@@ -253,7 +379,9 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
     private func rebuildSections() {
         sections.arrangedSubviews.forEach { $0.removeFromSuperview() }
         diffByPath.removeAll()
+        mcpResultByRowID.removeAll()
         guard let model else { return }
+        if let mcp = model.mcp { sections.addArrangedSubview(buildMCPCard(mcp)) }
         if let web = model.web { sections.addArrangedSubview(buildWebCard(web)) }
         if let diff = model.diff { sections.addArrangedSubview(buildDiffCard(diff)) }
         for view in sections.arrangedSubviews {
@@ -316,6 +444,141 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         f.textColor = color
         f.lineBreakMode = wraps ? .byWordWrapping : .byTruncatingTail
         return f
+    }
+
+    // MARK: MCP card
+
+    private func buildMCPCard(_ mcp: NativeToolGroupModel.MCP) -> NSView {
+        let card = makeSubCard()
+        let stack = NSStackView()
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+
+        // Header: powerplug glyph + "MCP" only — no call count (the Changes card
+        // carries no count either; the rows speak for themselves).
+        let header = NSStackView()
+        header.orientation = .horizontal
+        header.spacing = 8
+        header.alignment = .centerY
+        header.addArrangedSubview(Self.headerGlyph("powerplug", tint: mcp.hasErrors ? AppTheme.ns(AppTheme.roleError) : Self.muted))
+        header.addArrangedSubview(Self.label("MCP", font: NativeTranscriptFont.header))
+        stack.addArrangedSubview(header)
+
+        for row in mcp.rows {
+            let rowView = buildMCPRow(row)
+            stack.addArrangedSubview(rowView)
+            rowView.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+        if mcp.hiddenCount > 0 {
+            stack.addArrangedSubview(Self.label("\(mcp.hiddenCount) more MCP call\(mcp.hiddenCount == 1 ? "" : "s") hidden",
+                                                font: NativeTranscriptFont.callout(), color: Self.muted))
+        }
+
+        embed(stack, in: card, hInset: AppTheme.Chat.cardHPadding, vInset: AppTheme.Chat.cardVPadding)
+        return card
+    }
+
+    /// One MCP call: a `server/tool` headline (tool emphasized) with trailing "View"
+    /// (opens the full response in a modal, mirroring the Changes card's "Open") and
+    /// "Copy" buttons. The raw response is never dumped inline, and the args are not
+    /// shown — the headline is the call, the modal is the detail.
+    private func buildMCPRow(_ row: NativeToolGroupModel.MCP.Row) -> NSView {
+        let titleRow = NSStackView()
+        titleRow.translatesAutoresizingMaskIntoConstraints = false
+        titleRow.orientation = .horizontal
+        titleRow.spacing = 7
+        titleRow.alignment = .centerY
+
+        let icon = NSImageView()
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.image = NSImage(systemSymbolName: row.isError ? "exclamationmark.triangle" : "bolt.horizontal",
+                             accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.captionSize, weight: .semibold))
+        icon.contentTintColor = row.isError ? AppTheme.ns(AppTheme.roleError) : Self.muted
+        icon.imageScaling = .scaleProportionallyDown
+        icon.widthAnchor.constraint(equalToConstant: 16).isActive = true
+        titleRow.addArrangedSubview(icon)
+
+        let title = NSMutableAttributedString()
+        title.append(NSAttributedString(string: "\(row.server)/", attributes: [
+            .font: NativeTranscriptFont.callout(), .foregroundColor: Self.muted
+        ]))
+        title.append(NSAttributedString(string: row.tool, attributes: [
+            .font: NativeTranscriptFont.callout(.semibold), .foregroundColor: NSColor.labelColor
+        ]))
+        let titleField = NSTextField(labelWithAttributedString: title)
+        titleField.translatesAutoresizingMaskIntoConstraints = false
+        titleField.lineBreakMode = .byTruncatingMiddle
+        titleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        titleRow.addArrangedSubview(titleField)
+
+        titleRow.addArrangedSubview(NSView())  // spacer pushes the buttons to the trailing edge
+
+        // Both success and error responses get View/Copy — an error IS the response,
+        // and the user must be able to read it.
+        if let result = row.resultPreview, !result.isEmpty {
+            mcpResultByRowID[row.id.uuidString] = (server: row.server, tool: row.tool, result: result)
+            let viewBtn = NSButton(title: "View", target: self, action: #selector(openMCPResult(_:)))
+            viewBtn.bezelStyle = .rounded
+            viewBtn.controlSize = .small
+            viewBtn.font = NativeTranscriptFont.caption2(.semibold)
+            viewBtn.identifier = NSUserInterfaceItemIdentifier(row.id.uuidString)
+            titleRow.addArrangedSubview(viewBtn)
+
+            let copyBtn = NSButton(title: "Copy", target: self, action: #selector(copyMCPResult(_:)))
+            copyBtn.bezelStyle = .rounded
+            copyBtn.controlSize = .small
+            copyBtn.font = NativeTranscriptFont.caption2(.semibold)
+            copyBtn.identifier = NSUserInterfaceItemIdentifier(row.id.uuidString)
+            titleRow.addArrangedSubview(copyBtn)
+        }
+
+        // Success rows are just the headline; error rows add a concise red one-liner
+        // under it so the failure reads at a glance (full detail behind "View").
+        guard let summary = row.errorSummary, !summary.isEmpty else { return titleRow }
+        let rowStack = NSStackView()
+        rowStack.translatesAutoresizingMaskIntoConstraints = false
+        rowStack.orientation = .vertical
+        rowStack.alignment = .leading
+        rowStack.spacing = 3
+        rowStack.addArrangedSubview(titleRow)
+        titleRow.widthAnchor.constraint(equalTo: rowStack.widthAnchor).isActive = true
+
+        let errorLabel = Self.label(summary, font: NativeTranscriptFont.callout(), color: AppTheme.ns(AppTheme.roleError), wraps: true)
+        errorLabel.maximumNumberOfLines = 2
+        // Align under the headline text (16pt icon + 7pt gap), matching the title inset.
+        let indent = NSStackView(views: [errorLabel])
+        indent.translatesAutoresizingMaskIntoConstraints = false
+        indent.edgeInsets = NSEdgeInsets(top: 0, left: 23, bottom: 0, right: 0)
+        rowStack.addArrangedSubview(indent)
+        indent.widthAnchor.constraint(equalTo: rowStack.widthAnchor).isActive = true
+        return rowStack
+    }
+
+    private var mcpResultByRowID: [String: (server: String, tool: String, result: String)] = [:]
+
+    /// Present the full MCP response in a modal (hosting the SwiftUI sheet — a modal
+    /// is not a scroll hot path), mirroring how the diff "Open" button works.
+    @objc private func openMCPResult(_ sender: NSButton) {
+        guard let raw = sender.identifier?.rawValue, let call = mcpResultByRowID[raw],
+              let host = window?.contentViewController else { return }
+        var hosting: NSViewController?
+        let sheet = PiAgentNativeMCPResultSheet(server: call.server, tool: call.tool, text: call.result) { [weak host] in
+            if let hosting { host?.dismiss(hosting) }
+        }
+        let controller = NSHostingController(rootView: sheet)
+        hosting = controller
+        host.presentAsSheet(controller)
+    }
+
+    @objc private func copyMCPResult(_ sender: NSButton) {
+        guard let raw = sender.identifier?.rawValue, let call = mcpResultByRowID[raw] else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(call.result, forType: .string)
+        sender.title = "Copied"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { sender.title = "Copy" }
     }
 
     // MARK: Web card
@@ -671,6 +934,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         expandedWebRows.removeAll()
         expandedDiffRows.removeAll()
         diffByPath.removeAll()
+        mcpResultByRowID.removeAll()
     }
 }
 
