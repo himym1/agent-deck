@@ -1,6 +1,7 @@
 import Foundation
 import os
 
+#if DEBUG
 /// Focused, low-noise probe for the streaming transcript **wobble** — the
 /// vertical up/down jitter of the bottom bubble while tokens stream in.
 ///
@@ -220,3 +221,4 @@ final class TranscriptStreamWobbleProbe {
         """)
     }
 }
+#endif

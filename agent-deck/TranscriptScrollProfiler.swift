@@ -35,6 +35,24 @@ final class TranscriptScrollProfiler {
     static let logger = Logger(subsystem: "streetcoding.agent-deck", category: "ScrollPerf")
     static let signposter = OSSignposter(subsystem: "streetcoding.agent-deck", category: "ScrollPerf")
 
+    /// Mirror key perf lines to a file. `os.Logger` is invisible to `log
+    /// stream`/`log show` in some headless/automation contexts (no unified-log
+    /// access), so the perf harness also appends its summaries here where any
+    /// process can read them. Append-only, main-thread callers, best-effort.
+    /// File: `/tmp/agentdeck-perf.txt` (truncate between runs with the harness).
+    static func fileLog(_ line: String) {
+#if DEBUG
+        guard isEnabled else { return }
+        guard let data = (line + "\n").data(using: .utf8) else { return }
+        let url = URL(fileURLWithPath: "/tmp/agentdeck-perf.txt")
+        if let h = try? FileHandle(forWritingTo: url) {
+            h.seekToEndOfFile(); h.write(data); try? h.close()
+        } else {
+            try? data.write(to: url)
+        }
+#endif
+    }
+
     /// Master switch. DEBUG builds only (defaults ON, toggleable); release builds
     /// compile it to a constant `false`, so every `measure*` is a pass-through and
     /// nothing logs in production.
@@ -91,6 +109,25 @@ final class TranscriptScrollProfiler {
     /// Coarse description of what's on screen, set at gesture/bench start, so a
     /// slow gesture is correlated with content shape ("why these sessions").
     var contentFingerprint: String?
+
+    // MARK: Streaming-vs-static mode
+    //
+    // The same hitch means opposite things depending on what the transcript is
+    // doing: scrolling a finished transcript (cells evicted + rebuilt on
+    // scroll-back) vs live generation (rows appended + reconciled while the
+    // follow-glide runs). The coordinator stamps streaming activity here so every
+    // line says which regime it happened in — without it, a shared log mixing both
+    // can't be read. `static` = no streaming update in the last ~600ms.
+    private var lastStreamingActivity: CFTimeInterval = 0
+    /// Call once per `apply()` that carried a streaming update.
+    func noteStreamingActivity() { lastStreamingActivity = CACurrentMediaTime() }
+    var isStreamingRecently: Bool { CACurrentMediaTime() - lastStreamingActivity < 0.6 }
+    /// Compact regime tag stamped on every line: `stream` / `static`, plus
+    /// `+scroll` when a user scroll gesture is in flight (so "scrolling WHILE
+    /// streaming" is distinct from either alone).
+    var modeTag: String {
+        (isStreamingRecently ? "stream" : "static") + (window != nil ? "+scroll" : "")
+    }
 
     func setBenchTag(_ tag: String?) { benchTag = tag }
     func setContentFingerprint(rows: Int, tallRows: Int, totalEstHeight: CGFloat) {
@@ -214,7 +251,7 @@ final class TranscriptScrollProfiler {
             if gap > w.maxGapMs { w.maxGapMs = gap }
             if gap > hitchThresholdMs {
                 w.hitchCount += 1
-                Self.logger.info("hitch Δ=\(gap, format: .fixed(precision: 1))ms (gesture #\(self.gestureSeq)) \(self.benchTag ?? "", privacy: .public)")
+                Self.logger.info("hitch Δ=\(gap, format: .fixed(precision: 1))ms [\(self.modeTag, privacy: .public)] (gesture #\(self.gestureSeq)) \(self.benchTag ?? "", privacy: .public)")
                 Self.signposter.emitEvent("hitch", "gap=\(Int(gap))ms")
                 // The decisive capture: a real backtrace of whatever blocked the
                 // frame, for jank too brief to trip the hang watchdog.
@@ -253,8 +290,14 @@ final class TranscriptScrollProfiler {
         }
         let durMs = ms(w.lastTickTime, w.startTime)
         let avgGap = w.tickCount > 1 ? w.sumGapMs / Double(w.tickCount - 1) : 0
+#if DEBUG
+        Self.fileLog("gesture #\(gestureSeq) [\(reason)] [\(modeTag)] \(benchTag ?? "") \(contentFingerprint ?? "") "
+            + "\(w.tickCount)ticks/\(Int(durMs))ms hitches=\(w.hitchCount) maxGap=\(String(format: "%.0f", w.maxGapMs)) "
+            + "avgGap=\(String(format: "%.1f", avgGap)) configures=\(w.configures) hostCreate=\(w.hostCreates)(\(String(format: "%.0f", w.hostCreateMs))ms) "
+            + "retiles=\(w.retiles)/rows\(w.retiledRows)(\(String(format: "%.0f", w.retileMs))ms,max\(String(format: "%.1f", w.maxRetileMs)))")
+#endif
         Self.logger.info("""
-        gesture #\(self.gestureSeq) [\(reason, privacy: .public)] \(self.benchTag ?? "", privacy: .public) \(self.contentFingerprint ?? "", privacy: .public) \
+        gesture #\(self.gestureSeq) [\(reason, privacy: .public)] [\(self.modeTag, privacy: .public)] \(self.benchTag ?? "", privacy: .public) \(self.contentFingerprint ?? "", privacy: .public) \
         \(w.tickCount) ticks / \(durMs, format: .fixed(precision: 0))ms · \
         hitches=\(w.hitchCount) maxGap=\(w.maxGapMs, format: .fixed(precision: 1))ms avgGap=\(avgGap, format: .fixed(precision: 1))ms │ \
         configures=\(w.configures) rootSwaps=\(w.rootSwaps)(\(w.rootSwapMs, format: .fixed(precision: 1))ms,max \(w.maxRootSwapMs, format: .fixed(precision: 1))) \
@@ -361,6 +404,57 @@ final class TranscriptScrollProfiler {
         }
         return r
     }
+
+    /// Attribute a single cell-provider vend / `installNativeRow` — the path that
+    /// builds (or reuses) a row's view when the table asks for it during scroll or
+    /// a streaming snapshot apply. This is the hitch the gesture summary kept
+    /// missing: it runs inside the diffable data source's cell-provider closure and
+    /// the apply's reconfigure, neither of which any other `measure*` wraps, so a
+    /// fresh-build hitch showed up as "nothing attributed". Logs only over a frame
+    /// budget so steady cache-hit reuse (the common case) stays silent.
+    ///
+    /// `fresh` = a brand-new view was constructed (cache miss / evicted row /
+    /// type swap); `rebuilt` = the markdown subtree did a full teardown+rebuild
+    /// (vs a cheap in-place reconcile). Both being true on a scroll frame is the
+    /// smoking gun for "scrolling a long transcript rebuilds evicted cells".
+    /// `body` performs the build and returns its own attribution — evaluated AFTER
+    /// the build so it reflects this vend, not the previous one. A `nil` return
+    /// means the row isn't a markdown row (tool group, subagent card, …), so the
+    /// rebuild/block-count detail is omitted rather than guessed.
+    /// `via` names the call path that triggered the build, so the log separates
+    /// the two regimes a shared capture mixes:
+    ///   • `scroll-vend` — AppKit asked the data source for a row's view (the row
+    ///     scrolled on screen, or a snapshot inserted it). With `[static]` this is
+    ///     a cell evicted + rebuilt on scroll-back — the scrolling-cost story.
+    ///   • `stream-reconfig` / `width-reconfig` / `chrome-reconfig` — the
+    ///     coordinator re-ran a visible cell because its content/width changed.
+    ///     With `[stream]` this is the live-generation-cost story.
+#if DEBUG
+    func measureCellBuild(id: String, fresh: Bool, makeMs: Double = 0, via: String, _ body: () -> (rebuilt: Bool, blocks: Int)?) {
+        guard Self.isEnabled else { _ = body(); return }
+        let t = now()
+        let attribution = Self.signposter.withIntervalSignpost("cellBuild") { body() }
+        let dt = ms(now(), t) + makeMs
+        if window != nil {
+            // Fold into the per-gesture host-create tally so the summary's cost
+            // accounting reflects build-dominated scroll.
+            window!.hostCreateMs += dt
+            window!.hostCreates += 1
+        }
+        // 8ms ≈ half a 120Hz frame: a single cell build over this plausibly drops a
+        // frame on its own. Fresh builds and full rebuilds are the expensive kind;
+        // surface them by name so the console says WHY the row was costly.
+        if dt > 8 {
+            let detail = attribution.map { "\($0.rebuilt ? "FULL-REBUILD" : "reconcile") blocks=\($0.blocks)" } ?? "non-markdown-row"
+            Self.logger.error("""
+            cellBuild \(dt, format: .fixed(precision: 1))ms [\(self.modeTag, privacy: .public)] via=\(via, privacy: .public) \
+            id=\(String(id.suffix(6)), privacy: .public) \(fresh ? "FRESH-VIEW" : "reuse", privacy: .public) \(detail, privacy: .public)
+            """)
+            Self.fileLog("cellBuild \(String(format: "%.1f", dt))ms (make=\(String(format: "%.1f", makeMs)) cfg=\(String(format: "%.1f", dt - makeMs))) [\(modeTag)] via=\(via) id=\(String(id.suffix(6))) "
+                + "\(fresh ? "FRESH-VIEW" : "reuse") \(detail)")
+        }
+    }
+#endif
 
     /// Wrap a synchronous forced measurement (`forcedIntrinsicHeight` batches).
     func measureForced<T>(_ body: () -> T) -> T {

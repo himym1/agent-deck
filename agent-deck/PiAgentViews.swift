@@ -226,7 +226,123 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
         } else {
             streamingRevision += 1
         }
+#if DEBUG
+        streamSimArmIfEnabled()
+#endif
     }
+
+#if DEBUG
+    // MARK: - Streaming pulse simulator (perf harness)
+    //
+    // Reproduces a live response WITHOUT a model: appends a token to the last
+    // assistant message at 30Hz, rebuilding threads + bumping streamingRevision
+    // exactly like real streaming, so the full pipeline runs — per-token reconcile
+    // + row re-tile (regime A) AND the SwiftUI scaffold relayout the pulse triggers
+    // (regime B). The 33ms timer's *lateness* measures how congested the main
+    // thread is each frame: low avgLate/maxLate = smooth. Bracketed by STREAMSIM
+    // markers so HangWatchdog HITCH/HANG lines in the window are attributable.
+    //
+    //   defaults write streetcoding.agent-deck StreamSimEnabled -bool YES
+    //   (StreamSimRounds=3, StreamSimSeconds=6 overridable)
+    //   log stream --predicate 'subsystem == "streetcoding.agent-deck" AND (category == "StreamSim" OR category == "HangWatchdog" OR category == "ScrollPerf")' --info
+    private static let streamSimLog = Logger(subsystem: "streetcoding.agent-deck", category: "StreamSim")
+    private var streamSimTimer: Timer?
+    private var streamSimArmed = false
+    private var streamSimRoundsLeft = 0
+    private var streamSimPulses = 0
+    private var streamSimDeadline: CFTimeInterval = 0
+    private var streamSimTargetIndex: Int?
+    private var streamSimOriginalEntries: [PiAgentTranscriptEntry]?
+    private var streamSimHitchAtStart = 0
+    private var streamSimHangAtStart = 0
+    private var streamSimHangMsAtStart = 0
+    private var streamSimRoundNo = 0
+
+    /// Markdown chunk that mimics a real assistant message: heading, prose, a
+    /// bullet list and a fenced code block — i.e. a multi-block message whose cell
+    /// build is a genuine FULL-REBUILD of many block views (the dominant cost).
+    private static let streamSimRichChunks: [String] = [
+        "## Plan\nHere's the approach I'd take, broken into a few concrete steps that build on each other.\n\n- Parse the input and validate the shape\n- Walk the tree and collect the candidate nodes\n- Apply the transform and re-measure\n\n```swift\nfunc transform(_ nodes: [Node]) -> [Node] {\n    nodes.map { node in\n        var copy = node\n        copy.resolved = true\n        return copy\n    }\n}\n```\n",
+        "### Detail\nThe tricky part is the ordering: each item must be processed before its dependents, otherwise the resolved flag is stale.\n\n1. Topologically sort the graph\n2. Process in dependency order\n3. Verify no cycle remains\n\n```text\nA -> B -> C\nA -> C\n```\nThat means `C` is visited last regardless of the path taken.\n",
+    ]
+
+    private func streamSimArmIfEnabled() {
+        guard !streamSimArmed,
+              UserDefaults.standard.bool(forKey: "StreamSimEnabled"),
+              entries.contains(where: { $0.role == .assistant }) else { return }
+        streamSimArmed = true
+        streamSimRoundsLeft = max(1, UserDefaults.standard.object(forKey: "StreamSimRounds") as? Int ?? 3)
+        streamSimOriginalEntries = entries
+        Self.streamSimLog.error("STREAMSIM armed — \(self.streamSimRoundsLeft) round(s) on session \(self.lastSessionID?.uuidString.prefix(8) ?? "?", privacy: .public)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in self?.streamSimStartRound() }
+    }
+
+    private func streamSimStartRound() {
+        guard streamSimRoundsLeft > 0 else {
+            streamSimRestore()
+            Self.streamSimLog.error("STREAMSIM COMPLETE")
+            TranscriptScrollProfiler.fileLog("STREAMSIM COMPLETE")
+            return
+        }
+        guard let idx = entries.lastIndex(where: { $0.role == .assistant }) else {
+            Self.streamSimLog.error("STREAMSIM aborted — no assistant entry"); return
+        }
+        streamSimRoundNo += 1
+        streamSimTargetIndex = idx
+        let seconds = max(1.0, UserDefaults.standard.object(forKey: "StreamSimSeconds") as? Double ?? 6.0)
+        streamSimDeadline = CACurrentMediaTime() + seconds
+        streamSimPulses = 0
+        streamSimHitchAtStart = HangWatchdog.hitchCount
+        streamSimHangAtStart = HangWatchdog.hangCount
+        streamSimHangMsAtStart = HangWatchdog.hangMsTotal
+        Self.streamSimLog.error("STREAMSIM round \(self.streamSimRoundNo) START (\(seconds, format: .fixed(precision: 0))s @30Hz) ──────────")
+        TranscriptScrollProfiler.fileLog("STREAMSIM round \(streamSimRoundNo) START")
+        let t = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.streamSimTick() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        streamSimTimer = t
+    }
+
+    private func streamSimTick() {
+        if CACurrentMediaTime() >= streamSimDeadline { streamSimEndRound(); return }
+        guard let idx = streamSimTargetIndex, idx < entries.count else { streamSimEndRound(); return }
+        // Every ~22 pulses, append a NEW rich assistant row (a fresh cell build —
+        // the dominant real streaming cost). Otherwise grow the active message,
+        // which drives per-token reconcile + row re-tile + the follow glide.
+        if streamSimPulses % 22 == 21, let sid = entries[idx].sessionID as UUID? {
+            let chunk = Self.streamSimRichChunks[streamSimPulses % Self.streamSimRichChunks.count]
+            entries.append(PiAgentTranscriptEntry(sessionID: sid, role: .assistant, title: "Assistant", text: chunk))
+            streamSimTargetIndex = entries.count - 1
+        } else {
+            entries[idx].text += (streamSimPulses % 9 == 8) ? "\n\nNext, a fresh paragraph that adds another line or two of streamed prose. " : "token "
+        }
+        threads = PiAgentTranscriptThread.make(from: entries)
+        streamingRevision += 1
+        streamSimPulses += 1
+    }
+
+    private func streamSimEndRound() {
+        streamSimTimer?.invalidate(); streamSimTimer = nil
+        let hitches = HangWatchdog.hitchCount - streamSimHitchAtStart
+        let hangs = HangWatchdog.hangCount - streamSimHangAtStart
+        let hangMs = HangWatchdog.hangMsTotal - streamSimHangMsAtStart
+        let summary = "STREAMSIM round \(streamSimRoundNo) END pulses=\(streamSimPulses) hitches=\(hitches) hangs=\(hangs) hangMs=\(hangMs) worstHitch=\(HangWatchdog.worstHitchMs)ms"
+        Self.streamSimLog.error("\(summary, privacy: .public) ──────────")
+        TranscriptScrollProfiler.fileLog(summary)
+        streamSimRoundsLeft -= 1
+        // Reset the worst-hitch high-water mark between rounds for a per-round read.
+        HangWatchdog.worstHitchMs = 0
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.streamSimStartRound() }
+    }
+
+    private func streamSimRestore() {
+        guard let original = streamSimOriginalEntries else { return }
+        entries = original
+        threads = PiAgentTranscriptThread.make(from: entries)
+        renderRevision += 1
+    }
+#endif
 
     private enum AssistantContentInterpretation {
         case assistant(String)
@@ -764,14 +880,14 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// than the target can never loop forever wrapping the list.
         private var benchAdvanceBudget = 0
         private let benchMaxSessions = 6
-        private let benchShortDuration: CFTimeInterval = 2.5
-        private let benchLongDuration: CFTimeInterval = 7
+        private let benchShortDuration: CFTimeInterval = UserDefaults.standard.object(forKey: "BenchShortSec") as? Double ?? 2.5
+        private let benchLongDuration: CFTimeInterval = UserDefaults.standard.object(forKey: "BenchLongSec") as? Double ?? 7
         /// Long full-sweeps run back-to-back per session: repeated traversals are
         /// far more likely to surface a hang/hitch than a single pass (the first
         /// pass warms caches; a stall that survives into passes 2–3 is the real
         /// jank). Each pass is its own profiler gesture, so each gets a summary
         /// and can trip the hitch backtrace independently.
-        private let benchLongRepeats = 3
+        private let benchLongRepeats = UserDefaults.standard.object(forKey: "BenchLongRepeats") as? Int ?? 3
 
         var sessionID: UUID?
         var lastRenderRevision = -1
@@ -909,6 +1025,102 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private func touchCell(_ id: String) {
             if let idx = cellCacheLRU.firstIndex(of: id) { cellCacheLRU.remove(at: idx) }
             cellCacheLRU.append(id)
+        }
+
+        // MARK: - Idle pre-warm
+        //
+        // Building a transcript cell (markdown block stack, or a tool-group /
+        // subagent card) costs 10-46ms for a heavy row, and a long session has
+        // dozens. Doing it lazily on the scroll path is the dominant scroll hitch
+        // (a 130-row session = ~458ms of construction). Instead, after a session
+        // settles, build the off-screen cells during idle in small time-budgeted
+        // slices, so by the time the user scrolls the cells are already cached and
+        // the vend is a no-op configure. Yields to the user: paused while a scroll
+        // gesture or streaming is in flight, resumed when idle.
+        private var prewarmQueue: [String] = []
+        private var prewarmScheduled = false
+        /// Kill switch for A/B: `defaults write streetcoding.agent-deck TranscriptPrewarmDisabled -bool YES`.
+        private static let prewarmDisabled: Bool = {
+            UserDefaults.standard.bool(forKey: "TranscriptPrewarmDisabled")
+        }()
+        /// Per-runloop-slice main-thread budget. Kept under half a 120Hz frame so a
+        /// slice never itself drops a frame; construction is spread across ticks.
+        private let prewarmSliceBudgetMs: Double = 4.0
+
+        func schedulePrewarm() {
+            guard !Self.prewarmDisabled, let tableView else { return }
+            // Skip entirely while streaming: new rows are arriving every pulse, so
+            // the work list would churn and the visible path owns the main thread.
+            // A post-stream apply re-triggers this and pre-warms then.
+            guard !profiler.isStreamingRecently else { return }
+            // Build the work list: every row without a live cached cell, in document
+            // order, capped to the cache limit (pre-warming past it would just evict
+            // what we built). Skip while streaming — new content is arriving and the
+            // visible path takes priority.
+            let pending = orderedIDs.filter { cellCache[$0] == nil }
+            guard !pending.isEmpty, cellCache.count < cellCacheLimit else { return }
+            // Build outward from the viewport: the user scrolls away from where they
+            // are (the view opens pinned to the bottom), so rows nearest the visible
+            // range should be ready first. Order pending ids by row distance from the
+            // current visible window's centre.
+            let visible = tableView.rows(in: tableView.visibleRect)
+            let anchorRow = visible.length > 0 ? visible.location + visible.length / 2 : orderedIDs.count - 1
+            let indexByID = Dictionary(uniqueKeysWithValues: orderedIDs.enumerated().map { ($1, $0) })
+            let ordered = pending.sorted { (indexByID[$0] ?? 0) - anchorRow == 0 ? false :
+                abs((indexByID[$0] ?? 0) - anchorRow) < abs((indexByID[$1] ?? 0) - anchorRow) }
+            prewarmQueue = Array(ordered.prefix(cellCacheLimit - cellCache.count))
+            guard !prewarmScheduled else { return }
+            prewarmScheduled = true
+            DispatchQueue.main.async { [weak self] in self?.prewarmStep() }
+        }
+
+        private func prewarmStep() {
+            prewarmScheduled = false
+            guard !Self.prewarmDisabled, tableView != nil else { prewarmQueue.removeAll(); return }
+            // Don't compete with an active scroll gesture or live streaming — retry
+            // shortly. (Streaming re-tiles + the follow glide own the main thread.)
+            if isUserScrollingRecently || profiler.isStreamingRecently {
+                prewarmScheduled = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.prewarmStep() }
+                return
+            }
+            let start = CACurrentMediaTime()
+#if DEBUG
+            var builtThisSlice = 0
+#endif
+            while !prewarmQueue.isEmpty {
+                let id = prewarmQueue.removeFirst()
+                // Skip rows that scrolled into view (already built) or vanished.
+                guard cellCache[id] == nil, let item = itemByID[id],
+                      let row = orderedIDs.firstIndex(of: id) else { continue }
+                let cell = cachedCell(for: id)
+                configure(cell, with: item, row: row, via: "prewarm")
+                // Also measure + cache the height now, so when the row scrolls into
+                // view `heightOfRow` already has its true height and AppKit doesn't
+                // re-tile it (the residual scroll cost after construction is moved
+                // off the path). Offscreen `fittingSize` is valid for these views.
+                let h = cell.forcedIntrinsicHeight()
+                if h > 0 {
+                    let height = ceil(h)
+                    measuredHeightByID[id, default: [:]][widthBucket] = height
+                    lastNotedHeight[id] = height
+                }
+#if DEBUG
+                builtThisSlice += 1
+#endif
+                if (CACurrentMediaTime() - start) * 1000 >= prewarmSliceBudgetMs { break }
+            }
+            if prewarmQueue.isEmpty {
+#if DEBUG
+                if builtThisSlice > 0 {
+                    TranscriptScrollProfiler.fileLog("PREWARM done cached=\(cellCache.count)/\(orderedIDs.count)")
+                }
+#endif
+            } else {
+                prewarmScheduled = true
+                // Yield a full runloop turn between slices so the UI stays live.
+                DispatchQueue.main.async { [weak self] in self?.prewarmStep() }
+            }
         }
 
         /// Drop least-recently-vended cached cells over the cap. Never evicts a row
@@ -1121,6 +1333,12 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 return
             }
 
+            // Stamp streaming activity up front so every profiler line emitted by
+            // the builds/re-tiles below is tagged [stream] vs [static] — the shared
+            // capture mixes "scrolling a finished transcript" with "live generation"
+            // and they need opposite fixes.
+            if streamingUpdate { profiler.noteStreamingActivity() }
+
             self.items = items
             itemByID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             let nextRevisions = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.contentRevision) })
@@ -1202,6 +1420,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     // Rows were added/removed (or the session switched) — content
                     // geometry genuinely moved, so passive follow may act on it.
                     self.handleScrollAfterUpdate(isSessionSwitch: isSessionSwitch, explicitScroll: explicitScroll, wasFollowing: wasFollowing, contentAdvanced: true)
+                    // Build off-screen cells during idle so scrolling never pays
+                    // the per-row construction cost (the dominant scroll hitch).
+                    self.schedulePrewarm()
                 }
             } else {
                 let changedIDs = nextIDs.filter { contentRevisionByID[$0] != nextRevisions[$0] }
@@ -1277,7 +1498,90 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             lastBottomScrollRequest = bottomScrollRequest
             tableView.sizeLastColumnToFit()
             maybeStartScrollBenchmark()
+#if DEBUG
+            if isSessionSwitch { buildBenchDone = false; scrollProbeDone = false }
+            maybeRunBuildBench()
+            maybeRunScrollProbe()
+#endif
         }
+
+#if DEBUG
+        private var scrollProbeDone = false
+        /// Deterministic per-session scroll probe: on each session switch, if the
+        /// session is big enough to be interesting, wait for pre-warm to settle then
+        /// run one scroll pass. The profiler gesture summary (with the rows= finger-
+        /// print) captures hitches + hostCreate, so the SAME heavy session can be
+        /// compared pre-warm ON vs OFF just by cycling sessions with Cmd-].
+        ///   defaults write streetcoding.agent-deck ScrollProbeEnabled -bool YES
+        private func maybeRunScrollProbe() {
+            guard !scrollProbeDone,
+                  UserDefaults.standard.bool(forKey: "ScrollProbeEnabled"),
+                  tableView != nil, orderedIDs.count > 25 else { return }
+            scrollProbeDone = true
+            probeWhenPrewarmed(attempt: 0)
+        }
+
+        private func probeWhenPrewarmed(attempt: Int) {
+            // Wait for the idle pre-warm to drain (ON case) so the probe scrolls a
+            // fully-warmed session; OFF case has nothing pending and proceeds. Cap
+            // the wait so a stuck queue can't block the probe forever.
+            if !Self.prewarmDisabled, (prewarmScheduled || !prewarmQueue.isEmpty), attempt < 30 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                    self?.probeWhenPrewarmed(attempt: attempt + 1)
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self, self.orderedIDs.count > 25 else { return }
+                self.updateBenchFingerprint()
+                self.profiler.setBenchTag("probe")
+                self.runScrollPass(duration: 4.0, step: 40) { [weak self] in
+                    self?.profiler.setBenchTag(nil)
+                }
+            }
+        }
+#endif
+
+#if DEBUG
+        private var buildBenchDone = false
+        /// Deterministic construction microbenchmark: build EVERY row's cell of the
+        /// current session once (into the cache, off the scroll path) and report
+        /// total + worst construction cost. Repeatable on the same restored session,
+        /// so it isolates the cell-build fix from scroll/session-order noise.
+        ///   defaults write streetcoding.agent-deck BuildBenchEnabled -bool YES
+        private func maybeRunBuildBench() {
+            guard !buildBenchDone,
+                  UserDefaults.standard.bool(forKey: "BuildBenchEnabled"),
+                  tableView != nil, orderedIDs.count > 5 else { return }
+            buildBenchDone = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in self?.runBuildBench() }
+        }
+
+        private func runBuildBench() {
+            guard let tableView else { return }
+            // Drop any cached cells so this measures cold construction of the whole
+            // session, not just the rows that haven't been vended yet.
+            cellCache.removeAll(); cellCacheLRU.removeAll()
+            let ids = orderedIDs
+            let t0 = CACurrentMediaTime()
+            var total = 0.0
+            var built = 0
+            for (row, id) in ids.enumerated() {
+                guard let item = itemByID[id] else { continue }
+                let cell = cachedCell(for: id)
+                let s = CACurrentMediaTime()
+                configure(cell, with: item, row: row, via: "buildbench")
+                total += (CACurrentMediaTime() - s) * 1000
+                built += 1
+            }
+            let wall = (CACurrentMediaTime() - t0) * 1000
+            let line = "BUILDBENCH cells=\(built) total=\(String(format: "%.0f", total))ms wall=\(String(format: "%.0f", wall))ms session=\(self.sessionID?.uuidString.prefix(8) ?? "?") rows=\(ids.count)"
+            TranscriptScrollProfiler.logger.error("\(line, privacy: .public)")
+            TranscriptScrollProfiler.fileLog(line)
+            // Force a redisplay so the table isn't left showing stale cached cells.
+            tableView.reloadData()
+        }
+#endif
 
         // MARK: - Scroll benchmark (multi-session)
 
@@ -1373,6 +1677,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 benchActive = false
                 benchPhase = .idle
                 TranscriptScrollProfiler.logger.info("SCROLLBENCH COMPLETE — tested \(self.benchSessionsTested) session(s); see per-gesture summaries above")
+                TranscriptScrollProfiler.fileLog("SCROLLBENCH COMPLETE tested=\(benchSessionsTested)")
                 return
             }
             benchPhase = .advancing
@@ -1485,7 +1790,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                       let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? TranscriptTableCellView else { continue }
                 // configure() is a no-op when nothing's changed; otherwise the cell
                 // measures itself and reports a new height via onHeightChanged.
-                configure(cell, with: item, row: row)
+                configure(cell, with: item, row: row, via: "snapshot-reconfig")
             }
         }
 
@@ -1498,7 +1803,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 guard ids.contains(id),
                       let item = itemByID[id],
                       let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? TranscriptTableCellView else { continue }
-                configure(cell, with: item, row: row)
+                configure(cell, with: item, row: row, via: "stream-reconfig")
             }
         }
 
@@ -1518,12 +1823,14 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 let h = cell.forcedIntrinsicHeight()
                 guard h > 0 else { continue }
                 let height = ceil(h)
+#if DEBUG
                 // Smoking-gun: the streaming row's tiled height per token, folded
                 // with the measure path that produced it (set inside forcedIntrinsic
                 // → markdown measureHeight just above). A Δ<0 here = visible wobble.
                 TranscriptStreamWobbleProbe.shared.noteTile(
                     id: id, height: height, previousTiled: lastNotedHeight[id] ?? -1,
                     width: contentWidth, pinned: true, gliding: followGlideTimer != nil, source: "sync")
+#endif
                 measuredHeightByID[id, default: [:]][widthBucket] = height
                 if abs((lastNotedHeight[id] ?? -1) - height) > heightChangeEpsilon {
                     needRetile.insert(id)
@@ -1544,18 +1851,18 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 // new width's bucket fills in on its own as the cell re-measures
                 // and reports. Only the transient estimate is cleared.
                 estimateByID.removeValue(forKey: id)
-                configure(cell, with: item, row: row)
+                configure(cell, with: item, row: row, via: "width-reconfig")
             }
         }
 
-        private func configure(_ cell: TranscriptTableCellView, with item: PiAgentAppKitTranscriptItem, row: Int) {
+        private func configure(_ cell: TranscriptTableCellView, with item: PiAgentAppKitTranscriptItem, row: Int, via: String = "scroll-vend") {
             let width = currentViewportWidth()
             // Each cell owns its own NSHostingView for its lifetime. Recycling
             // a cell for a new item just swaps the host's rootView — never
             // detaches the host. That's what keeps multiple visible cells from
             // ever contending for a single shared host (the bug fixed here).
             profiler.noteConfigure()
-            cell.installRootView(item: item, width: width, profiler: profiler)
+            cell.installRootView(item: item, width: width, profiler: profiler, via: via)
             // No measurement here — the cell reports its real height via
             // `onMeasuredHeight` once it lays out. Until then `heightOfRow`
             // serves the char-count estimate (or a cached real height).
@@ -1603,11 +1910,13 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // spurious noteHeightOfRows whenever the cache shifted without the
             // laid-out height actually changing.
             let baseline = lastNotedHeight[itemID] ?? priorMeasured ?? estimatedRowHeight
+#if DEBUG
             // Same smoking-gun line for the debounced async path (rows that aren't
             // force-measured while pinned, e.g. when not auto-following).
             TranscriptStreamWobbleProbe.shared.noteTile(
                 id: itemID, height: height, previousTiled: baseline,
                 width: contentWidth, pinned: isAutoFollowing, gliding: followGlideTimer != nil, source: "async")
+#endif
             let delta = abs(baseline - height)
             guard delta > heightChangeEpsilon else { return }
             pendingHeightIDs.insert(itemID)
@@ -1965,11 +2274,13 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             documentView.layoutSubtreeIfNeeded()
             let trueMaxY = max(0, documentView.bounds.height - clipView.bounds.height)
             let trueGap = trueMaxY - clipView.bounds.origin.y
+#if DEBUG
             // Glide-side smoking-gun: trueGap<0 = eased past the true bottom and now
             // pulling back UP (downward content nudge); trueGap large = chased a
             // stale, too-short bottom for many frames then jumps.
             TranscriptStreamWobbleProbe.shared.noteGlideLanding(
                 trueGap: trueGap, docHeight: documentView.bounds.height, clipHeight: clipView.bounds.height)
+#endif
             guard abs(trueGap) > 0.5 else {
                 if abs(trueGap) > 0.01 {
                     isProgrammaticScroll = true
@@ -2107,10 +2418,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
         /// Configure the cell for an item. Every row is native; the spec's view is
         /// built/reused and pinned to the cell with the row insets.
-        func installRootView(item: PiAgentAppKitTranscriptItem, width: CGFloat, profiler: TranscriptScrollProfiler? = nil) {
+        func installRootView(item: PiAgentAppKitTranscriptItem, width: CGFloat, profiler: TranscriptScrollProfiler? = nil, via: String = "scroll-vend") {
             self.profiler = profiler
             guard case .native(let spec) = item.kind else { return }
-            installNativeRow(spec: spec, item: item, width: width)
+            installNativeRow(spec: spec, item: item, width: width, via: via)
         }
 
         /// Tear down the native row view (when a recycled cell switches to a
@@ -2130,19 +2441,28 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// Native render path: build/configure the spec's view pinned to the cell
         /// with the row insets, rebuilding if the recycled cell held a different
         /// view type.
-        private func installNativeRow(spec: NativeRowSpec, item: PiAgentAppKitTranscriptItem, width: CGFloat) {
+        private func installNativeRow(spec: NativeRowSpec, item: PiAgentAppKitTranscriptItem, width: CGFloat, via: String = "scroll-vend") {
             // A recycled cell holding a different native view type must rebuild it.
             if let existingType = nativeRowTypeID, existingType != spec.typeID {
                 teardownNativeRow()
             }
             let row: NSView
             let createdNow: Bool
+#if DEBUG
+            var makeMs = 0.0
+#endif
             if let existing = nativeRow {
                 row = existing
                 createdNow = false
             } else {
                 createdNow = true
+#if DEBUG
+                let t0 = CACurrentMediaTime()
                 row = spec.make()
+                makeMs = (CACurrentMediaTime() - t0) * 1000
+#else
+                row = spec.make()
+#endif
                 row.translatesAutoresizingMaskIntoConstraints = false
                 addSubview(row)
                 // Full-width row; the view sizes/positions its own content.
@@ -2187,7 +2507,28 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             let revisionChanged = itemChanged || configuredRevision != item.contentRevision
             let widthChanged = abs(configuredWidth - width) > 0.5
             if revisionChanged || widthChanged {
+#if DEBUG
+                // DEBUG-only attribution of the build cost — fresh-view construction
+                // + the markdown configure (reconcile vs full rebuild). This is the
+                // scroll/stream hitch the other profiler hooks never wrapped (it runs
+                // inside the table's cell-provider closure). Compiled out of release.
+                if let profiler {
+                    profiler.measureCellBuild(id: item.id, fresh: createdNow, makeMs: makeMs, via: via) {
+                        let seqBefore = NativeMarkdownTextContainer.configureSeq
+                        spec.configure(row, width)
+                        // Only trust the markdown attribution if a build actually
+                        // ran this vend (seq advanced) — a non-markdown row leaves
+                        // the statics stale, so report nil instead of mislabeling.
+                        guard NativeMarkdownTextContainer.configureSeq != seqBefore else { return nil }
+                        return (NativeMarkdownTextContainer.lastConfigureWasRebuild,
+                                NativeMarkdownTextContainer.lastConfigureBlockCount)
+                    }
+                } else {
+                    spec.configure(row, width)
+                }
+#else
                 spec.configure(row, width)
+#endif
                 lastIntrinsicHeight = -1
             }
             // `settle` is the immediate layout pass that stops a layer painting at a
