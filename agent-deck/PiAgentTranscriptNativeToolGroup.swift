@@ -480,10 +480,10 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         return card
     }
 
-    /// One MCP call: a `server/tool` headline (tool emphasized) with trailing "View"
-    /// (opens the full response in a modal, mirroring the Changes card's "Open") and
-    /// "Copy" buttons. The raw response is never dumped inline, and the args are not
-    /// shown — the headline is the call, the modal is the detail.
+    /// One MCP call: a `server/tool` headline (tool emphasized) with a trailing "View"
+    /// button that opens the full response in a modal (mirroring the Changes card's
+    /// "Open"; Copy lives inside that modal). The raw response is never dumped inline,
+    /// and the args are not shown — the headline is the call, the modal is the detail.
     private func buildMCPRow(_ row: NativeToolGroupModel.MCP.Row) -> NSView {
         let titleRow = NSStackView()
         titleRow.translatesAutoresizingMaskIntoConstraints = false
@@ -516,8 +516,8 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
 
         titleRow.addArrangedSubview(NSView())  // spacer pushes the buttons to the trailing edge
 
-        // Both success and error responses get View/Copy — an error IS the response,
-        // and the user must be able to read it.
+        // Both success and error responses get a View button — an error IS the
+        // response, and the user must be able to read it (Copy is inside the modal).
         if let result = row.resultPreview, !result.isEmpty {
             mcpResultByRowID[row.id.uuidString] = (server: row.server, tool: row.tool, result: result)
             let viewBtn = NSButton(title: "View", target: self, action: #selector(openMCPResult(_:)))
@@ -526,13 +526,6 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
             viewBtn.font = NativeTranscriptFont.caption2(.semibold)
             viewBtn.identifier = NSUserInterfaceItemIdentifier(row.id.uuidString)
             titleRow.addArrangedSubview(viewBtn)
-
-            let copyBtn = NSButton(title: "Copy", target: self, action: #selector(copyMCPResult(_:)))
-            copyBtn.bezelStyle = .rounded
-            copyBtn.controlSize = .small
-            copyBtn.font = NativeTranscriptFont.caption2(.semibold)
-            copyBtn.identifier = NSUserInterfaceItemIdentifier(row.id.uuidString)
-            titleRow.addArrangedSubview(copyBtn)
         }
 
         // Success rows are just the headline; error rows add a concise red one-liner
@@ -571,14 +564,6 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         let controller = NSHostingController(rootView: sheet)
         hosting = controller
         host.presentAsSheet(controller)
-    }
-
-    @objc private func copyMCPResult(_ sender: NSButton) {
-        guard let raw = sender.identifier?.rawValue, let call = mcpResultByRowID[raw] else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(call.result, forType: .string)
-        sender.title = "Copied"
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { sender.title = "Copy" }
     }
 
     // MARK: Web card
