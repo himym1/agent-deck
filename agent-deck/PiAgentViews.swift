@@ -1049,10 +1049,14 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
         func schedulePrewarm() {
             guard !Self.prewarmDisabled, let tableView else { return }
-            // Skip entirely while streaming: new rows are arriving every pulse, so
-            // the work list would churn and the visible path owns the main thread.
-            // A post-stream apply re-triggers this and pre-warms then.
-            guard !profiler.isStreamingRecently else { return }
+            // While streaming AND still pinned to the bottom, skip: new rows arrive
+            // every pulse and the visible streaming row owns the main thread, so a
+            // heavy pre-warm build would hitch what the reader is watching. But once
+            // the reader has scrolled UP to read history (auto-follow off), the
+            // stream is off-screen — pre-warm the history they're scrolling toward so
+            // those rows are already built+measured (no construction stutter, no
+            // estimate→real shift) even mid-stream.
+            guard !profiler.isStreamingRecently || !isAutoFollowing else { return }
             // Build the work list: every row without a live cached cell, in document
             // order, capped to the cache limit (pre-warming past it would just evict
             // what we built). Skip while streaming — new content is arriving and the
@@ -1338,6 +1342,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // capture mixes "scrolling a finished transcript" with "live generation"
             // and they need opposite fixes.
             if streamingUpdate { profiler.noteStreamingActivity() }
+#if DEBUG
+            if streamingUpdate { maybeRunStreamScrollTest() }
+#endif
 
             self.items = items
             itemByID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
@@ -1517,6 +1524,39 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         }
 
 #if DEBUG
+        // Reproduces the "scroll against the stream → jump" bug: mid-stream, fake a
+        // user scroll UP away from the bottom + let the scroll grace window lapse,
+        // then measure how far the viewport DRIFTS over the next 2s of streaming.
+        // drift≈0 = the viewport held (fixed); drift>0 = the follow glide yanked the
+        // reader back toward the bottom (the bug).
+        //   defaults write streetcoding.agent-deck StreamScrollTestEnabled -bool YES
+        private var streamScrollTestDone = false
+        private func maybeRunStreamScrollTest() {
+            guard !streamScrollTestDone,
+                  UserDefaults.standard.bool(forKey: "StreamScrollTestEnabled"),
+                  let scrollView, let dv = scrollView.documentView, orderedIDs.count > 20 else { return }
+            streamScrollTestDone = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                guard let self, let scrollView = self.scrollView, let dv = scrollView.documentView else { return }
+                let clip = scrollView.contentView
+                let target = max(0, clip.bounds.origin.y - 500)
+                self.isProgrammaticScroll = true
+                clip.scroll(to: NSPoint(x: 0, y: target)); scrollView.reflectScrolledClipView(clip)
+                self.isProgrammaticScroll = false
+                self.isAutoFollowing = false        // user scrolled away
+                self.lastUserScrollTime = 0          // …a while ago: grace window lapsed
+                self.stopFollowGlide()
+                let maxY0 = max(0, dv.bounds.height - clip.bounds.height)
+                TranscriptScrollProfiler.fileLog("STREAMSCROLLTEST away y=\(Int(target)) maxY=\(Int(maxY0)) gapFromBottom=\(Int(maxY0 - target))")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                    guard let self, let scrollView = self.scrollView, let dv = scrollView.documentView else { return }
+                    let nowY = scrollView.contentView.bounds.origin.y
+                    let maxY = max(0, dv.bounds.height - scrollView.contentView.bounds.height)
+                    TranscriptScrollProfiler.fileLog("STREAMSCROLLTEST drift=\(Int(nowY - target)) finalY=\(Int(nowY)) maxY=\(Int(maxY)) (drift~0=HELD, large+=YANKED-to-bottom)")
+                }
+            }
+        }
+
         private var scrollProbeDone = false
         /// Deterministic per-session scroll probe: on each session switch, if the
         /// session is big enough to be interesting, wait for pre-warm to settle then
@@ -2245,7 +2285,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// frame. Idempotent — if a glide is already running it simply continues
         /// and naturally picks up the new, larger bottom on its next tick.
         private func startFollowGlide() {
-            guard followGlideTimer == nil else { return }
+            // Never start a glide when auto-follow is disengaged — the caller's
+            // intent check and this guard together ensure the glide can only run
+            // while the reader is actually pinned to the bottom.
+            guard followGlideTimer == nil, isAutoFollowing else { return }
             let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated {
                     // self is nil only after the coordinator tore down, which
@@ -2265,6 +2308,16 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             }
             // The user's scroll is authoritative — disengage and let it stand.
             if isUserScrollingRecently {
+                stopFollowGlide()
+                return
+            }
+            // Auto-follow is disengaged (the user scrolled away from the bottom) —
+            // the glide must NEVER move the viewport, even if a stale timer is still
+            // ticking or the user paused long enough for the scroll grace window to
+            // lapse. Without this, a streaming re-tile lets the glide ease back to
+            // the bottom and yanks the reader down: the "scroll against the stream
+            // makes it jump" bug.
+            guard isAutoFollowing else {
                 stopFollowGlide()
                 return
             }
