@@ -129,6 +129,44 @@ struct MCPServersScreen: View {
             rowStatus(entry)
         }
         .padding(.vertical, 2)
+        .contextMenu { serverContextMenu(entry) }
+    }
+
+    /// Right-click actions for a server row, mirroring the Skills row menu. Edit/Remove
+    /// appear only for app-owned servers (`~/.pi/agent/mcp.json`); read-only servers
+    /// still get Test and Reveal so the defining file can be opened by hand.
+    @ViewBuilder
+    private func serverContextMenu(_ entry: MCPServerEntry) -> some View {
+        Button {
+            Task { await probe(entry) }
+        } label: {
+            Label("Test Connection", systemImage: "bolt.horizontal")
+        }
+        .disabled(statusByServer[entry.name] == .probing)
+
+        Button {
+            revealInFinder(entry)
+        } label: {
+            Label("Reveal Config in Finder", systemImage: "finder")
+        }
+
+        if viewModel.mcpServerIsEditable(entry) {
+            Divider()
+            Button {
+                editorModel = .edit(entry)
+            } label: {
+                Label("Edit Server", systemImage: "square.and.pencil")
+            }
+            Button(role: .destructive) {
+                pendingDeleteName = entry.name
+            } label: {
+                Label("Remove Server", systemImage: "trash")
+            }
+        }
+    }
+
+    private func revealInFinder(_ entry: MCPServerEntry) {
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: entry.sourcePath)])
     }
 
     @ViewBuilder
@@ -151,6 +189,7 @@ struct MCPServersScreen: View {
                     connectionCard(entry)
                     toolsCard(entry)
                     projectAssignmentCard(entry)
+                    removeCard(entry)
                 }
             }
         } else {
@@ -190,9 +229,6 @@ struct MCPServersScreen: View {
                         .disabled(statusByServer[entry.name] == .probing)
                     if viewModel.mcpServerIsEditable(entry) {
                         Button("Edit") { editorModel = .edit(entry) }.controlSize(.small)
-                        Button(role: .destructive) { pendingDeleteName = entry.name } label: {
-                            Image(systemName: "trash")
-                        }.controlSize(.small)
                     }
                 }
                 detailRow(icon: entry.config.resolvedTransport == .stdio ? "terminal" : "globe", text: transportLabel(entry))
@@ -284,6 +320,42 @@ struct MCPServersScreen: View {
                         .allowsHitTesting(!isGlobal)
                         if project.id != viewModel.enabledProjects.last?.id { Divider() }
                     }
+                }
+            }
+        }
+    }
+
+    /// Delete affordance, mirroring the Skills "Delete Skill" card. App-owned servers
+    /// get a destructive Remove button; read-only ones explain where they're defined so
+    /// the user knows to edit that file (we can't rewrite a config we don't own).
+    @ViewBuilder
+    private func removeCard(_ entry: MCPServerEntry) -> some View {
+        if viewModel.mcpServerIsEditable(entry) {
+            AppCard(title: "Remove Server") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Remove “\(entry.name)” from ~/.pi/agent/mcp.json and clear it from every project and agent assignment.")
+                        .font(.callout)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Button("Remove Server", role: .destructive) {
+                        pendingDeleteName = entry.name
+                    }
+                    .appDestructiveButton()
+                }
+            }
+        } else {
+            AppCard(title: "Read-only") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("This server is defined in a file Agent Deck doesn't own, so it can't be edited or removed here. Open the file to change or delete it.")
+                        .font(.callout)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    detailRow(icon: "doc", text: URL(fileURLWithPath: entry.sourcePath).path)
+                    Button("Reveal in Finder") { revealInFinder(entry) }
+                        .appSecondaryButton()
                 }
             }
         }

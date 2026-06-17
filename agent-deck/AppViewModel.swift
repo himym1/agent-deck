@@ -3459,9 +3459,15 @@ final class AppViewModel: NSObject {
                 return
             }
             await self.mcpConnectionManager.configure(servers: configured)
-            // Discover every server's tools; per-session scoping is applied when the
-            // catalog is rendered (mcpCatalogPrompt) and on each bridge call.
-            self.mcpCatalogSnapshot = await self.mcpConnectionManager.discoverCatalog(serverNames: names)
+            // Connect/enumerate ONLY servers assigned to this project (defaults +
+            // project assignment + any agent available to the project). Unassigned
+            // servers stay registered but unconnected, so adding an MCP without
+            // assigning it never spawns its process or triggers its permission prompt.
+            // The manager keeps connections live across sessions, so a server connects
+            // (and prompts) at most once, not on every new chat. Per-session scoping is
+            // still re-applied when the catalog is rendered and on each bridge call.
+            let scoped = self.assignedMCPServerNames(forProjectPath: projectURL?.path)
+            self.mcpCatalogSnapshot = await self.mcpConnectionManager.discoverCatalog(serverNames: scoped)
         }
     }
 
@@ -3579,6 +3585,21 @@ final class AppViewModel: NSObject {
         return resolved.intersection(mcpConfiguredServerNames)
     }
 
+    /// MCP servers worth connecting when a chat in `projectPath` is opened: the global
+    /// defaults, the project's own assignment, and every server any agent available to
+    /// that project assigns (so a bound-agent chat finds its tools already discovered).
+    /// Intersected with the configured set. A server added but assigned to nothing
+    /// (e.g. an Xcode MCP) is excluded here, so it is never connected and never prompts.
+    private func assignedMCPServerNames(forProjectPath projectPath: String?) -> Set<String> {
+        var names = appSettings.defaultMcpServerNames
+        if let projectPath {
+            names.formUnion(projectPreference(for: projectPath).assignedMcpServerNames)
+        }
+        let agents = projectPath.flatMap { allProjectSnapshots[$0]?.effectiveAgents } ?? globalSnapshot.effectiveAgents
+        for agent in agents { names.formUnion(agent.resolved.mcpServers ?? []) }
+        return names.intersection(mcpConfiguredServerNames)
+    }
+
     // MARK: MCP assignment (used by the MCP servers management UI)
 
     /// All configured MCP server entries for the active project (merged `mcp.json`).
@@ -3592,11 +3613,12 @@ final class AppViewModel: NSObject {
 
     func setMcpServer(_ name: String, enabled: Bool, for project: DiscoveredProject) {
         projectPreferencesStore.setAssignedMcpServer(name, assigned: enabled, for: project.path)
-        // Assignment only changes which servers a SESSION scopes at launch; the
-        // manager's configured set (all servers) is unchanged, so there is nothing to
-        // reconfigure or reconnect. A lightweight in-memory reconcile keeps the toggle
-        // instant, exactly like skill/agent project-assignment toggles.
         applyProjectPreferenceChanges()
+        // Assignment now governs which servers we actually connect, so re-run scoped
+        // discovery: a newly-assigned server connects (and populates the catalog) while
+        // a newly-unassigned one drops out. Connections are reused, so this only spawns
+        // a server process the first time it becomes assigned.
+        refreshMCPConfigurationIfNeeded(projectURL: projectRootURL, forced: true)
     }
 
     func isMcpServerEnabledForAllProjects(_ name: String) -> Bool {
@@ -3604,11 +3626,11 @@ final class AppViewModel: NSObject {
     }
 
     func setMcpServerEnabledForAllProjects(_ name: String, enabled: Bool) {
-        // Same as the per-project setter: this is an assignment default, not a config
-        // change, so the @Observable appSettings reassignment updates the UI without a
-        // manager reconnect.
         appSettingsController.setDefaultMcpServer(name, enabled: enabled)
         appSettings = appSettingsController.settings
+        // A default assignment makes this server in-scope for every project, so re-run
+        // scoped discovery to connect/enumerate it (or drop it). Connections are reused.
+        refreshMCPConfigurationIfNeeded(projectURL: projectRootURL, forced: true)
     }
 
     func setMCPEnabled(_ enabled: Bool) {
