@@ -384,13 +384,21 @@ struct MCPServersScreen: View {
         statusByServer = statusByServer.filter { key, _ in loaded.contains { $0.name == key } }
         isLoading = false
 
-        // Refresh OAuth connected-state for remote servers, then auto-probe each so the
-        // health pill shows without a manual Test.
+        // Refresh OAuth connected-state for remote servers.
         for entry in loaded where entry.config.resolvedTransport != .stdio {
             connectedByServer[entry.name] = await viewModel.mcpServerIsConnected(entry.name)
         }
+        // Reflect what's already known instead of reconnecting: show a health pill from
+        // the cached tool list for servers already discovered, and only re-list over an
+        // EXISTING live connection. Servers with no live connection are left "Untested"
+        // so merely opening this view never spawns a process or re-triggers a permission
+        // prompt — the explicit Test button handles those.
         for entry in loaded {
-            Task { await probe(entry) }
+            if let cached = await viewModel.cachedMCPTools(entry.name) {
+                statusByServer[entry.name] = .ok(cached)
+            } else if await viewModel.mcpServerHasLiveConnection(entry.name) {
+                Task { await probe(entry) }
+            }
         }
     }
 

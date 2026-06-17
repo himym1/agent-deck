@@ -159,9 +159,27 @@ actor MCPConnectionManager {
         return entries.sorted { $0.qualifiedName < $1.qualifiedName }
     }
 
-    /// One-shot connect + list against a config entry, for a "test connection" button.
-    /// Uses a throwaway connection so it works for servers not yet in the live set.
+    /// Tools already discovered for a server (catalog warm-up or a prior list), without
+    /// opening a connection. nil when nothing has been discovered yet.
+    func cachedTools(server: String) -> [MCPToolDescriptor]? { toolCache[server] }
+
+    /// Whether a live connection to this server already exists (reused across sessions).
+    func hasLiveConnection(_ server: String) -> Bool { connections[server] != nil }
+
+    /// Connect + list against a config entry, for a "test connection" button. Reuses the
+    /// live connection when one already exists, so re-testing an already-connected server
+    /// doesn't spawn a second process or re-trigger its permission prompt. Only servers
+    /// with no live connection get a throwaway probe (so it still works for read-only
+    /// servers not in the live set).
     func probe(entry: MCPServerEntry) async -> MCPProbeResult {
+        if connections[entry.name] != nil {
+            do {
+                let tools = try await listTools(server: entry.name)
+                return .ok(tools.map { MCPProbeTool(name: $0.name, description: $0.description) })
+            } catch {
+                return .failure((error as? MCPError)?.errorDescription ?? error.localizedDescription)
+            }
+        }
         let injected = transportFactory
         let provider = authTokenProvider
         let serverName = entry.name

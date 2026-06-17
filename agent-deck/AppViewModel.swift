@@ -3480,6 +3480,18 @@ final class AppViewModel: NSObject {
         await mcpConnectionManager.probe(entry: entry)
     }
 
+    /// Tools already discovered for a server (no connection opened), so the management
+    /// view can show a health pill from cache instead of reconnecting on entry.
+    func cachedMCPTools(_ name: String) async -> [MCPProbeTool]? {
+        await mcpConnectionManager.cachedTools(server: name)?
+            .map { MCPProbeTool(name: $0.name, description: $0.description) }
+    }
+
+    /// Whether a live (reused) connection to this server already exists.
+    func mcpServerHasLiveConnection(_ name: String) async -> Bool {
+        await mcpConnectionManager.hasLiveConnection(name)
+    }
+
     /// Tears down all MCP connections. Called at app termination.
     func shutdownMCP() async {
         await mcpConnectionManager.shutdown()
