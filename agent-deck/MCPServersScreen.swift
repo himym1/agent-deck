@@ -440,7 +440,7 @@ private struct MCPServerEditorSheet: View {
 
             Divider()
 
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 16) {
                     if !isEditing {
                         Picker("Input", selection: $inputMode) {

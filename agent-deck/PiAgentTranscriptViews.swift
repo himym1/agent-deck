@@ -1758,7 +1758,7 @@ struct PiAgentMCPResultTextView: View {
     @State private var rendered: String = ""
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: true) {
+        ScrollView(.vertical, showsIndicators: false) {
             Text(rendered.isEmpty ? text : rendered)
                 .font(AppTheme.Font.caption.monospaced())
                 .textSelection(.enabled)
