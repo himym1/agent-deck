@@ -836,6 +836,10 @@ private struct AgentLibraryPane: View {
             warningPopoverAgentID: $warningPopoverAgentID,
             onEdit: { onEditAgent(agent) }
         )
+        // Fill the row and give it a hit-testable shape so a right-click anywhere on the
+        // row (not just on the name text) opens the context menu.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .contextMenu {
             Button {
                 openFile(filePath)

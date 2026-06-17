@@ -74,6 +74,9 @@ struct GitHubIssueRowContent: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Hit-testable shape so a right-click anywhere on the row (not just on the title
+        // text) opens the context menu.
+        .contentShape(Rectangle())
         .contextMenu { contextMenu }
     }
 

@@ -389,6 +389,10 @@ struct PromptsScreen: View {
             canRename: canRename,
             onEdit: { promptEditTarget = makePromptEditTarget(prompt) }
         )
+        // Fill the row and give it a hit-testable shape so a right-click anywhere on the
+        // row (not just on the name text) opens the context menu.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .contextMenu {
             Button {
                 copyCommandValue(prompt.invocation)

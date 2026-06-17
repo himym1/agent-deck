@@ -243,6 +243,10 @@ struct MemoryScreen: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, 6)
+        // Fill the row and give it a hit-testable shape so a right-click anywhere on the
+        // row (not just on the title text) opens the context menu.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .contextMenu {
             ForEach(AgentMemoryStatus.allCases) { status in
                 if status != record.status {

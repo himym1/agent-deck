@@ -129,6 +129,10 @@ struct MCPServersScreen: View {
             rowStatus(entry)
         }
         .padding(.vertical, 2)
+        // Fill the row and give it a hit-testable shape so a right-click anywhere on the
+        // row (not just on the name text) opens the context menu.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .contextMenu { serverContextMenu(entry) }
     }
 
@@ -140,7 +144,7 @@ struct MCPServersScreen: View {
         Button {
             Task { await probe(entry) }
         } label: {
-            Label("Test Connection", systemImage: "bolt.horizontal")
+            Label(isServerConnected(entry) ? "Refresh Tools" : "Connect", systemImage: "bolt.horizontal")
         }
         .disabled(statusByServer[entry.name] == .probing)
 
@@ -215,18 +219,20 @@ struct MCPServersScreen: View {
                 HStack(spacing: 8) {
                     detailStatusTag(entry)
                     Spacer(minLength: 8)
-                    if entry.config.resolvedTransport != .stdio {
-                        if connectingServers.contains(entry.name) {
-                            AppSpinner().controlSize(.small)
-                        } else if connectedByServer[entry.name] ?? false {
-                            Button("Sign out") { Task { await signOut(entry) } }.controlSize(.small)
-                        } else {
-                            Button("Connect") { Task { await connect(entry) } }.controlSize(.small)
-                        }
+                    if entry.config.resolvedTransport == .stdio {
+                        // Local servers connect directly; once connected the same button
+                        // re-lists tools over the live connection.
+                        probeButton(entry)
+                    } else if connectingServers.contains(entry.name) {
+                        AppSpinner().controlSize(.small)
+                    } else if connectedByServer[entry.name] ?? false {
+                        // Remote servers authorize via OAuth first; offer a Refresh once
+                        // signed in, plus Sign out.
+                        Button("Sign out") { Task { await signOut(entry) } }.controlSize(.small)
+                        probeButton(entry)
+                    } else {
+                        Button("Connect") { Task { await connect(entry) } }.controlSize(.small)
                     }
-                    Button("Test") { Task { await probe(entry) } }
-                        .controlSize(.small)
-                        .disabled(statusByServer[entry.name] == .probing)
                     if viewModel.mcpServerIsEditable(entry) {
                         Button("Edit") { editorModel = .edit(entry) }.controlSize(.small)
                     }
@@ -239,6 +245,14 @@ struct MCPServersScreen: View {
                 }
             }
         }
+    }
+
+    /// Connect-or-refresh button: "Connect" when the server isn't connected yet, "Refresh"
+    /// once it is (re-lists tools over the live connection).
+    private func probeButton(_ entry: MCPServerEntry) -> some View {
+        Button(isServerConnected(entry) ? "Refresh" : "Connect") { Task { await probe(entry) } }
+            .controlSize(.small)
+            .disabled(statusByServer[entry.name] == .probing)
     }
 
     private func detailRow(icon: String, text: String) -> some View {
@@ -254,14 +268,20 @@ struct MCPServersScreen: View {
     private func detailStatusTag(_ entry: MCPServerEntry) -> some View {
         switch statusByServer[entry.name] {
         case .probing:
-            HStack(spacing: 6) { AppSpinner().controlSize(.small); Text("Testing…").font(.caption).foregroundStyle(.secondary) }
+            HStack(spacing: 6) { AppSpinner().controlSize(.small); Text("Connecting…").font(.caption).foregroundStyle(.secondary) }
         case let .ok(tools):
             AppLabelTag(text: "Connected · \(tools.count) tool\(tools.count == 1 ? "" : "s")", color: .green)
         case .failed:
             AppLabelTag(text: "Not reachable", color: .orange)
         case nil:
-            AppLabelTag(text: "Untested", color: .secondary)
+            AppLabelTag(text: "Not connected", color: .secondary)
         }
+    }
+
+    /// True when this server currently has a successful (connected) status.
+    private func isServerConnected(_ entry: MCPServerEntry) -> Bool {
+        if case .ok = statusByServer[entry.name] { return true }
+        return false
     }
 
     private func toolsCard(_ entry: MCPServerEntry) -> some View {
@@ -270,7 +290,7 @@ struct MCPServersScreen: View {
             if tools.isEmpty {
                 Text(statusByServer[entry.name] == .probing
                      ? "Loading tools…"
-                     : "Run Test (or Connect for OAuth servers) to load this server's tools.")
+                     : "Connect this server to load its tools.")
                     .font(.caption).foregroundStyle(AppTheme.mutedText)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
