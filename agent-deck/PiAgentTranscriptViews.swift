@@ -1854,7 +1854,7 @@ struct PiAgentFullDiffView: View {
     @State private var lines: [PiAgentFullDiffLine] = []
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: true) {
+        ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(lines.indices, id: \.self) { index in
                     let line = lines[index]

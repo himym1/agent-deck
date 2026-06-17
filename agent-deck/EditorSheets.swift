@@ -464,7 +464,7 @@ struct PiAgentFinalSystemPromptSheet: View {
 
             Divider()
 
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 Text(text)
                     .font(.system(.body, design: .monospaced))
                     .textSelection(.enabled)

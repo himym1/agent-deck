@@ -869,7 +869,7 @@ private struct PiAgentIssuePickerPopover: View {
                     .foregroundStyle(AppTheme.mutedText)
                     .frame(width: 400, alignment: .leading)
             } else {
-                ScrollView {
+                ScrollView(showsIndicators: false) {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(items.prefix(20)) { item in
                             ZStack(alignment: .topTrailing) {
