@@ -1789,15 +1789,63 @@ struct PiAgentMCPResultTextView: View {
     }
 
     /// Pretty-prints `raw` when the whole string parses as JSON; nil otherwise.
+    /// Re-indents the ORIGINAL text rather than re-serializing a parsed object, so
+    /// number literals stay byte-exact (`5.2` never becomes `5.2000000000000002`) and
+    /// key order is preserved.
     static func prettyJSON(_ raw: String) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix("{") || trimmed.hasPrefix("[") else { return nil }
+        guard trimmed.first == "{" || trimmed.first == "[" else { return nil }
+        // Validate it really is JSON before re-indenting.
         guard let data = trimmed.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let pretty = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else {
-            return nil
+              (try? JSONSerialization.jsonObject(with: data)) != nil else { return nil }
+
+        var out = ""
+        out.reserveCapacity(trimmed.count + trimmed.count / 4)
+        var indent = 0
+        var inString = false
+        var escaped = false
+        let pad = "  "
+        func newline() { out += "\n" + String(repeating: pad, count: indent) }
+
+        let chars = Array(trimmed)
+        var i = 0
+        while i < chars.count {
+            let c = chars[i]
+            if inString {
+                out.append(c)
+                if escaped { escaped = false }
+                else if c == "\\" { escaped = true }
+                else if c == "\"" { inString = false }
+                i += 1
+                continue
+            }
+            switch c {
+            case "\"":
+                inString = true
+                out.append(c)
+            case "{", "[":
+                // Collapse an empty container onto one line.
+                var j = i + 1
+                while j < chars.count, chars[j] == " " || chars[j] == "\n" || chars[j] == "\t" || chars[j] == "\r" { j += 1 }
+                if j < chars.count, (c == "{" && chars[j] == "}") || (c == "[" && chars[j] == "]") {
+                    out.append(c); out.append(chars[j]); i = j
+                } else {
+                    out.append(c); indent += 1; newline()
+                }
+            case "}", "]":
+                indent = max(0, indent - 1); newline(); out.append(c)
+            case ",":
+                out.append(c); newline()
+            case ":":
+                out.append(": ")
+            case " ", "\n", "\t", "\r":
+                break  // drop insignificant whitespace outside strings
+            default:
+                out.append(c)
+            }
+            i += 1
         }
-        return String(decoding: pretty, as: UTF8.self)
+        return out
     }
 }
 
