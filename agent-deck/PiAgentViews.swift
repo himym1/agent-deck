@@ -1361,6 +1361,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
             if isSessionSwitch || idsChanged {
                 let anchor = (!isSessionSwitch && !explicitScroll && !wasFollowing) ? captureScrollAnchor() : nil
+#if DEBUG
+                let coldT0 = isSessionSwitch ? CACurrentMediaTime() : 0
+                let coldCacheBefore = isSessionSwitch ? cellCache.count : 0
+#endif
                 if isSessionSwitch {
                     pendingHeightIDs.removeAll()
                     pendingHeightWork?.cancel()
@@ -1420,6 +1424,13 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     // Rows were added/removed (or the session switched) — content
                     // geometry genuinely moved, so passive follow may act on it.
                     self.handleScrollAfterUpdate(isSessionSwitch: isSessionSwitch, explicitScroll: explicitScroll, wasFollowing: wasFollowing, contentAdvanced: true)
+#if DEBUG
+                    if isSessionSwitch {
+                        let ms = (CACurrentMediaTime() - coldT0) * 1000
+                        let built = self.cellCache.count - coldCacheBefore
+                        TranscriptScrollProfiler.fileLog("COLDSTART session=\(self.sessionID?.uuidString.prefix(8) ?? "?") rows=\(self.orderedIDs.count) builtCells=\(built) ms=\(String(format: "%.0f", ms))")
+                    }
+#endif
                     // Build off-screen cells during idle so scrolling never pays
                     // the per-row construction cost (the dominant scroll hitch).
                     self.schedulePrewarm()
@@ -2053,8 +2064,16 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 guard visible.length > 0 else { return }
                 var ids = Set<String>()
                 for row in visible.location ..< visible.location + visible.length where row < orderedIDs.count {
-                    ids.insert(orderedIDs[row])
+                    let id = orderedIDs[row]
+                    // Skip rows whose height is already measured for this width (the
+                    // idle pre-warm measures every cell). Re-measuring them forces a
+                    // full layout pass per heavy markdown cell — the dominant cost of
+                    // re-opening a long session whose cells are already cached. A
+                    // cached height is authoritative, so the first frame stays exact.
+                    if measuredHeightByID[id]?[widthBucket] == nil { ids.insert(id) }
                 }
+                // All visible heights known (pre-warmed revisit) — already settled.
+                guard !ids.isEmpty else { return }
                 let retileIDs = measureChangedCellsSynchronously(ids)
                 guard !retileIDs.isEmpty else { return }
                 flushPendingHeightWorkSynchronously()
