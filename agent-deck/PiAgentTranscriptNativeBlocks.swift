@@ -500,6 +500,9 @@ struct NativeStatusPayload {
 /// Full-width divider row: a line — capsule(icon + label + time) — line. Mirrors
 /// `PiAgentStatusTranscriptRow.compactionDivider`.
 final class PiAgentNativeStatusDividerView: NSView, PiAgentNativeRowContent {
+    /// Pill height: the ~16pt caption label plus ~6pt breathing room top & bottom.
+    /// Corner radius is half this so it stays a full capsule.
+    private static let capsuleHeight: CGFloat = 28
     private let leftRule = NSView()
     private let rightRule = NSView()
     private let capsule = NSGlassEffectView()
@@ -508,6 +511,10 @@ final class PiAgentNativeStatusDividerView: NSView, PiAgentNativeRowContent {
     private let labelField = NSTextField(labelWithString: "")
     private let timeField = NSTextField(labelWithString: "")
     private let capsuleStack = NSStackView()
+    /// `NSGlassEffectView` hugs its content view's height, so the stack's vertical
+    /// `edgeInsets` never widen the pill — the label ends up touching the stroke.
+    /// We drive the capsule height explicitly instead (set in `configure`).
+    private var capsuleHeightC: NSLayoutConstraint!
     var onIntrinsicHeightChange: (() -> Void)?
 
     required init() {
@@ -540,20 +547,24 @@ final class PiAgentNativeStatusDividerView: NSView, PiAgentNativeRowContent {
         capsuleStack.orientation = .horizontal
         capsuleStack.spacing = 7
         capsuleStack.alignment = .centerY
-        capsuleStack.edgeInsets = NSEdgeInsets(top: 5, left: 10, bottom: 5, right: 10)
+        // Vertical breathing room comes from the explicit capsule height below;
+        // the stack only carries horizontal insets.
+        capsuleStack.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
         capsuleStack.addArrangedSubview(iconView)
         capsuleStack.addArrangedSubview(spinner)
         capsuleStack.addArrangedSubview(labelField)
         capsuleStack.addArrangedSubview(timeField)
 
         capsule.translatesAutoresizingMaskIntoConstraints = false
-        capsule.cornerRadius = 13
+        capsule.cornerRadius = Self.capsuleHeight / 2
         capsule.contentView = capsuleStack
         addSubview(capsule)
 
+        capsuleHeightC = capsule.heightAnchor.constraint(equalToConstant: Self.capsuleHeight)
         NSLayoutConstraint.activate([
             capsule.centerXAnchor.constraint(equalTo: centerXAnchor),
             capsule.centerYAnchor.constraint(equalTo: centerYAnchor),
+            capsuleHeightC,
             leftRule.leadingAnchor.constraint(equalTo: leadingAnchor),
             leftRule.trailingAnchor.constraint(equalTo: capsule.leadingAnchor, constant: -10),
             leftRule.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -584,10 +595,9 @@ final class PiAgentNativeStatusDividerView: NSView, PiAgentNativeRowContent {
     }
 
     func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat {
-        // Capsule height (icon/label + vertical insets) plus the 4pt outer padding
-        // the SwiftUI divider carries above and below.
-        let labelH = max(16, ceil(labelField.intrinsicContentSize.height))
-        return ceil(labelH + 10 /* capsule v-insets */ + 8 /* outer .vertical 4 */)
+        // Explicit capsule height plus the 4pt outer padding the SwiftUI divider
+        // carries above and below.
+        Self.capsuleHeight + 8
     }
 }
 

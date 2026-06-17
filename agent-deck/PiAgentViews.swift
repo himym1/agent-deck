@@ -1518,6 +1518,12 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 let h = cell.forcedIntrinsicHeight()
                 guard h > 0 else { continue }
                 let height = ceil(h)
+                // Smoking-gun: the streaming row's tiled height per token, folded
+                // with the measure path that produced it (set inside forcedIntrinsic
+                // → markdown measureHeight just above). A Δ<0 here = visible wobble.
+                TranscriptStreamWobbleProbe.shared.noteTile(
+                    id: id, height: height, previousTiled: lastNotedHeight[id] ?? -1,
+                    width: contentWidth, pinned: true, gliding: followGlideTimer != nil, source: "sync")
                 measuredHeightByID[id, default: [:]][widthBucket] = height
                 if abs((lastNotedHeight[id] ?? -1) - height) > heightChangeEpsilon {
                     needRetile.insert(id)
@@ -1597,6 +1603,11 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // spurious noteHeightOfRows whenever the cache shifted without the
             // laid-out height actually changing.
             let baseline = lastNotedHeight[itemID] ?? priorMeasured ?? estimatedRowHeight
+            // Same smoking-gun line for the debounced async path (rows that aren't
+            // force-measured while pinned, e.g. when not auto-following).
+            TranscriptStreamWobbleProbe.shared.noteTile(
+                id: itemID, height: height, previousTiled: baseline,
+                width: contentWidth, pinned: isAutoFollowing, gliding: followGlideTimer != nil, source: "async")
             let delta = abs(baseline - height)
             guard delta > heightChangeEpsilon else { return }
             pendingHeightIDs.insert(itemID)
@@ -1954,6 +1965,11 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             documentView.layoutSubtreeIfNeeded()
             let trueMaxY = max(0, documentView.bounds.height - clipView.bounds.height)
             let trueGap = trueMaxY - clipView.bounds.origin.y
+            // Glide-side smoking-gun: trueGap<0 = eased past the true bottom and now
+            // pulling back UP (downward content nudge); trueGap large = chased a
+            // stale, too-short bottom for many frames then jumps.
+            TranscriptStreamWobbleProbe.shared.noteGlideLanding(
+                trueGap: trueGap, docHeight: documentView.bounds.height, clipHeight: clipView.bounds.height)
             guard abs(trueGap) > 0.5 else {
                 if abs(trueGap) > 0.01 {
                     isProgrammaticScroll = true

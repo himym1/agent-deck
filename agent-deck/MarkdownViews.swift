@@ -542,6 +542,7 @@ final class NativeMarkdownTextContainer: NSView {
         if !styleChanged, let previous,
            previous.frontmatter == document.frontmatter,
            stackView.arrangedSubviews.count == viewOffset + previous.blocks.count {
+            TranscriptStreamWobbleProbe.recordDocPath(.reconcile)
             reconcileBlocks(old: previous.blocks, new: document.blocks, frontOffset: viewOffset)
             scheduleHeightMeasurement()
             return
@@ -553,6 +554,14 @@ final class NativeMarkdownTextContainer: NSView {
         // first build (fresh recycled container) are expected and stay silent.
         if !styleChanged, previous != nil {
             Self.logIncrementalBail("frontmatterOrViewCount")
+            // A bail-to-rebuild mid-stream resets lastFullLayoutWidth → forces the
+            // cold double-pass for the next measures. This is the measure-side
+            // wobble's root trigger, so name it on the wobble line too.
+            TranscriptStreamWobbleProbe.recordDocPath(.rebuild, bailReason: "frontmatterOrViewCount")
+        } else if styleChanged {
+            TranscriptStreamWobbleProbe.recordDocPath(.styleRebuild)
+        } else {
+            TranscriptStreamWobbleProbe.recordDocPath(.firstBuild)
         }
         rebuild(from: styleChanged ? nil : previous, to: document)
         scheduleHeightMeasurement()
@@ -709,6 +718,7 @@ final class NativeMarkdownTextContainer: NSView {
         // from the runloop-scoped cache; a fresh pass (after layout settles, or
         // a scroll-back) finds the cache cleared and re-measures.
         if let heightCache, abs(heightCache.width - width) < 0.5 {
+            TranscriptStreamWobbleProbe.recordMeasure(path: .cacheHit, width: width, height: heightCache.height)
             return heightCache.height
         }
         configureWidthConstraint(to: width)
@@ -721,6 +731,7 @@ final class NativeMarkdownTextContainer: NSView {
             stackView.layoutSubtreeIfNeeded()
             let height = ceil(stackView.fittingSize.height)
             heightCache = (width, height)
+            TranscriptStreamWobbleProbe.recordMeasure(path: .cheapSingle, width: width, height: height)
             return height
         }
         // Width changed (or first measure after a rebuild). A text view's
@@ -731,11 +742,16 @@ final class NativeMarkdownTextContainer: NSView {
         // each block its real width; we then invalidate the per-block intrinsics and
         // lay out again so they re-wrap at that width before we read the fitting size.
         stackView.layoutSubtreeIfNeeded()
+        let pass1 = ceil(stackView.fittingSize.height)
         invalidateBlockIntrinsics(in: stackView)
         stackView.layoutSubtreeIfNeeded()
         let height = ceil(stackView.fittingSize.height)
         heightCache = (width, height)
         lastFullLayoutWidth = width
+        // pass1 vs height (pass2) diverging means the measure disagreed with itself
+        // within one tick — the purest measure-side wobble fingerprint.
+        TranscriptStreamWobbleProbe.recordMeasure(path: .coldDouble, width: width, height: height,
+                                                  coldPass1: pass1, coldPass2: height)
         return height
     }
 
