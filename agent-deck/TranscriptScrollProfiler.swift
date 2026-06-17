@@ -145,6 +145,12 @@ final class TranscriptScrollProfiler {
     // distinguishes "body re-evaluates every scroll frame" from "rare rebuild".
     private static var bodyCounters: [String: Int] = [:]
 
+#if DEBUG
+    /// Total times `measureBody(label:)` has been entered — used by perf tests to
+    /// prove a SwiftUI body/representable update did (or didn't) run over a window.
+    static func bodyCallCount(_ label: String) -> Int { bodyCounters[label] ?? 0 }
+#endif
+
     static func measureBody<T>(_ label: String, _ body: () -> T) -> T {
         guard isEnabled else { return body() }
         let t = CACurrentMediaTime()

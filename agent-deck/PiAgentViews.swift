@@ -62,8 +62,14 @@ struct PiAgentTranscriptStack<Content: View>: View {
 
 @MainActor
 final class PiAgentTranscriptRenderCache: ObservableObject {
-    @Published private(set) var entries: [PiAgentTranscriptEntry] = []
-    @Published private(set) var threads: [PiAgentTranscriptThread] = []
+    // NOT @Published: the transcript host re-evaluates off the revision counters
+    // below (which bump in lockstep with content in `publish`), so publishing these
+    // too is a redundant 30Hz re-eval trigger — and it would defeat the streaming
+    // pulse deferral (a held pulse updates these but intentionally does NOT bump a
+    // revision, so the host must not observe them directly). `makeItems` reads
+    // `threads` directly, which is a value read, not an observation.
+    private(set) var entries: [PiAgentTranscriptEntry] = []
+    private(set) var threads: [PiAgentTranscriptThread] = []
     @Published private(set) var renderRevision = 0
     @Published private(set) var streamingRevision = 0
     @Published private(set) var autoScrollTurnRevision = 0
@@ -224,11 +230,45 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
         if structurallyChanged {
             renderRevision += 1
         } else {
-            streamingRevision += 1
+            bumpStreamingRevisionOrDefer()
         }
 #if DEBUG
         streamSimArmIfEnabled()
 #endif
+    }
+
+    /// Bump the streaming pulse — UNLESS the reader has scrolled away from the
+    /// bottom. There the growing row is off-screen, so showing it is pointless, but
+    /// the pulse would re-evaluate the SwiftUI transcript host and force the whole
+    /// screen scaffold to re-lay-out (StackLayout / FlexFrame `sizeThatFits`, up to
+    /// ~166ms) on EVERY token — the "scrolling during a stream hitches/jumps" bug.
+    /// Hold it and flush one bump when they return to the bottom (`setUserScrolling`).
+    private func bumpStreamingRevisionOrDefer() {
+        var defer_ = userScrolling
+#if DEBUG
+        if UserDefaults.standard.bool(forKey: "StreamDeferDisabled_AB") { defer_ = false }
+#endif
+        if defer_ {
+            hasDeferredStreamingPulse = true
+        } else {
+            streamingRevision += 1
+        }
+    }
+
+    /// Set by the transcript coordinator (via the host) while a user scroll gesture
+    /// is in flight. While true, streaming pulses are deferred (see `publish`).
+    private var userScrolling = false
+    private var hasDeferredStreamingPulse = false
+    func setUserScrolling(_ scrolling: Bool) {
+        guard scrolling != userScrolling else { return }
+        userScrolling = scrolling
+        if !scrolling, hasDeferredStreamingPulse {
+            // Scroll settled — flush the held streaming growth in one pulse so the
+            // transcript catches up (off-screen below, or in view if they returned
+            // to the bottom) with a single relayout instead of one per token.
+            hasDeferredStreamingPulse = false
+            streamingRevision += 1
+        }
     }
 
 #if DEBUG
@@ -318,7 +358,7 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
             entries[idx].text += (streamSimPulses % 9 == 8) ? "\n\nNext, a fresh paragraph that adds another line or two of streamed prose. " : "token "
         }
         threads = PiAgentTranscriptThread.make(from: entries)
-        streamingRevision += 1
+        bumpStreamingRevisionOrDefer()   // honor scroll-away deferral, like real streaming
         streamSimPulses += 1
     }
 
@@ -685,6 +725,7 @@ private struct PiAgentTranscriptHost: View {
             autoScrollTurnRevision: cache.autoScrollTurnRevision,
             bottomScrollRequest: bottomScrollRequest,
             onPinnedToBottomChange: onPinnedToBottomChange,
+            onScrollingChange: { [cache] scrolling in cache.setUserScrolling(scrolling) },
             onBenchAdvanceSession: onBenchAdvanceSession,
             benchSessionCount: benchSessionCount
         )
@@ -703,6 +744,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
     let autoScrollTurnRevision: Int
     let bottomScrollRequest: Int
     let onPinnedToBottomChange: (Bool) -> Void
+    /// Called as the user starts/stops scrolling history; the cache uses it to
+    /// defer streaming pulses (and the scaffold relayout they cause) until settle.
+    let onScrollingChange: (Bool) -> Void
     /// Advance selection to the next session (the ⌘] action). Used only by the
     /// scroll benchmark to sweep multiple chats; nil disables multi-session.
     var onBenchAdvanceSession: (() -> Void)?
@@ -772,6 +816,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         context.coordinator.tableView = tableView
         context.coordinator.onBenchAdvanceSession = onBenchAdvanceSession
         context.coordinator.benchSessionCount = benchSessionCount
+        context.coordinator.onScrollingChange = onScrollingChange
         context.coordinator.setupDataSource(for: tableView)
         context.coordinator.setupScrollObservation(scrollView)
         context.coordinator.updateColumnWidthIfNeeded()
@@ -794,6 +839,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             coordinator.onPinnedToBottomChange = onPinnedToBottomChange
             coordinator.onBenchAdvanceSession = onBenchAdvanceSession
             coordinator.benchSessionCount = benchSessionCount
+            coordinator.onScrollingChange = onScrollingChange
             coordinator.updateColumnWidthIfNeeded()
             coordinator.apply(
                 items: items,
@@ -951,7 +997,17 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         // switch (set true). The follow decisions read this, NOT the live position,
         // so the smooth-glide trailing a little behind the bottom never causes the
         // follow to give up and leave the view parked below the latest content.
-        private var isAutoFollowing = true
+        private var isAutoFollowing = true {
+            didSet {
+                guard isAutoFollowing != oldValue else { return }
+                // Scrolled away from the bottom → tell the cache to DEFER streaming
+                // pulses (the off-screen growing row would otherwise force a full
+                // SwiftUI scaffold relayout — up to ~166ms — every token). Returned
+                // to the bottom → resume + flush. This is what makes scrolling /
+                // reading history during a live stream smooth.
+                onScrollingChange?(!isAutoFollowing)
+            }
+        }
         private var isProgrammaticScroll = false
         // True between willStartLiveScroll / didEndLiveScroll — an authoritative
         // "user is driving the scroll" signal, but it only fires for trackpad
@@ -1524,35 +1580,45 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         }
 
 #if DEBUG
-        // Reproduces the "scroll against the stream → jump" bug: mid-stream, fake a
-        // user scroll UP away from the bottom + let the scroll grace window lapse,
-        // then measure how far the viewport DRIFTS over the next 2s of streaming.
-        // drift≈0 = the viewport held (fixed); drift>0 = the follow glide yanked the
-        // reader back toward the bottom (the bug).
+        // Reproduces the user's actual scenario: REAL simulated scrolling (the bench
+        // scroll driver scrolls the clip view without the programmatic flag, so the
+        // bounds observer treats it as a genuine user scroll) WHILE StreamSim streams.
+        // Measures (a) HangWatchdog hitches during the stream+scroll window and (b)
+        // viewport drift after the scroll stops (glide-yank check).
         //   defaults write streetcoding.agent-deck StreamScrollTestEnabled -bool YES
         private var streamScrollTestDone = false
         private func maybeRunStreamScrollTest() {
             guard !streamScrollTestDone,
                   UserDefaults.standard.bool(forKey: "StreamScrollTestEnabled"),
-                  let scrollView, let dv = scrollView.documentView, orderedIDs.count > 20 else { return }
+                  scrollView != nil, orderedIDs.count > 20 else { return }
             streamScrollTestDone = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-                guard let self, let scrollView = self.scrollView, let dv = scrollView.documentView else { return }
+                guard let self, let scrollView = self.scrollView else { return }
+                // Scroll UP 600px as a genuine user scroll (no programmatic flag, so
+                // the bounds observer registers it and sets isAutoFollowing=false).
+                guard let tableView = self.tableView else { return }
                 let clip = scrollView.contentView
-                let target = max(0, clip.bounds.origin.y - 500)
-                self.isProgrammaticScroll = true
+                let target = max(0, clip.bounds.origin.y - 600)
                 clip.scroll(to: NSPoint(x: 0, y: target)); scrollView.reflectScrolledClipView(clip)
-                self.isProgrammaticScroll = false
-                self.isAutoFollowing = false        // user scrolled away
-                self.lastUserScrollTime = 0          // …a while ago: grace window lapsed
-                self.stopFollowGlide()
-                let maxY0 = max(0, dv.bounds.height - clip.bounds.height)
-                TranscriptScrollProfiler.fileLog("STREAMSCROLLTEST away y=\(Int(target)) maxY=\(Int(maxY0)) gapFromBottom=\(Int(maxY0 - target))")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                    guard let self, let scrollView = self.scrollView, let dv = scrollView.documentView else { return }
-                    let nowY = scrollView.contentView.bounds.origin.y
-                    let maxY = max(0, dv.bounds.height - scrollView.contentView.bounds.height)
-                    TranscriptScrollProfiler.fileLog("STREAMSCROLLTEST drift=\(Int(nowY - target)) finalY=\(Int(nowY)) maxY=\(Int(maxY)) (drift~0=HELD, large+=YANKED-to-bottom)")
+                // Record the top-visible ROW + its offset on screen — the true "is the
+                // content I'm reading holding still" signal (origin.y alone drifts as
+                // the document grows above/below, which is benign).
+                let topRow = tableView.row(at: NSPoint(x: 0, y: clip.bounds.origin.y + 4))
+                let topID = (topRow >= 0 && topRow < self.orderedIDs.count) ? self.orderedIDs[topRow] : ""
+                let topOffset0 = topRow >= 0 ? clip.bounds.origin.y - tableView.rect(ofRow: topRow).minY : 0
+                let h0 = HangWatchdog.hitchCount, hang0 = HangWatchdog.hangCount
+                HangWatchdog.worstHitchMs = 0
+                let upd0 = TranscriptScrollProfiler.bodyCallCount("updateNSView")
+                let rev0 = self.lastStreamingRevision
+                TranscriptScrollProfiler.fileLog("STREAMSCROLL away topID=\(topID.suffix(6)) following=\(self.isAutoFollowing) — holding 4s while streaming")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+                    guard let self, let tableView = self.tableView, let clip = self.scrollView?.contentView else { return }
+                    let rowNow = self.orderedIDs.firstIndex(of: topID) ?? -1
+                    let topOffset1 = rowNow >= 0 ? clip.bounds.origin.y - tableView.rect(ofRow: rowNow).minY : -99999
+                    let visualShift = Int(topOffset1 - topOffset0)
+                    let updates = TranscriptScrollProfiler.bodyCallCount("updateNSView") - upd0
+                    let pulses = self.lastStreamingRevision - rev0
+                    TranscriptScrollProfiler.fileLog("STREAMSCROLL end updateNSView-calls=\(updates) streamPulsesSeen=\(pulses) hitches=\(HangWatchdog.hitchCount - h0) worstHitch=\(HangWatchdog.worstHitchMs)ms VISUAL-SHIFT=\(visualShift)px")
                 }
             }
         }
@@ -2370,6 +2436,12 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             scrollView.reflectScrolledClipView(clipView)
             isProgrammaticScroll = false
         }
+
+        /// Forwarded to the render cache (via the host) to gate streaming pulses
+        /// while the reader is scrolled away from the bottom. Set in `updateNSView`.
+        /// Driven entirely by the `isAutoFollowing` didSet, so every transition
+        /// (user scroll away, return to bottom, send, session switch) is covered.
+        var onScrollingChange: ((Bool) -> Void)?
 
         private func stopFollowGlide() {
             followGlideTimer?.invalidate()
