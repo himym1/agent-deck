@@ -390,11 +390,13 @@ jobs:
               # skip patches (e.g. 2.7 -> 2.7.2) would otherwise miss 2.7.1's
               # changes. Aggregate the minor-series tags up to and including this
               # release; minor/major updates still show only the target version.
+              # List newest first so the most relevant changes appear at the top.
               current_key = [int(p) for p in version_parts]
               series = [
                   t for t in tags_in_series(version_parts[0], version_parts[1])
                   if [int(p) for p in t[1:].split(".")] <= current_key
               ]
+              series.sort(key=lambda t: [int(p) for p in t[1:].split(".")], reverse=True)
               bodies = [release_notes_for(t) for t in series]
               notes_md = "\n\n".join(b for b in bodies if b)
               if not notes_md:
