@@ -67,8 +67,27 @@ nonisolated struct RemoteSkillSource: Hashable, Sendable {
     var repo: String
     /// Explicit branch from a `/tree/<branch>` URL; `nil` uses the default branch.
     var ref: String?
-    /// Skill folder slug the input pointed at, if any (e.g. a skills.sh deep link).
-    var preselectedSkillSlug: String?
+    /// Skill folder the input pointed at, if any (e.g. a skills.sh deep link
+    /// or a `/tree/<branch>/<path>` path). This is treated as a directory
+    /// constraint during discovery, so importing from a subfolder URL only
+    /// lists skills inside that path.
+    var preselectedSkillDirectory: String?
+    /// Kept for compatibility with existing callers that only need a slug hint.
+    var preselectedSkillSlug: String? { preselectedSkillDirectory?.split(separator: "/").last.map(String.init) }
+
+    init(
+        remoteURL: String,
+        owner: String,
+        repo: String,
+        ref: String? = nil,
+        preselectedSkillDirectory: String? = nil
+    ) {
+        self.remoteURL = remoteURL
+        self.owner = owner
+        self.repo = repo
+        self.ref = ref
+        self.preselectedSkillDirectory = preselectedSkillDirectory
+    }
 
     var displayName: String { "\(owner)/\(repo)" }
 }

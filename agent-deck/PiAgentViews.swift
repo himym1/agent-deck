@@ -1606,7 +1606,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 let topRow = tableView.row(at: NSPoint(x: 0, y: clip.bounds.origin.y + 4))
                 let topID = (topRow >= 0 && topRow < self.orderedIDs.count) ? self.orderedIDs[topRow] : ""
                 let topOffset0 = topRow >= 0 ? clip.bounds.origin.y - tableView.rect(ofRow: topRow).minY : 0
-                let h0 = HangWatchdog.hitchCount, hang0 = HangWatchdog.hangCount
+                let h0 = HangWatchdog.hitchCount
                 HangWatchdog.worstHitchMs = 0
                 let upd0 = TranscriptScrollProfiler.bodyCallCount("updateNSView")
                 let rev0 = self.lastStreamingRevision
@@ -4263,8 +4263,10 @@ struct PiAgentScreen: View {
         case .thinking:
             return Self.nativeReplyPayload(for: child).map { .bubble($0) }
         case .steering(let entry):
-            // Chip-bearing steering messages use the native chip-question card,
-            // re-labeled as "Steering".
+            // Steering messages are user messages, so they render right-aligned
+            // like the initial user question. Chip-bearing ones use the native
+            // chip-question card; plain-text ones use the lighter bubble with
+            // user-message alignment and visual weight.
             let hasChips = PiAgentUserMessageContent.displayChipsNaturalWidth(
                 for: entry, skills: skills, commandSlashNames: commandSlashNames) > 0
             if hasChips {
@@ -4285,8 +4287,9 @@ struct PiAgentScreen: View {
                 markdownSource: text,
                 bodyPrefix: nil,
                 copyText: entry.text,
-                copySide: .trailing,
-                isThreadChild: true
+                copySide: .leading,
+                isThreadChild: false,
+                isUserHugged: true
             ))
         case .status(let entry):
             if let memoryEvent = entry.agentMemoryEvent {

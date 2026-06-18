@@ -32,6 +32,9 @@ struct SkillImportSheet: View {
 
     // Shared candidate list state.
     @State private var searchText = ""
+    /// Debounced, cached filter results so heavy search scoring does not run
+    /// on every body evaluation.
+    @State private var filteredCandidates: [DisplayCandidate] = []
     @State private var selectedIDs: Set<String> = []
     @State private var importErrorMessage: String?
     @State private var isImporting = false
@@ -41,7 +44,11 @@ struct SkillImportSheet: View {
     /// Per-row AI-summary state. Keyed by `DisplayCandidate.id` so it survives
     /// search/filter changes but resets when the source mode changes.
     @State private var summariesByID: [String: SummaryState] = [:]
-    @State private var hoveredCandidateID: String?
+    /// Per-row hover state is stored in a dictionary so hover only invalidates
+    /// the affected row, not the whole list.
+    @State private var hoveredCandidateIDs: Set<String> = []
+    /// Cancellation handle for the search debounce task.
+    @State private var searchDebounceTask: Task<Void, Never>?
 
     enum SummaryState: Equatable {
         case loading
@@ -76,13 +83,19 @@ struct SkillImportSheet: View {
         .onChange(of: mode) { _, _ in
             importErrorMessage = nil
             searchText = ""
+            filteredCandidates = []
             selectedIDs = []
             summariesByID = [:]
-            hoveredCandidateID = nil
+            hoveredCandidateIDs.removeAll()
         }
+        .onChange(of: searchText) { _, _ in scheduleFilterUpdate() }
+        .onChange(of: localCandidates) { _, _ in scheduleFilterUpdate(immediate: true) }
+        .onChange(of: remoteContext) { _, _ in scheduleFilterUpdate(immediate: true) }
+        .onAppear { scheduleFilterUpdate(immediate: true) }
         .onDisappear {
             localScanTask?.cancel()
             remoteFetchTask?.cancel()
+            searchDebounceTask?.cancel()
         }
     }
 
@@ -368,9 +381,26 @@ struct SkillImportSheet: View {
                             .foregroundStyle(AppTheme.mutedText)
                             .frame(maxWidth: .infinity, minHeight: 120)
                     }
-                    ForEach(filteredCandidates) { candidate in
-                        candidateRow(candidate)
-                        if candidate.id != filteredCandidates.last?.id {
+                    ForEach(Array(filteredCandidates.enumerated()), id: \.element.id) { index, candidate in
+                        CandidateRow(
+                            candidate: candidate,
+                            isSelected: Binding(
+                                get: { selectedIDs.contains(candidate.id) },
+                                set: { isSelected in
+                                    if isSelected { selectedIDs.insert(candidate.id) }
+                                    else { selectedIDs.remove(candidate.id) }
+                                }
+                            ),
+                            summaryState: summariesByID[candidate.id],
+                            isHovered: hoveredCandidateIDs.contains(candidate.id),
+                            onHover: { hovering in
+                                if hovering { hoveredCandidateIDs.insert(candidate.id) }
+                                else { hoveredCandidateIDs.remove(candidate.id) }
+                            },
+                            onRequestSummary: { Task { await requestSummary(for: candidate) } },
+                            canGenerateSummary: viewModel.skillDescriptionGenerationModel() != nil
+                        )
+                        if index < filteredCandidates.count - 1 {
                             Divider()
                         }
                     }
@@ -379,137 +409,39 @@ struct SkillImportSheet: View {
         }
     }
 
-    private func candidateRow(_ candidate: DisplayCandidate) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Toggle(isOn: Binding(
-                get: { selectedIDs.contains(candidate.id) },
-                set: { isSelected in
-                    if isSelected { selectedIDs.insert(candidate.id) }
-                    else { selectedIDs.remove(candidate.id) }
-                }
-            )) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(candidate.name)
-                            .font(.body.weight(.semibold))
-                        if let badge = candidate.badge {
-                            Text(badge)
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 2)
-                                .background(.secondary.opacity(0.12), in: Capsule())
-                        }
-                    }
-
-                    if let description = candidate.description {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Description")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(AppTheme.mutedText)
-                            Text(description)
-                                .font(.caption)
-                                .foregroundStyle(.primary)
-                                .lineLimit(2)
-                        }
-                    }
-
-                    summaryBlock(for: candidate)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(candidate.detailLabel)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(AppTheme.mutedText)
-                        Text(candidate.detailValue)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(AppTheme.mutedText)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-                .padding(.vertical, 10)
-            }
-            .appCheckbox()
-
-            if viewModel.skillDescriptionGenerationModel() != nil {
-                magicButton(for: candidate)
-                    .padding(.top, 10)
-            }
-        }
-        .contentShape(Rectangle())
-        .onHover { hovering in
-            hoveredCandidateID = hovering ? candidate.id : nil
+    /// Triggers a recomputation of `filteredCandidates` after a short debounce
+    /// when the search text changes, and immediately when the source data
+    /// changes (local/remote candidates arriving).
+    @MainActor
+    private func scheduleFilterUpdate(immediate: Bool = false) {
+        searchDebounceTask?.cancel()
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let delay: Duration = immediate || query.isEmpty ? .milliseconds(0) : .milliseconds(80)
+        let candidates = importableCandidates
+        searchDebounceTask = Task {
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            let result = Self.filteredImportableCandidates(from: candidates, query: query)
+            guard !Task.isCancelled else { return }
+            filteredCandidates = result
         }
     }
 
-    @ViewBuilder
-    private func summaryBlock(for candidate: DisplayCandidate) -> some View {
-        if let state = summariesByID[candidate.id] {
-            switch state {
-            case .loading:
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text("Summarising with AI…")
-                        .font(.caption)
-                        .foregroundStyle(AppTheme.mutedText)
-                }
-            case let .ready(text):
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "sparkles")
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(AppTheme.brandAccent)
-                        Text("AI summary")
-                            .foregroundStyle(AppTheme.mutedText)
-                    }
-                    .font(.caption2.weight(.semibold))
-                    Text(text)
-                        .font(.caption)
-                        .foregroundStyle(.primary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            case let .failed(message):
-                Label(message, systemImage: "exclamationmark.triangle")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-                    .lineLimit(2)
+    private static func filteredImportableCandidates(
+        from candidates: [DisplayCandidate],
+        query: String
+    ) -> [DisplayCandidate] {
+        guard !query.isEmpty else { return candidates }
+        return candidates
+            .compactMap { candidate -> (DisplayCandidate, Int)? in
+                guard let score = searchScore(candidate, query: query) else { return nil }
+                return (candidate, score)
             }
-        }
-    }
-
-    @ViewBuilder
-    private func magicButton(for candidate: DisplayCandidate) -> some View {
-        let state = summariesByID[candidate.id]
-        let isVisible = hoveredCandidateID == candidate.id || state != nil
-        AppCircleIconButton(
-            style: .soft,
-            tint: AppTheme.brandAccent,
-            size: 28,
-            imageScale: .medium,
-            help: magicButtonHelpText(for: state),
-            action: { Task { await requestSummary(for: candidate) } }
-        ) {
-            switch state {
-            case .loading:
-                ProgressView().controlSize(.small)
-            case .failed:
-                Image(systemName: "arrow.clockwise")
-            default:
-                Image(systemName: "sparkles")
+            .sorted { lhs, rhs in
+                if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
+                return lhs.0.name.localizedCaseInsensitiveCompare(rhs.0.name) == .orderedAscending
             }
-        }
-        .disabled(state == .loading)
-        .opacity(isVisible ? 1 : 0)
-        .animation(.easeInOut(duration: 0.15), value: isVisible)
-    }
-
-    private func magicButtonHelpText(for state: SummaryState?) -> String {
-        switch state {
-        case .loading: return "Generating summary…"
-        case .failed: return "Retry AI summary"
-        case .ready: return "Regenerate AI summary"
-        case .none: return "Summarise this skill with AI"
-        }
+            .map(\.0)
     }
 
     private func requestSummary(for candidate: DisplayCandidate) async {
@@ -601,21 +533,6 @@ struct SkillImportSheet: View {
 
     private var hiddenAlreadyImportedCount: Int {
         displayCandidates.count - importableCandidates.count
-    }
-
-    private var filteredCandidates: [DisplayCandidate] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return importableCandidates }
-        return importableCandidates
-            .compactMap { candidate -> (DisplayCandidate, Int)? in
-                guard let score = searchScore(candidate, query: query) else { return nil }
-                return (candidate, score)
-            }
-            .sorted { lhs, rhs in
-                if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
-                return lhs.0.name.localizedCaseInsensitiveCompare(rhs.0.name) == .orderedAscending
-            }
-            .map(\.0)
     }
 
     private var visibleImportableIDs: Set<String> {
@@ -822,9 +739,147 @@ struct SkillImportSheet: View {
         isPresented = false
     }
 
+    // MARK: - Row view
+
+    private struct CandidateRow: View {
+        let candidate: DisplayCandidate
+        @Binding var isSelected: Bool
+        let summaryState: SummaryState?
+        let isHovered: Bool
+        let onHover: (Bool) -> Void
+        let onRequestSummary: () -> Void
+        let canGenerateSummary: Bool
+
+        var body: some View {
+            HStack(alignment: .top, spacing: 8) {
+                Toggle(isOn: $isSelected) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(candidate.name)
+                                .font(.body.weight(.semibold))
+                            if let badge = candidate.badge {
+                                Text(badge)
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 2)
+                                    .background(.secondary.opacity(0.12), in: Capsule())
+                            }
+                        }
+
+                        if let description = candidate.description {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Description")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(AppTheme.mutedText)
+                                Text(description)
+                                    .font(.caption)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(2)
+                            }
+                        }
+
+                        summaryBlock
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(candidate.detailLabel)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(AppTheme.mutedText)
+                            Text(candidate.detailValue)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(AppTheme.mutedText)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                    .padding(.vertical, 10)
+                }
+                .appCheckbox()
+
+                if canGenerateSummary {
+                    magicButton
+                        .padding(.top, 10)
+                }
+            }
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                onHover(hovering)
+            }
+        }
+
+        @ViewBuilder
+        private var summaryBlock: some View {
+            switch summaryState {
+            case .loading:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Summarising with AI…")
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                }
+            case let .ready(text):
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "sparkles")
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(AppTheme.brandAccent)
+                        Text("AI summary")
+                            .foregroundStyle(AppTheme.mutedText)
+                    }
+                    .font(.caption2.weight(.semibold))
+                    Text(text)
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            case let .failed(message):
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+            case nil:
+                EmptyView()
+            }
+        }
+
+        @ViewBuilder
+        private var magicButton: some View {
+            let isVisible = isHovered || summaryState != nil
+            AppCircleIconButton(
+                style: .soft,
+                tint: AppTheme.brandAccent,
+                size: 28,
+                imageScale: .medium,
+                help: magicButtonHelpText,
+                action: onRequestSummary
+            ) {
+                switch summaryState {
+                case .loading:
+                    ProgressView().controlSize(.small)
+                case .failed:
+                    Image(systemName: "arrow.clockwise")
+                default:
+                    Image(systemName: "sparkles")
+                }
+            }
+            .disabled(summaryState == .loading)
+            .opacity(isVisible ? 1 : 0)
+            .animation(.easeInOut(duration: 0.15), value: isVisible)
+        }
+
+        private var magicButtonHelpText: String {
+            switch summaryState {
+            case .loading: return "Generating summary…"
+            case .failed: return "Retry AI summary"
+            case .ready: return "Regenerate AI summary"
+            case .none: return "Summarise this skill with AI"
+            }
+        }
+    }
+
     // MARK: - Search scoring
 
-    private func searchScore(_ candidate: DisplayCandidate, query: String) -> Int? {
+    private static func searchScore(_ candidate: DisplayCandidate, query: String) -> Int? {
         let queryTokens = searchTokens(query)
         guard !queryTokens.isEmpty else { return 0 }
 
@@ -855,21 +910,21 @@ struct SkillImportSheet: View {
         return score
     }
 
-    private func searchTokens(_ text: String) -> [String] {
+    private static func searchTokens(_ text: String) -> [String] {
         normalizedSearchText(text)
             .split(separator: " ")
             .map(String.init)
             .filter { !["skill", "skills", "native", "claude", "code"].contains($0) }
     }
 
-    private func normalizedSearchText(_ text: String) -> String {
+    private static func normalizedSearchText(_ text: String) -> String {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             .lowercased()
             .replacingOccurrences(of: "[^a-z0-9]+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func compactSearchText(_ text: String) -> String {
+    private static func compactSearchText(_ text: String) -> String {
         normalizedSearchText(text).replacingOccurrences(of: " ", with: "")
     }
 }

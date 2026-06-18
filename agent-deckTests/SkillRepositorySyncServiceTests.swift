@@ -59,7 +59,8 @@ final class SkillRepositorySyncServiceTests: XCTestCase {
             from: "https://github.com/owner/repo/tree/dev/skills/foo"
         )
         XCTAssertEqual(source.ref, "dev")
-        XCTAssertEqual(source.preselectedSkillSlug, "skills/foo")
+        XCTAssertEqual(source.preselectedSkillDirectory, "skills/foo")
+        XCTAssertEqual(source.preselectedSkillSlug, "foo")
     }
 
     func testResolvesSSHRemote() throws {
@@ -92,7 +93,7 @@ final class SkillRepositorySyncServiceTests: XCTestCase {
         let service = SkillRepositorySyncService()
         let clonePath = try makeTempURL()
 
-        let source = RemoteSkillSource(remoteURL: origin.path, owner: "acme", repo: "kit", ref: nil, preselectedSkillSlug: nil)
+        let source = RemoteSkillSource(remoteURL: origin.path, owner: "acme", repo: "kit", ref: nil, preselectedSkillDirectory: nil)
         let info = try await service.cloneForDiscovery(source, into: clonePath)
         XCTAssertEqual(info.resolvedRef, "main")
         XCTAssertFalse(info.headCommit.isEmpty)
@@ -128,7 +129,7 @@ final class SkillRepositorySyncServiceTests: XCTestCase {
         let service = SkillRepositorySyncService()
         let clonePath = try makeTempURL()
 
-        let source = RemoteSkillSource(remoteURL: origin.path, owner: "acme", repo: "kit", ref: nil, preselectedSkillSlug: nil)
+        let source = RemoteSkillSource(remoteURL: origin.path, owner: "acme", repo: "kit", ref: nil, preselectedSkillDirectory: nil)
         _ = try await service.cloneForDiscovery(source, into: clonePath)
         let candidates = try await service.listSkills(inCloneAt: clonePath)
         try await service.checkout(candidates, inCloneAt: clonePath)
@@ -142,6 +143,27 @@ final class SkillRepositorySyncServiceTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: clonePath.appendingPathComponent("skills/beta/SKILL.md").path))
     }
 
+    func testListSkillsRespectsDirectoryConstraint() async throws {
+        let origin = try makeOriginRepository(
+            skills: [
+                "plugins/build-ios-apps/foo": "Foo Skill",
+                "plugins/build-ios-apps/bar": "Bar Skill",
+                "plugins/other/baz": "Baz Skill",
+                "standalone": "Standalone Skill",
+            ],
+            referenceFiles: [:]
+        )
+        let service = SkillRepositorySyncService()
+        let clonePath = try makeTempURL()
+
+        let source = RemoteSkillSource(remoteURL: origin.path, owner: "acme", repo: "kit", ref: nil, preselectedSkillDirectory: "plugins/build-ios-apps")
+        _ = try await service.cloneForDiscovery(source, into: clonePath)
+
+        let candidates = try await service.listSkills(inCloneAt: clonePath, directoryConstraint: "plugins/build-ios-apps")
+        XCTAssertEqual(candidates.map(\.name).sorted(), ["Bar Skill", "Foo Skill"])
+        XCTAssertEqual(candidates.map(\.repoRelativeDirectory).sorted(), ["plugins/build-ios-apps/bar", "plugins/build-ios-apps/foo"])
+    }
+
     func testWholeRepositorySkillCheckedOutEntirely() async throws {
         let origin = try makeOriginRepository(
             skills: ["": "Root Skill"],
@@ -150,7 +172,7 @@ final class SkillRepositorySyncServiceTests: XCTestCase {
         let service = SkillRepositorySyncService()
         let clonePath = try makeTempURL()
 
-        let source = RemoteSkillSource(remoteURL: origin.path, owner: "acme", repo: "hig", ref: nil, preselectedSkillSlug: nil)
+        let source = RemoteSkillSource(remoteURL: origin.path, owner: "acme", repo: "hig", ref: nil, preselectedSkillDirectory: nil)
         _ = try await service.cloneForDiscovery(source, into: clonePath)
 
         let candidates = try await service.listSkills(inCloneAt: clonePath)
@@ -166,7 +188,7 @@ final class SkillRepositorySyncServiceTests: XCTestCase {
         let origin = try makeOriginRepository(skills: ["skills/alpha": "Alpha Skill"], referenceFiles: [:])
         let service = SkillRepositorySyncService()
         let clonePath = try makeTempURL()
-        let source = RemoteSkillSource(remoteURL: origin.path, owner: "acme", repo: "kit", ref: nil, preselectedSkillSlug: nil)
+        let source = RemoteSkillSource(remoteURL: origin.path, owner: "acme", repo: "kit", ref: nil, preselectedSkillDirectory: nil)
         _ = try await service.cloneForDiscovery(source, into: clonePath)
         let candidates = try await service.listSkills(inCloneAt: clonePath)
         try await service.checkout(candidates, inCloneAt: clonePath)
@@ -185,7 +207,7 @@ final class SkillRepositorySyncServiceTests: XCTestCase {
         let origin = try makeOriginRepository(skills: ["skills/alpha": "Alpha Skill"], referenceFiles: [:])
         let service = SkillRepositorySyncService()
         let clonePath = try makeTempURL()
-        let source = RemoteSkillSource(remoteURL: origin.path, owner: "acme", repo: "kit", ref: nil, preselectedSkillSlug: nil)
+        let source = RemoteSkillSource(remoteURL: origin.path, owner: "acme", repo: "kit", ref: nil, preselectedSkillDirectory: nil)
         _ = try await service.cloneForDiscovery(source, into: clonePath)
         let candidates = try await service.listSkills(inCloneAt: clonePath)
         try await service.checkout(candidates, inCloneAt: clonePath)

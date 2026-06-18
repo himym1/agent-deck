@@ -120,7 +120,7 @@ nonisolated struct SkillRepositorySyncService {
             owner: owner,
             repo: repo,
             ref: nil,
-            preselectedSkillSlug: slug
+            preselectedSkillDirectory: slug
         )
     }
 
@@ -139,7 +139,7 @@ nonisolated struct SkillRepositorySyncService {
             owner: owner,
             repo: repo,
             ref: nil,
-            preselectedSkillSlug: nil
+            preselectedSkillDirectory: nil
         )
     }
 
@@ -169,7 +169,7 @@ nonisolated struct SkillRepositorySyncService {
             owner: owner,
             repo: repo,
             ref: ref,
-            preselectedSkillSlug: slug
+            preselectedSkillDirectory: slug
         )
     }
 
@@ -186,7 +186,7 @@ nonisolated struct SkillRepositorySyncService {
             owner: owner,
             repo: repo,
             ref: nil,
-            preselectedSkillSlug: nil
+            preselectedSkillDirectory: nil
         )
     }
 
@@ -240,18 +240,31 @@ nonisolated struct SkillRepositorySyncService {
     /// skill. Otherwise every `SKILL.md`'s parent directory is a skill root,
     /// excluding ones nested inside another skill root (example/reference
     /// skills bundled inside a skill).
+    ///
+    /// When `directoryConstraint` is provided, only skills whose
+    /// repo-relative directory is exactly that path or lives under it are
+    /// returned. This lets a `/tree/<branch>/<path>` URL import only the
+    /// skills in that subfolder instead of the entire repository.
     func listSkills(
         inCloneAt clonePath: URL,
+        directoryConstraint: String? = nil,
         progress: (@Sendable (_ completed: Int, _ total: Int) -> Void)? = nil
     ) async throws -> [RemoteSkillCandidate] {
         let listing = try await git(["ls-tree", "-r", "-z", "HEAD", "--name-only"], in: clonePath)
         let allPaths = listing.split(separator: "\0").map(String.init).filter { !$0.isEmpty }
-        let skillFilePaths = allPaths.filter { ($0 as NSString).lastPathComponent == "SKILL.md" }
+        let skillFilePaths = allPaths
+            .filter { ($0 as NSString).lastPathComponent == "SKILL.md" }
+            .filter { path in
+                guard let constraint = directoryConstraint, !constraint.isEmpty else { return true }
+                let directory = (path as NSString).deletingLastPathComponent
+                return directory == constraint || directory.hasPrefix(constraint + "/")
+            }
         guard !skillFilePaths.isEmpty else { return [] }
 
-        if skillFilePaths.contains("SKILL.md") {
+        if skillFilePaths.contains(where: { ($0 as NSString).deletingLastPathComponent == directoryConstraint ?? "" }) {
+            let rootDirectory = directoryConstraint ?? ""
             progress?(0, 1)
-            let candidate = try await makeCandidate(directory: "", allPaths: allPaths, clonePath: clonePath)
+            let candidate = try await makeCandidate(directory: rootDirectory, allPaths: allPaths, clonePath: clonePath)
             progress?(1, 1)
             return [candidate]
         }

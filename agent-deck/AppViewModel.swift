@@ -1098,7 +1098,11 @@ final class AppViewModel: NSObject {
 
         if let existing {
             let clonePath = URL(fileURLWithPath: existing.clonePath, isDirectory: true)
-            let candidates = try await skillRepositorySyncService.listSkills(inCloneAt: clonePath, progress: progress)
+            let candidates = try await skillRepositorySyncService.listSkills(
+                inCloneAt: clonePath,
+                directoryConstraint: source.preselectedSkillDirectory,
+                progress: progress
+            )
             return RemoteSkillImportContext(
                 source: source,
                 clonePath: clonePath,
@@ -1111,7 +1115,11 @@ final class AppViewModel: NSObject {
 
         let clonePath = SkillRepositorySyncService.cloneDirectoryURL(owner: source.owner, repo: source.repo)
         let info = try await skillRepositorySyncService.cloneForDiscovery(source, into: clonePath)
-        let candidates = try await skillRepositorySyncService.listSkills(inCloneAt: clonePath, progress: progress)
+        let candidates = try await skillRepositorySyncService.listSkills(
+            inCloneAt: clonePath,
+            directoryConstraint: source.preselectedSkillDirectory,
+            progress: progress
+        )
         return RemoteSkillImportContext(
             source: source,
             clonePath: clonePath,

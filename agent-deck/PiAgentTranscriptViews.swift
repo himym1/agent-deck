@@ -1087,15 +1087,29 @@ struct PiAgentTranscriptThreadCard: View {
     }
 
     /// One reply row — assistant / tool / status card on the left, copy button
-    /// hover-revealed on the RIGHT. Divider-style status entries (Compaction +
-    /// git completions) bypass ThreadMessageRow so they span the full transcript
-    /// width instead of sitting inside the assistant bubble column.
+    /// hover-revealed on the RIGHT. Steering messages are user messages and are
+    /// rendered like the initial question (right-aligned, hugged width). Divider-
+    /// style status entries bypass ThreadMessageRow so they span the full
+    /// transcript width instead of sitting inside the assistant bubble column.
     @ViewBuilder
     private func childBlock(_ child: PiAgentThreadChild) -> some View {
         if case .status(let entry) = child,
            entry.isDividerStatus,
            !Self.shouldHideNativeSubagentStatus(entry, nativeSubagentRunsByID: nativeSubagentRunsByID) {
             statusRowView(entry)
+        } else if case .steering(let entry) = child {
+            ThreadMessageRow(
+                copyText: entry.text,
+                copyOn: .leading,
+                cardMaxWidth: PiAgentBubbleWidth.huggedUser(
+                    text: PiAgentUserMessageContent.displayMessageText(for: entry, skills: skills, commandSlashNames: commandSlashNames),
+                    pillsWidth: PiAgentUserMessageContent.displayChipsNaturalWidth(for: entry, skills: skills, commandSlashNames: commandSlashNames),
+                    paneWidth: transcriptContentWidth
+                )
+            ) {
+                PiAgentTranscriptCard(entry: entry, style: .question, skills: skills, commandSlashNames: commandSlashNames)
+                    .id(entry.id)
+            }
         } else {
             ThreadMessageRow(
                 copyText: copyText(for: child),
@@ -1125,9 +1139,10 @@ struct PiAgentTranscriptThreadCard: View {
     @ViewBuilder
     private func childView(_ child: PiAgentThreadChild) -> some View {
         switch child {
-        case .steering(let entry):
-            PiAgentTranscriptCard(entry: entry, style: childStyle, skills: skills, commandSlashNames: commandSlashNames)
-                .id(entry.id)
+        case .steering:
+            // Steering children are rendered directly in childBlock so they can
+            // use user-message (right-aligned) layout. This branch is unreachable.
+            EmptyView()
         case .thinking(let entry):
             if visibility.showThinking {
                 PiAgentTranscriptCard(entry: entry, style: childStyle, skills: skills, commandSlashNames: commandSlashNames)
