@@ -6209,6 +6209,11 @@ private struct PiAgentComposerPanel: View {
     }
 
     private func loadComposerDraft(for sessionID: UUID?) {
+        // The slash selection is not part of a persisted composer draft. Drop
+        // it whenever a draft is loaded (session switch, window re-key, etc.)
+        // so a skill chip from session A never leaks into session B.
+        slashSelection = nil
+
         if let pending = viewModel.consumePendingPiAgentComposerText() {
             composerText = pending
             composerIssueAttachment = viewModel.consumePendingPiAgentIssueAttachment()

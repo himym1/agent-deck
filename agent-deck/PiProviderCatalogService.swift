@@ -3,7 +3,8 @@ import Foundation
 /// Enumerates every provider PI can connect to — not just the ones currently in
 /// the model catalog. `pi --list-models` only surfaces providers with free or
 /// already-authorized models, so the Add Provider picker reads the full list
-/// from pi-ai's `getProviders()` instead.
+/// from pi-ai's `getProviders()` plus any custom providers declared in
+/// `~/.pi/agent/models.json`.
 struct PiProviderCatalogService: Sendable {
     private let commandRunner: CommandRunning
     private let piResolver: PiExecutableResolver
@@ -19,8 +20,9 @@ struct PiProviderCatalogService: Sendable {
         // Walk up from the real pi binary to pi-ai's models.js (same technique
         // as PiModelDiscoveryService), then call getProviders().
         let script = #"""
-        import { existsSync, realpathSync } from 'node:fs';
-        import { dirname, resolve } from 'node:path';
+        import { existsSync, realpathSync, readFileSync } from 'node:fs';
+        import { dirname, resolve, join } from 'node:path';
+        import { homedir } from 'node:os';
 
         const candidates = [];
         const piPath = process.env.AGENT_DECK_PI_PATH;
@@ -47,7 +49,20 @@ struct PiProviderCatalogService: Sendable {
         const modulePath = candidates.find((p) => existsSync(p));
         if (!modulePath) throw new Error('Could not locate pi-ai models.js');
         const models = await import(modulePath);
-        const providers = typeof models.getProviders === 'function' ? models.getProviders() : [];
+        const builtInProviders = typeof models.getProviders === 'function' ? models.getProviders() : [];
+
+        // Surface custom providers from ~/.pi/agent/models.json so they can be
+        // added through the Add Provider picker like built-ins.
+        let customProviders = [];
+        try {
+          const modelsJsonPath = join(homedir(), '.pi/agent/models.json');
+          if (existsSync(modelsJsonPath)) {
+            const modelsJson = JSON.parse(readFileSync(modelsJsonPath, 'utf8'));
+            customProviders = Object.keys(modelsJson.providers || {});
+          }
+        } catch {}
+
+        const providers = Array.from(new Set([...builtInProviders, ...customProviders]));
         process.stdout.write(JSON.stringify(providers));
         """#
 
