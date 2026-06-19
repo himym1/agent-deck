@@ -543,6 +543,7 @@ struct PiAgentUIRequestInlineNotice: View {
             }
             Spacer(minLength: 0)
             Button("Cancel", action: onCancel)
+                .appSecondaryButton()
             Button("Respond…", action: onRespond)
                 .appPrimaryButton()
         }
@@ -606,7 +607,9 @@ struct PiAgentUIRequestCard: View {
                 HStack(spacing: 10) {
                     Spacer()
                     Button("Cancel", action: onCancel)
+                        .appSecondaryButton()
                     Button("No") { onConfirm(false) }
+                        .appSecondaryButton()
                     Button("Yes") { onConfirm(true) }
                         .appPrimaryButton()
                 }
@@ -678,6 +681,7 @@ struct PiAgentUIRequestCard: View {
                     HStack(spacing: 10) {
                         Spacer()
                         Button("Cancel", action: onCancel)
+                            .appSecondaryButton()
                         if isComposingFreeform {
                             Button("Submit") { onSubmitFreeform(freeformSentinel, draft) }
                                 .appPrimaryButton()
@@ -762,6 +766,7 @@ struct PiAgentUIRequestCard: View {
                     HStack(spacing: 10) {
                         Spacer()
                         Button("Cancel", action: onCancel)
+                            .appSecondaryButton()
                         Button("Submit") { onSubmitValue(request.options.filter { selectedOptions.contains($0) }.joined(separator: ", ")) }
                             .appPrimaryButton()
                             .disabled(selectedOptions.isEmpty)
@@ -857,6 +862,7 @@ struct PiAgentUIRequestCard: View {
             HStack(spacing: 10) {
                 Spacer()
                 Button("Cancel", action: onCancel)
+                    .appSecondaryButton()
                 Button("Submit") {
                     if isComposingFreeform {
                         onSubmitValue(request.nativeAskFreeformResponseValue(draft))
@@ -886,6 +892,7 @@ struct PiAgentUIRequestCard: View {
             HStack(spacing: 10) {
                 Spacer()
                 Button(cancelTitle, action: cancelAction)
+                    .appSecondaryButton()
                 Button(submitTitle, action: submitAction)
                     .appPrimaryButton()
                     .disabled(!canSubmit)

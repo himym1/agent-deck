@@ -69,6 +69,7 @@ struct PiSubagentSupervisorRequestCard: View {
                 HStack {
                     Spacer()
                     Button("Cancel", action: onCancel)
+                        .appSecondaryButton()
                     Button("Send Response") { onRespond(responsePayload) }
                         .appPrimaryButton()
                         .disabled(!canRespond)
