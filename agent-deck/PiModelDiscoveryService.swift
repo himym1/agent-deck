@@ -38,12 +38,17 @@ struct PiModelDiscoveryService: Sendable {
             return [:]
         }
 
-        // Walk up from the real pi binary location to find models.js, covering nvm,
-        // volta, fnm, local installs, and anything else where the binary is a symlink
-        // into a node_modules tree. Falls back to known Homebrew paths.
+        // Walk up from the real pi binary location to find pi-coding-agent's dist, covering nvm,
+        // volta, fnm, local installs, and anything else where the binary is a symlink into a
+        // node_modules tree. Falls back to known Homebrew paths. We import pi's ModelRegistry
+        // (not just pi-ai's `getModel`) because `getModel` only knows built-in models — custom
+        // providers declared in ~/.pi/agent/models.json (NeuralWatt, Ollama, etc.) are invisible
+        // to it and would wrongly resolve to ['off']. ModelRegistry loads models.json, so its
+        // getAll() returns custom models with their real `reasoning` flag.
         let script = #"""
 import { existsSync, realpathSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, join } from 'node:path';
+import { homedir } from 'node:os';
 
 const candidates = [];
 
@@ -53,10 +58,10 @@ if (piPath && existsSync(piPath)) {
     const realPath = realpathSync(piPath);
     let dir = dirname(realPath);
     for (let i = 0; i < 10; i++) {
-      const earendil = resolve(dir, 'node_modules/@earendil-works/pi-ai/dist/models.js');
-      const mario    = resolve(dir, 'node_modules/@mariozechner/pi-ai/dist/models.js');
-      if (existsSync(earendil)) { candidates.push(earendil); break; }
-      if (existsSync(mario))    { candidates.push(mario);    break; }
+      const paAgent = resolve(dir, 'node_modules/@earendil-works/pi-coding-agent/dist/core/model-registry.js');
+      if (existsSync(paAgent)) { candidates.push(paAgent); break; }
+      const paMario  = resolve(dir, 'node_modules/@mariozechner/pi-coding-agent/dist/core/model-registry.js');
+      if (existsSync(paMario)) { candidates.push(paMario);  break; }
       const parent = dirname(dir);
       if (parent === dir) break;
       dir = parent;
@@ -65,26 +70,52 @@ if (piPath && existsSync(piPath)) {
 }
 
 candidates.push(
-  '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/models.js',
-  '/opt/homebrew/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@mariozechner/pi-ai/dist/models.js',
-  '/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/models.js',
-  '/usr/local/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@mariozechner/pi-ai/dist/models.js',
+  '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/model-registry.js',
+  '/opt/homebrew/lib/node_modules/@mariozechner/pi-coding-agent/dist/core/model-registry.js',
+  '/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/model-registry.js',
+  '/usr/local/lib/node_modules/@mariozechner/pi-coding-agent/dist/core/model-registry.js',
 );
 
 const modulePath = candidates.find((path) => existsSync(path));
-if (!modulePath) throw new Error('Could not locate pi-ai models.js');
+if (!modulePath) throw new Error('Could not locate pi-coding-agent model-registry.js');
 
-const models = await import(modulePath);
+const registryModule = await import(modulePath);
+const ModelRegistry = registryModule.ModelRegistry;
+// AuthStorage lives alongside ModelRegistry; load it so the registry can resolve auth-gated
+// providers, then point it at the real ~/.pi/agent/models.json.
+const authModule = await import(resolve(dirname(modulePath), 'auth-storage.js'));
+const AuthStorage = authModule.AuthStorage;
+const auth = AuthStorage.create();
+const modelsJsonPath = join(homedir(), '.pi/agent/models.json');
+const registry = ModelRegistry.create(auth, modelsJsonPath);
+const allModels = (typeof registry.getAll === 'function') ? registry.getAll() : [];
+const byKey = new Map(allModels.map((m) => [`${m.provider}/${m.id}`, m]));
+
+// pi-ai's getSupportedThinkingLevels consumes a model object (built-in or custom) read from
+// the registry, so custom-provider reasoning flags are honored. pi-ai is a dependency of
+// pi-coding-agent: <pkg-root>/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/models.js
+// where <pkg-root> is the directory above dist/core.
+const coreDir = dirname(modulePath);              // .../pi-coding-agent/dist/core
+const distDir = dirname(coreDir);                 // .../pi-coding-agent/dist
+const pkgRoot = dirname(distDir);                 // .../pi-coding-agent
+const piAiCandidates = [
+  resolve(pkgRoot, 'node_modules/@earendil-works/pi-ai/dist/models.js'),
+  resolve(pkgRoot, 'node_modules/@mariozechner/pi-ai/dist/models.js'),
+];
+const piAiPath = piAiCandidates.find((p) => existsSync(p));
+const getLevels = piAiPath ? (await import(piAiPath)).getSupportedThinkingLevels : undefined;
+
 const input = JSON.parse(process.env.AGENT_DECK_MODEL_INPUT ?? '[]');
 const result = {};
 for (const item of input) {
-  const model = models.getModel(item.provider, item.model);
+  const key = `${item.provider}/${item.model}`;
+  const model = byKey.get(key);
   if (!model || !model.reasoning) {
-    result[`${item.provider}/${item.model}`] = ['off'];
+    result[key] = ['off'];
     continue;
   }
-  if (typeof models.getSupportedThinkingLevels === 'function') {
-    result[`${item.provider}/${item.model}`] = models.getSupportedThinkingLevels(model);
+  if (typeof getLevels === 'function') {
+    result[key] = getLevels(model);
   }
 }
 process.stdout.write(JSON.stringify(result));
