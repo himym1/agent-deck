@@ -465,6 +465,11 @@ final class NativeMarkdownTextContainer: NSView {
     /// timed was a markdown build at all (vs a non-markdown row like a tool group),
     /// so it never mislabels with a stale rebuild/block-count from an earlier vend.
     static var configureSeq = 0
+    /// Instance-level mirror for unit tests: the static `lastConfigureWasRebuild`
+    /// is shared across every container in the process, so observing it in tests
+    /// that share the app host is unreliable. This property belongs to one
+    /// container and is set only by that container's `configure` calls.
+    var lastConfigureWasRebuildInstance = false
 #endif
     /// Whether a document has ever been applied. Lets the representable parse
     /// the first appearance synchronously (no blank flash) and reserve the
@@ -555,11 +560,24 @@ final class NativeMarkdownTextContainer: NSView {
         // height each pass — the visible streaming "wobble".
         let viewOffset = document.frontmatter == nil ? 0 : 1
         if !styleChanged, let previous,
-           previous.frontmatter == document.frontmatter,
-           stackView.arrangedSubviews.count == viewOffset + previous.blocks.count {
+           previous.frontmatter == document.frontmatter {
+            // Reconcile in place even if the arranged-subview count has drifted
+            // from `previous.blocks.count`. `reconcileBlocks` handles insert/remove
+            // to restore the invariant, and keeping `lastFullLayoutWidth` intact
+            // avoids the cold double-pass that produces visible streaming wobble.
+            // A view-count drift is logged as a warning so we can still hunt the
+            // root cause, but it no longer forces a full rebuild.
+            let expectedViews = viewOffset + previous.blocks.count
+            let viewCountMismatch = stackView.arrangedSubviews.count != expectedViews
 #if DEBUG
-            TranscriptStreamWobbleProbe.recordDocPath(.reconcile)
+            if viewCountMismatch {
+                Self.logIncrementalWarning("reconcile despite viewCount:\(stackView.arrangedSubviews.count)!=\(expectedViews)")
+                TranscriptStreamWobbleProbe.recordDocPath(.reconcile, bailReason: "viewCount:\(stackView.arrangedSubviews.count)!=\(expectedViews)")
+            } else {
+                TranscriptStreamWobbleProbe.recordDocPath(.reconcile)
+            }
             Self.lastConfigureWasRebuild = false
+            self.lastConfigureWasRebuildInstance = false
             Self.lastConfigureBlockCount = document.blocks.count
             Self.configureSeq &+= 1
 #endif
@@ -569,24 +587,25 @@ final class NativeMarkdownTextContainer: NSView {
         }
         // Only the genuinely unexpected case is worth a diagnostic: we had a
         // previous document at the same style revision (so a reconcile *should*
-        // have been possible) but the frontmatter or arranged-view invariant
-        // didn't hold. A `styleChanged` rebuild (theme/highlight toggle) and a
-        // first build (fresh recycled container) are expected and stay silent.
+        // have been possible) but the frontmatter didn't match. A `styleChanged`
+        // rebuild (theme/highlight toggle) and a first build (fresh recycled
+        // container) are expected and stay silent.
         if !styleChanged, previous != nil {
-            Self.logIncrementalBail("frontmatterOrViewCount")
+            Self.logIncrementalBail("frontmatter")
         }
 #if DEBUG
         if !styleChanged, previous != nil {
             // A bail-to-rebuild mid-stream resets lastFullLayoutWidth → forces the
             // cold double-pass for the next measures. This is the measure-side
             // wobble's root trigger, so name it on the wobble line too.
-            TranscriptStreamWobbleProbe.recordDocPath(.rebuild, bailReason: "frontmatterOrViewCount")
+            TranscriptStreamWobbleProbe.recordDocPath(.rebuild, bailReason: "frontmatter")
         } else if styleChanged {
             TranscriptStreamWobbleProbe.recordDocPath(.styleRebuild)
         } else {
             TranscriptStreamWobbleProbe.recordDocPath(.firstBuild)
         }
         Self.lastConfigureWasRebuild = true
+        self.lastConfigureWasRebuildInstance = true
         Self.lastConfigureBlockCount = document.blocks.count
         Self.configureSeq &+= 1
 #endif
@@ -599,8 +618,12 @@ final class NativeMarkdownTextContainer: NSView {
     private static func logIncrementalBail(_ reason: String) {
         incrementalLog.error("markdown rebuild (incremental bail): \(reason, privacy: .public)")
     }
+    private static func logIncrementalWarning(_ reason: String) {
+        incrementalLog.warning("markdown reconcile (view-count drift): \(reason, privacy: .public)")
+    }
 #else
     private static func logIncrementalBail(_ reason: String) {}
+    private static func logIncrementalWarning(_ reason: String) {}
 #endif
 
     // Two block kinds have the "same shape" if their layout chrome (paddedBlock, listRow

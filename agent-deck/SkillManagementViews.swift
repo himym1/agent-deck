@@ -92,6 +92,9 @@ struct SkillsScreen: View {
     @State private var skillPendingDeletion: SkillRecord?
     @State private var skillPendingRemoval: SkillRecord?
     @State private var skillsPendingBatchRemoval: [SkillRecord]?
+    @State private var skillPendingDuplicateResolution: (kept: SkillRecord, removed: [SkillRecord])?
+    @State private var hoveredWarningID: String?
+    @State private var skillCompareContext: SkillCompareContext?
     @State private var skillPendingRename: SkillRecord?
     @State private var skillEditTarget: MarkdownFileEditTarget?
     @State private var newSkillDraft: NewSkillDraft?
@@ -172,6 +175,15 @@ struct SkillsScreen: View {
                 Button("Cancel", role: .cancel) { skillsPendingBatchRemoval = nil }
             } message: { skills in
                 Text("Remove \(skills.count) skills from the \(AppBrand.displayName) catalog and clear their assignments? The skill files are not deleted.")
+            }
+            .alert("Resolve Duplicate Skill?", isPresented: Binding(
+                get: { skillPendingDuplicateResolution != nil },
+                set: { if !$0 { skillPendingDuplicateResolution = nil } }
+            ), presenting: skillPendingDuplicateResolution) { context in
+                Button("Keep This Copy", role: .destructive) { resolveDuplicateSkill(context) }
+                Button("Cancel", role: .cancel) { skillPendingDuplicateResolution = nil }
+            } message: { context in
+                Text("Keep \"\(context.kept.name)\" from \(context.kept.filePath) and remove \(context.removed.count) other duplicate copy(s). Project assignments, global defaults, and agent skills will stay assigned to the kept copy.")
             }
             .alert("Skill Updates", isPresented: Binding(
                 get: { viewModel.skillBatchActionMessage != nil },
@@ -309,6 +321,15 @@ struct SkillsScreen: View {
                     skillUpdateStatusMessage = "Updated to the latest version."
                 }
             }
+        }
+        .sheet(item: $skillCompareContext) { context in
+            SkillCompareSheet(
+                context: context,
+                isPresented: Binding(
+                    get: { skillCompareContext != nil },
+                    set: { if !$0 { skillCompareContext = nil } }
+                )
+            )
         }
     }
 
@@ -616,8 +637,7 @@ struct SkillsScreen: View {
 
     private func diagnosticWarningCard(_ warning: DiagnosticWarning) -> some View {
         Button {
-            selectedSkillIDs = []
-            selectedWarning = .diagnostic(warning)
+            selectDiagnosticWarning(warning)
         } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -633,8 +653,17 @@ struct SkillsScreen: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.plain)
-        .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.orange.opacity(0.25), lineWidth: 1))
+        .background(hoveredWarningID == warning.id ? .orange.opacity(0.16) : .orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(hoveredWarningID == warning.id ? .orange.opacity(0.45) : .orange.opacity(0.25), lineWidth: 1))
+        .animation(.easeInOut(duration: 0.15), value: hoveredWarningID == warning.id)
+        .onHover { hovering in
+            hoveredWarningID = hovering ? warning.id : nil
+        }
+    }
+
+    private func selectDiagnosticWarning(_ warning: DiagnosticWarning) {
+        selectedSkillIDs = []
+        selectedWarning = .diagnostic(warning)
     }
 
     @ViewBuilder
@@ -973,13 +1002,14 @@ struct SkillsScreen: View {
                 if let duplicate = duplicateSkillWarningDetails(warning) {
                     AppKeyValueList(rows: [
                         ("Skill", duplicate.name),
-                        ("Issue", "Duplicate skill name"),
-                        ("Locations", duplicate.paths.joined(separator: "\n"))
+                        ("Issue", "Duplicate skill name")
                     ])
 
-                    Text("Keep one canonical copy of this skill and remove or rename the duplicate. Agent Deck can only pass a skill reliably when the name resolves to one path.")
+                    Text("Choose one canonical copy to keep. The other copies will be removed; project assignments, global defaults, and agent skills will stay with the kept copy.")
                         .foregroundStyle(AppTheme.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
+
+                    duplicateSkillResolutionList(for: duplicate)
 
                     HStack {
                         Button("Search Catalog") {
@@ -990,6 +1020,11 @@ struct SkillsScreen: View {
                                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
                             }
                         }
+                        if let compareContext = compareContext(for: duplicate) {
+                            Button("Compare") {
+                                skillCompareContext = compareContext
+                            }
+                        }
                     }
                 } else {
                     Text("Review the referenced file or setting, then fix the malformed or conflicting skill definition.")
@@ -997,6 +1032,67 @@ struct SkillsScreen: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func duplicateSkillResolutionList(for duplicate: (name: String, paths: [String])) -> some View {
+        let records = duplicate.paths.compactMap { path in
+            viewModel.allVisibleSkillRecords.first { $0.filePath == path }
+        }
+
+        if records.count > 1 {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(records) { skill in
+                    let removed = records.filter { $0.id != skill.id }
+                    let canKeep = SkillDuplicateResolution.canResolve(
+                        keeping: skill,
+                        removing: removed,
+                        canDelete: viewModel.canDeleteSkill,
+                        isImported: viewModel.isImportedSkill
+                    )
+
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(skillLocationLabel(skill, selectedProjectRoot: viewModel.snapshot.projectRoot))
+                                .font(.caption.weight(.semibold))
+                                .fontWidth(.expanded)
+                                .foregroundStyle(AppTheme.mutedText)
+                            Text(skill.filePath)
+                                .font(.caption)
+                                .foregroundStyle(AppTheme.mutedText)
+                                .textSelection(.enabled)
+                                .lineLimit(2)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        if canKeep {
+                            Button("Keep This Copy") {
+                                skillPendingDuplicateResolution = (kept: skill, removed: removed)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        } else {
+                            Text("Protected")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.orange)
+                                .help("This copy cannot be chosen because one or more other copies are bundled or package-managed and cannot be removed.")
+                        }
+                    }
+                    .padding(10)
+                    .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+            }
+        }
+    }
+
+    /// Returns a compare context for the first two resolvable duplicate copies,
+    /// or nil if fewer than two copies are currently visible.
+    private func compareContext(for duplicate: (name: String, paths: [String])) -> SkillCompareContext? {
+        let records = duplicate.paths.compactMap { path in
+            viewModel.allVisibleSkillRecords.first { $0.filePath == path }
+        }
+        guard records.count >= 2 else { return nil }
+        return SkillCompareContext(left: records[0], right: records[1])
     }
 
     private func skillWarningSummaryCard(warnings: [DiagnosticWarning]) -> some View {
@@ -1519,6 +1615,17 @@ struct SkillsScreen: View {
 
             Only imported skills can be removed from the catalog.
             """
+        }
+    }
+
+    private func resolveDuplicateSkill(_ context: (kept: SkillRecord, removed: [SkillRecord])) {
+        do {
+            try viewModel.resolveSkillDuplicate(keeping: context.kept, removing: context.removed)
+            skillPendingDuplicateResolution = nil
+            selectedWarning = nil
+        } catch {
+            skillPendingDuplicateResolution = nil
+            presentSkillActionError(error, skill: context.kept, action: "resolve the duplicate skill")
         }
     }
 

@@ -7986,6 +7986,46 @@ final class AppViewModel: NSObject {
         return failed
     }
 
+    /// Resolves a duplicate skill name by keeping one canonical copy and
+    /// removing all other copies. Project assignments, global defaults, and
+    /// agent skill lists keyed by the skill name are intentionally preserved,
+    /// because the name remains valid via the kept copy.
+    func resolveSkillDuplicate(keeping keptSkill: SkillRecord, removing removedSkills: [SkillRecord]) throws {
+        try SkillDuplicateResolution.removeDuplicateCopies(
+            keeping: keptSkill,
+            removing: removedSkills,
+            canDelete: canDeleteSkill,
+            delete: { [weak self] skill in
+                guard let self else { return }
+                let url = self.skillDeletionTargetURL(for: skill)
+                try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                self.removeExternalSkillCatalogReferences(for: skill, deletedTarget: url)
+                self.unlistSkillFromSyncedRepository(skill)
+            },
+            isImported: isImportedSkill,
+            removeExternalPath: { [weak self] skill in
+                guard let self else { return }
+                let url = self.skillDeletionTargetURL(for: skill)
+                self.removeExternalSkillCatalogReferences(for: skill, deletedTarget: url)
+            },
+            unlistFromSyncedRepository: { [weak self] skill in
+                self?.unlistSkillFromSyncedRepository(skill)
+            }
+        )
+
+        // Hide removed rows immediately. `removeDuplicateCopies` already
+        // performed the file/catalog work; this only updates the UI.
+        withAnimation(.snappy(duration: 0.18)) {
+            for skill in removedSkills {
+                _ = pendingDeletedSkillIDs.insert(skill.id)
+            }
+        }
+
+        // Select the kept copy. Because its id is unchanged, this is stable.
+        selectedSkillID = keptSkill.id
+        refresh(includeModels: false, scanAllProjects: true, silentlyReconcile: true)
+    }
+
     /// Drop `skill` from its synced repository's tracked set, if it belongs to
     /// one. When that leaves the repository with no synced skills, the whole
     /// repository is un-registered — its record is removed (so it is no longer

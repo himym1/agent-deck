@@ -1933,23 +1933,32 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             let visible = tableView.rows(in: tableView.visibleRect)
             guard visible.length > 0 else { return [] }
             var needRetile = Set<String>()
+            let streaming = profiler.isStreamingRecently
             for row in visible.location ..< visible.location + visible.length where row < orderedIDs.count {
                 let id = orderedIDs[row]
                 guard ids.contains(id),
                       let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? TranscriptTableCellView else { continue }
                 let h = cell.forcedIntrinsicHeight()
                 guard h > 0 else { continue }
-                let height = ceil(h)
+                var height = ceil(h)
+                let previousTiled = lastNotedHeight[id] ?? -1
+                // Streaming content only grows; a measured height that comes back
+                // shorter than the last tile is a TextKit/measurement artifact
+                // (cold double-pass disagreement, settle-loop wobble) and must not
+                // be allowed to yank the row upward.
+                if streaming, previousTiled > 0 {
+                    height = max(height, previousTiled)
+                }
 #if DEBUG
                 // Smoking-gun: the streaming row's tiled height per token, folded
                 // with the measure path that produced it (set inside forcedIntrinsic
                 // → markdown measureHeight just above). A Δ<0 here = visible wobble.
                 TranscriptStreamWobbleProbe.shared.noteTile(
-                    id: id, height: height, previousTiled: lastNotedHeight[id] ?? -1,
+                    id: id, height: height, previousTiled: previousTiled,
                     width: contentWidth, pinned: true, gliding: followGlideTimer != nil, source: "sync")
 #endif
                 measuredHeightByID[id, default: [:]][widthBucket] = height
-                if abs((lastNotedHeight[id] ?? -1) - height) > heightChangeEpsilon {
+                if abs(previousTiled - height) > heightChangeEpsilon {
                     needRetile.insert(id)
                 }
             }
@@ -2015,11 +2024,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // wrote ~56 over the card's real 157 during a switch). Drop them; the
             // id's next live cell re-reports through this same path.
             guard itemByID[itemID] != nil else { return }
-            let height = ceil(rawHeight)
+            var height = ceil(rawHeight)
             let bucket = widthBucket
             let priorMeasured = measuredHeightByID[itemID]?[bucket]
-            measuredHeightByID[itemID, default: [:]][bucket] = height
-            estimateByID.removeValue(forKey: itemID)
             // Re-tile only when AppKit's *laid-out* height is genuinely stale.
             // The baseline is what the table currently has tiled (lastNotedHeight),
             // not the cache — falling back to the prior measurement, then the
@@ -2027,6 +2034,14 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // spurious noteHeightOfRows whenever the cache shifted without the
             // laid-out height actually changing.
             let baseline = lastNotedHeight[itemID] ?? priorMeasured ?? estimatedRowHeight
+            // Streaming content only grows; clamp the async reported height to the
+            // last real measurement so a late-settle measure cannot pull the row up.
+            // Never clamp against the rough `estimatedRowHeight` for a brand-new row.
+            if profiler.isStreamingRecently, let clampBase = lastNotedHeight[itemID] ?? priorMeasured {
+                height = max(height, clampBase)
+            }
+            measuredHeightByID[itemID, default: [:]][bucket] = height
+            estimateByID.removeValue(forKey: itemID)
 #if DEBUG
             // Same smoking-gun line for the debounced async path (rows that aren't
             // force-measured while pinned, e.g. when not auto-following).
