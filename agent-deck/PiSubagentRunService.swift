@@ -399,6 +399,7 @@ final class PiSubagentRunService {
     }
 
     private func handle(rawLine: String, event: PiAgentRPCEvent?, runID: UUID, parentSessionID: UUID) {
+        NSLog("PiSubagentRunService.handle rawLine=%@ event=%@", rawLine, event == nil ? "nil" : "nonnil")
         guard let event else {
             store.appendSubagentTranscript(.init(sessionID: parentSessionID, role: .raw, title: "Raw Output", text: rawLine), runID: runID, parentSessionID: parentSessionID)
             return
@@ -1109,6 +1110,7 @@ final class PiSubagentRunService {
     }
 
     private func handleExtensionUIRequest(_ event: PiAgentRPCEvent, rawLine: String, runID: UUID, parentSessionID: UUID) {
+        NSLog("handleExtensionUIRequest title=%@ id=%@", event.title ?? "nil", event.id ?? "nil")
         let title = event.title ?? event.method ?? "extension UI"
         if title == "AGENT_DECK_BRIDGE system_prompt_audit", let requestID = event.id {
             handleSystemPromptAuditBridgeRequest(event, requestID: requestID, rawLine: rawLine, runID: runID, parentSessionID: parentSessionID)

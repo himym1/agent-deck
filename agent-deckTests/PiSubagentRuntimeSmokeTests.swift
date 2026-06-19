@@ -318,10 +318,11 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
         defer { runner.stop(runID: run.id, parentSessionID: parent.id) }
 
         let finalPromptURL = run.artifactDirectory.asFileURL.appendingPathComponent("final-system-prompt.md")
-        XCTAssertTrue(PiTestSupport.waitUntil {
+        let success = await PiTestSupport.waitUntilAsync {
             (try? String(contentsOf: finalPromptURL, encoding: .utf8)) == "Final child prompt from Pi."
                 && responseValue(id: "audit-child-1", in: harness.stdinLog) == "System prompt captured."
-        })
+        }
+        XCTAssertTrue(success)
         XCTAssertTrue(store.subagentTranscript(for: run.id).contains { $0.title == "System Prompt Captured" })
     }
 

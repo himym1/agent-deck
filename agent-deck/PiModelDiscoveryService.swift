@@ -127,15 +127,27 @@ process.stdout.write(JSON.stringify(result));
                 guard parts.count >= 6 else { return nil }
                 let identifier = "\(parts[0])/\(parts[1])"
                 let supportsThinking = parts[4].lowercased() == "yes"
+                // `pi --list-models` always prints a number for max-out (its own 16384 default
+                // when the source omits a cap), so the text can't tell "real 16.4K" from "unknown."
+                // Providers Agent Deck knows report no limit (NeuralWatt today) are mapped to nil
+                // here so the UI shows a dash instead of pi's fabricated default.
+                let maxOutput = Self.maxOutput(forProvider: parts[0], rawColumn: parts[3])
                 return AvailableModel(
                     provider: parts[0],
                     model: parts[1],
                     contextWindow: parts[2],
-                    maxOutput: parts[3],
+                    maxOutput: maxOutput,
                     supportsThinking: supportsThinking,
                     supportsImages: parts[5].lowercased() == "yes",
                     supportedThinkingLevels: exactThinkingLevels[identifier] ?? (supportsThinking ? [] : ["off"])
                 )
             }
+    }
+
+    /// Resolve the max-output column to display. Returns nil (→ dash) for providers Agent Deck
+    /// knows report no limit; passes the raw pi value through otherwise.
+    static func maxOutput(forProvider provider: String, rawColumn: String) -> String? {
+        if NeuralWattProviderSpec.providerID == provider { return nil }
+        return rawColumn
     }
 }

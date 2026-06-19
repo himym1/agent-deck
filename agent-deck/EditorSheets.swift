@@ -1087,7 +1087,7 @@ struct AgentEditorSheet: View {
     private func modelMenuLabel(for model: AvailableModel) -> String {
         let thinking = model.supportsThinking ? "thinking" : "no thinking"
         let images = model.supportsImages ? "images" : "text"
-        return "\(model.model) · \(thinking) · \(images) · ctx \(model.contextWindow) · out \(model.maxOutput)"
+        return "\(model.model) · \(thinking) · \(images) · ctx \(model.contextWindow) · out \(model.maxOutput ?? "—")"
     }
 
     private var selectedAvailableModel: AvailableModel? {

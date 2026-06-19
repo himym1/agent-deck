@@ -62,7 +62,12 @@ struct PiProviderCatalogService: Sendable {
           }
         } catch {}
 
-        const providers = Array.from(new Set([...builtInProviders, ...customProviders]));
+        // Bundled providers Agent Deck self-manages via NeuralWattCatalogSync appear here even
+        // before models.json exists, so a fresh machine can add NeuralWatt through the picker
+        // and have the sync seed the file. Keep in sync with NeuralWattProviderSpec.providerID.
+        const bundledProviders = ['neuralwatt'];
+
+        const providers = Array.from(new Set([...builtInProviders, ...customProviders, ...bundledProviders]));
         process.stdout.write(JSON.stringify(providers));
         """#
 

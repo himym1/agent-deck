@@ -479,7 +479,7 @@ struct ModelsScreen: View {
                         fastModeTagButton(for: model, isModelEnabled: isEnabled)
                     }
                 }
-                Text("ctx \(model.contextWindow) · out \(model.maxOutput)")
+                Text("ctx \(model.contextWindow) · out \(model.maxOutput ?? "—")")
                     .font(.footnote.monospaced())
                     .foregroundStyle(AppTheme.mutedText)
             }

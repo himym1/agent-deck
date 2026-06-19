@@ -240,7 +240,9 @@ nonisolated struct AvailableModel: Identifiable, Hashable, Sendable {
     let provider: String
     let model: String
     let contextWindow: String
-    let maxOutput: String
+    /// nil when the source reports no max-output limit. Rendered as a dash, never a fabricated
+    /// default. See [[feedback-show-dash-for-unknown-max-output]].
+    let maxOutput: String?
     let supportsThinking: Bool
     let supportsImages: Bool
     let supportedThinkingLevels: [String]
@@ -248,7 +250,7 @@ nonisolated struct AvailableModel: Identifiable, Hashable, Sendable {
     var id: String { identifier }
     var identifier: String { "\(provider)/\(model)" }
     var summary: String {
-        "\(identifier) · ctx \(contextWindow) · out \(maxOutput)"
+        "\(identifier) · ctx \(contextWindow) · out \(maxOutput ?? "—")"
     }
 
     var displayName: String {

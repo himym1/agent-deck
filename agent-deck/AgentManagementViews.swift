@@ -2471,7 +2471,7 @@ private struct AgentEditSheet: View {
 
     private var modelSummary: String {
         if let model = selectedModel {
-            return "\(model.identifier) · ctx \(model.contextWindow) · out \(model.maxOutput)"
+            return "\(model.identifier) · ctx \(model.contextWindow) · out \(model.maxOutput ?? "—")"
         }
         return "Uses Pi's default model resolution."
     }

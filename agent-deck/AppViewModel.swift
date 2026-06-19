@@ -4827,7 +4827,7 @@ final class AppViewModel: NSObject {
                     id: model.model,
                     name: nil,
                     contextWindow: Int(model.contextWindow),
-                    maxOutput: Int(model.maxOutput),
+                    maxOutput: model.maxOutput.flatMap { Int($0) },
                     supportsThinking: model.supportsThinking,
                     supportedThinkingLevels: model.supportedThinkingLevels,
                     supportsImages: model.supportsImages
@@ -8847,6 +8847,14 @@ final class AppViewModel: NSObject {
         isRefreshingModels = true
 
         Task.detached(priority: .utility) { [weak self] in
+            // Keep NeuralWatt's ~/.pi/agent/models.json block in sync with the user's sign-in
+            // state and NeuralWatt's live /v1/models, before querying pi. The neuralwatt block
+            // exists ONLY when a real key is in ~/.pi/agent/auth.json — sign-out removes it, so
+            // pi never lists NeuralWatt models without a credential. Best-effort: a failed fetch
+            // leaves the existing block untouched and never blocks the model list. See
+            // NeuralWattCatalogSync.
+            let hasNeuralWattKey = PiAuthCredentialStore().signedInProviders().contains(NeuralWattProviderSpec.providerID)
+            await NeuralWattCatalogSync().reconcile(hasRealKey: hasNeuralWattKey)
             let models = await PiModelDiscoveryService().loadAvailableModels()
             await self?.applyAvailableModelsRefresh(models, markRefreshComplete: true)
         }
