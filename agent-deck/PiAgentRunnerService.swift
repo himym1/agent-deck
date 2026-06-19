@@ -2102,6 +2102,12 @@ final class PiAgentRunnerService {
             return condensedSingleLine(args["command"]?.stringValue)
         case "web_search", "code_search":
             return condensedSingleLine(args["query"]?.stringValue)
+        case "mcp":
+            guard let rawTool = args["tool"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !rawTool.isEmpty,
+                  let address = MCPConnectionManager.resolveAddress(rawTool, serverHint: args["server"]?.stringValue)
+            else { return nil }
+            return "\(address.server)/\(address.tool)"
         default:
             return nil
         }

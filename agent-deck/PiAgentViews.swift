@@ -4892,7 +4892,21 @@ struct PiAgentScreen: View {
         let title = entry.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard title.hasPrefix("Tool:") else { return "Running tool" }
         let toolName = title.dropFirst("Tool:".count).trimmingCharacters(in: .whitespacesAndNewlines)
-        return toolProcessingMessage(forToolName: toolName)
+        let detail = mcpToolAddress(from: entry.rawJSON)
+        return toolProcessingMessage(forToolName: toolName, detail: detail)
+    }
+
+    /// Resolves the `server/tool` address from an MCP proxy entry's raw JSON,
+    /// so the live status row can say "Running MCP xcode/ListWindows" instead of
+    /// the generic "Running mcp".
+    private func mcpToolAddress(from rawJSON: String?) -> String? {
+        guard let event = PiAgentRPCEventRenderCache.event(from: rawJSON),
+              let args = event.args,
+              let rawTool = args["tool"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawTool.isEmpty,
+              let address = MCPConnectionManager.resolveAddress(rawTool, serverHint: args["server"]?.stringValue)
+        else { return nil }
+        return "\(address.server)/\(address.tool)"
     }
 
     /// Turns a raw Pi tool name (and, when available, its target) into a
@@ -4917,6 +4931,7 @@ struct PiAgentScreen: View {
         case "ask_user": return "Waiting for your input"
         case "agent_deck_memory_write", "agent_deck_memory_mark_stale": return "Updating memory"
         case "list_supervisor_requests", "answer_supervisor_request": return "Coordinating Deck agents"
+        case "mcp": return target.map { "Running MCP \($0)" } ?? "Running MCP tool"
         case "": return "Running tool"
         default: return "Running \(name.replacingOccurrences(of: "_", with: " "))"
         }
