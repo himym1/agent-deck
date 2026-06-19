@@ -4,6 +4,24 @@ struct PiExecutableResolver: Sendable {
     nonisolated private static let cacheLock = NSLock()
     nonisolated(unsafe) private static var cachedURL: (key: String, url: URL)?
 
+    /// Overridable candidate list so tests can force a "pi not found" state on
+    /// machines that have pi installed in a standard location. Defaults to the
+    /// standard install paths; see `commonPiCandidates()`.
+    private nonisolated let candidatesProvider: @Sendable () -> [URL]
+
+    /// Directories always searched after `PATH`. Defaults to the standard macOS
+    /// bin locations so the OAuth login bridge still finds `pi`/`node` when
+    /// launched with a minimal `PATH`. Injectable so tests can force "not found".
+    private nonisolated let defaultPathDirectories: @Sendable () -> [String]
+
+    nonisolated init(
+        candidatesProvider: @Sendable @escaping () -> [URL] = { PiExecutableResolver.commonPiCandidates() },
+        defaultPathDirectories: @Sendable @escaping () -> [String] = { ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"] }
+    ) {
+        self.candidatesProvider = candidatesProvider
+        self.defaultPathDirectories = defaultPathDirectories
+    }
+
     nonisolated func resolve() -> URL? {
         let environment = ProcessInfo.processInfo.environment
         let cacheKey = Self.cacheKey(for: environment)
@@ -46,7 +64,7 @@ struct PiExecutableResolver: Sendable {
             return pathResolved
         }
 
-        let candidates = commonPiCandidates()
+        let candidates = candidatesProvider()
         if let match = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) {
             return match
         }
@@ -63,13 +81,9 @@ struct PiExecutableResolver: Sendable {
     }
 
     nonisolated private func resolveExecutableInPATH(_ command: String, environment: [String: String]) -> URL? {
-        let defaultPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        let path = [environment["PATH"], defaultPath]
-            .compactMap { $0 }
-            .filter { !$0.isEmpty }
-            .joined(separator: ":")
+        let directories = (environment["PATH"].map { $0.split(separator: ":").map(String.init) } ?? []) + defaultPathDirectories()
         var checked: Set<String> = []
-        for directory in path.split(separator: ":").map(String.init) where !directory.isEmpty {
+        for directory in directories where !directory.isEmpty {
             let candidate = URL(fileURLWithPath: directory).appendingPathComponent(command).path
             guard checked.insert(candidate).inserted else { continue }
             if FileManager.default.isExecutableFile(atPath: candidate) {
@@ -108,7 +122,7 @@ struct PiExecutableResolver: Sendable {
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
-    nonisolated func commonPiCandidates() -> [URL] {
+    nonisolated static func commonPiCandidates() -> [URL] {
         var paths = [
             "/opt/homebrew/bin/pi",
             "/usr/local/bin/pi",

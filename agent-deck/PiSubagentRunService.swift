@@ -1,5 +1,13 @@
 import Foundation
 
+/// Captures the specific `PiRPCClient` that owns a run's process so the run
+/// service can tell a stale client's late termination apart from the current
+/// client's termination. See `PiSubagentRunService.handleTermination`.
+@MainActor
+final class ClientTerminationHolder {
+    weak var client: PiRPCClient?
+}
+
 @MainActor
 final class PiSubagentRunService {
     private let store: PiAgentSessionStore
@@ -279,6 +287,12 @@ final class PiSubagentRunService {
         let childSessionID = UUID()
         let parentSessionID = parentSession.id
         finalTextByRunID[runID] = nil
+        // Holds a weak reference to this run's client so its async termination
+        // handler can confirm it's still the *current* client for the runID
+        // before clearing the slot. A continuation reuses the runID; the previous
+        // client's late termination (from `completeIfNeeded`'s `stop()`) must not
+        // clobber the newly installed continuation client.
+        let terminationHolder = ClientTerminationHolder()
         let client = try PiRPCClient(
             cwd: childProjectURL,
             sessionFile: continuingRun?.childPiSessionFile,
@@ -303,10 +317,11 @@ final class PiSubagentRunService {
                 }
             },
             onTermination: { [weak self] exitCode in
-                Task { @MainActor [weak self] in self?.handleTermination(exitCode: exitCode, runID: runID, parentSessionID: parentSessionID) }
+                Task { @MainActor [weak self] in self?.handleTermination(exitCode: exitCode, runID: runID, parentSessionID: parentSessionID, terminatingClient: terminationHolder.client) }
             }
         )
         clientsByRunID[runID] = client
+        terminationHolder.client = client
         if let onCompletion {
             completionHandlersByRunID[runID] = onCompletion
         }
@@ -555,7 +570,14 @@ final class PiSubagentRunService {
         }
     }
 
-    private func handleTermination(exitCode: Int32, runID: UUID, parentSessionID: UUID) {
+    private func handleTermination(exitCode: Int32, runID: UUID, parentSessionID: UUID, terminatingClient: PiRPCClient?) {
+        // Only act if the terminating client is still the *current* client for
+        // this runID. A continuation reuses the runID and installs a new client;
+        // the previous client's late async termination (e.g. from
+        // `completeIfNeeded`'s `stop()`) — once that client is released the weak
+        // identity is nil — must not clobber the new client or fail the active
+        // run. So both "no identity" and "different identity" are treated as stale.
+        guard let terminatingClient, clientsByRunID[runID] === terminatingClient else { return }
         clientsByRunID[runID] = nil
         cancelSupervisorTimeouts(for: runID, parentSessionID: parentSessionID)
         clearStreamingState(for: runID)
