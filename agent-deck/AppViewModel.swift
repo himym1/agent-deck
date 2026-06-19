@@ -768,6 +768,12 @@ final class AppViewModel: NSObject {
     /// the agent-catalog fields it copies through. This replaces a full
     /// `refresh()` (which re-walks the filesystem) for assignment toggles.
     private func reconcileSnapshotsFromPreferences() {
+        // Capture the selected agent's name before rebuilding the display
+        // cache, because the agent's EffectiveAgentRecord.id can change when
+        // it moves between catalog-only and effective (e.g. project
+        // assignment toggle). After the rebuild we restore the selection by
+        // name so the detail pane does not tear down and lose its @State.
+        let previousSelectedAgentName = selectedAgent?.name
         let catalogProjectSnapshots = Array(allProjectSnapshots.values)
         globalSnapshot = scopedAgentSnapshot(
             globalSnapshot,
@@ -789,6 +795,16 @@ final class AppViewModel: NSObject {
             snapshot = makeAggregateSnapshot()
         }
         rebuildWarningCaches()
+        // Restore selection when the old EffectiveAgentRecord.id disappeared
+        // from the rebuilt cache (e.g. catalog → effective after project
+        // assignment). Falls back to name-based lookup so the detail pane
+        // stays on the same logical agent.
+        if let previousID = selectedAgentID,
+           let name = previousSelectedAgentName,
+           cachedDisplayAgentByID[previousID] == nil,
+           let newID = cachedAllDisplayAgents.first(where: { $0.name == name })?.id {
+            selectedAgentID = newID
+        }
     }
 
     /// Patch the in-memory effective-agent skill list so snapshot-derived

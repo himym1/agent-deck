@@ -953,15 +953,59 @@ nonisolated struct PiScanner: @unchecked Sendable {
         let bodyStart = normalized.index(range.lowerBound, offsetBy: 4)
         let body = String(normalized[bodyStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
 
+        let rawLines = frontmatterBlock.components(separatedBy: "\n")
         var frontmatter: [String: String] = [:]
-        for rawLine in frontmatterBlock.split(separator: "\n", omittingEmptySubsequences: false) {
-            guard let separator = rawLine.firstIndex(of: ":") else { continue }
+        var i = 0
+        while i < rawLines.count {
+            let rawLine = rawLines[i]
+            guard let separator = rawLine.firstIndex(of: ":") else {
+                i += 1
+                continue
+            }
             let key = String(rawLine[..<separator]).trimmingCharacters(in: .whitespaces)
             var value = String(rawLine[rawLine.index(after: separator)...]).trimmingCharacters(in: .whitespaces)
             if (value.hasPrefix("\"") && value.hasSuffix("\"")) || (value.hasPrefix("'") && value.hasSuffix("'")) {
                 value = String(value.dropFirst().dropLast())
             }
-            if !key.isEmpty { frontmatter[key] = value }
+            guard !key.isEmpty else { i += 1; continue }
+
+            if SkillFrontmatter.isBlockScalarIndicator(value) {
+                // Consume subsequent indented lines as the block-scalar value.
+                i += 1
+                let keyLineIndent = rawLine.prefix(while: { $0 == " " || $0 == "\t" }).count
+                var blockLines: [String] = []
+                while i < rawLines.count {
+                    let nextRaw = rawLines[i]
+                    let nextTrimmed = nextRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if nextTrimmed.isEmpty || nextTrimmed.hasPrefix("#") {
+                        blockLines.append(nextTrimmed)
+                        i += 1
+                        continue
+                    }
+                    let nextIndent = nextRaw.prefix(while: { $0 == " " || $0 == "\t" }).count
+                    if nextIndent > keyLineIndent {
+                        blockLines.append(nextTrimmed)
+                        i += 1
+                    } else {
+                        break
+                    }
+                }
+                let joined: String
+                if value.hasPrefix("|") {
+                    joined = blockLines.joined(separator: "\n")
+                } else {
+                    joined = blockLines
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty }
+                        .joined(separator: " ")
+                }
+                if !joined.isEmpty {
+                    frontmatter[key] = joined
+                }
+            } else {
+                frontmatter[key] = value
+                i += 1
+            }
         }
         return (frontmatter, body)
     }

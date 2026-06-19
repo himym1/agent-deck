@@ -1095,7 +1095,12 @@ private struct AgentDetailView: View {
                 }
             )
         }
-        .onChange(of: agent.id) { _, _ in
+        .onChange(of: agent.name) { oldName, newName in
+            // Reset transient local state only when the logical agent
+            // identity (name) changes — not when its EffectiveAgentRecord.id
+            // changes due to project assignment / catalog → effective
+            // transition, which would otherwise tear down @State.
+            guard oldName != newName else { return }
             cancelAgentRename()
             renameErrorMessage = nil
             avatarMessage = nil

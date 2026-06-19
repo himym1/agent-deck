@@ -519,7 +519,7 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
 
     private func isMeaningfulAssistantEntry(_ entry: PiAgentTranscriptEntry) -> Bool {
         let text = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return true }
+        guard !text.isEmpty else { return false }
         return !piAgentLeakedToolNames.contains(text.lowercased())
     }
 }
