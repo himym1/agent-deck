@@ -865,6 +865,9 @@ struct ProjectsScreen: View {
     private func projectRow(_ project: DiscoveredProject) -> some View {
         let preference = viewModel.projectPreference(for: project.path)
         let isActiveSessionProject = viewModel.selectedProjectPath == project.path
+        let hasAgentAssignments = !viewModel.appSettings.defaultAgentNames.isEmpty || !preference.assignedAgentNames.isEmpty
+        let hasSkillAssignments = !viewModel.appSettings.defaultSkillNames.isEmpty || !preference.assignedSkillNames.isEmpty
+        let hasMcpAssignments = !viewModel.appSettings.defaultMcpServerNames.isEmpty || !preference.assignedMcpServerNames.isEmpty
 
         HStack(spacing: 10) {
             ProjectIconEditorButton(
@@ -927,31 +930,34 @@ struct ProjectsScreen: View {
                 agentsRecapProject = project
             } label: {
                 Image(systemName: "paperplane")
-                    .foregroundStyle(AppTheme.mutedText)
+                    .foregroundStyle(hasAgentAssignments ? AppTheme.mutedText : AppTheme.mutedText.opacity(0.35))
                     .frame(width: 20, height: 20)
             }
             .buttonStyle(.plain)
-            .help("Show agents for this project")
+            .disabled(!hasAgentAssignments)
+            .help(hasAgentAssignments ? "Show agents for this project" : "No agents assigned to this project")
 
             Button {
                 skillsRecapProject = project
             } label: {
                 Image(systemName: "wand.and.stars")
-                    .foregroundStyle(AppTheme.mutedText)
+                    .foregroundStyle(hasSkillAssignments ? AppTheme.mutedText : AppTheme.mutedText.opacity(0.35))
                     .frame(width: 20, height: 20)
             }
             .buttonStyle(.plain)
-            .help("Show skills for this project")
+            .disabled(!hasSkillAssignments)
+            .help(hasSkillAssignments ? "Show skills for this project" : "No skills assigned to this project")
 
             Button {
                 mcpRecapProject = project
             } label: {
                 Image(systemName: "powerplug")
-                    .foregroundStyle(AppTheme.mutedText)
+                    .foregroundStyle(hasMcpAssignments ? AppTheme.mutedText : AppTheme.mutedText.opacity(0.35))
                     .frame(width: 20, height: 20)
             }
             .buttonStyle(.plain)
-            .help("Show MCP servers for this project")
+            .disabled(!hasMcpAssignments)
+            .help(hasMcpAssignments ? "Show MCP servers for this project" : "No MCP servers assigned to this project")
 
             Button(role: .destructive) {
                 projectPendingRemoval = project
