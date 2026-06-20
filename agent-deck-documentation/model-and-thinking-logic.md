@@ -46,7 +46,7 @@ The resolved values are passed to `PiRPCClient`, which appends `--provider`, `--
 
 ## Native subagent model and thinking values
 
-Native subagents can set `model` and `thinking` independently in agent frontmatter.
+Native subagents can set `model` and `thinking` independently in agent frontmatter. For builtin agents, global and project settings overrides are merged field-by-field before launch: project-set fields win, and omitted project fields inherit global override values.
 
 Resolution order for child launches:
 

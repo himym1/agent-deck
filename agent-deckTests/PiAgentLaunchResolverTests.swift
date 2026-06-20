@@ -47,6 +47,56 @@ final class PiAgentLaunchResolverTests: XCTestCase {
         XCTAssertEqual(reviewer?.resolutionKind, .projectCustom)
     }
 
+    func testProjectBuiltinOverrideMergesGlobalModelOverride() {
+        let projectRoot = "/tmp/project"
+        let builtin = agentRecord(name: "explorer", kind: .builtin, path: "/app/bundled-agents/explorer.md")
+        let globalSettings = settingsSummary(
+            path: "/Users/test/.pi/agent/settings.json",
+            overrides: [
+                override(
+                    name: "explorer",
+                    path: "/Users/test/.pi/agent/settings.json",
+                    values: [
+                        "model": .string("openai-codex/gpt-5.4-mini"),
+                        "thinking": .bool(false),
+                        "skills": .array([.string("agent-authoring")])
+                    ]
+                )
+            ]
+        )
+        let projectSettings = settingsSummary(
+            path: "\(projectRoot)/.pi/settings.json",
+            overrides: [
+                override(
+                    name: "explorer",
+                    path: "\(projectRoot)/.pi/settings.json",
+                    values: [
+                        "skills": .array([.string("agent-authoring")]),
+                        "thinking": .bool(false)
+                    ]
+                )
+            ]
+        )
+        let snapshot = ScanSnapshot.empty.replacing(
+            projectRoot: projectRoot,
+            builtinAgents: [builtin],
+            settings: [globalSettings, projectSettings]
+        )
+
+        let effective = PiAgentLaunchResolver.effectiveAgents(
+            defaultAgentNames: [],
+            projectAgentNames: [],
+            snapshot: snapshot,
+            catalog: []
+        )
+
+        let explorer = effective.first { $0.name == "explorer" }
+        XCTAssertEqual(explorer?.resolved.model, "openai-codex/gpt-5.4-mini")
+        XCTAssertNil(explorer?.resolved.thinking)
+        XCTAssertEqual(explorer?.resolved.skills, ["agent-authoring"])
+        XCTAssertEqual(explorer?.resolutionKind, .builtinWithOverride)
+    }
+
     private func agentRecord(name: String, kind: ResourceScopeKind, path: String) -> AgentRecord {
         var config = AgentConfig.empty
         config.name = name
@@ -63,13 +113,30 @@ final class PiAgentLaunchResolverTests: XCTestCase {
             parsed: config
         )
     }
+
+    private func settingsSummary(path: String, overrides: [BuiltinOverrideRecord], disableBuiltins: Bool? = nil) -> SettingsSummary {
+        SettingsSummary(path: path, packages: [], prompts: [], disableBuiltins: disableBuiltins, agentOverrides: overrides)
+    }
+
+    private func override(name: String, path: String, values: [String: JSONValue]) -> BuiltinOverrideRecord {
+        BuiltinOverrideRecord(
+            agentName: name,
+            scope: ScopeID(kind: .override, path: path),
+            settingsPath: path,
+            values: values
+        )
+    }
 }
 
 private extension ScanSnapshot {
-    func replacing(projectRoot: String? = nil) -> ScanSnapshot {
+    func replacing(
+        projectRoot: String? = nil,
+        builtinAgents: [AgentRecord]? = nil,
+        settings: [SettingsSummary]? = nil
+    ) -> ScanSnapshot {
         ScanSnapshot(
             projectRoot: projectRoot ?? self.projectRoot,
-            builtinAgents: builtinAgents,
+            builtinAgents: builtinAgents ?? self.builtinAgents,
             globalAgents: globalAgents,
             projectAgents: projectAgents,
             legacyProjectAgents: legacyProjectAgents,
@@ -79,7 +146,7 @@ private extension ScanSnapshot {
             librarySkills: librarySkills,
             promptTemplates: promptTemplates,
             libraryPromptTemplates: libraryPromptTemplates,
-            settings: settings,
+            settings: settings ?? self.settings,
             envKeys: envKeys,
             warnings: warnings
         )

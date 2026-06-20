@@ -719,6 +719,10 @@ nonisolated struct PiScanner: @unchecked Sendable {
             guard var resolved = winner?.parsed else { return nil }
             if winner?.source.kind == .builtin {
                 if let projectOverride {
+                    // Project overrides should refine global builtin overrides field-by-field.
+                    // Keep the existing disabled precedence: a project override does not
+                    // inherit global disabled state unless it explicitly sets `disabled`.
+                    resolved = applyOverride(userOverride, to: resolved, includeDisabled: false)
                     resolved = applyOverride(projectOverride, to: resolved)
                 } else if projectDisableBuiltins == true {
                     resolved.disabled = true
@@ -754,7 +758,7 @@ nonisolated struct PiScanner: @unchecked Sendable {
         }
     }
 
-    private func applyOverride(_ override: BuiltinOverrideRecord?, to config: AgentConfig) -> AgentConfig {
+    private func applyOverride(_ override: BuiltinOverrideRecord?, to config: AgentConfig, includeDisabled: Bool = true) -> AgentConfig {
         guard let override else { return config }
         var result = config
 
@@ -776,7 +780,7 @@ nonisolated struct PiScanner: @unchecked Sendable {
             case "inheritSkills":
                 if let value = rawValue.boolValue { result.inheritSkills = value }
             case "disabled":
-                if let value = rawValue.boolValue { result.disabled = value }
+                if includeDisabled, let value = rawValue.boolValue { result.disabled = value }
             case "skills":
                 if rawValue.boolValue == false { result.skills = [] }
                 else if let values = splitJSONArray(rawValue) { result.skills = values }

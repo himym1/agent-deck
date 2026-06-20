@@ -20,6 +20,10 @@ nonisolated enum PiAgentLaunchResolver {
             let projectOverride = projectOverrides.first { $0.agentName == builtin.name }
             var resolved = builtin.parsed
             if let projectOverride {
+                // Project overrides should refine global builtin overrides field-by-field.
+                // Keep the existing disabled precedence: a project override does not
+                // inherit global disabled state unless it explicitly sets `disabled`.
+                resolved = applyOverride(userOverride, to: resolved, includeDisabled: false)
                 resolved = applyOverride(projectOverride, to: resolved)
             } else if projectDisableBuiltins == true {
                 resolved.disabled = true
@@ -149,7 +153,7 @@ nonisolated enum PiAgentLaunchResolver {
         return snapshot.settings.first { URL(fileURLWithPath: $0.path).standardizedFileURL.path == projectSettingsPath }
     }
 
-    private static func applyOverride(_ override: BuiltinOverrideRecord?, to config: AgentConfig) -> AgentConfig {
+    private static func applyOverride(_ override: BuiltinOverrideRecord?, to config: AgentConfig, includeDisabled: Bool = true) -> AgentConfig {
         guard let override else { return config }
         var result = config
         for (key, rawValue) in override.values {
@@ -170,7 +174,7 @@ nonisolated enum PiAgentLaunchResolver {
             case "inheritSkills":
                 if let value = rawValue.boolValue { result.inheritSkills = value }
             case "disabled":
-                if let value = rawValue.boolValue { result.disabled = value }
+                if includeDisabled, let value = rawValue.boolValue { result.disabled = value }
             case "defaultExpectedOutcome":
                 if let value = rawValue.stringValue { result.defaultExpectedOutcome = parseExpectedOutcome(value) }
                 else if rawValue.boolValue == false { result.defaultExpectedOutcome = nil }

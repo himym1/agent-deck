@@ -973,6 +973,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private var pendingScrollWork: DispatchWorkItem?
         private var pendingSettleScrollWork: DispatchWorkItem?
         private var pendingRemeasureWork: DispatchWorkItem?
+        private var pendingRemeasureIDs = Set<String>()
         private var pendingScrollSettle = false
         private var pendingWidthWork: DispatchWorkItem?
         // Smooth auto-follow. The streaming follow doesn't snap to the bottom each
@@ -1337,6 +1338,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             pendingScrollWork?.cancel()
             pendingSettleScrollWork?.cancel()
             pendingRemeasureWork?.cancel()
+            pendingRemeasureIDs.removeAll()
             pendingWidthWork?.cancel()
             stopFollowGlide()
         }
@@ -1487,6 +1489,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     // Rows were added/removed (or the session switched) — content
                     // geometry genuinely moved, so passive follow may act on it.
                     self.handleScrollAfterUpdate(isSessionSwitch: isSessionSwitch, explicitScroll: explicitScroll, wasFollowing: wasFollowing, contentAdvanced: true)
+                    self.scheduleVisibleHeightRemeasure(forIDs: Set(nextIDs))
 #if DEBUG
                     if isSessionSwitch {
                         let ms = (CACurrentMediaTime() - coldT0) * 1000
@@ -1563,6 +1566,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     wasFollowing: wasFollowing,
                     contentAdvanced: !changedIDs.isEmpty
                 )
+                if !changedIDs.isEmpty {
+                    scheduleVisibleHeightRemeasure(forIDs: Set(changedIDs))
+                }
             }
 
             self.sessionID = sessionID
@@ -2167,6 +2173,31 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             noteHeightsChanged(forIDs: ids)
         }
 
+        /// Re-check visible row heights after AppKit has finished a snapshot or
+        /// content-reconfigure pass. The normal cell path reports height from an
+        /// async layout callback, but complex native cards can briefly paint at a
+        /// stale cached/estimated row height. A session switch already force-settles
+        /// visible rows; this debounced pass gives ordinary transcript updates the
+        /// same correction without doing synchronous work inside AppKit layout.
+        private func scheduleVisibleHeightRemeasure(forIDs ids: Set<String>) {
+            guard !ids.isEmpty else { return }
+            pendingRemeasureIDs.formUnion(ids)
+            guard pendingRemeasureWork == nil else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                let ids = self.pendingRemeasureIDs
+                self.pendingRemeasureIDs.removeAll()
+                self.pendingRemeasureWork = nil
+                guard !self.isUserScrollingRecently, !self.profiler.isStreamingRecently else { return }
+                let retileIDs = self.measureChangedCellsSynchronously(ids)
+                guard !retileIDs.isEmpty else { return }
+                self.flushPendingHeightWorkSynchronously()
+                self.noteHeightsChanged(forIDs: retileIDs)
+            }
+            pendingRemeasureWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
+        }
+
         /// A session switch pins to a bottom computed from ESTIMATE heights; the
         /// visible cells then measure asynchronously and every correction
         /// re-tiles and re-snaps the bottom over the next frames — the "new
@@ -2514,6 +2545,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 let est = item.estimatedHeight(contentWidth)
                 estimateByID[id] = est
                 lastNotedHeight[id] = est
+                if !isUserScrollingRecently, !profiler.isStreamingRecently {
+                    scheduleVisibleHeightRemeasure(forIDs: [id])
+                }
                 return est
             }
             return estimatedRowHeight
@@ -2702,6 +2736,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             if !createdNow && (widthChanged || insetChanged) {
                 spec.settle(row)
             }
+            if revisionChanged || widthChanged || insetChanged {
+                scheduleLayoutHeightReport()
+            }
             configuredItemID = item.id
             configuredRevision = item.contentRevision
             configuredWidth = width
@@ -2710,6 +2747,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         }
 
         private var pendingLayoutHeightReport = false
+        private var layoutHeightReportGeneration = 0
 
         /// AppKit's per-pass layout hook, and where the row reports height drift.
         override func layout() {
@@ -2735,8 +2773,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private func scheduleLayoutHeightReport() {
             guard !pendingLayoutHeightReport else { return }
             pendingLayoutHeightReport = true
+            let generation = layoutHeightReportGeneration
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                guard generation == self.layoutHeightReportGeneration else { return }
                 self.pendingLayoutHeightReport = false
                 guard let row = self.nativeRow, let spec = self.nativeRowSpec,
                       let itemID = self.configuredItemID, self.configuredWidth > 1 else { return }
@@ -2754,6 +2794,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// `layout()` sees no change and doesn't redundantly re-report.
         func forcedIntrinsicHeight() -> CGFloat {
             guard let row = nativeRow, let spec = nativeRowSpec, configuredWidth > 1 else { return -1 }
+            pendingLayoutHeightReport = false
+            layoutHeightReportGeneration += 1
             row.layoutSubtreeIfNeeded()
             let h = configuredTopInset + spec.measure(row, configuredWidth) + configuredBottomInset
             guard h > 0, h.isFinite else { return -1 }
@@ -4079,7 +4121,7 @@ struct PiAgentScreen: View {
                             view: nil,
                             kind: nativeKind,
                             baseRevision: revision,
-                            estimatedContentHeight: { Self.estimatedChildHeight(child, width: $0) },
+                            estimatedContentHeight: { Self.estimatedChildHeight(child, width: $0, subagentRuns: subagentRuns) },
                             threadID: item.id,
                             isThreadQuestion: false
                         ))
@@ -4414,7 +4456,11 @@ struct PiAgentScreen: View {
         }
     }
 
-    private static func estimatedChildHeight(_ child: PiAgentThreadChild, width: CGFloat) -> CGFloat {
+    private static func estimatedChildHeight(
+        _ child: PiAgentThreadChild,
+        width: CGFloat,
+        subagentRuns: [UUID: PiSubagentRunRecord]
+    ) -> CGFloat {
         let cardWidth = max(width - 32, 200)
         let charsPerLine = max(Int(cardWidth / 7), 20)
         switch child {
@@ -4425,8 +4471,17 @@ struct PiAgentScreen: View {
             // One row per activity — a flat estimate made a multi-tool group
             // pop hard the first time it appeared (before the cell re-measures).
             return CGFloat(max(group.activities.count, 1)) * 40 + 16
-        case .status, .error, .retry:
+        case let .status(entry):
+            if entry.agentMemoryEvent != nil { return 128 }
+            if let runID = entry.nativeSubagentRunID, let run = subagentRuns[runID] {
+                if NativeSubagentFactory.isParallel(run) {
+                    return 72 + CGFloat(max(run.children?.count ?? 1, 1)) * 142
+                }
+                return 168
+            }
             return 56
+        case .error, .retry:
+            return 72
         }
     }
 
