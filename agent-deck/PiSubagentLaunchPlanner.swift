@@ -23,16 +23,17 @@ enum PiSubagentLaunchPlanner {
             return PiSubagentLaunchModelSelection(provider: nil, modelArgument: nil)
         }
 
+        let inheritedThinking = firstNonEmpty(agent.resolved.thinking, parentSession.thinkingLevel)
         if inheritedProvider == nil, let split = splitProviderModel(inheritedModel) {
             return PiSubagentLaunchModelSelection(
                 provider: split.provider,
-                modelArgument: suffixedModel(split.model, thinking: parentSession.thinkingLevel) ?? split.model
+                modelArgument: suffixedModel(split.model, thinking: inheritedThinking) ?? split.model
             )
         }
 
         return PiSubagentLaunchModelSelection(
             provider: inheritedProvider,
-            modelArgument: suffixedModel(inheritedModel, thinking: parentSession.thinkingLevel) ?? inheritedModel
+            modelArgument: suffixedModel(inheritedModel, thinking: inheritedThinking) ?? inheritedModel
         )
     }
 

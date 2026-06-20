@@ -2001,7 +2001,7 @@ private struct AgentEditSheet: View {
                         }
                         .appMenuPicker()
                         .frame(maxWidth: 180, alignment: .leading)
-                        Text("Only values supported by the selected model are shown.")
+                        Text(selectedModel == nil ? "Applies while using Pi's default model when supported." : "Only values supported by the selected model are shown.")
                             .font(.caption)
                             .foregroundStyle(AppTheme.mutedText)
                     }
@@ -2477,7 +2477,11 @@ private struct AgentEditSheet: View {
     }
 
     private var availableThinkingLevels: [String] {
-        selectedModel?.supportedThinkingLevels ?? []
+        if let selectedModel {
+            return selectedModel.supportedThinkingLevels.isEmpty ? ["off"] : selectedModel.supportedThinkingLevels
+        }
+        let discovered = Array(Set(availableModels.flatMap(\.supportedThinkingLevels))).sorted { thinkingSortIndex($0) < thinkingSortIndex($1) }
+        return discovered.isEmpty ? ["off", "minimal", "low", "medium", "high", "xhigh"] : discovered
     }
 
     private var selectedToolValues: [String] {
@@ -2544,6 +2548,10 @@ private struct AgentEditSheet: View {
         guard !availableThinkingLevels.contains(current) else { return }
         let fallback = availableThinkingLevels.first ?? "off"
         draft?.config.thinking = fallback == "off" ? nil : fallback
+    }
+
+    private func thinkingSortIndex(_ level: String) -> Int {
+        ["off", "minimal", "low", "medium", "high", "xhigh"].firstIndex(of: level) ?? Int.max
     }
 
     private func addFallbackModel(_ model: String) {

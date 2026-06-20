@@ -339,6 +339,7 @@ struct ModelsScreen: View {
             guard let identifier = draft?.config.model else { return nil }
             return viewModel.enabledAvailableModels.first { $0.identifier == identifier }
         }()
+        let thinkingModel = selectedModel ?? viewModel.defaultPiAgentModel()
 
         HStack(alignment: .center, spacing: 12) {
             Text(agent.name)
@@ -357,10 +358,10 @@ struct ModelsScreen: View {
                         applyAgentModelChange(agent, modelIdentifier: model?.identifier)
                     }
                 )
-                if let selectedModel, selectedModel.supportsThinking, !selectedModel.supportedThinkingLevels.isEmpty {
+                if let thinkingModel, thinkingModel.supportsThinking, !thinkingModel.supportedThinkingLevels.isEmpty {
                     DefaultModelsThinkingPicker(
-                        selectedLevel: agentThinkingLevel(agent, levels: selectedModel.supportedThinkingLevels),
-                        levels: selectedModel.supportedThinkingLevels,
+                        selectedLevel: agentThinkingLevel(agent, levels: thinkingModel.supportedThinkingLevels),
+                        levels: thinkingModel.supportedThinkingLevels,
                         onSelect: { level in
                             applyAgentThinkingChange(agent, level: level)
                         }
@@ -388,8 +389,13 @@ struct ModelsScreen: View {
                 let fallback = levels.first ?? "off"
                 draft.config.thinking = fallback == "off" ? nil : fallback
             }
-        } else {
-            draft.config.thinking = nil
+        } else if let defaultModel = viewModel.defaultPiAgentModel() {
+            let levels = defaultModel.supportedThinkingLevels
+            let current = draft.config.thinking ?? "off"
+            if !levels.contains(current) {
+                let fallback = levels.first ?? "off"
+                draft.config.thinking = fallback == "off" ? nil : fallback
+            }
         }
         saveAgentDraft(agent, draft)
     }
@@ -1214,19 +1220,15 @@ struct AgentModelQuickEditRow: View {
             .help(selectedModelMetadataSummary ?? "Use the default model from Sidebar > Models")
 
             Picker("Thinking", selection: thinkingSelectionBinding) {
-                if usesDefaultModel {
-                    Text("Default").tag(defaultThinkingSelection)
-                } else {
-                    ForEach(availableThinkingLevels, id: \.self) { level in
-                        Text(level.capitalized).tag(level)
-                    }
+                ForEach(availableThinkingLevels, id: \.self) { level in
+                    Text(level == "off" ? "Default" : level.capitalized).tag(level)
                 }
             }
             .labelsHidden()
             .appMenuPicker()
             .frame(width: 130, alignment: .leading)
-            .disabled(usesDefaultModel || availableThinkingLevels.isEmpty)
-            .help(usesDefaultModel ? "Select a specific model to override thinking for this agent" : "Override thinking for the selected model")
+            .disabled(availableThinkingLevels.isEmpty)
+            .help(usesDefaultModel ? "Override thinking while using Pi's default model" : "Override thinking for the selected model")
 
             Text(selectedModelMetadataSummary ?? "Default")
                 .font(.caption.monospaced())
@@ -1263,10 +1265,12 @@ struct AgentModelQuickEditRow: View {
         return "context: \(model.contextWindow)"
     }
 
-    private var defaultThinkingSelection: String { "__default__" }
-
     private var availableThinkingLevels: [String] {
-        selectedModel?.supportedThinkingLevels ?? []
+        if let selectedModel {
+            return selectedModel.supportedThinkingLevels.isEmpty ? ["off"] : selectedModel.supportedThinkingLevels
+        }
+        let discovered = Array(Set(availableModels.flatMap(\.supportedThinkingLevels))).sorted { thinkingSortIndex($0) < thinkingSortIndex($1) }
+        return discovered.isEmpty ? ["off", "minimal", "low", "medium", "high", "xhigh"] : discovered
     }
 
     private var modelSelectionBinding: Binding<String> {
@@ -1282,12 +1286,10 @@ struct AgentModelQuickEditRow: View {
     private var thinkingSelectionBinding: Binding<String> {
         Binding(
             get: {
-                guard !usesDefaultModel else { return defaultThinkingSelection }
                 let current = draft.config.thinking ?? "off"
                 return availableThinkingLevels.contains(current) ? current : (availableThinkingLevels.first ?? "off")
             },
             set: { newValue in
-                guard newValue != defaultThinkingSelection else { return }
                 draft.config.thinking = newValue == "off" ? nil : newValue
             }
         )
@@ -1298,5 +1300,9 @@ struct AgentModelQuickEditRow: View {
         guard !availableThinkingLevels.contains(current) else { return }
         let fallback = availableThinkingLevels.first ?? "off"
         draft.config.thinking = fallback == "off" ? nil : fallback
+    }
+
+    private func thinkingSortIndex(_ level: String) -> Int {
+        ["off", "minimal", "low", "medium", "high", "xhigh"].firstIndex(of: level) ?? Int.max
     }
 }

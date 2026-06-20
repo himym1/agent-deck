@@ -27,6 +27,18 @@ final class PiSubagentLaunchPlannerTests: XCTestCase {
     }
 
     @MainActor
+    func testAgentThinkingOverridesParentThinkingWhenModelIsInherited() async throws {
+        let selection = PiSubagentLaunchPlanner.modelSelection(
+            for: PiTestSupport.makeAgent(model: nil, thinking: "low"),
+            parentSession: try PiTestSupport.makeParentSession(model: "glm-5.1", provider: "zai", thinking: "xhigh")
+        )
+
+        XCTAssertEqual(selection.provider, "zai")
+        XCTAssertEqual(selection.modelArgument, "glm-5.1:low")
+        XCTAssertEqual(selection.displayName, "zai/glm-5.1:low")
+    }
+
+    @MainActor
     func testThinkingSuffixIsNotDuplicated() async throws {
         let selection = PiSubagentLaunchPlanner.modelSelection(
             for: PiTestSupport.makeAgent(model: nil, thinking: nil),
@@ -128,6 +140,56 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
 
         let persisted = store.subagentRuns(for: parent.id).first(where: { $0.id == run.id })
         XCTAssertEqual(persisted?.model, "zai/glm-5.1:low")
+    }
+
+    func testRunSingleLaunchCommandUsesAgentModelAndThinking() async throws {
+        let fakePi = try PiTestSupport.makeFakePiExecutable()
+        let oldPiPath = getenv("AGENT_DECK_PI_PATH").map { String(cString: $0) }
+        setenv("AGENT_DECK_PI_PATH", fakePi.path, 1)
+        defer { restorePiPath(oldPiPath) }
+
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let runner = PiSubagentRunService(store: store)
+        let parent = try PiTestSupport.makeParentSession(model: "glm-5.1", provider: "zai", thinking: "xhigh")
+
+        let run = try await runner.runSingle(
+            parentSession: parent,
+            agent: PiTestSupport.makeAgent(model: "openai-codex/gpt-5.5", thinking: "low"),
+            snapshot: .empty,
+            task: "verify launch model"
+        )
+        defer { runner.stop(runID: run.id, parentSessionID: parent.id) }
+
+        XCTAssertEqual(run.model, "openai-codex/gpt-5.5:low")
+        XCTAssertEqual(run.thinking, "low")
+        XCTAssertTrue(run.launchCommand?.contains("--model openai-codex/gpt-5.5:low") == true)
+        XCTAssertFalse(run.launchCommand?.contains("--provider zai") == true)
+        XCTAssertFalse(run.launchCommand?.contains("glm-5.1:xhigh") == true)
+    }
+
+    func testRunSingleLaunchCommandUsesAgentThinkingWithInheritedModel() async throws {
+        let fakePi = try PiTestSupport.makeFakePiExecutable()
+        let oldPiPath = getenv("AGENT_DECK_PI_PATH").map { String(cString: $0) }
+        setenv("AGENT_DECK_PI_PATH", fakePi.path, 1)
+        defer { restorePiPath(oldPiPath) }
+
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let runner = PiSubagentRunService(store: store)
+        let parent = try PiTestSupport.makeParentSession(model: "glm-5.1", provider: "zai", thinking: "xhigh")
+
+        let run = try await runner.runSingle(
+            parentSession: parent,
+            agent: PiTestSupport.makeAgent(model: nil, thinking: "low"),
+            snapshot: .empty,
+            task: "verify inherited model launch thinking"
+        )
+        defer { runner.stop(runID: run.id, parentSessionID: parent.id) }
+
+        XCTAssertEqual(run.model, "zai/glm-5.1:low")
+        XCTAssertEqual(run.thinking, "low")
+        XCTAssertTrue(run.launchCommand?.contains("--provider zai") == true)
+        XCTAssertTrue(run.launchCommand?.contains("--model glm-5.1:low") == true)
+        XCTAssertFalse(run.launchCommand?.contains("glm-5.1:xhigh") == true)
     }
 
     func testSystemPromptPlacesAgentPromptBeforeCommonBoundary() async throws {
