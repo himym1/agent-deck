@@ -1476,11 +1476,6 @@ final class AppViewModel: NSObject {
         }
     }
 
-    func toggleProjectFavorite(_ project: DiscoveredProject) {
-        projectPreferencesStore.toggleFavorite(for: project.path)
-        applyProjectPreferenceChanges()
-    }
-
     func chooseCustomIcon(for project: DiscoveredProject) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = false
@@ -2305,13 +2300,14 @@ final class AppViewModel: NSObject {
                 selectPiAgentSession(existing.id)
                 ensurePiAgentModelCatalogLoaded()
             } else {
-                _ = piAgentSessionStore.createSession(
+                let session = piAgentSessionStore.createSession(
                     kind: .project,
                     title: "Project agent · \(project.name)",
                     project: project,
                     repository: project.gitHubRemote?.nameWithOwner
                 )
-                ensurePiAgentModelCatalogLoaded()
+                revealSessionGroup(session)
+                selectPiAgentSession(session.id)
             }
         } else {
             acknowledgeVisibleSelectedPiAgentSession()
@@ -2324,13 +2320,23 @@ final class AppViewModel: NSObject {
 
     func createPiAgentDraft(for project: DiscoveredProject) {
         selectedSidebarItem = .agent
-        _ = piAgentSessionStore.createSession(
+        let session = piAgentSessionStore.createSession(
             kind: .project,
             title: "Draft · \(project.name)",
             project: project,
             repository: project.gitHubRemote?.nameWithOwner
         )
-        ensurePiAgentModelCatalogLoaded()
+        revealSessionGroup(session)
+        selectPiAgentSession(session.id)
+        Task { @MainActor [weak self] in
+            // Some mounted session lists reconcile selection after their cached
+            // sections update. Re-assert the freshly-created chat on the next
+            // turn so every + entry point lands on the new session, not the
+            // previous scoped selection.
+            await Task.yield()
+            self?.revealSessionGroup(session)
+            self?.selectPiAgentSession(session.id)
+        }
     }
 
     func startPiAgentForSelectedProject(initialInstruction: String) {
@@ -2353,6 +2359,8 @@ final class AppViewModel: NSObject {
                 project: project,
                 repository: project.gitHubRemote?.nameWithOwner
             )
+            revealSessionGroup(session)
+            selectPiAgentSession(session.id)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.provisionWorktreeIfEnabled(for: session.id, project: project)
@@ -2372,7 +2380,7 @@ final class AppViewModel: NSObject {
             return
         }
         selectedSidebarItem = .agent
-        _ = piAgentSessionStore.createSession(
+        let session = piAgentSessionStore.createSession(
             kind: .issue,
             title: detail.item.title,
             project: project,
@@ -2380,7 +2388,8 @@ final class AppViewModel: NSObject {
             issueNumber: detail.item.number,
             issueURL: detail.item.url
         )
-        ensurePiAgentModelCatalogLoaded()
+        revealSessionGroup(session)
+        selectPiAgentSession(session.id)
         piAgentPendingComposerText = PiIssuePromptBuilder.issueDraft(detail: detail, project: project)
         piAgentPendingIssueAttachment = PiAgentIssueAttachment(detail: detail)
     }
@@ -6650,10 +6659,6 @@ final class AppViewModel: NSObject {
 
     var enabledProjects: [DiscoveredProject] {
         discoveredProjects.filter { projectPreference(for: $0.path).isEnabled }
-    }
-
-    var favoriteProjects: [DiscoveredProject] {
-        enabledProjects.filter { projectPreference(for: $0.path).isFavorite }
     }
 
     var gitHubProjects: [DiscoveredProject] {

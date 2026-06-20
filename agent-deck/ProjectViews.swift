@@ -161,6 +161,9 @@ struct ProjectIconView: View {
                     .antialiased(true)
                     .resizable()
                     .scaledToFill()
+            } else if imageURL != nil {
+                ProgressView()
+                    .controlSize(.small)
             } else if let assetName, !assetName.isEmpty, NSImage(named: assetName) != nil {
                 Image(assetName)
                     .resizable()
@@ -668,7 +671,6 @@ struct ProjectsScreen: View {
         case all = "All"
         case enabled = "Enabled"
         case disabled = "Disabled"
-        case favorites = "Favorites"
 
         var id: String { rawValue }
     }
@@ -708,20 +710,20 @@ struct ProjectsScreen: View {
         .sheet(item: $agentsRecapProject) { project in
             ProjectAgentsRecapSheet(
                 project: project,
-                recap: viewModel.agentRecap(for: project),
+                viewModel: viewModel,
                 imageStore: viewModel.agentImageStore
             )
         }
         .sheet(item: $skillsRecapProject) { project in
             ProjectSkillsRecapSheet(
                 project: project,
-                recap: viewModel.skillRecap(for: project)
+                viewModel: viewModel
             )
         }
         .sheet(item: $mcpRecapProject) { project in
             ProjectMcpServersRecapSheet(
                 project: project,
-                recap: viewModel.mcpRecap(for: project)
+                viewModel: viewModel
             )
         }
         .alert("Remove project?", isPresented: removeProjectAlertBinding, presenting: projectPendingRemoval) { project in
@@ -775,7 +777,7 @@ struct ProjectsScreen: View {
             .appSegmentedPicker()
             .frame(maxWidth: 320)
 
-            Text("Manage project visibility, favorites, icons, and assigned resource summaries. Use the System Prompt view to inspect and edit Pi instruction files.")
+            Text("Manage project visibility, icons, and assigned resource summaries. Use the System Prompt view to inspect and edit Pi instruction files.")
                 .font(.caption)
                 .foregroundStyle(AppTheme.mutedText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -852,7 +854,6 @@ struct ProjectsScreen: View {
             case .all: true
             case .enabled: preference.isEnabled
             case .disabled: !preference.isEnabled
-            case .favorites: preference.isFavorite
             }
             guard matchesFilter else { continue }
             if !query.isEmpty, !project.searchIndex.contains(query) { continue }
@@ -915,16 +916,6 @@ struct ProjectsScreen: View {
             .appSwitch()
             .labelsHidden()
             .help(preference.isEnabled ? "Disable project" : "Enable project")
-
-            Button {
-                viewModel.toggleProjectFavorite(project)
-            } label: {
-                Image(systemName: preference.isFavorite ? "star.fill" : "star")
-                    .foregroundStyle(preference.isFavorite ? .yellow : AppTheme.mutedText)
-                    .frame(width: 20, height: 20)
-            }
-            .buttonStyle(.plain)
-            .help(preference.isFavorite ? "Remove favorite" : "Add favorite")
 
             Button {
                 agentsRecapProject = project
@@ -1569,10 +1560,18 @@ private struct PiSystemInstructionsInfoPopover: View {
 
 private struct ProjectAgentsRecapSheet: View {
     let project: DiscoveredProject
-    let recap: ProjectAgentRecap
+    let viewModel: AppViewModel
     @ObservedObject var imageStore: AgentImageStore
 
     @Environment(\.dismiss) private var dismiss
+
+    private var recap: ProjectAgentRecap {
+        viewModel.agentRecap(for: project)
+    }
+
+    private var hasLoadedProjectCatalog: Bool {
+        viewModel.allProjectSnapshots[project.path] != nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1603,15 +1602,15 @@ private struct ProjectAgentsRecapSheet: View {
                 VStack(alignment: .leading, spacing: 16) {
                     if hasResolvedAgents {
                         if !recap.defaultAgents.isEmpty {
-                            agentRecapSection(title: "Default", agents: recap.defaultAgents, color: .blue)
+                            agentRecapSection(title: "Global", agents: recap.defaultAgents, color: .blue)
                         }
                         if !recap.projectAgents.isEmpty {
                             agentRecapSection(title: "Project", agents: recap.projectAgents, color: .green)
                         }
                         if !recap.otherEffectiveAgents.isEmpty {
-                            agentRecapSection(title: "Effective", agents: recap.otherEffectiveAgents, color: AppTheme.assistantAccent)
+                            agentRecapSection(title: "Default", agents: recap.otherEffectiveAgents, color: AppTheme.assistantAccent)
                         }
-                    } else {
+                    } else if hasLoadedProjectCatalog {
                         ContentUnavailableView(
                             "No Agents",
                             systemImage: "paperplane",
@@ -1619,9 +1618,13 @@ private struct ProjectAgentsRecapSheet: View {
                         )
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 32)
+                    } else {
+                        ProgressView("Loading agents…")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 32)
                     }
 
-                    if !recap.unresolvedNames.isEmpty {
+                    if hasLoadedProjectCatalog, !recap.unresolvedNames.isEmpty {
                         unresolvedAgentSection
                     }
                 }
@@ -1629,6 +1632,15 @@ private struct ProjectAgentsRecapSheet: View {
             }
         }
         .frame(width: 560, height: 620)
+        .task(id: project.path) {
+            guard !hasLoadedProjectCatalog else { return }
+            viewModel.refresh(
+                includeModels: false,
+                scanAllProjects: false,
+                extraProjectPathsToScan: [project.path],
+                silentlyReconcile: true
+            )
+        }
     }
 
     private var hasResolvedAgents: Bool {
@@ -1652,17 +1664,9 @@ private struct ProjectAgentsRecapSheet: View {
                         )
 
                         VStack(alignment: .leading, spacing: 3) {
-                            HStack(spacing: 6) {
-                                Text(agent.name)
-                                    .font(.subheadline.weight(.semibold))
-                                    .strikethrough(agent.resolved.disabled == true, color: AppTheme.mutedText)
-                                Text(agent.resolutionKind.rawValue)
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(color)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(color.opacity(0.12), in: Capsule(style: .continuous))
-                            }
+                            Text(agent.name)
+                                .font(.subheadline.weight(.semibold))
+                                .strikethrough(agent.resolved.disabled == true, color: AppTheme.mutedText)
                             if !agent.resolved.description.isEmpty {
                                 Text(agent.resolved.description)
                                     .font(.caption)
@@ -1706,9 +1710,17 @@ private struct ProjectAgentsRecapSheet: View {
 
 private struct ProjectSkillsRecapSheet: View {
     let project: DiscoveredProject
-    let recap: ProjectSkillRecap
+    let viewModel: AppViewModel
 
     @Environment(\.dismiss) private var dismiss
+
+    private var recap: ProjectSkillRecap {
+        viewModel.skillRecap(for: project)
+    }
+
+    private var hasLoadedProjectCatalog: Bool {
+        viewModel.allProjectSnapshots[project.path] != nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1750,7 +1762,7 @@ private struct ProjectSkillsRecapSheet: View {
                         if !recap.projectSkills.isEmpty {
                             skillRecapSection(title: "Project", skills: recap.projectSkills, color: .green)
                         }
-                    } else {
+                    } else if hasLoadedProjectCatalog {
                         ContentUnavailableView(
                             "No Skills",
                             systemImage: "wand.and.stars",
@@ -1758,9 +1770,13 @@ private struct ProjectSkillsRecapSheet: View {
                         )
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 32)
+                    } else {
+                        ProgressView("Loading skills…")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 32)
                     }
 
-                    if !recap.unresolvedNames.isEmpty {
+                    if hasLoadedProjectCatalog, !recap.unresolvedNames.isEmpty {
                         unresolvedSection
                     }
                 }
@@ -1768,6 +1784,15 @@ private struct ProjectSkillsRecapSheet: View {
             }
         }
         .frame(width: 520, height: 560)
+        .task(id: project.path) {
+            guard !hasLoadedProjectCatalog else { return }
+            viewModel.refresh(
+                includeModels: false,
+                scanAllProjects: false,
+                extraProjectPathsToScan: [project.path],
+                silentlyReconcile: true
+            )
+        }
     }
 
     private var hasResolvedSkills: Bool {
@@ -1833,9 +1858,17 @@ private struct ProjectSkillsRecapSheet: View {
 
 private struct ProjectMcpServersRecapSheet: View {
     let project: DiscoveredProject
-    let recap: ProjectMcpServerRecap
+    let viewModel: AppViewModel
 
     @Environment(\.dismiss) private var dismiss
+
+    private var recap: ProjectMcpServerRecap {
+        viewModel.mcpRecap(for: project)
+    }
+
+    private var hasLoadedProjectCatalog: Bool {
+        viewModel.allProjectSnapshots[project.path] != nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1877,7 +1910,7 @@ private struct ProjectMcpServersRecapSheet: View {
                         if !recap.projectServers.isEmpty {
                             serverRecapSection(title: "Project", servers: recap.projectServers, color: .green)
                         }
-                    } else {
+                    } else if hasLoadedProjectCatalog {
                         ContentUnavailableView(
                             "No MCP Servers",
                             systemImage: "powerplug",
@@ -1885,9 +1918,13 @@ private struct ProjectMcpServersRecapSheet: View {
                         )
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 32)
+                    } else {
+                        ProgressView("Loading MCP servers…")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 32)
                     }
 
-                    if !recap.unresolvedNames.isEmpty {
+                    if hasLoadedProjectCatalog, !recap.unresolvedNames.isEmpty {
                         unresolvedSection
                     }
                 }
@@ -1895,6 +1932,15 @@ private struct ProjectMcpServersRecapSheet: View {
             }
         }
         .frame(width: 520, height: 560)
+        .task(id: project.path) {
+            guard !hasLoadedProjectCatalog else { return }
+            viewModel.refresh(
+                includeModels: false,
+                scanAllProjects: false,
+                extraProjectPathsToScan: [project.path],
+                silentlyReconcile: true
+            )
+        }
     }
 
     private func serverRecapSection(title: String, servers: [MCPServerRecapItem], color: Color) -> some View {

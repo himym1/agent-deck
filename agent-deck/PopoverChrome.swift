@@ -83,6 +83,27 @@ struct AppPopoverScrollList<Content: View>: View {
     }
 }
 
+/// Taller cap for project pickers: they can safely use most of the app window,
+/// while compact model/thinking popovers keep the shared default height.
+struct AppProjectPickerPopoverList<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        AppPopoverScrollList(maxHeight: max(AppTheme.Popover.listMaxHeight, appWindowListMaxHeight)) {
+            content()
+        }
+    }
+
+    private var appWindowListMaxHeight: CGFloat {
+        let fallbackHeight: CGFloat = 640
+        let windowHeight = NSApplication.shared.keyWindow?.contentLayoutRect.height
+            ?? NSApplication.shared.mainWindow?.contentLayoutRect.height
+            ?? fallbackHeight
+        // Leave room for the popover header/divider and a little breathing room.
+        return max(240, floor(windowHeight * 0.90) - 58)
+    }
+}
+
 /// Selectable text row (model, thinking, agent). The active choice carries the
 /// app-wide selection mark — accent `checkmark.circle.fill` right after the
 /// name (same as the Settings/agent-editor pickers) — plus a subtle fill.

@@ -19,89 +19,20 @@ extension PiAgentSessionRecord {
 }
 
 /// Header row shared by both states of the Coding Agent pull-up panel: the
-/// project selector (icon + name + picker glyph opening the project popover),
-/// live status badges, a per-state trailing slot (new-session controls,
-/// delete) and the expand/collapse chevron. The whole row is tappable; inner
+/// fixed Sessions title, a per-state trailing slot (new-session controls,
+/// delete), and the expand/collapse chevron. The whole row is tappable; inner
 /// buttons take gesture priority so their own actions still win.
 struct CodingAgentPanelHeader<Trailing: View>: View {
-    let viewModel: AppViewModel
     let isExpanded: Bool
     let onToggle: () -> Void
-    let projects: [DiscoveredProject]
-    let selectedProject: DiscoveredProject?
-    let selectedProjectPath: String?
-    @Binding var projectFilterText: String
-    let isSearchDebouncing: Bool
-    let onSelectProject: (DiscoveredProject?) -> Void
     @ViewBuilder var trailing: Trailing
-
-    @State private var isProjectPickerPresented = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            if selectedProject == nil && selectedProjectPath == nil {
-                Text("Sessions")
-                    .font(.body)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-            } else {
-                Button {
-                    isProjectPickerPresented.toggle()
-                } label: {
-                    // Logo + name are ONE click target: both open the picker, and
-                    // the popover anchors under the whole block.
-                    HStack(alignment: .center, spacing: 10) {
-                        // 30 matches the visible height of the title+subtitle block
-                        // beside it (34 overhung the text on both ends) and the 30pt
-                        // round controls at the row's trailing edge.
-                        ProjectIconView(
-                            imageURL: selectedProject?.iconFileURL,
-                            symbolName: selectedProject?.fallbackSymbolName ?? "square.grid.2x2",
-                            size: 30,
-                            assetName: selectedProject?.projectType.assetName
-                        )
-
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack(alignment: .center, spacing: 5) {
-                                Text(selectedProjectTitle)
-                                    .font(.body)
-                                    .fontWeight(.medium)
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-                                Image(systemName: "chevron.up.chevron.down")
-                                    .font(.system(size: 9, weight: .semibold))
-                                    .foregroundStyle(.secondary)
-                            }
-                            if selectedProject != nil {
-                                Text(selectedProjectSubtitle)
-                                    .font(.callout)
-                                    .fontWeight(.regular)
-                                    .foregroundStyle(AppTheme.mutedText)
-                                    .lineLimit(1)
-                                    .fontWidth(.compressed)
-                            }
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Choose project")
-                .accessibilityLabel("Choose project")
-                .accessibilityHint("Opens the project picker")
-                .popover(isPresented: $isProjectPickerPresented, arrowEdge: .bottom) {
-                    ProjectPickerPopover(
-                        projects: projects,
-                        selectedProjectPath: selectedProjectPath,
-                        filterText: $projectFilterText,
-                        isSearchDebouncing: isSearchDebouncing,
-                        onSelectProject: { project in
-                            onSelectProject(project)
-                            isProjectPickerPresented = false
-                        }
-                    )
-                }
-            }
+            Text("Sessions")
+                .font(AppTheme.Font.headline)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
 
             Spacer(minLength: 8)
 
@@ -120,49 +51,22 @@ struct CodingAgentPanelHeader<Trailing: View>: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onToggle)
     }
-
-    private var selectedProjectTitle: String {
-        if selectedProject == nil && selectedProjectPath == nil {
-            return "Sessions"
-        }
-        if let remote = selectedProject?.gitHubRemote {
-            return remote.repo
-        }
-        if let selectedProject {
-            return selectedProject.name
-        }
-        if let selectedProjectPath {
-            return URL(fileURLWithPath: selectedProjectPath).lastPathComponent
-        }
-        return "Choose Project"
-    }
-
-    private var selectedProjectSubtitle: String {
-        if let remote = selectedProject?.gitHubRemote {
-            return remote.owner
-        }
-        return selectedProject?.path ?? selectedProjectPath ?? ""
-    }
 }
 
-/// New-session control shared by the collapsed and expanded panel headers:
-/// the project picker `+` when no project is scoped, otherwise the plain `+`.
+/// New-session control shared by the collapsed and expanded panel headers.
+/// The Sessions panel is always global, so `+` always opens the project picker.
 /// Starting a 1:1 agent chat lives in the draft's Deck-agents card, next to
 /// the agents themselves, so the header stays a single button.
 struct CodingAgentNewSessionControls: View {
     let viewModel: AppViewModel
 
     var body: some View {
-        if viewModel.selectedDiscoveredProject == nil {
-            PiAgentAddSessionMenuButton(
-                projects: orderedProjects,
-                selectedProject: viewModel.selectedDiscoveredProject,
-                action: { viewModel.createPiAgentDraftForSelectedProject() },
-                onSelectProject: { viewModel.createPiAgentDraft(for: $0) }
-            )
-        } else {
-            PiAgentAddSessionButton(action: { viewModel.createPiAgentDraftForSelectedProject() })
-        }
+        PiAgentAddSessionMenuButton(
+            projects: orderedProjects,
+            selectedProject: nil,
+            action: { viewModel.createPiAgentDraftForSelectedProject() },
+            onSelectProject: { viewModel.createPiAgentDraft(for: $0) }
+        )
     }
 
     private var orderedProjects: [DiscoveredProject] {
@@ -177,11 +81,6 @@ struct CodingAgentNewSessionControls: View {
 struct CodingAgentCollapsedPanel: View {
     let viewModel: AppViewModel
     let store: PiAgentSessionStore
-    let projects: [DiscoveredProject]
-    let selectedProject: DiscoveredProject?
-    @Binding var projectFilterText: String
-    let isSearchDebouncing: Bool
-    let onSelectProject: (DiscoveredProject?) -> Void
     /// The same toolbar search the expanded list filters on, so searching
     /// narrows the recents too.
     let sessionSearchText: String
@@ -203,15 +102,8 @@ struct CodingAgentCollapsedPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             CodingAgentPanelHeader(
-                viewModel: viewModel,
                 isExpanded: false,
-                onToggle: { viewModel.openPiAgentScreen() },
-                projects: projects,
-                selectedProject: selectedProject,
-                selectedProjectPath: viewModel.selectedProjectPath,
-                projectFilterText: $projectFilterText,
-                isSearchDebouncing: isSearchDebouncing,
-                onSelectProject: onSelectProject
+                onToggle: { viewModel.openPiAgentScreen() }
             ) {
                 CodingAgentNewSessionControls(viewModel: viewModel)
             }
@@ -219,6 +111,11 @@ struct CodingAgentCollapsedPanel: View {
             // card at the top of the sidebar.
             .padding(.horizontal, 6)
             .padding(.top, 2)
+
+            Rectangle()
+                .fill(AppTheme.contentStroke)
+                .frame(height: 1)
+                .padding(.horizontal, 6)
 
             if !recentSessions.isEmpty {
                 CodingAgentRecentList(
@@ -249,7 +146,6 @@ struct CodingAgentCollapsedPanel: View {
             recentScrollRequest = store.selectedSessionID
         }
         .onChange(of: store.sessionListRevision) { _, _ in rebuildRecents() }
-        .onChange(of: viewModel.selectedProjectPath) { _, _ in rebuildRecents() }
         .onChange(of: sessionSearchText) { _, _ in rebuildRecents() }
         .onChange(of: viewModel.showPiAgentAttentionOnly) { _, _ in rebuildRecents() }
         // The expanded panel stays mounted while this one shows (and vice
@@ -292,12 +188,7 @@ struct CodingAgentCollapsedPanel: View {
     }
 
     private func rebuildRecents() {
-        var scoped: [PiAgentSessionRecord]
-        if let path = viewModel.selectedProjectPath {
-            scoped = store.sessions.filter { $0.projectPath == path }
-        } else {
-            scoped = store.sessions
-        }
+        var scoped = store.sessions
         if viewModel.showPiAgentAttentionOnly {
             scoped = scoped.filter(\.needsAttention)
         }
@@ -305,16 +196,9 @@ struct CodingAgentCollapsedPanel: View {
         if !query.isEmpty {
             scoped = scoped.filter { $0.matchesSessionSearch(query) }
         }
-        // In All-Projects mode the 5-row strip reads as "what's live across
-        // projects": surface working, pinned, and last-30-min sessions first
-        // (across every project), then fill by global recency. Per-project
-        // grouping + "Show more" live in the expanded panel.
-        let next: [PiAgentSessionRecord]
-        if viewModel.selectedProjectPath == nil {
-            next = interleaveByLiveness(scoped)
-        } else {
-            next = scoped.sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
-        }
+        // Sessions are always global now: project selection in other views must
+        // not change the session strip.
+        let next = interleaveByLiveness(scoped)
         if next != recentSessions { recentSessions = next }
     }
 

@@ -5,7 +5,6 @@ import Observation
 struct ProjectPreference: Codable, Hashable, Identifiable, Sendable {
     let path: String
     var isEnabled: Bool
-    var isFavorite: Bool
     var isHidden: Bool
     var customIconPath: String?
     var assignedAgentNames: Set<String>
@@ -16,17 +15,16 @@ struct ProjectPreference: Codable, Hashable, Identifiable, Sendable {
     var id: String { path }
 
     static func `default`(for path: String) -> ProjectPreference {
-        ProjectPreference(path: path, isEnabled: false, isFavorite: false, isHidden: false, customIconPath: nil, assignedAgentNames: [], assignedSkillNames: [], assignedPromptTemplateNames: [])
+        ProjectPreference(path: path, isEnabled: false, isHidden: false, customIconPath: nil, assignedAgentNames: [], assignedSkillNames: [], assignedPromptTemplateNames: [])
     }
 
     enum CodingKeys: String, CodingKey {
-        case path, isEnabled, isFavorite, isHidden, customIconPath, assignedAgentNames, assignedSkillNames, assignedPromptTemplateNames, assignedMcpServerNames
+        case path, isEnabled, isHidden, customIconPath, assignedAgentNames, assignedSkillNames, assignedPromptTemplateNames, assignedMcpServerNames
     }
 
-    init(path: String, isEnabled: Bool, isFavorite: Bool, isHidden: Bool, customIconPath: String?, assignedAgentNames: Set<String> = [], assignedSkillNames: Set<String> = [], assignedPromptTemplateNames: Set<String> = [], assignedMcpServerNames: Set<String> = []) {
+    init(path: String, isEnabled: Bool, isHidden: Bool, customIconPath: String?, assignedAgentNames: Set<String> = [], assignedSkillNames: Set<String> = [], assignedPromptTemplateNames: Set<String> = [], assignedMcpServerNames: Set<String> = []) {
         self.path = path
         self.isEnabled = isEnabled
-        self.isFavorite = isFavorite
         self.isHidden = isHidden
         self.customIconPath = customIconPath
         self.assignedAgentNames = assignedAgentNames
@@ -39,7 +37,6 @@ struct ProjectPreference: Codable, Hashable, Identifiable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         path = try container.decode(String.self, forKey: .path)
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
-        isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
         isHidden = try container.decodeIfPresent(Bool.self, forKey: .isHidden) ?? false
         customIconPath = try container.decodeIfPresent(String.self, forKey: .customIconPath)
         assignedAgentNames = try container.decodeIfPresent(Set<String>.self, forKey: .assignedAgentNames) ?? []
@@ -87,14 +84,6 @@ final class ProjectPreferencesStore {
 
     func setEnabled(_ isEnabled: Bool, for path: String) {
         update(path) { $0.isEnabled = isEnabled }
-    }
-
-    func toggleFavorite(for path: String) {
-        update(path) { $0.isFavorite.toggle() }
-    }
-
-    func setFavorite(_ isFavorite: Bool, for path: String) {
-        update(path) { $0.isFavorite = isFavorite }
     }
 
     func setHidden(_ isHidden: Bool, for path: String) {
@@ -230,7 +219,7 @@ final class ProjectPreferencesStore {
     }
 
     /// Same debounce-then-off-main pattern as `AppSettingsStore.schedulePersist`.
-    /// Coalesces bursts of assignment toggles (favorite, hide, project agent/skill
+    /// Coalesces bursts of assignment toggles (hide, project agent/skill
     /// assignment) into one encode + UserDefaults write per ~150ms window.
     private var pendingPersistTask: Task<Void, Never>?
     private static let persistDebounceNanoseconds: UInt64 = 150_000_000
@@ -286,7 +275,6 @@ final class ProjectPreferencesStore {
             return (standardizedPath, ProjectPreference(
                 path: standardizedPath,
                 isEnabled: preference.isEnabled,
-                isFavorite: preference.isFavorite,
                 isHidden: preference.isHidden,
                 customIconPath: preference.customIconPath,
                 assignedAgentNames: preference.assignedAgentNames,

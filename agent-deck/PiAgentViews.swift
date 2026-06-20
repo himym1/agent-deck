@@ -2692,14 +2692,13 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             }
             // `settle` is the immediate layout pass that stops a layer painting at a
             // stale position. With per-item cells (one cell per id, never recycled to a
-            // different item) there is no stale recycled position to fix on a fresh
-            // build — and forcing the layout here would lay out rows that scroll past
-            // before they're ever displayed, the dominant cold-scroll cost. So skip it
-            // on first build (`createdNow`) and on streaming appends (same id/width),
-            // running it only when an already-displayed cell changes geometry (width or
-            // inset). The cell still lays out + reports its real height naturally via
-            // `layout()` when AppKit displays it.
-            if !createdNow && (widthChanged || insetChanged) {
+            // different item) most fresh builds can skip it; otherwise cold scrolling
+            // pays to lay out rows that pass by before display. User-question cards are
+            // the exception: their trailing-aligned card, header, and attachment flow
+            // need one synchronous first layout or the header can paint from transient
+            // geometry until a later relayout (session switch/resize) corrects it.
+            let needsInitialSettle = createdNow && spec.typeID == ObjectIdentifier(PiAgentNativeQuestionView.self)
+            if needsInitialSettle || (!createdNow && (widthChanged || insetChanged)) {
                 spec.settle(row)
             }
             configuredItemID = item.id
@@ -2967,35 +2966,41 @@ private struct PiAgentSessionGroupHeader: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            ProjectIconView(
-                imageURL: section.iconFileURL,
-                symbolName: section.fallbackSymbolName,
-                size: 30,
-                assetName: section.assetName
-            )
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .center, spacing: 5) {
-                    Text(section.title)
-                        .font(AppTheme.Font.footnote.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(AppTheme.mutedText)
-                        .frame(width: 11, height: 11, alignment: .center)
-                        .rotationEffect(.degrees(section.isCollapsed ? 0 : 90))
-                        .animation(.snappy(duration: 0.22), value: section.isCollapsed)
+            Button(action: onToggleCollapse) {
+                HStack(alignment: .center, spacing: 8) {
+                    ProjectIconView(
+                        imageURL: section.iconFileURL,
+                        symbolName: section.fallbackSymbolName,
+                        size: 30,
+                        assetName: section.assetName
+                    )
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(alignment: .center, spacing: 5) {
+                            Text(section.title)
+                                .font(AppTheme.Font.footnote.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(AppTheme.mutedText)
+                                .frame(width: 11, height: 11, alignment: .center)
+                                .rotationEffect(.degrees(section.isCollapsed ? 0 : 90))
+                                .animation(.snappy(duration: 0.22), value: section.isCollapsed)
+                        }
+                        if let subtitle = section.subtitle {
+                            Text(subtitle)
+                                .font(AppTheme.Font.caption2)
+                                .foregroundStyle(AppTheme.mutedText)
+                                .lineLimit(1)
+                        }
+                    }
+                    .frame(minHeight: 30, alignment: .center)
                 }
-                if let subtitle = section.subtitle {
-                    Text(subtitle)
-                        .font(AppTheme.Font.caption2)
-                        .foregroundStyle(AppTheme.mutedText)
-                        .lineLimit(1)
-                }
+                .contentShape(Rectangle())
             }
-            .frame(minHeight: 30, alignment: .center)
-
-            Spacer(minLength: 4)
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help(section.isCollapsed ? "Expand" : "Collapse")
 
             if section.isProjectGroup {
                 Button(action: onCreateSession) {
@@ -3016,10 +3021,7 @@ private struct PiAgentSessionGroupHeader: View {
         // sits at listHorizontalInset 6 + the row's own 8pt padding = 14pt).
         .padding(.horizontal, 8)
         .frame(minHeight: 34, alignment: .center)
-        .contentShape(Rectangle())
         .onHover { isHovering = $0 }
-        .onTapGesture(perform: onToggleCollapse)
-        .help(section.isCollapsed ? "Expand" : "Collapse")
     }
 }
 
@@ -3027,17 +3029,24 @@ private struct PiAgentSessionGroupFooter: View {
     let section: PiAgentSessionListSection
     let onToggleShowMore: () -> Void
 
+    @State private var isHovering = false
+
     var body: some View {
         Button(action: onToggleShowMore) {
             Text(section.isShowMoreActive ? "Show less" : "Show more")
-                .font(AppTheme.Font.footnote.weight(.medium))
-                .foregroundStyle(AppTheme.mutedText)
+                .font(AppTheme.Font.footnote.weight(.semibold))
+                .foregroundStyle(isHovering ? AppTheme.brandAccentBright : AppTheme.brandAccent)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isHovering ? AppTheme.brandAccent.opacity(0.10) : Color.clear)
+        )
+        .onHover { isHovering = $0 }
         .help(section.isShowMoreActive ? "Show fewer" : "Show \(section.hiddenCount) hidden session\(section.hiddenCount == 1 ? "" : "s")")
     }
 }
@@ -3048,11 +3057,6 @@ private struct PiAgentSessionGroupFooter: View {
 struct CodingAgentExpandedPanel: View {
     let viewModel: AppViewModel
     let store: PiAgentSessionStore
-    let projects: [DiscoveredProject]
-    let selectedProject: DiscoveredProject?
-    @Binding var projectFilterText: String
-    let isSearchDebouncing: Bool
-    let onSelectProject: (DiscoveredProject?) -> Void
     @Binding var sessionSearchText: String
     /// True only while the panel is expanded. Both panel states are kept
     /// permanently mounted (ZStack in `mainContent`) so the pull-up is a cheap
@@ -3076,6 +3080,7 @@ struct CodingAgentExpandedPanel: View {
     @State private var pendingDeleteSessionIDs: Set<UUID> = []
     @State private var isDeleteSessionsAlertPresented = false
     @State private var sessionActivityCache: [UUID: PiAgentSessionGitActivity] = [:]
+    @State private var postExpandTask: Task<Void, Never>?
     /// Per-session memo of the last activity parse, keyed by the store's
     /// `gitActivityRevision` it was computed at. That revision bumps exactly
     /// when a commit/push/merge entry lands, so a memo entry parsed at the
@@ -3094,6 +3099,12 @@ struct CodingAgentExpandedPanel: View {
             header
                 .padding(.horizontal, 14)
                 .padding(.top, 12)
+                .padding(.bottom, 10)
+
+            Rectangle()
+                .fill(AppTheme.contentStroke)
+                .frame(height: 1)
+                .padding(.horizontal, 14)
                 .padding(.bottom, 10)
 
             if !hasAnyScopedSessions {
@@ -3151,15 +3162,19 @@ struct CodingAgentExpandedPanel: View {
             rebuildVisibleSessions()
             syncVisibleSessionSelection()
             syncMultiSelectionToSelectedSession()
-            rebuildSessionActivityCache()
-            // Pre-position even while hidden: the jump realizes the LazyVStack
-            // rows between the stale offset and the target NOW, off the expand
-            // animation's critical path. Expanding then animates over an
-            // already-positioned, already-realized list.
-            sessionScrollRequest = store.selectedSession?.id
+            if isActive { schedulePostExpandWork() }
+        }
+        .onDisappear {
+            postExpandTask?.cancel()
+            postExpandTask = nil
         }
         .onChange(of: isActive) { _, active in
-            if active { sessionScrollRequest = store.selectedSession?.id }
+            if active {
+                schedulePostExpandWork()
+            } else {
+                postExpandTask?.cancel()
+                postExpandTask = nil
+            }
         }
         .onChange(of: store.sessionListRevision) { _, _ in rebuildVisibleSessions() }
         .onChange(of: sessionSearchText) { _, _ in rebuildVisibleSessions() }
@@ -3170,10 +3185,6 @@ struct CodingAgentExpandedPanel: View {
         // this trigger the cached sections stayed grouped under "Other" until a
         // later rebuild (the original first-launch "all Other" symptom).
         .onChange(of: viewModel.discoveredProjectsRevision) { _, _ in rebuildVisibleSessions() }
-        .onChange(of: viewModel.selectedProjectPath) { _, _ in
-            rebuildVisibleSessions()
-            syncVisibleSessionSelection()
-        }
         .onChange(of: store.selectedSession?.id) { _, _ in
             syncMultiSelectionToSelectedSession()
             // Keep the selected row in view for both click selection and keyboard
@@ -3186,11 +3197,12 @@ struct CodingAgentExpandedPanel: View {
             pruneMultiSelectionToVisibleSessions()
             rebuildSessionActivityCache()
         }
-        // While hidden, `activityRevisionToken` is a constant, so this never fires
-        // and the parse never runs. On activation the token flips to the live
-        // revision, firing exactly one refresh — no separate activation handler
-        // or dirty flag needed.
-        .onChange(of: activityRevisionToken) { _, _ in rebuildSessionActivityCache() }
+        // Git activity is derived by scanning visible transcripts. Do not run it
+        // on the first expand frame: that frame is already resizing/laying out the
+        // sidebar and `ScrollViewReader.scrollTo` can realize many lazy rows.
+        .onChange(of: store.gitActivityRevision) { _, _ in
+            if isActive { rebuildSessionActivityCache() }
+        }
         .alert(deleteSessionsAlertTitle, isPresented: $isDeleteSessionsAlertPresented) {
             Button("Delete", role: .destructive) {
                 viewModel.deletePiAgentSessions(pendingDeleteSessionIDs)
@@ -3204,15 +3216,8 @@ struct CodingAgentExpandedPanel: View {
 
     private var header: some View {
         CodingAgentPanelHeader(
-            viewModel: viewModel,
             isExpanded: true,
-            onToggle: onCollapse,
-            projects: projects,
-            selectedProject: selectedProject,
-            selectedProjectPath: viewModel.selectedProjectPath,
-            projectFilterText: $projectFilterText,
-            isSearchDebouncing: isSearchDebouncing,
-            onSelectProject: onSelectProject
+            onToggle: onCollapse
         ) {
             if selectedSessionIDs.count > 1 {
                 Button(role: .destructive) { requestDeleteSessions(selectedSessionIDs) } label: {
@@ -3230,11 +3235,10 @@ struct CodingAgentExpandedPanel: View {
     }
 
     private var scopedSessions: [PiAgentSessionRecord] {
-        guard let path = viewModel.selectedProjectPath else { return store.sessions }
-        return store.sessions.filter { $0.projectPath == path }
+        store.sessions
     }
 
-    private var isAllProjects: Bool { viewModel.selectedProjectPath == nil }
+    private var isAllProjects: Bool { true }
 
     private var visibleSections: [PiAgentSessionListSection] {
         hasBuiltVisibleSessions ? cachedSections : computedSections()
@@ -3247,14 +3251,19 @@ struct CodingAgentExpandedPanel: View {
 
     private var visibleSessionIDs: [UUID] { visibleSessions.map(\.id) }
 
-    /// Drives the git-activity refresh. `gitActivityRevision` only bumps when a
-    /// commit/push/merge entry lands (not per streaming token), so the visible
-    /// sidebar's body no longer re-evaluates ~30Hz during a run. Gated on
-    /// `isActive` so the hidden sidebar reads a constant and registers no store
-    /// dependency at all; the drain in `.onChange(of: isActive)` catches up any
-    /// events that landed while hidden.
-    private var activityRevisionToken: Int {
-        isActive ? store.gitActivityRevision : -1
+    private func schedulePostExpandWork() {
+        postExpandTask?.cancel()
+        postExpandTask = Task { @MainActor in
+            // Let the panel's expand animation and first layout pass get on
+            // screen before forcing a ScrollViewReader jump or parsing transcript
+            // git activity. Doing both synchronously on activation caused the
+            // expanded sidebar to hitch and could trip AppKit layout recursion.
+            try? await Task.sleep(for: .milliseconds(260))
+            guard !Task.isCancelled, isActive else { return }
+            sessionScrollRequest = store.selectedSession?.id
+            rebuildSessionActivityCache()
+            postExpandTask = nil
+        }
     }
 
     private func rebuildVisibleSessions() {
@@ -3596,14 +3605,6 @@ struct PiAgentScreen: View {
         .onChange(of: store.transcriptRevisionsBySessionID) { _, _ in
             rebuildSessionActivityCache()
         }
-        .onChange(of: viewModel.selectedProjectPath) { _, _ in
-            rebuildVisibleSessions()
-            syncVisibleSessionSelection()
-            Task { @MainActor in
-                await Task.yield()
-                viewModel.acknowledgeVisibleSelectedPiAgentSession()
-            }
-        }
         .task(id: store.selectedTranscriptRevision) {
             await Task.yield()
             scheduleTranscriptCacheUpdate()
@@ -3646,16 +3647,11 @@ struct PiAgentScreen: View {
         }
     }
 
-    private var sessionScopePath: String? {
-        viewModel.selectedProjectPath
-    }
-
     private var scopedSessions: [PiAgentSessionRecord] {
-        guard let sessionScopePath else { return store.sessions }
-        return store.sessions.filter { $0.projectPath == sessionScopePath }
+        store.sessions
     }
 
-    private var isAllProjects: Bool { viewModel.selectedProjectPath == nil }
+    private var isAllProjects: Bool { true }
 
     private var visibleSections: [PiAgentSessionListSection] {
         hasBuiltVisibleSessions ? cachedSections : computedSections()
@@ -5289,7 +5285,7 @@ struct PiAgentScreen: View {
                 placeholder: !hasSelectedSession ? "Start a new Pi Agent session…" : (isCompacting ? "Compacting context…" : (isRunning ? "Steer the current turn…" : "Ask Pi to implement, inspect, explain, or fix…")),
                 canSend: !isCompacting && store.selectedSession != nil && (!composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composerImages.isEmpty || !composerFiles.isEmpty || !composerFolders.isEmpty || composerIssueAttachment != nil || slashSelection != nil),
                 canCreateSession: !isCompacting && store.selectedSession == nil,
-                createSessionProjects: viewModel.selectedDiscoveredProject == nil ? piAgentNewSessionProjects : [],
+                createSessionProjects: piAgentNewSessionProjects,
                 onFiles: addFileAttachments,
                 onFolders: addFolderAttachments,
                 viewModel: viewModel,
@@ -6106,7 +6102,7 @@ private struct PiAgentComposerPanel: View {
                 placeholder: !hasSelectedSession ? "Start a new Pi Agent session…" : (isCompacting ? "Compacting context…" : (isRunning ? "Steer the current turn…" : "Ask Pi to implement, inspect, explain, or fix…")),
                 canSend: !isCompacting && store.selectedSession != nil && (!composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composerImages.isEmpty || !composerFiles.isEmpty || !composerFolders.isEmpty || composerIssueAttachment != nil || slashSelection != nil),
                 canCreateSession: !isCompacting && store.selectedSession == nil,
-                createSessionProjects: viewModel.selectedDiscoveredProject == nil ? piAgentNewSessionProjects : [],
+                createSessionProjects: piAgentNewSessionProjects,
                 onFiles: addFileAttachments,
                 onFolders: addFolderAttachments,
                 viewModel: viewModel,

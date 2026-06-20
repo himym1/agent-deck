@@ -549,6 +549,7 @@ struct ContentView: View {
     @State private var agentModelQuickEditor: AgentModelQuickEditorContext?
     @State private var commandContext = AgentDeckCommandContext()
     @State private var isIssuesProjectPopoverPresented = false
+    @State private var isMemoryProjectPopoverPresented = false
     @State private var isIssuesFilterPopoverPresented = false
     @State private var isAgentsFilterPopoverPresented = false
     #if DEBUG
@@ -615,11 +616,6 @@ struct ContentView: View {
                     CodingAgentExpandedPanel(
                         viewModel: viewModel,
                         store: viewModel.piAgentSessionStore,
-                        projects: filteredProjects,
-                        selectedProject: selectedProject,
-                        projectFilterText: $projectFilterText,
-                        isSearchDebouncing: projectSearchIsDebouncing,
-                        onSelectProject: { viewModel.setSelectedProject($0?.url) },
                         sessionSearchText: $piAgentSessionSearchText,
                         isActive: isExpanded,
                         onCollapse: { viewModel.isCodingAgentPanelExpanded = false }
@@ -759,11 +755,6 @@ struct ContentView: View {
             CodingAgentCollapsedPanel(
                 viewModel: viewModel,
                 store: viewModel.piAgentSessionStore,
-                projects: filteredProjects,
-                selectedProject: selectedProject,
-                projectFilterText: $projectFilterText,
-                isSearchDebouncing: projectSearchIsDebouncing,
-                onSelectProject: { viewModel.setSelectedProject($0?.url) },
                 sessionSearchText: piAgentSessionSearchText
             )
             .padding(.horizontal, 16)
@@ -1587,6 +1578,15 @@ struct ContentView: View {
     @ToolbarContentBuilder
     private var memoryPrimaryToolbarContent: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
+            ProjectToolbarSelector(
+                viewModel: viewModel,
+                isPresented: $isMemoryProjectPopoverPresented
+            )
+        }
+
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+
+        ToolbarItem(placement: .primaryAction) {
             ControlGroup {
                 // Button-style toggle, not a switch: toolbar islands hold
                 // Label-based controls so overflow menus and VoiceOver get the
@@ -1682,7 +1682,7 @@ struct ContentView: View {
                 isPresented.toggle()
             } label: {
                 HStack(spacing: 7) {
-                    if let project = viewModel.selectedGitHubProject {
+                    if let project = viewModel.selectedDiscoveredProject {
                         ProjectIconView(
                             imageURL: project.iconFileURL,
                             symbolName: project.fallbackSymbolName,
@@ -1705,7 +1705,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Projects")
                         .font(.headline)
-                    ForEach(viewModel.gitHubProjects) { project in
+                    ForEach(viewModel.enabledProjects) { project in
                         Button {
                             viewModel.setSelectedProject(project.url)
                             isPresented = false

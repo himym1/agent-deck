@@ -1289,7 +1289,7 @@ private struct PiAgentComposerProjectPickerPopover: View {
 
     var body: some View {
         AppPopoverContainer(title: "New Session", subtitle: "Choose a project for Pi Agent.") {
-            AppPopoverScrollList {
+            AppProjectPickerPopoverList {
                 ForEach(projects) { project in
                     AppPopoverProjectRow(
                         imageURL: project.iconFileURL,
