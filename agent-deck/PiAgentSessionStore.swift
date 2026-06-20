@@ -569,7 +569,7 @@ final class PiAgentSessionStore {
             || sessions[index].title != preTitle
             || sessions[index].projectPath != preProjectPath
             // Status drives the row's ACTIVE badge. The session list renders from a
-            // cached snapshot (`cachedVisibleSessions`) that only rebuilds on a
+            // cached snapshot (`cachedSections`) that only rebuilds on a
             // `sessionListRevision` bump, so without this a stop (→ .stopped) left the
             // row showing a stale ACTIVE badge. Only transitions reach here (no change
             // → no bump), so streaming's steady .running stays cheap.

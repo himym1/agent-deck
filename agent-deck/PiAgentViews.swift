@@ -2792,7 +2792,11 @@ private extension PiAgentTranscriptThread {
 /// list can never go stale: a real change to any of them differs the inputs and
 /// forces a rebuild. Bindings and callbacks are intentionally excluded from `==`.
 private struct SessionListContent: View, Equatable {
-    let visibleSessions: [PiAgentSessionRecord]
+    let sections: [PiAgentSessionListSection]
+    /// Render per-project group headers. False for the single-project scoped
+    /// view, which renders one anonymous section identical to the pre-grouping
+    /// flat layout.
+    let isGrouped: Bool
     let selectedSessionIDs: Set<UUID>
     let renamingSessionID: UUID?
     let workingSessionIDs: Set<UUID>
@@ -2814,10 +2818,21 @@ private struct SessionListContent: View, Equatable {
     let onRename: (UUID, String) -> Void
     let onTogglePinned: (UUID) -> Void
     let onDelete: (UUID) -> Void
+    /// Toggle a project group's "Show more/less" state.
+    let onToggleExpand: (String) -> Void
+    /// Toggle a project group's disclosure collapse (header-only / expanded).
+    let onToggleCollapse: (String) -> Void
+    /// Start a new session scoped to the given project path. No-op for the
+    /// catch-all "Other" group (it has no resolvable project).
+    let onCreateSessionForProject: (String) -> Void
+    /// Arrow-key navigation (↑/↓), routed through the same view-model path as
+    /// ⌘]/⌘[ so both follow the grouped list with auto-reveal. `nil` disables
+    /// arrows (lists that don't need keyboard nav).
+    var onArrowNavigate: ((MoveCommandDirection) -> Void)? = nil
 
     static func == (lhs: SessionListContent, rhs: SessionListContent) -> Bool {
         let diff: String?
-        if lhs.visibleSessions != rhs.visibleSessions { diff = "visibleSessions" }
+        if lhs.sections != rhs.sections { diff = "sections" }
         else if lhs.selectedSessionIDs != rhs.selectedSessionIDs { diff = "selectedSessionIDs" }
         else if lhs.renamingSessionID != rhs.renamingSessionID { diff = "renamingSessionID" }
         else if lhs.workingSessionIDs != rhs.workingSessionIDs { diff = "workingSessionIDs" }
@@ -2850,8 +2865,10 @@ private struct SessionListContent: View, Equatable {
 
     var body: some View {
         AppList(
-            sections: [AppListSection(id: "sessions", title: nil, items: visibleSessions)],
+            sections: appSections,
             selection: .multi($selection),
+            keyboardNavigation: onArrowNavigate != nil,
+            onArrowNavigate: onArrowNavigate,
             cornerRadius: AppTheme.Chat.subCardCornerRadius,
             rowHorizontalPadding: 0,
             rowVerticalPadding: 0,
@@ -2863,8 +2880,44 @@ private struct SessionListContent: View, Equatable {
         ) { session in
             row(session)
         }
-        .animation(.snappy(duration: 0.24), value: visibleSessions.map(\.id))
+        .animation(.snappy(duration: 0.24), value: sections.flatMap(\.items).map(\.id))
         .bottomEdgeFade(height: 34)
+    }
+
+    /// Map the value-type `PiAgentSessionListSection`s to `AppListSection`s,
+    /// attaching a custom project-group header to any section that needs one.
+    private var appSections: [AppListSection<PiAgentSessionRecord>] {
+        sections.map { section in
+            AppListSection(
+                id: section.id,
+                header: shouldShowHeader(for: section)
+                    ? AnyView(PiAgentSessionGroupHeader(
+                        section: section,
+                        onToggleCollapse: { onToggleCollapse(section.id) },
+                        onCreateSession: { onCreateSessionForProject(section.id) }
+                    ))
+                    : nil,
+                footer: shouldShowFooter(for: section)
+                    ? AnyView(PiAgentSessionGroupFooter(
+                        section: section,
+                        onToggleShowMore: { onToggleExpand(section.id) }
+                    ))
+                    : nil,
+                items: section.items
+            )
+        }
+    }
+
+    /// A header renders whenever the list is grouped — every group needs a
+    /// disclosure + identity, now that groups can collapse to just their
+    /// header. A single-project scoped view (`isGrouped == false`) stays
+    /// headerless, identical to the pre-grouping flat layout.
+    private func shouldShowHeader(for section: PiAgentSessionListSection) -> Bool {
+        isGrouped
+    }
+
+    private func shouldShowFooter(for section: PiAgentSessionListSection) -> Bool {
+        isGrouped && !section.isCollapsed && (section.hiddenCount > 0 || section.isShowMoreActive)
     }
 
     @ViewBuilder
@@ -2899,6 +2952,96 @@ private struct SessionListContent: View, Equatable {
     }
 }
 
+/// Per-project group header for the All-Projects session list: a disclosure
+/// project icon, repo name (primary) + owner (muted), an inline disclosure
+/// chevron that collapses the group to its header, a "Show N more / Show less"
+/// affordance when the group has capped content, and a trailing `+` that
+/// starts a new session in that project. Rendered through
+/// `AppListSection.header`, so it inherits `AppList`'s section spacing.
+private struct PiAgentSessionGroupHeader: View {
+    let section: PiAgentSessionListSection
+    let onToggleCollapse: () -> Void
+    let onCreateSession: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            ProjectIconView(
+                imageURL: section.iconFileURL,
+                symbolName: section.fallbackSymbolName,
+                size: 30,
+                assetName: section.assetName
+            )
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .center, spacing: 5) {
+                    Text(section.title)
+                        .font(AppTheme.Font.footnote.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(AppTheme.mutedText)
+                        .frame(width: 11, height: 11, alignment: .center)
+                        .rotationEffect(.degrees(section.isCollapsed ? 0 : 90))
+                        .animation(.snappy(duration: 0.22), value: section.isCollapsed)
+                }
+                if let subtitle = section.subtitle {
+                    Text(subtitle)
+                        .font(AppTheme.Font.caption2)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .lineLimit(1)
+                }
+            }
+            .frame(minHeight: 30, alignment: .center)
+
+            Spacer(minLength: 4)
+
+            if section.isProjectGroup {
+                Button(action: onCreateSession) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(AppTheme.mutedText)
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(isHovering ? AppTheme.contentSubtleFill : Color.clear))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .frame(width: 30, height: 30, alignment: .center)
+                .help("New session in \(section.title)")
+                .accessibilityLabel("New session in \(section.title)")
+            }
+        }
+        // Aligns the icon's leading edge with the session row title (row text
+        // sits at listHorizontalInset 6 + the row's own 8pt padding = 14pt).
+        .padding(.horizontal, 8)
+        .frame(minHeight: 34, alignment: .center)
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .onTapGesture(perform: onToggleCollapse)
+        .help(section.isCollapsed ? "Expand" : "Collapse")
+    }
+}
+
+private struct PiAgentSessionGroupFooter: View {
+    let section: PiAgentSessionListSection
+    let onToggleShowMore: () -> Void
+
+    var body: some View {
+        Button(action: onToggleShowMore) {
+            Text(section.isShowMoreActive ? "Show less" : "Show more")
+                .font(AppTheme.Font.footnote.weight(.medium))
+                .foregroundStyle(AppTheme.mutedText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .help(section.isShowMoreActive ? "Show fewer" : "Show \(section.hiddenCount) hidden session\(section.hiddenCount == 1 ? "" : "s")")
+    }
+}
+
 /// Expanded state of the Coding Agent pull-up panel: the full searchable
 /// session list that overlays the upper nav sections when the panel is pulled
 /// up (see `mainContent`'s sidebar ZStack).
@@ -2920,7 +3063,7 @@ struct CodingAgentExpandedPanel: View {
     let isActive: Bool
     let onCollapse: () -> Void
 
-    @State private var cachedVisibleSessions: [PiAgentSessionRecord] = []
+    @State private var cachedSections: [PiAgentSessionListSection] = []
     @State private var hasBuiltVisibleSessions = false
     // Cached so `body` never reads `store.sessions` directly: `touchSession`
     // mutates that array many times per second during streaming, and a live read
@@ -2959,7 +3102,8 @@ struct CodingAgentExpandedPanel: View {
                 AppEmptyState("No sessions found", systemImage: "magnifyingglass", description: "Try another search.", layout: .fill)
             } else {
                 SessionListContent(
-                    visibleSessions: visibleSessions,
+                    sections: visibleSections,
+                    isGrouped: isAllProjects,
                     selectedSessionIDs: selectedSessionIDs,
                     renamingSessionID: renamingSessionID,
                     workingSessionIDs: workingVisibleSessionIDs,
@@ -2979,7 +3123,23 @@ struct CodingAgentExpandedPanel: View {
                     onEndRename: { renamingSessionID = nil },
                     onRename: { viewModel.renamePiAgentSession($0, title: $1) },
                     onTogglePinned: { viewModel.togglePiAgentSessionPinned($0) },
-                    onDelete: { id in requestDeleteSessions(selectedSessionIDs.contains(id) && selectedSessionIDs.count > 1 ? selectedSessionIDs : [id]) }
+                    onDelete: { id in requestDeleteSessions(selectedSessionIDs.contains(id) && selectedSessionIDs.count > 1 ? selectedSessionIDs : [id]) },
+                    onToggleExpand: { projectID in
+                        if viewModel.expandedProjects.contains(projectID) { viewModel.expandedProjects.remove(projectID) }
+                        else { viewModel.expandedProjects.insert(projectID) }
+                    },
+                    onToggleCollapse: { projectID in
+                        if viewModel.collapsedProjects.contains(projectID) { viewModel.collapsedProjects.remove(projectID) }
+                        else { viewModel.collapsedProjects.insert(projectID) }
+                    },
+                    onCreateSessionForProject: { projectPath in
+                        if let project = viewModel.projectByPath[projectPath] {
+                            viewModel.createPiAgentDraft(for: project)
+                        }
+                    },
+                    onArrowNavigate: { direction in
+                        viewModel.selectAdjacentPiAgentSession(offset: direction == .down ? 1 : -1, wrap: false)
+                    }
                 )
                 .equatable()
             }
@@ -3004,15 +3164,22 @@ struct CodingAgentExpandedPanel: View {
         .onChange(of: store.sessionListRevision) { _, _ in rebuildVisibleSessions() }
         .onChange(of: sessionSearchText) { _, _ in rebuildVisibleSessions() }
         .onChange(of: viewModel.showPiAgentAttentionOnly) { _, _ in rebuildVisibleSessions() }
+        .onChange(of: viewModel.expandedProjects) { _, _ in rebuildVisibleSessions() }
+        .onChange(of: viewModel.collapsedProjects) { _, _ in rebuildVisibleSessions() }
+        // Projects load asynchronously after sessions on first launch; without
+        // this trigger the cached sections stayed grouped under "Other" until a
+        // later rebuild (the original first-launch "all Other" symptom).
+        .onChange(of: viewModel.discoveredProjectsRevision) { _, _ in rebuildVisibleSessions() }
         .onChange(of: viewModel.selectedProjectPath) { _, _ in
             rebuildVisibleSessions()
             syncVisibleSessionSelection()
         }
         .onChange(of: store.selectedSession?.id) { _, _ in
             syncMultiSelectionToSelectedSession()
-            // Track selection while hidden (collapsed-recents clicks) so the
-            // scroll-to-selection happens during the click, not at expand time.
-            if !isActive { sessionScrollRequest = store.selectedSession?.id }
+            // Keep the selected row in view for both click selection and keyboard
+            // navigation. While hidden, this still pre-positions the list before
+            // the next expand; while active, it tracks ↑/↓ and ⌘]/⌘[ jumps.
+            sessionScrollRequest = store.selectedSession?.id
         }
         .onChange(of: visibleSessionIDs) { _, _ in
             syncVisibleSessionSelection()
@@ -3067,9 +3234,16 @@ struct CodingAgentExpandedPanel: View {
         return store.sessions.filter { $0.projectPath == path }
     }
 
-    private var visibleSessions: [PiAgentSessionRecord] {
-        hasBuiltVisibleSessions ? cachedVisibleSessions : computedVisibleSessions()
+    private var isAllProjects: Bool { viewModel.selectedProjectPath == nil }
+
+    private var visibleSections: [PiAgentSessionListSection] {
+        hasBuiltVisibleSessions ? cachedSections : computedSections()
     }
+
+    /// Flattened rendered sessions (preview sets only) for helpers that still
+    /// think in terms of a flat list — selection sync, working set, activity
+    /// cache. Hidden sessions are intentionally excluded.
+    private var visibleSessions: [PiAgentSessionRecord] { visibleSections.flatMap(\.items) }
 
     private var visibleSessionIDs: [UUID] { visibleSessions.map(\.id) }
 
@@ -3086,19 +3260,31 @@ struct CodingAgentExpandedPanel: View {
     private func rebuildVisibleSessions() {
         let scoped = scopedSessions
         if hasAnyScopedSessions != !scoped.isEmpty { hasAnyScopedSessions = !scoped.isEmpty }
-        let next = computedVisibleSessions(from: scoped)
-        if !hasBuiltVisibleSessions || next != cachedVisibleSessions {
-            cachedVisibleSessions = next
+        let next = computedSections(from: scoped)
+        if !hasBuiltVisibleSessions || next != cachedSections {
+            cachedSections = next
         }
         hasBuiltVisibleSessions = true
     }
 
-    private func computedVisibleSessions(from scoped: [PiAgentSessionRecord]? = nil) -> [PiAgentSessionRecord] {
+    private func computedSections(from scoped: [PiAgentSessionRecord]? = nil) -> [PiAgentSessionListSection] {
         let query = sessionSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let scopedSource = scoped ?? scopedSessions
         let source = viewModel.showPiAgentAttentionOnly ? scopedSource.filter(\.needsAttention) : scopedSource
         let filtered = query.isEmpty ? source : source.filter { $0.matchesSessionSearch(query) }
-        return filtered.sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
+        // Cap previews only in All-Projects browsing — searching or filtering by
+        // attention bypasses the cap (the user is hunting), and a scoped project
+        // keeps its full flat list exactly as before.
+        let capPreviews = isAllProjects && query.isEmpty && !viewModel.showPiAgentAttentionOnly
+        return PiAgentSessionGrouping.sections(
+            from: filtered,
+            projectByPath: viewModel.projectByPath,
+            expandedProjectIDs: viewModel.expandedProjects,
+            collapsedProjectIDs: viewModel.collapsedProjects,
+            capPreviews: capPreviews,
+            isWorking: { viewModel.piAgentSessionIsWorking($0) },
+            selectedSessionID: store.selectedSession?.id
+        )
     }
 
     private var workingVisibleSessionIDs: Set<UUID> {
@@ -3286,7 +3472,7 @@ struct PiAgentScreen: View {
     @State private var transcriptPinnedState = TranscriptPinnedState()
     @State private var showArchivedPreCompactionTranscript = false
     @State private var isEarlierTranscriptSheetPresented = false
-    @State private var cachedVisibleSessions: [PiAgentSessionRecord] = []
+    @State private var cachedSections: [PiAgentSessionListSection] = []
     @State private var hasBuiltVisibleSessions = false
     /// Per-session derived git activity (commit/push/merge timestamps), keyed by
     /// session.id. Rebuilt off the body hot path on transcript-revision or
@@ -3346,6 +3532,12 @@ struct PiAgentScreen: View {
         .onChange(of: store.sessionListRevision) { _, _ in rebuildVisibleSessions() }
         .onChange(of: sessionSearchText) { _, _ in rebuildVisibleSessions() }
         .onChange(of: viewModel.showPiAgentAttentionOnly) { _, _ in rebuildVisibleSessions() }
+        .onChange(of: viewModel.expandedProjects) { _, _ in rebuildVisibleSessions() }
+        .onChange(of: viewModel.collapsedProjects) { _, _ in rebuildVisibleSessions() }
+        // Projects load asynchronously after sessions on first launch; without
+        // this trigger the cached sections stayed grouped under "Other" until a
+        // later rebuild.
+        .onChange(of: viewModel.discoveredProjectsRevision) { _, _ in rebuildVisibleSessions() }
         .onDisappear {
             processingMessageUpdateTask?.cancel()
             processingMessageUpdateTask = nil
@@ -3463,27 +3655,46 @@ struct PiAgentScreen: View {
         return store.sessions.filter { $0.projectPath == sessionScopePath }
     }
 
-    private var visibleSessions: [PiAgentSessionRecord] {
-        hasBuiltVisibleSessions ? cachedVisibleSessions : computedVisibleSessions()
+    private var isAllProjects: Bool { viewModel.selectedProjectPath == nil }
+
+    private var visibleSections: [PiAgentSessionListSection] {
+        hasBuiltVisibleSessions ? cachedSections : computedSections()
     }
 
+    /// Flattened rendered sessions (preview sets only) for helpers that still
+    /// think in terms of a flat list — selection sync, working set, activity
+    /// cache. Hidden sessions are intentionally excluded.
+    private var visibleSessions: [PiAgentSessionRecord] { visibleSections.flatMap(\.items) }
+
     private func rebuildVisibleSessions() {
-        let next = computedVisibleSessions()
+        let next = computedSections()
         // Only write @State when the visible list actually changed. A bare
         // `sessionListRevision` bump (e.g. a background re-sort/refresh while the
         // user is just scrolling the transcript) otherwise re-evaluates the whole
         // screen body and re-runs the transcript's updateNSView for nothing.
-        if !hasBuiltVisibleSessions || next != cachedVisibleSessions {
-            cachedVisibleSessions = next
+        if !hasBuiltVisibleSessions || next != cachedSections {
+            cachedSections = next
         }
         hasBuiltVisibleSessions = true
     }
 
-    private func computedVisibleSessions() -> [PiAgentSessionRecord] {
+    private func computedSections() -> [PiAgentSessionListSection] {
         let query = sessionSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let source = viewModel.showPiAgentAttentionOnly ? scopedSessions.filter(\.needsAttention) : scopedSessions
         let filtered = query.isEmpty ? source : source.filter { sessionMatchesSearch($0, query: query) }
-        return sortedSessions(filtered)
+        // Cap previews only in All-Projects browsing — searching or filtering by
+        // attention bypasses the cap (the user is hunting), and a scoped project
+        // keeps its full flat list exactly as before.
+        let capPreviews = isAllProjects && query.isEmpty && !viewModel.showPiAgentAttentionOnly
+        return PiAgentSessionGrouping.sections(
+            from: filtered,
+            projectByPath: viewModel.projectByPath,
+            expandedProjectIDs: viewModel.expandedProjects,
+            collapsedProjectIDs: viewModel.collapsedProjects,
+            capPreviews: capPreviews,
+            isWorking: { viewModel.piAgentSessionIsWorking($0) },
+            selectedSessionID: store.selectedSession?.id
+        )
     }
 
     private var visibleSessionIDs: [UUID] {
@@ -3617,7 +3828,8 @@ struct PiAgentScreen: View {
                         AppEmptyState("No sessions found", systemImage: "magnifyingglass", description: "Try another search.", layout: .fill)
                     } else {
                         SessionListContent(
-                            visibleSessions: visibleSessions,
+                            sections: visibleSections,
+                            isGrouped: isAllProjects,
                             selectedSessionIDs: selectedSessionIDs,
                             renamingSessionID: renamingSessionID,
                             workingSessionIDs: workingVisibleSessionIDs,
@@ -3641,6 +3853,22 @@ struct PiAgentScreen: View {
                                         ? selectedSessionIDs
                                         : [id]
                                 )
+                            },
+                            onToggleExpand: { projectID in
+                                if viewModel.expandedProjects.contains(projectID) { viewModel.expandedProjects.remove(projectID) }
+                                else { viewModel.expandedProjects.insert(projectID) }
+                            },
+                            onToggleCollapse: { projectID in
+                                if viewModel.collapsedProjects.contains(projectID) { viewModel.collapsedProjects.remove(projectID) }
+                                else { viewModel.collapsedProjects.insert(projectID) }
+                            },
+                            onCreateSessionForProject: { projectPath in
+                                if let project = viewModel.projectByPath[projectPath] {
+                                    viewModel.createPiAgentDraft(for: project)
+                                }
+                            },
+                            onArrowNavigate: { direction in
+                                viewModel.selectAdjacentPiAgentSession(offset: direction == .down ? 1 : -1, wrap: false)
                             }
                         )
                         .equatable()
@@ -5704,7 +5932,27 @@ struct PiAgentScreen: View {
         guard !deleteIDs.isEmpty else { return }
         selectedSessionIDs.subtract(deleteIDs)
         withAnimation(.snappy(duration: 0.18)) {
-            cachedVisibleSessions.removeAll { deleteIDs.contains($0.id) }
+            // Optimistically drop deleted rows from the rendered sections so the
+            // removal animates; `rebuildVisibleSessions()` below recomputes
+            // `hiddenCount` and everything else correctly in the same tick.
+            cachedSections = cachedSections.map { section in
+                let remaining = section.items.filter { !deleteIDs.contains($0.id) }
+                let removedInThisSection = section.items.count - remaining.count
+                return PiAgentSessionListSection(
+                    id: section.id,
+                    title: section.title,
+                    subtitle: section.subtitle,
+                    iconFileURL: section.iconFileURL,
+                    fallbackSymbolName: section.fallbackSymbolName,
+                    assetName: section.assetName,
+                    items: remaining,
+                    hiddenCount: section.hiddenCount,
+                    isShowMoreActive: section.isShowMoreActive,
+                    isCollapsed: section.isCollapsed,
+                    totalCount: max(0, section.totalCount - removedInThisSection),
+                    isProjectGroup: section.isProjectGroup
+                )
+            }
             hasBuiltVisibleSessions = true
         }
         viewModel.deletePiAgentSessions(deleteIDs)
@@ -5740,10 +5988,6 @@ struct PiAgentScreen: View {
             viewModel.renamePiAgentSession(session.id, title: trimmedTitle)
             selectedSessionTitleDraft = trimmedTitle
         }
-    }
-
-    private func sortedSessions(_ sessions: [PiAgentSessionRecord]) -> [PiAgentSessionRecord] {
-        sessions.sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
     }
 
     private func sessionMatchesSearch(_ session: PiAgentSessionRecord, query: String) -> Bool {

@@ -181,7 +181,7 @@ struct CodingAgentCollapsedPanel: View {
     /// Cached so `body` never reads `store.sessions` directly — `touchSession`
     /// mutates that array many times per second during streaming. Rebuilt only
     /// on the non-streaming triggers that actually change the list, mirroring
-    /// the expanded panel's `cachedVisibleSessions`.
+    /// the expanded panel's `cachedSections`.
     @State private var recentSessions: [PiAgentSessionRecord] = []
     /// On-demand jump consumed by the list's `AppList`; set when this panel
     /// becomes the visible one so the selected session scrolls into view.
@@ -218,6 +218,7 @@ struct CodingAgentCollapsedPanel: View {
                     selectedSessionID: store.selectedSessionID,
                     isAgentSelected: viewModel.selectedSidebarItem == .agent,
                     workingSessionIDs: workingRecentSessionIDs,
+                    projectByPath: viewModel.projectByPath,
                     bottomContentInset: recentListFadeHeight > 0 ? recentListFadeHeight + 2 : 4,
                     scrollRequestID: recentScrollRequest,
                     scrollRequest: $recentScrollRequest,
@@ -296,8 +297,33 @@ struct CodingAgentCollapsedPanel: View {
         if !query.isEmpty {
             scoped = scoped.filter { $0.matchesSessionSearch(query) }
         }
-        let next = scoped.sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
+        // In All-Projects mode the 5-row strip reads as "what's live across
+        // projects": surface working, pinned, and last-30-min sessions first
+        // (across every project), then fill by global recency. Per-project
+        // grouping + "Show more" live in the expanded panel.
+        let next: [PiAgentSessionRecord]
+        if viewModel.selectedProjectPath == nil {
+            next = interleaveByLiveness(scoped)
+        } else {
+            next = scoped.sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
+        }
         if next != recentSessions { recentSessions = next }
+    }
+
+    /// Live sessions (working / pinned / updated in the last 30 min) first in
+    /// recency order, then the remaining sessions in recency order. Used only
+    /// for the All-Projects compact strip.
+    private func interleaveByLiveness(_ sessions: [PiAgentSessionRecord]) -> [PiAgentSessionRecord] {
+        let recentCutoff = Date().addingTimeInterval(-1_800)
+        let liveIDs = Set(sessions.filter {
+            viewModel.piAgentSessionIsWorking($0) || $0.isPinned || $0.updatedAt >= recentCutoff
+        }.map(\.id))
+        let sortRecency: (PiAgentSessionRecord, PiAgentSessionRecord) -> Bool = {
+            PiAgentSessionRecord.sessionListPrecedes($0, $1)
+        }
+        let live = sessions.filter { liveIDs.contains($0.id) }.sorted(by: sortRecency)
+        let rest = sessions.filter { !liveIDs.contains($0.id) }.sorted(by: sortRecency)
+        return live + rest
     }
 }
 
@@ -310,6 +336,7 @@ private struct CodingAgentRecentList: View, Equatable {
     let selectedSessionID: UUID?
     let isAgentSelected: Bool
     let workingSessionIDs: Set<UUID>
+    let projectByPath: [String: DiscoveredProject]
     /// Past the panel's fade when one shows, so the last row can scroll clear
     /// of the gradient. Derived from the session count, so `==` already
     /// covers it via `sessions`.
@@ -328,6 +355,7 @@ private struct CodingAgentRecentList: View, Equatable {
             && lhs.selectedSessionID == rhs.selectedSessionID
             && lhs.isAgentSelected == rhs.isAgentSelected
             && lhs.workingSessionIDs == rhs.workingSessionIDs
+            && lhs.projectByPath == rhs.projectByPath
             // A pending scroll request must defeat the gate so the inner
             // AppList's onChange sees it (same trap as SessionListContent).
             && lhs.scrollRequestID == rhs.scrollRequestID
@@ -345,6 +373,7 @@ private struct CodingAgentRecentList: View, Equatable {
         ) { session in
             CodingAgentRecentRow(
                 session: session,
+                project: projectByPath[session.projectPath],
                 isSelected: isAgentSelected && session.id == selectedSessionID,
                 isRunning: workingSessionIDs.contains(session.id),
                 onDelete: { onDelete(session.id) }
@@ -364,13 +393,13 @@ private struct CodingAgentRecentList: View, Equatable {
     }
 }
 
-/// Compact one-line session row for the collapsed panel: title and a live
-/// status slot (typing dots while running, bell when waiting; a hover swaps it
-/// for the delete affordance). No project icon — the panel header's project
-/// selector already says where you are. Selection/hover chrome and the tap
-/// come from the enclosing `AppList` row.
+/// Compact one-line session row for the collapsed panel: project icon, title,
+/// and a live status slot (typing dots while running, bell when waiting; a hover
+/// swaps it for the delete affordance). Selection/hover chrome and the tap come
+/// from the enclosing `AppList` row.
 struct CodingAgentRecentRow: View, Equatable {
     let session: PiAgentSessionRecord
+    let project: DiscoveredProject?
     let isSelected: Bool
     let isRunning: Bool
     let onDelete: () -> Void
@@ -382,6 +411,7 @@ struct CodingAgentRecentRow: View, Equatable {
     // instance's closure captured the same session id, so it stays correct.
     static func == (lhs: CodingAgentRecentRow, rhs: CodingAgentRecentRow) -> Bool {
         lhs.session == rhs.session
+            && lhs.project == rhs.project
             && lhs.isSelected == rhs.isSelected
             && lhs.isRunning == rhs.isRunning
     }
@@ -390,6 +420,14 @@ struct CodingAgentRecentRow: View, Equatable {
 
     var body: some View {
         HStack(spacing: 8) {
+            ProjectIconView(
+                imageURL: project?.iconFileURL,
+                symbolName: project?.fallbackSymbolName ?? "folder",
+                size: 18,
+                assetName: project?.projectType.assetName
+            )
+            .opacity(isSelected || isRunning || session.needsAttention ? 1 : 0.58)
+
             Text(session.displayTitle)
                 .font(AppTheme.Font.footnote.weight(.medium))
                 .fontWidth(.expanded)

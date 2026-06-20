@@ -176,13 +176,17 @@ struct ProjectIconView: View {
         }
         .frame(width: size, height: size)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(AppTheme.contentSubtleFill)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .task(id: imageURL?.path) {
             await loadImage()
         }
+    }
+
+    private var cornerRadius: CGFloat {
+        min(8, size * 0.267)
     }
 
     private func loadImage() async {

@@ -249,6 +249,15 @@ final class AppViewModel: NSObject {
 
     var automationAvailableModels: [AvailableModel] { cachedAutomationAvailableModels }
     var showPiAgentAttentionOnly = false
+    /// Per-project "Show more/less" state for the All-Projects grouped session
+    /// list, keyed by section id (project path, or the catch-all "Other").
+    /// Shared on the view model so all mounted session lists (sidebar panel,
+    /// Pi Agent screen column) stay consistent and so ⌘]/⌘[ and ↑/↓ can
+    /// auto-reveal a hidden target.
+    var expandedProjects: Set<String> = []
+    /// Per-project disclosure-collapse state for the grouped list (a collapsed
+    /// group renders only its header).
+    var collapsedProjects: Set<String> = []
     private(set) var piAgentTitleGeneratingSessionIDs: Set<UUID> = []
     private(set) var piAgentPendingComposerText: String?
     private(set) var piAgentPendingIssueAttachment: PiAgentIssueAttachment?
@@ -2474,21 +2483,62 @@ final class AppViewModel: NSObject {
         return piAgentSessionStore.sessions.filter { $0.projectPath == path }
     }
 
-    /// Move selection by `offset` within the scoped session list, wrapping at
-    /// both ends. No-op when there are no sessions. Used by the ⌘] / ⌘[
-    /// shortcuts and reused as the scroll benchmark's "advance" mechanism.
-    func selectAdjacentPiAgentSession(offset: Int) {
-        let sessions = scopedPiAgentSessionsInOrder()
-        guard !sessions.isEmpty else { return }
+    /// Move selection by `offset` within the scoped session list, in grouped
+    /// display order (alphabetical by repo, each group sorted by recency).
+    /// The target's group is auto-revealed — its disclosure expands if collapsed
+    /// and "Show more" activates if capped — so the selection always lands on a
+    /// rendered row. `wrap == true` wraps at both ends (⌘]/⌘[); `false` stops at
+    /// the ends (↑/↓). No-op when there are no sessions.
+    ///
+    /// Both ⌘]/⌘[ and the in-list ↑/↓ arrows go through here so the two entry
+    /// points share one navigation order and one reveal rule.
+    func selectAdjacentPiAgentSession(offset: Int, wrap: Bool = true) {
+        let ordered = orderedAllSessionsForNavigation()
+        guard !ordered.isEmpty else { return }
         let currentID = piAgentSessionStore.selectedSessionID
-        let currentIndex = sessions.firstIndex { $0.id == currentID } ?? 0
-        let count = sessions.count
-        let nextIndex = ((currentIndex + offset) % count + count) % count
-        selectPiAgentSession(sessions[nextIndex].id)
+        let currentIndex = ordered.firstIndex { $0.id == currentID } ?? 0
+        let count = ordered.count
+        var nextIndex: Int
+        if wrap {
+            nextIndex = ((currentIndex + offset) % count + count) % count
+        } else {
+            nextIndex = min(max(currentIndex + offset, 0), count - 1)
+        }
+        let target = ordered[nextIndex]
+        revealSessionGroup(target)
+        selectPiAgentSession(target.id)
     }
 
-    func selectNextPiAgentSession() { selectAdjacentPiAgentSession(offset: 1) }
-    func selectPreviousPiAgentSession() { selectAdjacentPiAgentSession(offset: -1) }
+    /// Every scoped session in grouped display order, ignoring group collapse
+    /// and "Show more" caps — the full navigation surface, so arrows/⌘] can
+    /// reach hidden sessions and reveal them. Mirrors the list's grouped order
+    /// (alphabetical by repo name, each group sorted by `sessionListPrecedes`).
+    private func orderedAllSessionsForNavigation() -> [PiAgentSessionRecord] {
+        PiAgentSessionGrouping.sections(
+            from: scopedPiAgentSessionsInOrder(),
+            projectByPath: projectByPath,
+            expandedProjectIDs: [],
+            collapsedProjectIDs: [],
+            capPreviews: false,
+            isWorking: { _ in false },
+            selectedSessionID: nil
+        ).flatMap(\.items)
+    }
+
+    /// Auto-reveal the group owning `session` so it lands on a rendered row:
+    /// expand a disclosure-collapsed group and activate "Show more" for a
+    /// capped one. State is shared on the view model so every mounted session
+    /// list stays consistent.
+    private func revealSessionGroup(_ session: PiAgentSessionRecord) {
+        let groupID = projectByPath[session.projectPath] != nil
+            ? session.projectPath
+            : PiAgentSessionGrouping.otherSectionID
+        collapsedProjects.remove(groupID)
+        expandedProjects.insert(groupID)
+    }
+
+    func selectNextPiAgentSession() { selectAdjacentPiAgentSession(offset: 1, wrap: true) }
+    func selectPreviousPiAgentSession() { selectAdjacentPiAgentSession(offset: -1, wrap: true) }
 
     var canNavigatePiAgentSessions: Bool {
         scopedPiAgentSessionsInOrder().count > 1

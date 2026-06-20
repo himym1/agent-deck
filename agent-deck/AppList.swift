@@ -44,6 +44,11 @@ import SwiftUI
 /// - `info` — optional help-popover text rendered as a `?` next to the title.
 /// - `accessory` — optional control rendered at the trailing edge of the
 ///   header row (e.g. a bulk action over the section's items).
+/// - `header` — optional fully custom header view. When non-`nil` it replaces
+///   the standard `title`/`info`/`accessory` header row entirely, for sections
+///   that need richer chrome (e.g. an icon + name + subtitle project group).
+/// - `footer` — optional fully custom footer view rendered after the section's
+///   rows, useful for section-local affordances like "Show more".
 /// - `items` — the rows. If empty and `emptyMessage` is set, that row renders
 ///   in place of the items as a secondary-color placeholder.
 struct AppListSection<Item: Identifiable & Hashable>: Identifiable {
@@ -51,6 +56,8 @@ struct AppListSection<Item: Identifiable & Hashable>: Identifiable {
     let title: String?
     let info: String?
     let accessory: AnyView?
+    let header: AnyView?
+    let footer: AnyView?
     let items: [Item]
     let emptyMessage: String?
 
@@ -59,6 +66,8 @@ struct AppListSection<Item: Identifiable & Hashable>: Identifiable {
         title: String? = nil,
         info: String? = nil,
         accessory: AnyView? = nil,
+        header: AnyView? = nil,
+        footer: AnyView? = nil,
         items: [Item],
         emptyMessage: String? = nil
     ) {
@@ -66,6 +75,8 @@ struct AppListSection<Item: Identifiable & Hashable>: Identifiable {
         self.title = title
         self.info = info
         self.accessory = accessory
+        self.header = header
+        self.footer = footer
         self.items = items
         self.emptyMessage = emptyMessage
     }
@@ -98,6 +109,11 @@ struct AppList<Item: Identifiable & Hashable, RowContent: View>: View {
     /// handlers on lists that don't need them (resource lists, sessions —
     /// where the user clicks). Turn ON for primary nav (sidebar).
     var keyboardNavigation: Bool = false
+    /// When set, arrow-key moves are delegated to this closure instead of the
+    /// built-in `moveSelection`. Used by the session list to route ↑/↓ through
+    /// the view model (same path as ⌘]/⌘[) so arrows navigate the grouped
+    /// list with auto-reveal. Tap selection is unaffected.
+    var onArrowNavigate: ((MoveCommandDirection) -> Void)? = nil
     /// Corner radius for both the selection chip and the hit area.
     var cornerRadius: CGFloat = AppListMetrics.cornerRadius
     /// Padding between row content and the rounded chip edge.
@@ -145,7 +161,11 @@ struct AppList<Item: Identifiable & Hashable, RowContent: View>: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: AppListMetrics.rowSpacing) {
                     ForEach(sections) { section in
-                        if let title = section.title {
+                        if let header = section.header {
+                            header
+                                .padding(.top, firstSectionID == section.id ? AppTheme.Split.contentTopInset : 16)
+                                .padding(.bottom, 2)
+                        } else if let title = section.title {
                             AppListSectionHeaderView(title: title, info: section.info, accessory: section.accessory)
                                 .padding(.top, firstSectionID == section.id ? AppTheme.Split.contentTopInset : 16)
                                 .padding(.bottom, 2)
@@ -170,6 +190,11 @@ struct AppList<Item: Identifiable & Hashable, RowContent: View>: View {
                                 .id(item.id)
                             }
                         }
+
+                        if let footer = section.footer {
+                            footer
+                                .padding(.top, 2)
+                        }
                     }
                 }
                 .padding(.horizontal, listHorizontalInset)
@@ -187,7 +212,8 @@ struct AppList<Item: Identifiable & Hashable, RowContent: View>: View {
             .modifier(AppListKeyboardNavigation(
                 enabled: keyboardNavigation,
                 isFocused: $isFocused,
-                onMove: moveSelection
+                onMove: moveSelection,
+                onArrowNavigate: onArrowNavigate
             ))
             .onAppear { performScrollRequest(with: proxy) }
             .onChange(of: scrollRequest.wrappedValue) { _, _ in performScrollRequest(with: proxy) }
@@ -314,6 +340,7 @@ private struct AppListKeyboardNavigation: ViewModifier {
     let enabled: Bool
     @FocusState.Binding var isFocused: Bool
     let onMove: (MoveCommandDirection) -> Void
+    var onArrowNavigate: ((MoveCommandDirection) -> Void)?
 
     func body(content: Content) -> some View {
         if enabled {
@@ -321,7 +348,13 @@ private struct AppListKeyboardNavigation: ViewModifier {
                 .focusable()
                 .focused($isFocused)
                 .focusEffectDisabled()
-                .onMoveCommand(perform: onMove)
+                .onMoveCommand { direction in
+                    if let onArrowNavigate {
+                        onArrowNavigate(direction)
+                    } else {
+                        onMove(direction)
+                    }
+                }
         } else {
             content
         }
