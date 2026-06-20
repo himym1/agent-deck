@@ -39,6 +39,30 @@ final class PiSubagentLaunchPlannerTests: XCTestCase {
     }
 
     @MainActor
+    func testAgentThinkingOffOverridesParentThinkingWhenModelIsInherited() async throws {
+        let selection = PiSubagentLaunchPlanner.modelSelection(
+            for: PiTestSupport.makeAgent(model: nil, thinking: "off"),
+            parentSession: try PiTestSupport.makeParentSession(model: "glm-5.1", provider: "zai", thinking: "high")
+        )
+
+        XCTAssertEqual(selection.provider, "zai")
+        XCTAssertEqual(selection.modelArgument, "glm-5.1:off")
+        XCTAssertEqual(selection.displayName, "zai/glm-5.1:off")
+    }
+
+    @MainActor
+    func testExplicitAgentModelUsesThinkingOffSuffix() async throws {
+        let selection = PiSubagentLaunchPlanner.modelSelection(
+            for: PiTestSupport.makeAgent(model: "openai-codex/gpt-5.4-mini", thinking: "off"),
+            parentSession: try PiTestSupport.makeParentSession(model: "glm-5.1", provider: "zai", thinking: "high")
+        )
+
+        XCTAssertNil(selection.provider)
+        XCTAssertEqual(selection.modelArgument, "openai-codex/gpt-5.4-mini:off")
+        XCTAssertEqual(selection.displayName, "openai-codex/gpt-5.4-mini:off")
+    }
+
+    @MainActor
     func testThinkingSuffixIsNotDuplicated() async throws {
         let selection = PiSubagentLaunchPlanner.modelSelection(
             for: PiTestSupport.makeAgent(model: nil, thinking: nil),

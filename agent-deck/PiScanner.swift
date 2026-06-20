@@ -772,7 +772,7 @@ nonisolated struct PiScanner: @unchecked Sendable {
                 else if rawValue.boolValue == false { result.model = nil }
             case "thinking":
                 if let value = rawValue.stringValue { result.thinking = value }
-                else if rawValue.boolValue == false { result.thinking = nil }
+                else if rawValue.boolValue == false { result.thinking = "off" }
             case "systemPromptMode":
                 if let value = rawValue.stringValue { result.systemPromptMode = value }
             case "inheritProjectContext", "defaultContext":

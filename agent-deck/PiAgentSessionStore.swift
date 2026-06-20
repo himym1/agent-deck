@@ -51,6 +51,7 @@ final class PiAgentSessionStore {
 
     private var composerTextDraftsBySessionID: [UUID: String] = [:]
     private var composerImageDraftsBySessionID: [UUID: [PiAgentImageAttachment]] = [:]
+    private var composerPasteDraftsBySessionID: [UUID: [PiAgentPasteAttachment]] = [:]
     private var composerFileDraftsBySessionID: [UUID: [PiAgentFileAttachment]] = [:]
     private var composerFolderDraftsBySessionID: [UUID: [PiAgentFolderAttachment]] = [:]
 
@@ -193,20 +194,23 @@ final class PiAgentSessionStore {
         return uiRequestsBySessionID[session.id]
     }
 
-    func composerDraft(for sessionID: UUID) -> (text: String, images: [PiAgentImageAttachment], files: [PiAgentFileAttachment], folders: [PiAgentFolderAttachment]) {
+    func composerDraft(for sessionID: UUID) -> (text: String, pasteAttachments: [PiAgentPasteAttachment], images: [PiAgentImageAttachment], files: [PiAgentFileAttachment], folders: [PiAgentFolderAttachment]) {
         (
             composerTextDraftsBySessionID[sessionID] ?? "",
+            composerPasteDraftsBySessionID[sessionID] ?? [],
             composerImageDraftsBySessionID[sessionID] ?? [],
             composerFileDraftsBySessionID[sessionID] ?? [],
             composerFolderDraftsBySessionID[sessionID] ?? []
         )
     }
 
-    func saveComposerDraft(text: String, images: [PiAgentImageAttachment], files: [PiAgentFileAttachment], folders: [PiAgentFolderAttachment], for sessionID: UUID) {
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty && files.isEmpty && folders.isEmpty {
+    func saveComposerDraft(text: String, pasteAttachments: [PiAgentPasteAttachment] = [], images: [PiAgentImageAttachment], files: [PiAgentFileAttachment], folders: [PiAgentFolderAttachment], for sessionID: UUID) {
+        let activePasteAttachments = PiAgentPasteMarkerCodec.activeAttachments(in: text, attachments: pasteAttachments)
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && activePasteAttachments.isEmpty && images.isEmpty && files.isEmpty && folders.isEmpty {
             clearComposerDraft(for: sessionID)
         } else {
             composerTextDraftsBySessionID[sessionID] = text
+            composerPasteDraftsBySessionID[sessionID] = activePasteAttachments
             composerImageDraftsBySessionID[sessionID] = images
             composerFileDraftsBySessionID[sessionID] = files
             composerFolderDraftsBySessionID[sessionID] = folders
@@ -215,6 +219,7 @@ final class PiAgentSessionStore {
 
     func clearComposerDraft(for sessionID: UUID) {
         composerTextDraftsBySessionID.removeValue(forKey: sessionID)
+        composerPasteDraftsBySessionID.removeValue(forKey: sessionID)
         composerImageDraftsBySessionID.removeValue(forKey: sessionID)
         composerFileDraftsBySessionID.removeValue(forKey: sessionID)
         composerFolderDraftsBySessionID.removeValue(forKey: sessionID)

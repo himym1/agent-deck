@@ -92,7 +92,7 @@ final class PiAgentLaunchResolverTests: XCTestCase {
 
         let explorer = effective.first { $0.name == "explorer" }
         XCTAssertEqual(explorer?.resolved.model, "openai-codex/gpt-5.4-mini")
-        XCTAssertNil(explorer?.resolved.thinking)
+        XCTAssertEqual(explorer?.resolved.thinking, "off")
         XCTAssertEqual(explorer?.resolved.skills, ["agent-authoring"])
         XCTAssertEqual(explorer?.resolutionKind, .builtinWithOverride)
     }

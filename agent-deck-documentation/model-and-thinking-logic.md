@@ -55,7 +55,7 @@ Resolution order for child launches:
 3. If the agent sets `thinking`, use that thinking level even when the model is inherited.
 4. Otherwise inherit the parent session thinking level.
 
-Native subagents usually encode the resolved thinking level as a `:<thinking>` suffix on the child `--model` argument.
+Native subagents usually encode the resolved thinking level as a `:<thinking>` suffix on the child `--model` argument, including `:off` when the agent is explicitly configured with Thinking Off.
 
 ## Default model and thinking values
 

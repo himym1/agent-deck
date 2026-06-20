@@ -39,7 +39,7 @@ enum PiSubagentLaunchPlanner {
 
     private static func suffixedModel(_ rawModel: String?, thinking: String?) -> String? {
         guard let model = rawModel?.trimmingCharacters(in: .whitespacesAndNewlines), !model.isEmpty else { return nil }
-        guard let thinking = thinking?.trimmingCharacters(in: .whitespacesAndNewlines), !thinking.isEmpty, thinking != "off" else { return model }
+        guard let thinking = thinking?.trimmingCharacters(in: .whitespacesAndNewlines), !thinking.isEmpty else { return model }
         let suffixes = ["off", "minimal", "low", "medium", "high", "xhigh"]
         if let suffix = model.split(separator: ":").last, suffixes.contains(String(suffix)) { return model }
         return "\(model):\(thinking)"
