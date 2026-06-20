@@ -548,6 +548,7 @@ struct ContentView: View {
     @State private var navigationColumnVisibility: NavigationSplitViewVisibility = .all
     @State private var agentModelQuickEditor: AgentModelQuickEditorContext?
     @State private var commandContext = AgentDeckCommandContext()
+    @State private var isIssuesProjectPopoverPresented = false
     @State private var isIssuesFilterPopoverPresented = false
     @State private var isAgentsFilterPopoverPresented = false
     #if DEBUG
@@ -1559,6 +1560,15 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var issuesPrimaryToolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            ProjectToolbarSelector(
+                viewModel: viewModel,
+                isPresented: $isIssuesProjectPopoverPresented
+            )
+        }
+
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+
         // One ControlGroup so the two buttons share an island with the same
         // spacing as every other view (Memory, Projects, …), instead of the
         // narrower separate-items + ToolbarSpacer look.
@@ -1661,6 +1671,76 @@ struct ContentView: View {
         .toolbarNeutralChrome()
         .help("Refresh issues")
         .disabled(!viewModel.githubConnectionState.isConnected || viewModel.githubIsLoadingProjectBoard)
+    }
+
+    private struct ProjectToolbarSelector: View {
+        @Bindable var viewModel: AppViewModel
+        @Binding var isPresented: Bool
+
+        var body: some View {
+            Button {
+                isPresented.toggle()
+            } label: {
+                HStack(spacing: 7) {
+                    if let project = viewModel.selectedGitHubProject {
+                        ProjectIconView(
+                            imageURL: project.iconFileURL,
+                            symbolName: project.fallbackSymbolName,
+                            size: 18,
+                            assetName: project.projectType.assetName
+                        )
+                        Text(project.repositoryDisplayName)
+                    } else {
+                        Image(systemName: "folder")
+                        Text("Select Project")
+                    }
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .toolbarNeutralChrome()
+            .help("Choose project")
+            .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Projects")
+                        .font(.headline)
+                    ForEach(viewModel.gitHubProjects) { project in
+                        Button {
+                            viewModel.setSelectedProject(project.url)
+                            isPresented = false
+                        } label: {
+                            HStack(spacing: 10) {
+                                ProjectIconView(
+                                    imageURL: project.iconFileURL,
+                                    symbolName: project.fallbackSymbolName,
+                                    size: 24,
+                                    assetName: project.projectType.assetName
+                                )
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(project.repositoryDisplayName)
+                                        .font(.body.weight(.medium))
+                                    if let remote = project.gitHubRemote {
+                                        Text(remote.nameWithOwner)
+                                            .font(.caption)
+                                            .foregroundStyle(AppTheme.mutedText)
+                                    }
+                                }
+                                Spacer(minLength: 12)
+                                if project.path == viewModel.selectedProjectPath {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(AppTheme.brandAccent)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(14)
+                .frame(width: 300)
+            }
+        }
     }
 
     private var currentAgentModelQuickEditorContext: AgentModelQuickEditorContext {

@@ -39,60 +39,68 @@ struct CodingAgentPanelHeader<Trailing: View>: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            Button {
-                isProjectPickerPresented.toggle()
-            } label: {
-                // Logo + name are ONE click target: both open the picker, and
-                // the popover anchors under the whole block.
-                HStack(alignment: .center, spacing: 10) {
-                    // 30 matches the visible height of the title+subtitle block
-                    // beside it (34 overhung the text on both ends) and the 30pt
-                    // round controls at the row's trailing edge.
-                    ProjectIconView(
-                        imageURL: selectedProject?.iconFileURL,
-                        symbolName: selectedProject?.fallbackSymbolName ?? "square.grid.2x2",
-                        size: 30,
-                        assetName: selectedProject?.projectType.assetName
-                    )
+            if selectedProject == nil && selectedProjectPath == nil {
+                Text("Sessions")
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            } else {
+                Button {
+                    isProjectPickerPresented.toggle()
+                } label: {
+                    // Logo + name are ONE click target: both open the picker, and
+                    // the popover anchors under the whole block.
+                    HStack(alignment: .center, spacing: 10) {
+                        // 30 matches the visible height of the title+subtitle block
+                        // beside it (34 overhung the text on both ends) and the 30pt
+                        // round controls at the row's trailing edge.
+                        ProjectIconView(
+                            imageURL: selectedProject?.iconFileURL,
+                            symbolName: selectedProject?.fallbackSymbolName ?? "square.grid.2x2",
+                            size: 30,
+                            assetName: selectedProject?.projectType.assetName
+                        )
 
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(alignment: .center, spacing: 5) {
-                            Text(selectedProjectTitle)
-                                .font(.body)
-                                .fontWeight(.medium)
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                        if selectedProject != nil {
-                            Text(selectedProjectSubtitle)
-                                .font(.callout)
-                                .fontWeight(.regular)
-                                .foregroundStyle(AppTheme.mutedText)
-                                .lineLimit(1)
-                                .fontWidth(.compressed)
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(alignment: .center, spacing: 5) {
+                                Text(selectedProjectTitle)
+                                    .font(.body)
+                                    .fontWeight(.medium)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+                            if selectedProject != nil {
+                                Text(selectedProjectSubtitle)
+                                    .font(.callout)
+                                    .fontWeight(.regular)
+                                    .foregroundStyle(AppTheme.mutedText)
+                                    .lineLimit(1)
+                                    .fontWidth(.compressed)
+                            }
                         }
                     }
+                    .contentShape(Rectangle())
                 }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Choose project")
-            .accessibilityLabel("Choose project")
-            .accessibilityHint("Opens the project picker")
-            .popover(isPresented: $isProjectPickerPresented, arrowEdge: .bottom) {
-                ProjectPickerPopover(
-                    projects: projects,
-                    selectedProjectPath: selectedProjectPath,
-                    filterText: $projectFilterText,
-                    isSearchDebouncing: isSearchDebouncing,
-                    onSelectProject: { project in
-                        onSelectProject(project)
-                        isProjectPickerPresented = false
-                    }
-                )
+                .buttonStyle(.plain)
+                .help("Choose project")
+                .accessibilityLabel("Choose project")
+                .accessibilityHint("Opens the project picker")
+                .popover(isPresented: $isProjectPickerPresented, arrowEdge: .bottom) {
+                    ProjectPickerPopover(
+                        projects: projects,
+                        selectedProjectPath: selectedProjectPath,
+                        filterText: $projectFilterText,
+                        isSearchDebouncing: isSearchDebouncing,
+                        onSelectProject: { project in
+                            onSelectProject(project)
+                            isProjectPickerPresented = false
+                        }
+                    )
+                }
             }
 
             Spacer(minLength: 8)
@@ -115,7 +123,7 @@ struct CodingAgentPanelHeader<Trailing: View>: View {
 
     private var selectedProjectTitle: String {
         if selectedProject == nil && selectedProjectPath == nil {
-            return "All Projects"
+            return "Sessions"
         }
         if let remote = selectedProject?.gitHubRemote {
             return remote.repo
