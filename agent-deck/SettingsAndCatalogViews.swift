@@ -1,10 +1,15 @@
 import AppKit
 import SwiftUI
 
-private struct DefaultModelsModelPicker: View {
+private struct ModelChipPicker: View {
     let models: [AvailableModel]
     let selectedModel: AvailableModel?
-    let onSelect: (AvailableModel) -> Void
+    /// When true, the picker offers a "default" option that selects `nil`
+    /// (used for per-agent and per-automation overrides).
+    var allowsDefault = false
+    /// Label shown for the `nil` selection, both on the chip and in the menu.
+    var nilLabel = "Default model"
+    let onSelect: (AvailableModel?) -> Void
 
     @State private var isPresented = false
 
@@ -15,7 +20,7 @@ private struct DefaultModelsModelPicker: View {
             HStack(spacing: 8) {
                 Image(systemName: "cpu")
                     .font(.caption.weight(.semibold))
-                Text(selectedModel?.identifier ?? "Model")
+                Text(selectedModel?.identifier ?? nilLabel)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Image(systemName: "chevron.down")
@@ -36,6 +41,20 @@ private struct DefaultModelsModelPicker: View {
                 Label("Model", systemImage: "cpu")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
+
+                if allowsDefault {
+                    Button {
+                        onSelect(nil)
+                        isPresented = false
+                    } label: {
+                        row(
+                            title: nilLabel,
+                            subtitle: "Follow the default model",
+                            isSelected: selectedModel == nil
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
 
                 ScrollView(showsIndicators: false) {
                     LazyVStack(alignment: .leading, spacing: 10) {
@@ -217,10 +236,22 @@ struct ModelsInfoPopover: View {
     }
 }
 
+private struct AutomationModelItem: Identifiable {
+    let id: String
+    let title: String
+    let description: String
+    let models: [AvailableModel]
+    let selectedIdentifier: String?
+    let nilLabel: String
+    let isDisabled: Bool
+    let onSelect: (AvailableModel?) -> Void
+}
+
 struct ModelsScreen: View {
     var viewModel: AppViewModel
 
     @State private var loginService = PiProviderLoginService()
+    @State private var agentDrafts: [EffectiveAgentRecord.ID: AgentEditorDraft] = [:]
 
     var body: some View {
         AppPage("Models") {
@@ -234,6 +265,10 @@ struct ModelsScreen: View {
                     if !viewModel.availableModels.isEmpty {
                         defaultSelectionSection
                     }
+                    if !viewModel.availableModels.isEmpty {
+                        agentModelsSection
+                        automationModelsSection
+                    }
                     ForEach(groupedModels, id: \.provider) { group in
                         providerSection(group)
                     }
@@ -244,6 +279,10 @@ struct ModelsScreen: View {
             viewModel.ensureAvailableModelsLoaded()
             viewModel.refreshProviderAuthState()
             viewModel.ensureConnectableProvidersLoaded()
+            seedAgentDrafts()
+        }
+        .onChange(of: viewModel.displayAgentsRevision) { _, _ in
+            seedAgentDrafts()
         }
         .sheet(isPresented: Binding(
             get: { viewModel.isAddProviderPresented },
@@ -251,6 +290,264 @@ struct ModelsScreen: View {
         )) {
             AddProviderFlowSheet(viewModel: viewModel, loginService: loginService)
         }
+    }
+
+    // MARK: - Agent & Automation models
+
+    private var editableAgents: [EffectiveAgentRecord] {
+        viewModel.allDisplayAgents.filter { agentDrafts[$0.id] != nil }
+    }
+
+    /// Resyncs the per-agent editor drafts. Safe to call repeatedly: changes
+    /// are saved immediately, so there are never unsaved drafts to clobber.
+    private func seedAgentDrafts() {
+        var seeded: [EffectiveAgentRecord.ID: AgentEditorDraft] = [:]
+        for agent in viewModel.allDisplayAgents where seeded[agent.id] == nil {
+            if let draft = viewModel.makeAgentDraft(for: agent) {
+                seeded[agent.id] = draft
+            }
+        }
+        agentDrafts = seeded
+    }
+
+    private var agentModelsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            modelsSectionHeader(
+                systemImage: "paperplane",
+                title: "Agent Models"
+            )
+
+            if editableAgents.isEmpty {
+                emptyModelsCard("No editable agents. Agents you add in the Agents view show up here.")
+            } else {
+                modelsBorderedCard {
+                    ForEach(Array(editableAgents.enumerated()), id: \.element.id) { index, agent in
+                        agentModelRow(agent)
+                        if index < editableAgents.count - 1 {
+                            Divider()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func agentModelRow(_ agent: EffectiveAgentRecord) -> some View {
+        let draft = agentDrafts[agent.id]
+        let selectedModel: AvailableModel? = {
+            guard let identifier = draft?.config.model else { return nil }
+            return viewModel.enabledAvailableModels.first { $0.identifier == identifier }
+        }()
+
+        HStack(alignment: .center, spacing: 12) {
+            Text(agent.name)
+                .font(.headline)
+                .fontWidth(.expanded)
+                .lineLimit(1)
+
+            Spacer(minLength: 12)
+
+            HStack(spacing: 8) {
+                ModelChipPicker(
+                    models: viewModel.enabledAvailableModels,
+                    selectedModel: selectedModel,
+                    allowsDefault: true,
+                    onSelect: { model in
+                        applyAgentModelChange(agent, modelIdentifier: model?.identifier)
+                    }
+                )
+                if let selectedModel, selectedModel.supportsThinking, !selectedModel.supportedThinkingLevels.isEmpty {
+                    DefaultModelsThinkingPicker(
+                        selectedLevel: agentThinkingLevel(agent, levels: selectedModel.supportedThinkingLevels),
+                        levels: selectedModel.supportedThinkingLevels,
+                        onSelect: { level in
+                            applyAgentThinkingChange(agent, level: level)
+                        }
+                    )
+                }
+            }
+        }
+        .padding(.vertical, 10)
+    }
+
+    private func agentThinkingLevel(_ agent: EffectiveAgentRecord, levels: [String]) -> String {
+        let current = agentDrafts[agent.id]?.config.thinking ?? "off"
+        return levels.contains(current) ? current : (levels.first ?? "off")
+    }
+
+    private func applyAgentModelChange(_ agent: EffectiveAgentRecord, modelIdentifier: String?) {
+        guard var draft = agentDrafts[agent.id] else { return }
+        draft.config.model = modelIdentifier
+        // Clamp thinking to the newly selected model's supported levels.
+        if let identifier = modelIdentifier,
+           let model = viewModel.enabledAvailableModels.first(where: { $0.identifier == identifier }) {
+            let levels = model.supportedThinkingLevels
+            let current = draft.config.thinking ?? "off"
+            if !levels.contains(current) {
+                let fallback = levels.first ?? "off"
+                draft.config.thinking = fallback == "off" ? nil : fallback
+            }
+        } else {
+            draft.config.thinking = nil
+        }
+        saveAgentDraft(agent, draft)
+    }
+
+    private func applyAgentThinkingChange(_ agent: EffectiveAgentRecord, level: String) {
+        guard var draft = agentDrafts[agent.id] else { return }
+        draft.config.thinking = (level == "off" || level.isEmpty) ? nil : level
+        saveAgentDraft(agent, draft)
+    }
+
+    /// Persists one agent's model/thinking immediately. The local draft mirrors
+    /// the saved state for this row; for plain builtin overrides the snapshot
+    /// catches up on the next rescan, which is cosmetic.
+    private func saveAgentDraft(_ agent: EffectiveAgentRecord, _ draft: AgentEditorDraft) {
+        do {
+            try viewModel.saveAgentDrafts([(draft: draft, agent: agent)])
+            agentDrafts[agent.id] = draft
+        } catch {
+            NSSound.beep()
+        }
+    }
+
+    private var automationModelsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            modelsSectionHeader(
+                systemImage: "wand.and.stars",
+                title: "Automation Models"
+            )
+            modelsBorderedCard {
+                ForEach(Array(automationRows.enumerated()), id: \.element.id) { index, item in
+                    automationModelRow(item)
+                    if index < automationRows.count - 1 {
+                        Divider()
+                    }
+                }
+            }
+        }
+    }
+
+    private var automationRows: [AutomationModelItem] {
+        [
+            AutomationModelItem(
+                id: "titles",
+                title: "Session Titles",
+                description: "Generates and refreshes Pi Agent session titles in the background.",
+                models: viewModel.automationAvailableModels,
+                selectedIdentifier: viewModel.appSettings.piAgentTitleGenerationModelIdentifier,
+                nilLabel: "Default model",
+                isDisabled: !viewModel.appSettings.autoGeneratePiAgentSessionTitles,
+                onSelect: { viewModel.setPiAgentTitleGenerationModelIdentifier($0?.identifier) }
+            ),
+            AutomationModelItem(
+                id: "commits",
+                title: "Git Commit Messages",
+                description: "Drafts commit messages for the Commit and Push toolbar actions.",
+                models: viewModel.automationAvailableModels,
+                selectedIdentifier: viewModel.appSettings.piAgentCommitMessageModelIdentifier,
+                nilLabel: "Default model",
+                isDisabled: !viewModel.appSettings.piAgentGitAutomationEnabled,
+                onSelect: { viewModel.setPiAgentCommitMessageModelIdentifier($0?.identifier) }
+            ),
+            AutomationModelItem(
+                id: "avatars",
+                title: "Agent Avatar Prompts",
+                description: "Drafts Image Playground prompts for agent avatars.",
+                models: viewModel.automationAvailableModels,
+                selectedIdentifier: viewModel.appSettings.agentAvatarPromptModelIdentifier,
+                nilLabel: "Default model",
+                isDisabled: !viewModel.appSettings.autoGenerateAgentAvatarPrompts,
+                onSelect: { viewModel.setAgentAvatarPromptModelIdentifier($0?.identifier) }
+            ),
+            AutomationModelItem(
+                id: "skills",
+                title: "Skill Summaries",
+                description: "Powers the ✨ summary action when importing skills.",
+                models: viewModel.automationAvailableModels,
+                selectedIdentifier: viewModel.appSettings.skillDescriptionModelIdentifier,
+                nilLabel: "Foundation if available",
+                isDisabled: false,
+                onSelect: { viewModel.setSkillDescriptionModelIdentifier($0?.identifier) }
+            )
+        ]
+    }
+
+    @ViewBuilder
+    private func automationModelRow(_ item: AutomationModelItem) -> some View {
+        let selectedModel = item.models.first { $0.identifier == item.selectedIdentifier }
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(item.title)
+                        .font(.headline)
+                        .fontWidth(.expanded)
+                    if item.isDisabled {
+                        AppLabelTag(text: "Off", color: .secondary)
+                    }
+                }
+                Text(item.description)
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 12)
+
+            ModelChipPicker(
+                models: item.models,
+                selectedModel: selectedModel,
+                allowsDefault: true,
+                nilLabel: item.nilLabel,
+                onSelect: item.onSelect
+            )
+            .opacity(item.isDisabled ? 0.5 : 1)
+        }
+        .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private func modelsSectionHeader(systemImage: String, title: String) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: systemImage)
+                .foregroundStyle(AppTheme.brandAccent)
+                .font(.title3.weight(.semibold))
+                .accessibilityHidden(true)
+            Text(title)
+                .font(.title3.weight(.bold))
+                .fontWidth(.expanded)
+                .foregroundStyle(.primary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 2)
+    }
+
+    @ViewBuilder
+    private func modelsBorderedCard<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            content()
+        }
+        .padding(.horizontal, AppTheme.cardPadding)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
+                .fill(AppTheme.contentFill)
+                .stroke(AppTheme.contentStroke, lineWidth: 1)
+        )
+    }
+
+    private func emptyModelsCard(_ text: String) -> some View {
+        Text(text)
+            .font(.callout)
+            .foregroundStyle(AppTheme.mutedText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
+                    .stroke(AppTheme.contentStroke, lineWidth: 1)
+            )
     }
 
     private func providerSection(_ group: (provider: String, models: [AvailableModel])) -> some View {
@@ -331,10 +628,11 @@ struct ModelsScreen: View {
                 }
             }
 
-            DefaultModelsModelPicker(
+            ModelChipPicker(
                 models: viewModel.enabledAvailableModels,
                 selectedModel: selectedDefaultModel,
                 onSelect: { model in
+                    guard let model else { return }
                     defaultModelBinding.wrappedValue = model.identifier
                 }
             )

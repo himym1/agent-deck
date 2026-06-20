@@ -1334,6 +1334,15 @@ struct ContentView: View {
                 .help("Refresh models")
 
                 Button {
+                    agentModelQuickEditor = currentAgentModelQuickEditorContext
+                } label: {
+                    Label("Quick Edit", systemImage: "cpu")
+                }
+                .toolbarNeutralChrome()
+                .help("Quick edit every agent's model and thinking at once")
+                .disabled(currentAgentModelQuickEditorContext.sections.allSatisfy { $0.agents.isEmpty })
+
+                Button {
                     viewModel.isAddProviderPresented = true
                 } label: {
                     Label("Add Provider", systemImage: "plus")
