@@ -17,6 +17,10 @@ struct ProviderRetryInfo: Hashable {
     var isQuotaLimit: Bool
     /// Best-effort human-readable error message.
     var message: String
+    /// The raw error payload this retry was parsed from — exposed so the thread
+    /// builder can drop the paired `Model Error` entry Pi emits alongside every
+    /// attempt (same string) and collapse a burst into one card.
+    var errorPayload: String
     /// When the limit clears, if the provider's payload tells us (Codex / Gemini).
     var resetsAt: Date?
     /// Codex-only plan tier, e.g. "plus".
@@ -39,6 +43,7 @@ struct ProviderRetryInfo: Hashable {
             self.gaveUp = false
         }
 
+        self.errorPayload = errorPayload
         self.message = Self.humanMessage(from: errorPayload)
         self.isQuotaLimit = Self.detectsQuotaLimit(payload: errorPayload)
 

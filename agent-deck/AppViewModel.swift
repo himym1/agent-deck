@@ -2326,17 +2326,17 @@ final class AppViewModel: NSObject {
             project: project,
             repository: project.gitHubRemote?.nameWithOwner
         )
+        // Settle selection synchronously: createSession already inserts, sorts,
+        // and assigns `selectedSessionID`; revealSessionGroup expands the
+        // target's group so the row is on screen; selectPiAgentSession commits
+        // the sidebar tab. A second re-assertion on the next runloop was only
+        // here to win the fight against the per-project `selectedProjectPath`
+        // reconciler, which is gone now (see
+        // `reconcileSelectedSessionWithProjectScope`). Re-running it a frame
+        // later rebuilt the cached sections a second time and visibly jumped
+        // the freshly-created row — so it has been removed.
         revealSessionGroup(session)
         selectPiAgentSession(session.id)
-        Task { @MainActor [weak self] in
-            // Some mounted session lists reconcile selection after their cached
-            // sections update. Re-assert the freshly-created chat on the next
-            // turn so every + entry point lands on the new session, not the
-            // previous scoped selection.
-            await Task.yield()
-            self?.revealSessionGroup(session)
-            self?.selectPiAgentSession(session.id)
-        }
     }
 
     func startPiAgentForSelectedProject(initialInstruction: String) {
@@ -2453,21 +2453,27 @@ final class AppViewModel: NSObject {
         acknowledgePiAgentSession(id)
     }
 
-    /// The ONE authority for "is the selected session still valid" — keeps the
-    /// selection when the session exists in the current PROJECT scope, otherwise
-    /// moves it to the first scoped session. Validity deliberately ignores
-    /// per-panel view filters (search text, attention-only): every session list
-    /// delegates here, so two mounted panels with different filters can never
-    /// fight over the global selection (captured: each panel "correcting" the
-    /// selection into its own filtered scope, ping-ponging the transcript
-    /// through session switches that read as flickering).
+    /// The ONE authority for "is the selected session still valid". Now that the
+    /// session list is global (no per-project filter), validity is simply "the
+    /// selected session still exists in the store". It still ignores per-panel
+    /// view filters (search text, attention-only) so two mounted panels with
+    /// different filters can never fight over the global selection.
+    ///
+    /// Previously this also coerced selection into the currently-selected
+    /// *project* scope (`selectedProjectPath`). That was correct when the list
+    /// was project-scoped, but after unscoping it actively broke the app: a user
+    /// could click (or send into) a session whose `projectPath` differs from the
+    /// project they last picked for new-session context, and the next list
+    /// rebuild (fired by the send's `mark(.running)` → `sessionListRevision`
+    /// bump) would call back into here and clear/move the selection right out
+    /// from under the turn — leaving the composer in a "no session selected"
+    /// state even though the message had already gone out. `selectedProjectPath`
+    /// now only drives new-session context and is never assumed to equal the
+    /// active session's project.
     func reconcileSelectedSessionWithProjectScope() {
         let store = piAgentSessionStore
-        let scoped = selectedProjectPath.map { path in
-            store.sessions.filter { $0.projectPath == path }
-        } ?? store.sessions
-        if let id = store.selectedSessionID, scoped.contains(where: { $0.id == id }) { return }
-        if let first = scoped.min(by: { PiAgentSessionRecord.sessionListPrecedes($0, $1) }) {
+        if let id = store.selectedSessionID, store.sessions.contains(where: { $0.id == id }) { return }
+        if let first = store.sessions.min(by: { PiAgentSessionRecord.sessionListPrecedes($0, $1) }) {
             store.select(first.id)
         } else {
             store.clearSelection()

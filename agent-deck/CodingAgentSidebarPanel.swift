@@ -154,6 +154,17 @@ struct CodingAgentCollapsedPanel: View {
         .onChange(of: viewModel.isCodingAgentPanelExpanded) { _, isExpanded in
             if !isExpanded { recentScrollRequest = store.selectedSessionID }
         }
+        // Keep the selected row in view whenever selection changes — a newly
+        // created session is selected by `createPiAgentDraft`, and without this
+        // the strip would just highlight it offscreen if the user was scrolled
+        // down. Gated on the collapsed state (expanded mode hides this strip via
+        // opacity 0, so scrolling it would be wasted work and could realize lazy
+        // rows the user never sees). The same value backing the row's selection
+        // highlight is observed here, so no extra derivation per body eval.
+        .onChange(of: store.selectedSessionID) { _, newID in
+            guard !viewModel.isCodingAgentPanelExpanded, let newID else { return }
+            recentScrollRequest = newID
+        }
         .alert("Delete Pi Agent session?", isPresented: $isDeleteSessionAlertPresented) {
             Button("Delete", role: .destructive) {
                 if let id = pendingDeleteSessionID {

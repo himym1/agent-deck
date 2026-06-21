@@ -260,11 +260,21 @@ struct PiAgentTranscriptThread: Identifiable, Hashable {
                         ? normalizedCompaction(arrival.entry)
                         : arrival.entry
                     if normalized.title == "Retry", let retryInfo = ProviderRetryInfo(entry: normalized) {
-                        // Collapse a consecutive run of Pi auto-retry statuses into one
-                        // card — only the last (the auto_retry_end marker) is kept. Keyed
-                        // on the Pi retry envelope, so this holds for every provider, and
-                        // parsed here at thread-build time so the card never re-parses
-                        // during render.
+                        // Collapse a retry burst into one card. Pi emits TWO entries per
+                        // failed attempt — a paired `Model Error` (role:error) carrying the
+                        // raw provider payload, immediately followed by the `Retry` status —
+                        // so on Codex usage-limit bursts we used to render four Error cards
+                        // and four hourglass cards for what's a single event. Drop the
+                        // trailing paired Model Error(s) whose text matches this retry's
+                        // payload, then collapse any adjacent retry (the prior attempt of
+                        // the same burst). Only the final `auto_retry_end` survives — the
+                        // repeating attempt text is still parsed at thread-build time so
+                        // the card never re-parses during render.
+                        let payload = retryInfo.errorPayload
+                        while case .error(let prev)? = children.last,
+                              prev.text == payload {
+                            children.removeLast()
+                        }
                         if case .retry? = children.last { children.removeLast() }
                         children.append(.retry(normalized, retryInfo))
                     } else {
@@ -310,6 +320,7 @@ struct PiAgentTranscriptThread: Identifiable, Hashable {
 
         private func coalescedErrors(_ entries: [PiAgentTranscriptEntry]) -> [PiAgentTranscriptEntry] {
             var output: [PiAgentTranscriptEntry] = []
+            var seenNonToolTexts = Set<String>()
             var latestByTool: [String: PiAgentTranscriptEntry] = [:]
             var toolOrder: [String] = []
             for entry in entries {
@@ -318,7 +329,15 @@ struct PiAgentTranscriptThread: Identifiable, Hashable {
                     if latestByTool[key] == nil { toolOrder.append(key) }
                     latestByTool[key] = normalizedToolError(entry)
                 } else {
-                    output.append(entry)
+                    // Pi emits a paired (Model Error, Retry) per failed attempt, so a
+                    // retry burst with the same underlying payload (e.g. a Codex
+                    // usage-limit burst once credits are gone) would otherwise stack N
+                    // identical Model Error rows here. Keep only the first per distinct
+                    // text; the burst's final verdict is surfaced by the consolidated
+                    // retry card.
+                    if seenNonToolTexts.insert(entry.text).inserted {
+                        output.append(entry)
+                    }
                 }
             }
             output.append(contentsOf: toolOrder.compactMap { latestByTool[$0] })
