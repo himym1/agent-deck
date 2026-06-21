@@ -408,7 +408,7 @@ final class AppViewModel: NSObject {
             self?.nativeSubagentCatalogPrompt(for: session)
         }
         piAgentRunner.mcpCatalogProvider = { [weak self] session in
-            self?.mcpCatalogPrompt(for: session)
+            await self?.mcpCatalogPrompt(for: session)
         }
         piAgentRunner.onMCPBridgeRequest = { [weak self] sessionID, request, completion in
             guard let self else { completion("\(AppBrand.displayName)'s MCP bridge is not available."); return }
@@ -3548,7 +3548,8 @@ final class AppViewModel: NSObject {
             // assigning it never spawns its process or triggers its permission prompt.
             // The manager keeps connections live across sessions, so a server connects
             // (and prompts) at most once, not on every new chat. Per-session scoping is
-            // still re-applied when the catalog is rendered and on each bridge call.
+            // re-applied on catalog render (snapshot for the active project, on-demand
+            // discovery for other projects — see `mcpCatalogEntries`) and on each bridge call.
             let scoped = self.assignedMCPServerNames(forProjectPath: projectURL?.path)
             self.mcpCatalogSnapshot = await self.mcpConnectionManager.discoverCatalog(serverNames: scoped)
         }
@@ -3737,8 +3738,31 @@ final class AppViewModel: NSObject {
     /// Compact MCP tool catalog injected into the system prompt, scoped to the session's
     /// assigned servers. Returns nil when MCP is off or nothing is assigned, so neither
     /// the bridge nor a prompt block is injected (matching the Deck-agents catalog).
-    private func mcpCatalogPrompt(for session: PiAgentSessionRecord) -> String? {
-        mcpCatalogPrompt(forScope: assignedMCPServerNames(for: session))
+    ///
+    /// Sessions whose project differs from the active project discover their assigned
+    /// servers on demand via the connection manager instead of filtering the
+    /// active-project snapshot, which only covers the active project's scope. The
+    /// manager reuses live connections and caches tool lists, so a server already
+    /// connected for another project adds no extra process or permission prompt.
+    private func mcpCatalogPrompt(for session: PiAgentSessionRecord) async -> String? {
+        guard appSettings.mcpEnabled else { return nil }
+        let scope = assignedMCPServerNames(for: session)
+        let entries = await mcpCatalogEntries(forScope: scope, projectPath: session.projectPath)
+        return mcpCatalogPrompt(fromEntries: entries)
+    }
+
+    /// Resolves catalog entries for a scope. When the scope belongs to a project other
+    /// than the active one, discovers on demand via the connection manager (reusing
+    /// live connections and cached tool lists) instead of relying on the
+    /// active-project snapshot, which only covers the active project's assigned servers.
+    /// Relies on the servers being in the manager's configured set; globally configured
+    /// servers (the common case) are always present regardless of active project.
+    private func mcpCatalogEntries(forScope scope: Set<String>, projectPath: String?) async -> [MCPCatalogEntry] {
+        guard !scope.isEmpty else { return [] }
+        if projectPath == projectRootURL?.path {
+            return mcpCatalogSnapshot.filter { scope.contains($0.server) }
+        }
+        return await mcpConnectionManager.discoverCatalog(serverNames: scope)
     }
 
     /// MCP servers in scope for a delegated Deck agent: its assigned `mcpServers`,
@@ -3760,7 +3784,8 @@ final class AppViewModel: NSObject {
     private func childMCPArguments(for parentSession: PiAgentSessionRecord, agent: EffectiveAgentRecord) async -> [String] {
         guard appSettings.mcpEnabled else { return [] }
         let scope = Set(agent.resolved.mcpServers ?? []).intersection(mcpConfiguredServerNames)
-        guard let catalog = mcpCatalogPrompt(forScope: scope), !catalog.isEmpty,
+        let entries = await mcpCatalogEntries(forScope: scope, projectPath: parentSession.projectPath)
+        guard let catalog = mcpCatalogPrompt(fromEntries: entries), !catalog.isEmpty,
               let mcpURL = try? PiNativeSubagentBridgeExtensions.mcpExtensionURL() else { return [] }
         return ["--extension", mcpURL.path, "--append-system-prompt", catalog]
     }
@@ -3769,12 +3794,11 @@ final class AppViewModel: NSObject {
         await performMCPBridge(request: request, scope: subagentMCPScope(parentSessionID: parentSessionID, agentName: agentName))
     }
 
-    /// Compact MCP tool catalog for a given server scope. Shared by the parent-session
+    /// Compact MCP tool catalog for a given set of entries. Shared by the parent-session
     /// and delegated-Deck-agent paths.
-    private func mcpCatalogPrompt(forScope scope: Set<String>) -> String? {
+    private func mcpCatalogPrompt(fromEntries entries: [MCPCatalogEntry]) -> String? {
         guard appSettings.mcpEnabled else { return nil }
-        let entries = mcpCatalogSnapshot.filter { scope.contains($0.server) }
-            .sorted { $0.qualifiedName < $1.qualifiedName }
+        let entries = entries.sorted { $0.qualifiedName < $1.qualifiedName }
         guard !entries.isEmpty else { return nil }
 
         var lines: [String] = [

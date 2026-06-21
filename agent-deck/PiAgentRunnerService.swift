@@ -158,8 +158,10 @@ final class PiAgentRunnerService {
     var nativeSubagentCatalogProvider: ((PiAgentSessionRecord) -> String?)?
     /// Returns the compact MCP tool catalog to inject for this session, scoped to its
     /// assigned servers. Nil/empty means MCP is off for the session: no bridge, no
-    /// system-prompt block (same gating as the Deck-agents catalog).
-    var mcpCatalogProvider: ((PiAgentSessionRecord) -> String?)?
+    /// system-prompt block (same gating as the Deck-agents catalog). Async so the
+    /// provider can discover a non-active project's servers on demand instead of
+    /// relying solely on the active-project snapshot.
+    var mcpCatalogProvider: ((PiAgentSessionRecord) async -> String?)?
     var onMCPBridgeRequest: ((UUID, PiMCPBridgeRequest, @escaping (String) -> Void) -> Void)?
     var parentSkillArgumentsProvider: ((URL) throws -> [String])?
     var parentPromptTemplateArgumentsProvider: ((URL) throws -> [String])?
@@ -727,6 +729,12 @@ final class PiAgentRunnerService {
             // Collected here and emitted once below so the active APPEND_SYSTEM.md is
             // preserved a single time, regardless of how many features contribute.
             var agentDeckAppendPrompts: [String] = []
+            // Resolve the session's MCP catalog once so both the bound-agent tool
+            // allowlist decision and the append below reuse the same discovery. The
+            // provider discovers on demand for sessions in a project other than the
+            // active one, so their assigned servers are connected even when the
+            // active-project snapshot wouldn't cover them.
+            let mcpCatalog: String? = await mcpCatalogProvider?(session)
             if let boundAgent {
                 // 1:1 agent chat: launch Pi with the agent's raw system prompt,
                 // its tool allowlist (minus `contact_supervisor` — there's no
@@ -749,7 +757,7 @@ final class PiAgentRunnerService {
                     includeFallbackWebFetchTool: !exaConfigured && webFetchInstalled,
                     // The native `mcp` bridge is injected below when the agent has
                     // in-scope servers; a restrictive allowlist must include it.
-                    includeMCPTool: mcpCatalogProvider?(session)?.isEmpty == false
+                    includeMCPTool: mcpCatalog?.isEmpty == false
                 )))
                 // Share the single `--no-extensions` already at the top of
                 // extraArguments; only append the agent's authored extensions.
@@ -771,7 +779,9 @@ final class PiAgentRunnerService {
             // agents. When no MCP servers are assigned the provider returns nil and the
             // session launches exactly as if MCP were off — no bridge, no prompt block.
             // Loaded before user extensions below so the `mcp` tool wins any conflict.
-            if let mcpCatalog = mcpCatalogProvider?(session), !mcpCatalog.isEmpty,
+            // `mcpCatalog` is resolved once above the bound-agent branch so the tool
+            // allowlist decision and the append both reuse the same discovery.
+            if let mcpCatalog, !mcpCatalog.isEmpty,
                let mcpURL = try? PiNativeSubagentBridgeExtensions.mcpExtensionURL() {
                 extraArguments.append(contentsOf: ["--extension", mcpURL.path])
                 agentDeckAppendPrompts.append(mcpCatalog)

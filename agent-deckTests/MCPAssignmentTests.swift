@@ -28,7 +28,6 @@ final class MCPAssignmentTests: XCTestCase {
         let preference = ProjectPreference(
             path: "/tmp/project",
             isEnabled: true,
-            isFavorite: false,
             isHidden: false,
             customIconPath: nil,
             assignedMcpServerNames: ["github", "filesystem"]
@@ -56,7 +55,6 @@ final class MCPAssignmentTests: XCTestCase {
         let saved = [ProjectPreference(
             path: "/tmp/project",
             isEnabled: true,
-            isFavorite: false,
             isHidden: false,
             customIconPath: nil,
             assignedSkillNames: ["lint"],
