@@ -4986,7 +4986,7 @@ final class AppViewModel: NSObject {
         deletePiAgentSessions(staleIDs)
     }
 
-    func deletePiAgentSessions(_ sessionIDs: Set<UUID>) {
+    func deletePiAgentSessions(_ sessionIDs: Set<UUID>, fallbackSelectionID: UUID? = nil) {
         for sessionID in sessionIDs where piAgentRunner.isRunning(sessionID: sessionID) {
             piAgentRunner.stop(sessionID: sessionID, recordTranscript: false)
         }
@@ -5008,12 +5008,17 @@ final class AppViewModel: NSObject {
             return (worktreePath, session.projectPath, session.branchName, session.sourceBranch)
         }
 
-        piAgentSessionStore.deleteSessions(sessionIDs)
-        // The store's deletion clamp picks the GLOBALLY first session (it has no
-        // notion of project scope); reconcile to the scoped choice in the same
-        // runloop turn so the UI only ever observes the final selection — without
-        // this, launch-time draft pruning briefly selected an out-of-scope
-        // session and the correction read as an extra transcript switch.
+        // If the caller handed us the next-visible neighbor (the row below the
+        // deleted set in the user's grouped list), hand it to the store so it
+        // lands where the user expects instead of clamping to the globally
+        // most-recent session. The store ignores the hint when the active
+        // selection survives the delete.
+        piAgentSessionStore.deleteSessions(sessionIDs, fallbackSelectionID: fallbackSelectionID)
+        // Belt-and-suspenders: still reconcile in the same runloop turn so the
+        // UI only ever observes the final selection — without this, launch-time
+        // draft pruning briefly selected an out-of-scope session and the
+        // correction read as an extra transcript switch. After the fallback
+        // above, reconcile is usually a no-op (selection already valid).
         reconcileSelectedSessionWithProjectScope()
 
         for cleanup in worktreeCleanups {

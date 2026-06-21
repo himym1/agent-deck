@@ -992,7 +992,7 @@ final class PiAgentSessionStore {
         deleteSessions([sessionID])
     }
 
-    func deleteSessions(_ sessionIDs: Set<UUID>) {
+    func deleteSessions(_ sessionIDs: Set<UUID>, fallbackSelectionID: UUID? = nil) {
         let existingIDs = Set(sessions.map(\.id)).intersection(sessionIDs)
         guard !existingIDs.isEmpty else { return }
 
@@ -1022,7 +1022,14 @@ final class PiAgentSessionStore {
             processingActivityBySessionID[sessionID] = nil
         }
         if let currentSelectedSessionID = selectedSessionID, existingIDs.contains(currentSelectedSessionID) {
-            selectedSessionID = sessions.first?.id
+            // Prefer the caller-supplied neighbor (the row below the deleted set
+            // in the user's visible grouped list) so selection follows the user's
+            // eyes instead of clamping to the globally most-recent session.
+            if let fallbackSelectionID, sessions.contains(where: { $0.id == fallbackSelectionID }) {
+                selectedSessionID = fallbackSelectionID
+            } else {
+                selectedSessionID = sessions.first?.id
+            }
         }
         saveStructuralChange()
     }

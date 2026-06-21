@@ -211,6 +211,114 @@ final class PiAgentSessionGroupingTests: XCTestCase {
         XCTAssertEqual(sections.first?.totalCount, 4)
     }
 
+    // MARK: - nextSelectionAfterDeletion
+
+    /// Three sessions, delete the middle (current) one → the row below it wins.
+    func testNextSelectionPicksRowBelowDeletedSelection() throws {
+        let sessions = try (0..<3).map { i in
+            try makeSession(title: "s\(i)", updatedAt: now.addingTimeInterval(-Double(3600 * i)))
+        }
+        let next = PiAgentSessionGrouping.nextSelectionAfterDeletion(
+            visibleSessions: sessions, deletedIDs: [sessions[1].id], selectedID: sessions[1].id)
+        XCTAssertEqual(next, sessions[2].id)
+    }
+
+    /// Delete the LAST (current) row → fall back to the row above it.
+    func testNextSelectionFallsBackToRowAboveWhenDeletingLast() throws {
+        let sessions = try (0..<3).map { i in
+            try makeSession(title: "s\(i)", updatedAt: now.addingTimeInterval(-Double(3600 * i)))
+        }
+        let next = PiAgentSessionGrouping.nextSelectionAfterDeletion(
+            visibleSessions: sessions, deletedIDs: [sessions[2].id], selectedID: sessions[2].id)
+        XCTAssertEqual(next, sessions[1].id)
+    }
+
+    /// Delete the only visible session → nil so the caller clears selection.
+    func testNextSelectionReturnsNilWhenNoSurvivors() throws {
+        let only = try makeSession(title: "only", updatedAt: now)
+        let next = PiAgentSessionGrouping.nextSelectionAfterDeletion(
+            visibleSessions: [only], deletedIDs: [only.id], selectedID: only.id)
+        XCTAssertNil(next)
+    }
+
+    /// Delete a NON-current row → selection must not move (returns nil), even
+    /// when other rows are deleted alongside it.
+    func testNextSelectionNilWhenCurrentSelectionSurvives() throws {
+        let sessions = try (0..<4).map { i in
+            try makeSession(title: "s\(i)", updatedAt: now.addingTimeInterval(-Double(3600 * i)))
+        }
+        // Delete rows 0 and 2 but the current selection is row 1.
+        let next = PiAgentSessionGrouping.nextSelectionAfterDeletion(
+            visibleSessions: sessions, deletedIDs: [sessions[0].id, sessions[2].id],
+            selectedID: sessions[1].id)
+        XCTAssertNil(next)
+    }
+
+    /// Multi-select delete of a NON-CONTIGUOUS set including the selected row
+    /// (e.g. delete rows {0,2} where the current selection is row 2): the row
+    /// immediately below the selected one wins, NOT a survivor of row 0's gap.
+    func testNextSelectionAnchorsOnSelectedRowNotFirstDeleted() throws {
+        let sessions = try (0..<5).map { i in
+            try makeSession(title: "s\(i)", updatedAt: now.addingTimeInterval(-Double(3600 * i)))
+        }
+        // Delete row 0 and row 2 (the current selection). The natural target is
+        // the row right after the selected one (row 3), not row 1.
+        let next = PiAgentSessionGrouping.nextSelectionAfterDeletion(
+            visibleSessions: sessions, deletedIDs: [sessions[0].id, sessions[2].id],
+            selectedID: sessions[2].id)
+        XCTAssertEqual(next, sessions[3].id)
+    }
+
+    /// Contiguous block including the selected row → first survivor below the block.
+    func testNextSelectionFindsFirstSurvivorAfterContiguousBlock() throws {
+        let sessions = try (0..<6).map { i in
+            try makeSession(title: "s\(i)", updatedAt: now.addingTimeInterval(-Double(3600 * i)))
+        }
+        // Delete rows 2,3,4 with the current selection at row 3.
+        let deletedIDs: Set<UUID> = [sessions[2].id, sessions[3].id, sessions[4].id]
+        let next = PiAgentSessionGrouping.nextSelectionAfterDeletion(
+            visibleSessions: sessions, deletedIDs: deletedIDs,
+            selectedID: sessions[3].id)
+        XCTAssertEqual(next, sessions[5].id)
+    }
+
+    /// Contiguous block including the selected row that runs to the END of the
+    /// list → first survivor ABOVE the block.
+    func testNextSelectionFallsUpwardWhenBlockRunsToEnd() throws {
+        let sessions = try (0..<5).map { i in
+            try makeSession(title: "s\(i)", updatedAt: now.addingTimeInterval(-Double(3600 * i)))
+        }
+        // Delete rows 3,4 with the current selection at row 3.
+        let deletedIDs: Set<UUID> = [sessions[3].id, sessions[4].id]
+        let next = PiAgentSessionGrouping.nextSelectionAfterDeletion(
+            visibleSessions: sessions, deletedIDs: deletedIDs,
+            selectedID: sessions[3].id)
+        XCTAssertEqual(next, sessions[2].id)
+    }
+
+    /// Selected row is not in the visible list (hidden behind Show more /
+    /// collapsed) but is being deleted → fall back to the first visible survivor.
+    func testNextSelectionFallsBackWhenSelectedNotVisible() throws {
+        let visible = try (0..<3).map { i in
+            try makeSession(title: "s\(i)", updatedAt: now.addingTimeInterval(-Double(3600 * i)))
+        }
+        let hiddenSelected = try makeSession(title: "hidden", updatedAt: now.addingTimeInterval(-200_000))
+        let next = PiAgentSessionGrouping.nextSelectionAfterDeletion(
+            visibleSessions: visible, deletedIDs: [hiddenSelected.id], selectedID: hiddenSelected.id)
+        XCTAssertEqual(next, visible[0].id)
+    }
+
+    /// No current selection at all → nil (don't manufacture a selection from a
+    /// delete triggered while there's none).
+    func testNextSelectionNilWithNoCurrentSelection() throws {
+        let sessions = try (0..<3).map { i in
+            try makeSession(title: "s\(i)", updatedAt: now.addingTimeInterval(-Double(3600 * i)))
+        }
+        let next = PiAgentSessionGrouping.nextSelectionAfterDeletion(
+            visibleSessions: sessions, deletedIDs: [sessions[1].id], selectedID: nil)
+        XCTAssertNil(next)
+    }
+
     // MARK: - helpers
 
     private func makeSession(

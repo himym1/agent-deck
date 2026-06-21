@@ -3205,7 +3205,13 @@ struct CodingAgentExpandedPanel: View {
         }
         .alert(deleteSessionsAlertTitle, isPresented: $isDeleteSessionsAlertPresented) {
             Button("Delete", role: .destructive) {
-                viewModel.deletePiAgentSessions(pendingDeleteSessionIDs)
+                let deleteIDs = pendingDeleteSessionIDs
+                let nextID = PiAgentSessionGrouping.nextSelectionAfterDeletion(
+                    visibleSessions: visibleSessions,
+                    deletedIDs: deleteIDs,
+                    selectedID: store.selectedSession?.id
+                )
+                viewModel.deletePiAgentSessions(deleteIDs, fallbackSelectionID: nextID)
                 pendingDeleteSessionIDs = []
             }
             Button("Cancel", role: .cancel) { pendingDeleteSessionIDs = [] }
@@ -5927,6 +5933,14 @@ struct PiAgentScreen: View {
         let existing = Set(store.sessions.map(\.id))
         let deleteIDs = ids.intersection(existing)
         guard !deleteIDs.isEmpty else { return }
+        // Compute the next session to make current before deleting, in the
+        // order the user actually sees (the row below the deleted set; the row
+        // above if it ran to the end). `nil` when the current selection survives.
+        let nextID = PiAgentSessionGrouping.nextSelectionAfterDeletion(
+            visibleSessions: visibleSessions,
+            deletedIDs: deleteIDs,
+            selectedID: store.selectedSession?.id
+        )
         selectedSessionIDs.subtract(deleteIDs)
         withAnimation(.snappy(duration: 0.18)) {
             // Optimistically drop deleted rows from the rendered sections so the
@@ -5952,7 +5966,7 @@ struct PiAgentScreen: View {
             }
             hasBuiltVisibleSessions = true
         }
-        viewModel.deletePiAgentSessions(deleteIDs)
+        viewModel.deletePiAgentSessions(deleteIDs, fallbackSelectionID: nextID)
         rebuildVisibleSessions()
         syncMultiSelectionToSelectedSession()
         syncRuntimeFooterSnapshot()

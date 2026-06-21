@@ -156,6 +156,63 @@ enum PiAgentSessionGrouping {
         return sections
     }
 
+    /// The session to make current after `deletedIDs` are removed from the
+    /// list the user actually sees (`visibleSessions`, in display order).
+    ///
+    /// Mail-app semantics applied to the flat grouped list: the row that takes
+    /// the deleted set's place is the first sibling BELOW it; if the deleted set
+    /// runs to the end of the list, the row immediately ABOVE it becomes current.
+    /// If nothing remains, returns `nil` (and the caller clears selection).
+    ///
+    /// `selectedID` anchors the search — when the user deletes a non-current
+    /// row (multi-select delete excluding the current one) the selection should
+    /// not move, so the helper only returns a non-nil fallback when the current
+    /// selection is among the deleted IDs.
+    ///
+    /// Why this lives here and not on the store: "next" is a property of the
+    /// user's visible grouped order (search/attention filters and collapse
+    /// state can hide rows the store still knows about). The store sees the
+    /// full flat `sessions` array and would otherwise clamp to the globally
+    /// most-recent session, which jumps the transcript to an unrelated chat.
+    static func nextSelectionAfterDeletion(
+        visibleSessions: [PiAgentSessionRecord],
+        deletedIDs: Set<UUID>,
+        selectedID: UUID?
+    ) -> UUID? {
+        // No work to do unless the current selection is being deleted —
+        // deleting an unrelated row must not move the active session.
+        guard let selectedID, deletedIDs.contains(selectedID) else { return nil }
+
+        // Anchor on the selected row's position in the visible list. From there
+        // walk downward for the first surviving "row below"; if the deleted set
+        // runs to the end (or the selected row was last/hidden), walk upward
+        // for the closest surviving "row above". This handles every deletion
+        // shape in ONE pass per direction:
+        //   - single selected row deleted → the row immediately below it
+        //   - contiguous block including selected → first survivor below the block
+        //   - non-contiguous multi-select including selected → the row right
+        //     next to the selected one (not far away at the first deleted row)
+        //   - selected row was last / not visible → the new last visible row
+        //   - nothing survives → nil (caller clears selection)
+        let visibleIDs = visibleSessions.map(\.id)
+        let anchor = visibleIDs.firstIndex(of: selectedID)
+
+        if let anchor, anchor + 1 < visibleIDs.count {
+            for id in visibleIDs[(anchor + 1)...] where !deletedIDs.contains(id) {
+                return id
+            }
+        }
+        if let anchor, anchor > 0 {
+            for index in stride(from: anchor - 1, through: 0, by: -1) where !deletedIDs.contains(visibleIDs[index]) {
+                return visibleIDs[index]
+            }
+        }
+        // Selected row wasn't in the visible list (hidden behind Show more /
+        // collapsed) but is being deleted — fall back to the first surviving
+        // visible row, or nil if the visible list is also emptied.
+        return visibleSessions.first(where: { !deletedIDs.contains($0.id) })?.id
+    }
+
     private static func makeSection(
         id: String,
         title: String,
