@@ -91,11 +91,34 @@ struct MCPServersScreen: View {
         // shows "MCP: On/Off". The empty case is handled before the split, so the
         // list always has servers here.
         AppList(
-            sections: [AppListSection(id: "servers", title: "Servers", items: servers)],
+            sections: serverListSections,
             selection: .single($selectedServerID)
         ) { entry in
             listRow(entry)
         }
+    }
+
+    private var serverListSections: [AppListSection<MCPServerEntry>] {
+        let defaultServers = servers.filter { viewModel.isMcpServerEnabledForAllProjects($0.name) }
+        let catalogServers = servers.filter { !viewModel.isMcpServerEnabledForAllProjects($0.name) }
+        var sections: [AppListSection<MCPServerEntry>] = [
+            AppListSection(
+                id: "default",
+                title: "Default MCP Servers",
+                info: "Available to every project when MCP is on.",
+                items: defaultServers,
+                emptyMessage: "No default MCP servers."
+            )
+        ]
+        if !catalogServers.isEmpty {
+            sections.append(AppListSection(
+                id: "catalog",
+                title: "Catalog",
+                info: "Configured servers. Dimmed only when not enabled for All Projects and not assigned to any project.",
+                items: catalogServers
+            ))
+        }
+        return sections
     }
 
     /// Single centered empty state shown in place of the split view when no servers
@@ -111,24 +134,16 @@ struct MCPServersScreen: View {
     }
 
     private func listRow(_ entry: MCPServerEntry) -> some View {
-        let isSelected = selectedServerID == entry.id
-        return HStack(spacing: 10) {
-            Image(systemName: entry.config.resolvedTransport == .stdio ? "terminal" : "globe")
-                .font(.callout)
-                .foregroundStyle(isSelected ? AppTheme.brandAccent : .secondary)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.name).font(.body.weight(.medium)).lineLimit(1)
-                Text(transportLabel(entry))
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer(minLength: 6)
-            rowStatus(entry)
-        }
-        .padding(.vertical, 2)
+        MCPServerListRowView(
+            entry: entry,
+            subtitle: transportLabel(entry),
+            iconName: serverIcon(entry),
+            iconColor: serverColor(entry),
+            isInactive: !serverIsAssignedSomewhere(entry),
+            canEdit: viewModel.mcpServerIsEditable(entry),
+            status: { rowStatus(entry) },
+            onEdit: { editorModel = .edit(entry) }
+        )
         // Fill the row and give it a hit-testable shape so a right-click anywhere on the
         // row (not just on the name text) opens the context menu.
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -381,6 +396,22 @@ struct MCPServersScreen: View {
         }
     }
 
+    private func serverIsAssignedSomewhere(_ entry: MCPServerEntry) -> Bool {
+        viewModel.isMcpServerEnabledForAllProjects(entry.name)
+            || viewModel.enabledProjects.contains { viewModel.mcpServer(entry.name, isEnabledFor: $0) }
+    }
+
+    private func serverIcon(_ entry: MCPServerEntry) -> String {
+        entry.config.resolvedTransport == .stdio ? "terminal" : "globe"
+    }
+
+    private func serverColor(_ entry: MCPServerEntry) -> Color {
+        switch entry.config.resolvedTransport {
+        case .stdio: return AppTheme.brandAccent
+        case .http, .sse: return AppTheme.sourceLibrary
+        }
+    }
+
     private func transportLabel(_ entry: MCPServerEntry) -> String {
         switch entry.config.resolvedTransport {
         case .stdio: return entry.config.command ?? "stdio"
@@ -445,6 +476,62 @@ struct MCPServersScreen: View {
         await viewModel.disconnectMCPServer(entry.name)
         connectedByServer[entry.name] = false
         statusByServer[entry.name] = nil
+    }
+}
+
+/// MCP server catalog row. Mirrors the Agents/Skills/Prompts list density and
+/// inactive treatment: dim only when the server is not assigned anywhere.
+private struct MCPServerListRowView<Status: View>: View {
+    let entry: MCPServerEntry
+    let subtitle: String
+    let iconName: String
+    let iconColor: Color
+    let isInactive: Bool
+    let canEdit: Bool
+    @ViewBuilder let status: () -> Status
+    let onEdit: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: iconName)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(iconColor)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(entry.name)
+                    .font(.headline)
+                    .fontWidth(.expanded)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 6)
+
+            if canEdit {
+                Button(action: onEdit) {
+                    Text("Edit")
+                        .font(.caption.weight(.semibold))
+                }
+                .appSmallSecondaryButton()
+                .opacity(isHovered ? 1 : 0)
+                .help("Edit MCP server")
+                .animation(.easeInOut(duration: 0.15), value: isHovered)
+            }
+
+            status()
+        }
+        .onHover { isHovered = $0 }
+        .padding(.vertical, 6)
+        .opacity(isInactive ? 0.62 : 1)
+        .saturation(isInactive ? 0.25 : 1)
     }
 }
 

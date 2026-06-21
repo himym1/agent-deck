@@ -935,7 +935,7 @@ struct ContentView: View {
         ctx.selectPreviousPiAgentSession = { viewModel.selectPreviousPiAgentSession() }
         ctx.createAgent = {
             editingAgent = nil
-            agentDraft = viewModel.makeNewAgentDraft(scope: viewModel.selectedProjectPath == nil ? .library : .project)
+            agentDraft = viewModel.makeNewAgentDraft(scope: .library)
         }
         ctx.deletePiAgentSession = { showingPiAgentDeleteAlert = true }
         ctx.stopPiAgentSession = { viewModel.stopSelectedPiAgentSession() }
@@ -1011,9 +1011,7 @@ struct ContentView: View {
                     }
                 }
             )),
-            isDisabled: { item in
-                item == .instructions && viewModel.selectedProjectPath == nil
-            },
+            isDisabled: { _ in false },
             // Constant on purpose: tying this to the panel-expansion flag handed
             // AppList a changed parameter on every toggle, forcing a full nav
             // re-diff (a per-toggle hitch). Arrow keys while the panel covers
@@ -1232,12 +1230,6 @@ struct ContentView: View {
             Button("New Library Agent") {
                 editingAgent = nil
                 agentDraft = viewModel.makeNewAgentDraft(scope: .library)
-            }
-            if viewModel.selectedProjectPath != nil {
-                Button("New Project Agent") {
-                    editingAgent = nil
-                    agentDraft = viewModel.makeNewAgentDraft(scope: .project)
-                }
             }
         } label: {
             Label("New", systemImage: "plus")
@@ -1673,87 +1665,18 @@ struct ContentView: View {
         .disabled(!viewModel.githubConnectionState.isConnected || viewModel.githubIsLoadingProjectBoard)
     }
 
-    private struct ProjectToolbarSelector: View {
-        @Bindable var viewModel: AppViewModel
-        @Binding var isPresented: Bool
-
-        var body: some View {
-            Button {
-                isPresented.toggle()
-            } label: {
-                HStack(spacing: 7) {
-                    if let project = viewModel.selectedDiscoveredProject {
-                        ProjectIconView(
-                            imageURL: project.iconFileURL,
-                            symbolName: project.fallbackSymbolName,
-                            size: 18,
-                            assetName: project.projectType.assetName
-                        )
-                        Text(project.repositoryDisplayName)
-                    } else {
-                        Image(systemName: "folder")
-                        Text("Select Project")
-                    }
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .toolbarNeutralChrome()
-            .help("Choose project")
-            .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Projects")
-                        .font(.headline)
-                    ForEach(viewModel.enabledProjects) { project in
-                        Button {
-                            viewModel.setSelectedProject(project.url)
-                            isPresented = false
-                        } label: {
-                            HStack(spacing: 10) {
-                                ProjectIconView(
-                                    imageURL: project.iconFileURL,
-                                    symbolName: project.fallbackSymbolName,
-                                    size: 24,
-                                    assetName: project.projectType.assetName
-                                )
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(project.repositoryDisplayName)
-                                        .font(.body.weight(.medium))
-                                    if let remote = project.gitHubRemote {
-                                        Text(remote.nameWithOwner)
-                                            .font(.caption)
-                                            .foregroundStyle(AppTheme.mutedText)
-                                    }
-                                }
-                                Spacer(minLength: 12)
-                                if project.path == viewModel.selectedProjectPath {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(AppTheme.brandAccent)
-                                }
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(14)
-                .frame(width: 300)
-            }
-        }
-    }
-
     private var currentAgentModelQuickEditorContext: AgentModelQuickEditorContext {
         AgentModelQuickEditorContext(
             title: "Agent Models",
-            subtitle: viewModel.selectedDiscoveredProject.map { "Quick edits for agents visible in \($0.name)." } ?? "Quick edits for agents visible in the current global view.",
+            subtitle: "Quick edits for agents visible in the current global view.",
             sections: currentAgentModelQuickEditorSections,
-            preferredOverrideScope: viewModel.selectedProjectPath == nil ? .global : .project
+            preferredOverrideScope: .global
         )
     }
 
     private var currentAgentModelQuickEditorSections: [AgentModelQuickEditorSection] {
-        let filteredAgents = viewModel.selectedProjectPath == nil ? viewModel.allDisplayAgents : viewModel.filteredAgents
+        // Global catalog — independent of `selectedProjectPath`.
+        let filteredAgents = viewModel.allDisplayAgents
 
         func sortedUnique(_ agents: [EffectiveAgentRecord]) -> [EffectiveAgentRecord] {
             preferredAgentsByName(agents) { records in records.first }
@@ -1773,25 +1696,8 @@ struct ContentView: View {
             let isPlainBuiltin = agent.builtin != nil && agent.globalCustom == nil && agent.projectCustom == nil
             return !isPlainBuiltin
         }
-        if viewModel.selectedProjectPath == nil {
-            return [
-                AgentModelQuickEditorSection(title: "Custom Agents", agents: sortedUnique(editableNonBuiltinAgents)),
-                AgentModelQuickEditorSection(title: "Builtin Agents", agents: builtinAgents)
-            ]
-        }
-
-        let activeCandidates = editableNonBuiltinAgents.filter { agent in
-            agent.resolved.disabled != true
-        }
-        let inactiveCandidates = editableNonBuiltinAgents.filter { agent in
-            agent.resolved.disabled == true
-        }
-        let activeAgents = sortedUnique(activeCandidates)
-        let inactiveAgents = sortedUnique(inactiveCandidates)
-
         return [
-            AgentModelQuickEditorSection(title: "Active Agents", agents: activeAgents),
-            AgentModelQuickEditorSection(title: "Inactive Agents", agents: inactiveAgents, isDimmed: true),
+            AgentModelQuickEditorSection(title: "Custom Agents", agents: sortedUnique(editableNonBuiltinAgents)),
             AgentModelQuickEditorSection(title: "Builtin Agents", agents: builtinAgents)
         ]
     }

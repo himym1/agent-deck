@@ -71,6 +71,13 @@ struct SkillListMetadata {
     /// the active/catalog split. Cached so the split isn't an O(skills) project-
     /// preference scan on every body eval.
     let isActiveForCurrentProject: Bool
+    /// Whether the skill's root path is tracked in `externalSkillPaths`.
+    /// `isImportedSkill(_:)` resolves `URL.standardizedFileURL` (lstat) per
+    /// call, so the context-menu builder — which SwiftUI re-evaluates during
+    /// layout for every visible row — must read this cached flag instead of
+    /// the live method, otherwise scrolling the skills list stalls the main
+    /// thread with stat syscalls.
+    let isImported: Bool
 }
 
 private enum SkillDetailSummaryState: Equatable {
@@ -222,7 +229,7 @@ struct SkillsScreen: View {
         .appDebugLayout("Skills.hsplit", logger: Self.layoutLog)
         .onAppear {
             #if DEBUG
-            Self.layoutLog.debug("Skills.state event=appear selectedIDs=\(selectedSkillIDs.count, privacy: .public) selected=\(selectedSkill?.name ?? "nil", privacy: .public) project=\(viewModel.selectedDiscoveredProject?.name ?? "nil", privacy: .public)")
+            Self.layoutLog.debug("Skills.state event=appear selectedIDs=\(selectedSkillIDs.count, privacy: .public) selected=\(selectedSkill?.name ?? "nil", privacy: .public)")
             #endif
             cachedLayout = recomputeLayout()
             scheduleSelectionSynchronization()
@@ -241,9 +248,6 @@ struct SkillsScreen: View {
         .onChange(of: searchText) { _, _ in
             cachedLayout = recomputeLayout()
             scheduleSelectionSynchronization()
-        }
-        .onChange(of: viewModel.selectedDiscoveredProject) { _, _ in
-            cachedLayout = recomputeLayout()
         }
         // Catches repository sync / update-check results (hasKnownUpdate),
         // which change row badges without touching the skill records.
@@ -353,7 +357,7 @@ struct SkillsScreen: View {
             ) { skill in
                 skillListRow(
                     skill,
-                    metadata: metadataByID[skill.id] ?? SkillListMetadata(isAssigned: false, hasWarnings: false, isActiveForCurrentProject: false),
+                    metadata: metadataByID[skill.id] ?? SkillListMetadata(isAssigned: false, hasWarnings: false, isActiveForCurrentProject: false, isImported: viewModel.isImportedSkill(skill)),
                     inactive: layout.inactiveByID[skill.id]
                 )
             }
@@ -399,9 +403,7 @@ struct SkillsScreen: View {
         managedSkills: [SkillRecord],
         repositoryBySkillID: [SkillRecord.ID: ImportedSkillRepository]
     ) {
-        let metadataByID = viewModel.cachedSkillMetadataByID
         let allRecords = viewModel.allVisibleSkillRecords
-        let project = selectedProject
 
         let grouped = Dictionary(grouping: allRecords, by: \.name)
         let preferred = grouped.values.compactMap(preferredSkillRecord)
@@ -448,16 +450,11 @@ struct SkillsScreen: View {
             }
         }
 
-        // Same fallback as the previous body-time `skillIsActiveForCurrentProject`
-        // — covers the pre-first-scan window where `cachedSkillMetadataByID`
-        // hasn't been populated yet.
-        func isActiveForCurrentProject(_ skill: SkillRecord) -> Bool {
-            if let cached = metadataByID[skill.id] {
-                return cached.isActiveForCurrentProject
-            }
-            if viewModel.skillIsEnabledGlobally(skill) { return true }
-            if let project, viewModel.skill(skill, isEnabledFor: project) { return true }
-            return false
+        // A row is visually active when the skill is Default, assigned to at
+        // least one project, or assigned to at least one Deck agent. Dim only
+        // skills that are present in the catalog but unused everywhere.
+        func isAssignedSomewhere(_ skill: SkillRecord) -> Bool {
+            viewModel.skillIsEnabledGlobally(skill) || !viewModel.assignedProjects(for: skill).isEmpty
         }
 
         var sections: [AppListSection<SkillRecord>] = []
@@ -467,45 +464,24 @@ struct SkillsScreen: View {
             for item in items { inactiveByID[item.id] = inactive }
         }
 
-        if project != nil {
-            let active = managed.filter { isActiveForCurrentProject($0) }
-            let catalog = managed.filter { !isActiveForCurrentProject($0) }
-            mark(active, inactive: false)
+        let global = managed.filter { viewModel.skillIsEnabledGlobally($0) }
+        let catalog = managed.filter { !viewModel.skillIsEnabledGlobally($0) }
+        mark(global, inactive: false)
+        sections.append(AppListSection(
+            id: "global",
+            title: "Default Skills",
+            info: "Injected into every parent Pi Agent session. This is global runtime injection, not per-project assignment.",
+            items: global,
+            emptyMessage: "No default skills."
+        ))
+        if !catalog.isEmpty {
+            for item in catalog { inactiveByID[item.id] = !isAssignedSomewhere(item) }
             sections.append(AppListSection(
-                id: "active",
-                title: "Active",
-                items: active,
-                emptyMessage: "No skills are assigned for this project."
+                id: "catalog",
+                title: "Catalog",
+                info: "Available skills. They are not injected until made Default, assigned to a project runtime, or assigned to a Deck agent.",
+                items: catalog
             ))
-            if !catalog.isEmpty {
-                mark(catalog, inactive: true)
-                sections.append(AppListSection(
-                    id: "catalog",
-                    title: "Catalog",
-                    info: "Available skills. They are not injected until made Default, assigned to a project runtime, or assigned to a Deck agent.",
-                    items: catalog
-                ))
-            }
-        } else {
-            let global = managed.filter { viewModel.skillIsEnabledGlobally($0) }
-            let catalog = managed.filter { !isActiveForCurrentProject($0) }
-            mark(global, inactive: false)
-            sections.append(AppListSection(
-                id: "global",
-                title: "Default Skills",
-                info: "Injected into every parent Pi Agent session. This is global runtime injection, not per-project assignment.",
-                items: global,
-                emptyMessage: "No default skills."
-            ))
-            if !catalog.isEmpty {
-                mark(catalog, inactive: true)
-                sections.append(AppListSection(
-                    id: "catalog",
-                    title: "Catalog",
-                    info: "Available skills. They are not injected until made Default, assigned to a project runtime, or assigned to a Deck agent.",
-                    items: catalog
-                ))
-            }
         }
 
         return (sections, inactiveByID, managed, repositoryBySkillID)
@@ -513,11 +489,21 @@ struct SkillsScreen: View {
 
     /// Selection-aware list context menu. A single right-clicked skill gets the
     /// full action set; a multi-selection gets a batch delete.
+    ///
+    /// `metadataByID` carries the cached `isImported` flag so this builder —
+    /// which SwiftUI re-evaluates during layout for every visible row, not
+    /// only when the menu opens — never calls `viewModel.isImportedSkill`
+    /// (an `lstat` syscall) on the main thread while scrolling.
     @ViewBuilder
-    private func skillContextMenu(for ids: Set<SkillRecord.ID>) -> some View {
+    private func skillContextMenu(
+        for ids: Set<SkillRecord.ID>,
+        metadataByID: [SkillRecord.ID: SkillListMetadata]
+    ) -> some View {
+        // Cache-miss falls back to the live method; in practice the cache is
+        // populated for every skill after the first scan, so this is rare.
         let skills = managedSkills.filter { ids.contains($0.id) }
         if skills.count > 1 {
-            let importable = skills.filter { viewModel.isImportedSkill($0) }
+            let importable = skills.filter { metadataByID[$0.id]?.isImported ?? viewModel.isImportedSkill($0) }
             let deletable = skills.filter { viewModel.canDeleteSkill($0) }
             if !importable.isEmpty {
                 Button {
@@ -571,11 +557,12 @@ struct SkillsScreen: View {
                 }
             }
 
-            if viewModel.isImportedSkill(skill) || viewModel.canDeleteSkill(skill) {
+            let isImported = metadataByID[skill.id]?.isImported ?? viewModel.isImportedSkill(skill)
+            if isImported || viewModel.canDeleteSkill(skill) {
                 Divider()
             }
 
-            if viewModel.isImportedSkill(skill) {
+            if isImported {
                 Button {
                     skillPendingRemoval = skill
                 } label: {
@@ -1053,7 +1040,7 @@ struct SkillsScreen: View {
 
                     HStack(alignment: .top, spacing: 12) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(skillLocationLabel(skill, selectedProjectRoot: viewModel.snapshot.projectRoot))
+                            Text(skillLocationLabel(skill, selectedProjectRoot: viewModel.globalCatalogSnapshot.projectRoot))
                                 .font(.caption.weight(.semibold))
                                 .fontWidth(.expanded)
                                 .foregroundStyle(AppTheme.mutedText)
@@ -1113,10 +1100,6 @@ struct SkillsScreen: View {
         }
     }
 
-    private var selectedProject: DiscoveredProject? {
-        viewModel.selectedDiscoveredProject
-    }
-
     /// Reads from the `cachedLayout` rebuilt by `recomputeLayout()` on input
     /// changes. Pre-refactor this property did the dedupe + sort + multi-field
     /// search inline on every access — and was hit from `skillListLayout`,
@@ -1144,30 +1127,7 @@ struct SkillsScreen: View {
 
     private var skillDetailSubtitle: String? {
         if selectedSkillIDs.count > 1 { return "Batch actions" }
-        return selectedSkill.map { skillLocationLabel($0, selectedProjectRoot: viewModel.snapshot.projectRoot) }
-    }
-
-    private var activeSkills: [SkillRecord] {
-        if selectedProject != nil {
-            return managedSkills.filter { skillIsActiveForCurrentProject($0) }
-        }
-        return globalSkills
-    }
-
-    private var globalSkills: [SkillRecord] {
-        managedSkills.filter { viewModel.skillIsEnabledGlobally($0) }
-    }
-
-    private var catalogSkills: [SkillRecord] {
-        managedSkills.filter { !skillIsActiveForCurrentProject($0) }
-    }
-
-    private var projectAssignedSkills: [SkillRecord] {
-        guard let selectedProject else { return [] }
-        return managedSkills.filter {
-            viewModel.skill($0, isEnabledFor: selectedProject) &&
-            !viewModel.skillIsEnabledGlobally($0)
-        }
+        return selectedSkill.map { skillLocationLabel($0, selectedProjectRoot: viewModel.globalCatalogSnapshot.projectRoot) }
     }
 
     private func preferredSkillRecord(_ records: [SkillRecord]) -> SkillRecord? {
@@ -1176,17 +1136,6 @@ struct SkillsScreen: View {
         ?? records.first { $0.source.kind == .project }
         ?? records.first { $0.source.kind == .legacyProject }
         ?? records.first
-    }
-
-    private func skillIsActiveForCurrentProject(_ skill: SkillRecord) -> Bool {
-        // Precomputed in AppViewModel's cachedSkillMetadataByID, rebuilt on
-        // data rescans. Live fallback covers the pre-first-scan window.
-        if let cached = viewModel.cachedSkillMetadataByID[skill.id] {
-            return cached.isActiveForCurrentProject
-        }
-        if viewModel.skillIsEnabledGlobally(skill) { return true }
-        if let selectedProject, viewModel.skill(skill, isEnabledFor: selectedProject) { return true }
-        return false
     }
 
     private func scheduleSelectionSynchronization() {
@@ -1233,7 +1182,7 @@ struct SkillsScreen: View {
     }
 
     private func skillListRow(_ skill: SkillRecord, metadata: SkillListMetadata, inactive: Bool? = nil) -> some View {
-        let isActive = metadata.isAssigned
+        let isActive = viewModel.skillIsEnabledGlobally(skill) || !viewModel.assignedProjects(for: skill).isEmpty
         let isInactive = inactive ?? !isActive
         let hasWarnings = metadata.hasWarnings
         let iconName = hasWarnings ? "exclamationmark.triangle.fill" : skillIcon(skill)
@@ -1246,6 +1195,7 @@ struct SkillsScreen: View {
             iconName: iconName,
             iconColor: iconColor,
             isInactive: isInactive,
+            isDisabled: viewModel.bundledSkillIsDisabled(skill),
             repositoryDisplayName: repository?.displayName,
             hasUpdate: hasUpdate,
             isUpdating: repository != nil && isUpdatingSkillRepository,
@@ -1267,7 +1217,7 @@ struct SkillsScreen: View {
             let effectiveIDs: Set<SkillRecord.ID> = (selectedSkillIDs.count > 1 && selectedSkillIDs.contains(skill.id))
                 ? selectedSkillIDs
                 : [skill.id]
-            skillContextMenu(for: effectiveIDs)
+            skillContextMenu(for: effectiveIDs, metadataByID: viewModel.cachedSkillMetadataByID)
         }
     }
 
@@ -1361,7 +1311,10 @@ struct SkillsScreen: View {
     }
 
     private func sourcePath(forAgentNamed agentName: String, projectPath: String) -> String? {
-        viewModel.snapshot.effectiveAgents.first {
+        // The warning is about a specific project's skill visibility, so resolve
+        // the agent against that project's effective agents (not the selected
+        // project). Keeps the Skills view global — no `selectedProjectPath` read.
+        viewModel.startupSnapshot(forProjectPath: projectPath).effectiveAgents.first {
             $0.name == agentName && ($0.projectRoot == projectPath || $0.projectRoot == nil)
         }?.sourcePath
     }
@@ -1887,7 +1840,7 @@ private struct SkillAgentAssignmentList: View {
     }
 
     private func recompute() {
-        let active = viewModel.snapshot.effectiveAgents
+        let active = viewModel.globalCatalogSnapshot.effectiveAgents
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         let activeIDs = Set(active.map(\.id))
         let inactive = viewModel.allDisplayAgents
@@ -1950,6 +1903,7 @@ private struct SkillListRowView: View {
     let iconName: String
     let iconColor: Color
     let isInactive: Bool
+    let isDisabled: Bool
     let repositoryDisplayName: String?
     let hasUpdate: Bool
     let isUpdating: Bool
@@ -1969,6 +1923,7 @@ private struct SkillListRowView: View {
                     .font(.headline)
                     .fontWidth(.expanded)
                     .foregroundStyle(.primary)
+                    .strikethrough(isDisabled, color: AppTheme.mutedText)
                     .lineLimit(1)
                 Text(skill.description ?? "No description")
                     .font(.caption)

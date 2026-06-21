@@ -487,14 +487,27 @@ struct PiAgentSessionSubagentPickerCard: View {
         let selection: Set<String>
         let hasExplicitSelection: Bool
 
+        private var visibleRowNames: Set<String> { Set(rows.map(\.name)) }
+
         var selectedCount: Int {
             rows.filter { selection.contains($0.name) }.count
         }
 
+        /// Selected agent names that are not in a visible default row — agents
+        /// added via "Add agents" after the row list was scoped to project
+        /// defaults. Surfaced in the subtitle so added agents aren't invisible.
+        var addedCount: Int {
+            selection.filter { !visibleRowNames.contains($0) }.count
+        }
+
         var subtitle: String {
-            selectedCount == 0
-                ? "None selected · this session runs without Deck agents"
-                : "\(selectedCount) of \(rows.count) selected · set before the first message"
+            var text = "\(selectedCount) of \(rows.count) default selected"
+            // Never say "None selected" once there are hidden added agents —
+            // the count alone would understate the effective launch set.
+            if addedCount > 0 {
+                text += " · \(addedCount) added"
+            }
+            return text
         }
     }
 
@@ -507,7 +520,10 @@ struct PiAgentSessionSubagentPickerCard: View {
                 .map(\.name)
         )
         let selection = session.agentSelection ?? defaultNames
-        let rowNames = defaultNames.union(selection)
+        // Main card rows show only the project assigned/default agents. Agents
+        // added via "Add agents" are not duplicated as main rows; they stay
+        // reachable only through the Add agents sheet.
+        let rowNames = defaultNames
 
         let byName: (EffectiveAgentRecord, EffectiveAgentRecord) -> Bool = {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
@@ -564,15 +580,20 @@ struct PiAgentSessionSubagentPickerCard: View {
                         }
                     }
                     .sheet(isPresented: $isAddSheetPresented) {
-                        PiAgentAddAgentsSheet(
-                            addable: data?.addable ?? [],
-                            description: description(for:),
-                            onAdd: { names in
-                                var updated = data?.selection ?? []
-                                for name in names { updated.insert(name) }
-                                viewModel.setAgentSelection(updated, for: session.id)
-                            }
-                        )
+                        if let data {
+                            PiAgentAddAgentsSheet(
+                                addable: data.addable,
+                                currentSelection: data.selection,
+                                launchDetail: launchDetail(for:),
+                                onApply: { chosenExtras in
+                                    // Preserve visible default-row selections
+                                    // (intersect current selection with default
+                                    // row names), then union the chosen extras.
+                                    let defaults = data.selection.intersection(data.rows.map(\.name))
+                                    viewModel.setAgentSelection(defaults.union(chosenExtras), for: session.id)
+                                }
+                            )
+                        }
                     }
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 }
@@ -669,7 +690,13 @@ struct PiAgentSessionSubagentPickerCard: View {
             agent: agent,
             checked: checked,
             avatarURL: viewModel.agentImageStore.imageURL(for: agent.name),
-            description: description(for: agent),
+            launchDetail: launchDetail(for: agent),
+            availableModels: viewModel.enabledAvailableModels,
+            selectedModelIdentifier: editableModelIdentifier(for: agent),
+            selectedThinkingLevel: editableThinkingLevel(for: agent),
+            thinkingLevels: editableThinkingLevels(for: agent),
+            onSelectModel: { applyModel($0, to: agent) },
+            onSelectThinking: { applyThinking($0, to: agent) },
             onToggle: { apply(selection, name: agent.name, include: !checked) },
             onStartDirectChat: {
                 withAnimation(.easeOut(duration: 0.22)) {
@@ -715,16 +742,101 @@ struct PiAgentSessionSubagentPickerCard: View {
         PiAgentPickerAvatar(imageURL: session.agentName.flatMap { viewModel.agentImageStore.imageURL(for: $0) })
     }
 
-    private func description(for agent: EffectiveAgentRecord) -> String? {
-        let raw = (agent.resolved.whenToUse ?? agent.resolved.description)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return raw.isEmpty ? nil : raw
-    }
-
     private func apply(_ selection: Set<String>, name: String, include: Bool) {
         var updated = selection
         if include { updated.insert(name) } else { updated.remove(name) }
         viewModel.setAgentSelection(updated, for: session.id)
+    }
+
+    // MARK: - Per-agent launch controls
+    //
+    // Inline model + thinking chips let the user override an agent's model and
+    // reasoning effort directly from the picker, persisting via the same
+    // `saveAgentDraft` path as the agent editor. These mirror the chip pair
+    // that used to live on each picker row.
+
+    private func launchDetail(for agent: EffectiveAgentRecord) -> String {
+        let modelPart = editableModelIdentifier(for: agent)
+        var parts: [String] = []
+        if let modelPart, !modelPart.isEmpty {
+            parts.append(modelPart)
+        }
+        if let thinking = editableThinkingLevel(for: agent), !hasThinkingSuffix(modelPart) {
+            parts.append("thinking \(thinking)")
+        }
+        return parts.isEmpty ? "Pi default" : parts.joined(separator: " · ")
+    }
+
+    private func trimmed(_ value: String?) -> String? {
+        let v = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (v?.isEmpty == false) ? v : nil
+    }
+
+    private func resolvedThinkingToken(for agent: EffectiveAgentRecord) -> String? {
+        trimmed(agent.resolved.thinking)
+    }
+
+    /// True when `detail` already encodes a thinking level, so callers don't
+    /// append a duplicate thinking segment.
+    private func hasThinkingSuffix(_ detail: String?) -> Bool {
+        guard let detail, !detail.isEmpty else { return false }
+        return detail.lowercased().contains("thinking")
+    }
+
+    private func editableModelIdentifier(for agent: EffectiveAgentRecord) -> String? {
+        trimmed(agent.resolved.model)
+    }
+
+    private func editableThinkingLevel(for agent: EffectiveAgentRecord) -> String? {
+        let level = resolvedThinkingToken(for: agent)
+        guard let level, level != "off" else { return nil }
+        return level
+    }
+
+    private func editableThinkingLevels(for agent: EffectiveAgentRecord) -> [String] {
+        thinkingLevels(forModelIdentifier: editableModelIdentifier(for: agent))
+    }
+
+    private func thinkingLevels(forModelIdentifier identifier: String?) -> [String] {
+        let models = viewModel.enabledAvailableModels
+        if let identifier, let model = models.first(where: { $0.identifier == identifier }) {
+            return model.supportedThinkingLevels.isEmpty ? defaultThinkingLevels : model.supportedThinkingLevels
+        }
+        let discovered = Array(Set(models.flatMap(\.supportedThinkingLevels)))
+            .sorted { thinkingSortIndex($0) < thinkingSortIndex($1) }
+        return discovered.isEmpty ? defaultThinkingLevels : discovered
+    }
+
+    private let defaultThinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh"]
+
+    private func thinkingSortIndex(_ level: String) -> Int {
+        defaultThinkingLevels.firstIndex(of: level) ?? Int.max
+    }
+
+    private var overrideScope: AgentEditingTarget.OverrideScope {
+        let path = viewModel.selectedProjectPath
+        return (path == nil || path?.isEmpty == true) ? .global : .project
+    }
+
+    private func applyModel(_ identifier: String?, to agent: EffectiveAgentRecord) {
+        guard var draft = viewModel.makeAgentDraft(for: agent, preferredOverrideScope: overrideScope) else { return }
+        draft.config.model = (identifier?.isEmpty == false) ? identifier : nil
+        saveAgentDraft(draft, for: agent)
+    }
+
+    private func applyThinking(_ level: String?, to agent: EffectiveAgentRecord) {
+        guard var draft = viewModel.makeAgentDraft(for: agent, preferredOverrideScope: overrideScope) else { return }
+        let resolved = trimmed(level)
+        draft.config.thinking = (resolved == nil || resolved == "off") ? nil : resolved
+        saveAgentDraft(draft, for: agent)
+    }
+
+    private func saveAgentDraft(_ draft: AgentEditorDraft, for agent: EffectiveAgentRecord) {
+        do {
+            try viewModel.saveAgentDraft(draft, for: agent)
+        } catch {
+            NSSound.beep()
+        }
     }
 }
 
@@ -754,31 +866,40 @@ private struct PiAgentPickerAvatar: View {
     }
 }
 
-/// One agent in the picker card: check + avatar + name/description, with a
-/// soft hover fill. The 1:1 action is a small glass capsule revealed on row
-/// hover only — same treatment as the session rows' hover delete — labeled
-/// so it doesn't rely on the paperplane glyph alone. Unchecked rows render
-/// desaturated and dimmed, matching the session list's "seen" treatment.
+/// One agent in the picker card: check + avatar + name + inline launch
+/// (model + thinking) chips, with a soft hover fill. The 1:1 action is a small
+/// glass capsule revealed on row hover only — same treatment as the session
+/// rows' hover delete — labeled so it doesn't rely on the paperplane glyph
+/// alone. Unchecked rows render desaturated and dimmed, matching the session
+/// list's "seen" treatment. The row has a FIXED height so nothing shifts when
+/// hovering or when launch chips change state.
 private struct PiAgentSubagentPickerRow: View {
     let agent: EffectiveAgentRecord
     let checked: Bool
     let avatarURL: URL?
-    let description: String?
+    let launchDetail: String
+    let availableModels: [AvailableModel]
+    let selectedModelIdentifier: String?
+    let selectedThinkingLevel: String?
+    let thinkingLevels: [String]
+    let onSelectModel: (String?) -> Void
+    let onSelectThinking: (String?) -> Void
     let onToggle: () -> Void
     let onStartDirectChat: () -> Void
 
     @State private var isHovered = false
 
     private static let accent = PiAgentSessionSubagentPickerCard.accent
+    /// Fixed row height so every row is identical — nothing shifts when the
+    /// hover chat button reveals or launch chips change state.
+    private static let rowHeight: CGFloat = 40
 
     var body: some View {
-        // The chat button sits inline (not overlaid) so its space is always
-        // reserved and the description never runs underneath it; the outer
-        // `.center` alignment keeps it vertically centered however many lines
-        // the description wraps to.
         HStack(alignment: .center, spacing: 10) {
+            // Toggle area = check + avatar + name only, so the launch-control
+            // chips (separate buttons) stay independently tappable.
             Button(action: onToggle) {
-                HStack(alignment: .top, spacing: 10) {
+                HStack(alignment: .center, spacing: 10) {
                     Image(systemName: checked ? "checkmark.circle.fill" : "circle")
                         .font(.body)
                         .foregroundStyle(checked ? Self.accent : AppTheme.mutedText)
@@ -786,31 +907,35 @@ private struct PiAgentSubagentPickerRow: View {
                         .frame(width: 20, height: 28)
                     PiAgentPickerAvatar(imageURL: avatarURL)
                         .saturation(checked ? 1 : 0)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(agent.name)
-                            .font(.callout.weight(.medium))
-                            .foregroundStyle(.primary)
-                        if let description {
-                            Text(description)
-                                .font(.caption)
-                                .foregroundStyle(AppTheme.mutedText)
-                                .lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    .opacity(checked ? 1 : 0.66)
-                    Spacer(minLength: 0)
+                    Text(agent.name)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .opacity(checked ? 1 : 0.66)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
+            PiAgentPickerLaunchControls(
+                launchDetail: launchDetail,
+                availableModels: availableModels,
+                selectedModelIdentifier: selectedModelIdentifier,
+                selectedThinkingLevel: selectedThinkingLevel,
+                thinkingLevels: thinkingLevels,
+                onSelectModel: onSelectModel,
+                onSelectThinking: onSelectThinking
+            )
+
+            Spacer(minLength: 0)
+
             chatButton
                 .opacity(isHovered ? 1 : 0)
                 .allowsHitTesting(isHovered)
         }
+        .frame(height: Self.rowHeight)
         .padding(.horizontal, 8)
-        .padding(.vertical, 7)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(AppTheme.contentSubtleFill)
@@ -835,6 +960,235 @@ private struct PiAgentSubagentPickerRow: View {
         .help("Make this a 1:1 chat with \(agent.name)")
         .accessibilityLabel("Start a 1:1 chat with \(agent.name)")
         .disabled(agent.resolved.disabled == true)
+    }
+}
+
+/// Inline per-agent model + thinking chips for a picker row. The model chip
+/// opens a popover listing Pi's known models grouped by provider (plus "Pi
+/// default"); the thinking chip lists the levels supported by the current
+/// model (plus "Pi default"). `launchDetail` is the combined summary shown as
+/// the chips' help text. Chips share a FIXED capsule height so the row height
+/// never shifts between selection/model states.
+private struct PiAgentPickerLaunchControls: View {
+    let launchDetail: String
+    let availableModels: [AvailableModel]
+    let selectedModelIdentifier: String?
+    let selectedThinkingLevel: String?
+    let thinkingLevels: [String]
+    let onSelectModel: (String?) -> Void
+    let onSelectThinking: (String?) -> Void
+
+    @State private var isModelPresented = false
+    @State private var isThinkingPresented = false
+
+    private static let chipHeight: CGFloat = 22
+
+    var body: some View {
+        HStack(spacing: 5) {
+            modelChip
+            thinkingChip
+        }
+        .frame(height: Self.chipHeight)
+        .help(launchDetail)
+    }
+
+    private var modelLabel: String {
+        guard let id = selectedModelIdentifier, !id.isEmpty else { return "Pi default" }
+        return id
+    }
+
+    private var thinkingLabel: String {
+        guard let level = selectedThinkingLevel, !level.isEmpty, level != "off" else { return "Pi default" }
+        return level.capitalized
+    }
+
+    private var modelChip: some View {
+        Button {
+            isModelPresented.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "cpu")
+                Text(modelLabel)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.down")
+                    .font(AppTheme.Font.caption2.weight(.bold))
+                    .foregroundStyle(AppTheme.mutedText)
+            }
+            .font(AppTheme.Font.caption2.weight(.semibold))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 8)
+            .frame(height: Self.chipHeight)
+            .appGlassCapsule()
+            .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isModelPresented) {
+            modelPopover
+        }
+    }
+
+    private var thinkingChip: some View {
+        Button {
+            isThinkingPresented.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "brain.head.profile")
+                Text("Thinking: \(thinkingLabel)")
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                Image(systemName: "chevron.down")
+                    .font(AppTheme.Font.caption2.weight(.bold))
+                    .foregroundStyle(AppTheme.mutedText)
+            }
+            .font(AppTheme.Font.caption2.weight(.semibold))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 8)
+            .frame(height: Self.chipHeight)
+            .appGlassCapsule()
+            .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(thinkingLevels.isEmpty)
+        .popover(isPresented: $isThinkingPresented) {
+            thinkingPopover
+        }
+    }
+
+    private var modelPopover: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            AppPopoverHeader(title: "Model")
+            Divider()
+            ScrollView(showsIndicators: false) {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    Button {
+                        onSelectModel(nil)
+                        isModelPresented = false
+                    } label: {
+                        popoverRow(label: "Pi default", isSelected: selectedModelIdentifier == nil)
+                    }
+                    .buttonStyle(.plain)
+                    ForEach(groupedModels, id: \.provider) { group in
+                        VStack(alignment: .leading, spacing: 4) {
+                            ProviderLabel(provider: group.provider, logoSize: 13, spacing: 5)
+                                .font(AppTheme.Font.caption.weight(.bold))
+                                .fontWidth(.expanded)
+                                .foregroundStyle(.primary)
+                                .padding(.horizontal, AppTheme.Popover.rowHInset)
+                            Divider()
+                                .padding(.horizontal, AppTheme.Popover.rowHInset)
+                            VStack(spacing: 2) {
+                                ForEach(group.models) { model in
+                                    Button {
+                                        onSelectModel(model.identifier)
+                                        isModelPresented = false
+                                    } label: {
+                                        popoverRow(label: model.identifier, isSelected: model.identifier == selectedModelIdentifier)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, AppTheme.Popover.listInset)
+                .padding(.vertical, AppTheme.Popover.listInset)
+            }
+            .frame(maxHeight: AppTheme.Popover.listMaxHeight)
+        }
+        .frame(width: AppTheme.Popover.standardWidth)
+        .foregroundStyle(.primary)
+    }
+
+    private var thinkingPopover: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            AppPopoverHeader(title: "Thinking")
+            Divider()
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 2) {
+                    Button {
+                        onSelectThinking(nil)
+                        isThinkingPresented = false
+                    } label: {
+                        popoverRow(label: "Pi default", isSelected: isThinkingDefault)
+                    }
+                    .buttonStyle(.plain)
+                    ForEach(thinkingOptions, id: \.self) { level in
+                        Button {
+                            onSelectThinking(level)
+                            isThinkingPresented = false
+                        } label: {
+                            popoverRow(label: level.capitalized, isSelected: level == selectedThinkingLevel)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, AppTheme.Popover.listInset)
+                .padding(.vertical, AppTheme.Popover.listInset)
+            }
+            .frame(maxHeight: AppTheme.Popover.listMaxHeight)
+        }
+        .frame(width: AppTheme.Popover.compactWidth)
+        .foregroundStyle(.primary)
+    }
+
+    private func popoverRow(label: String, isSelected: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: isSelected ? "checkmark" : "circle")
+                .font(AppTheme.Font.caption.weight(.semibold))
+                .foregroundStyle(isSelected ? AppTheme.brandAccent : AppTheme.mutedText)
+                .frame(width: 14)
+            Text(label)
+                .font(AppTheme.Font.callout)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, AppTheme.Popover.rowHInset)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+
+    private var isThinkingDefault: Bool {
+        guard let level = selectedThinkingLevel else { return true }
+        return level.isEmpty || level == "off"
+    }
+
+    private var thinkingOptions: [String] {
+        thinkingLevels.filter { !$0.isEmpty && $0 != "off" }
+    }
+
+    private var groupedModels: [(provider: String, models: [AvailableModel])] {
+        Dictionary(grouping: availableModels, by: \.provider)
+            .map { provider, models in
+                (provider: provider, models: models.sorted { $0.model.localizedCaseInsensitiveCompare($1.model) == .orderedAscending })
+            }
+            .sorted { $0.provider.localizedCaseInsensitiveCompare($1.provider) == .orderedAscending }
+    }
+}
+
+/// Non-interactive summary chip shown on Add Agents sheet rows: the agent's
+/// resolved model/thinking detail (or "Pi default"). FIXED capsule height so
+/// every sheet row stays one line at an identical height.
+private struct PiAgentPickerModelChip: View {
+    let label: String
+
+    private static let chipHeight: CGFloat = 18
+
+    var body: some View {
+        Text(label)
+            .font(AppTheme.Font.caption2.weight(.semibold))
+            .foregroundStyle(AppTheme.mutedText)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .padding(.horizontal, 7)
+            .frame(height: Self.chipHeight)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(AppTheme.contentSubtleFill)
+            )
     }
 }
 
@@ -900,11 +1254,14 @@ private struct PiAgentPickerAddRow: View {
 /// Multi-select picker presented as a sheet when the user taps "Add agents…"
 /// in `PiAgentSessionSubagentPickerCard`. Matches the `MarkdownFileEditorSheet`
 /// chrome (compact `.headline` title, 18pt header, divider rails, 16pt footer
-/// with prominent confirm button).
+/// with prominent confirm button). Reflects the current explicit selection
+/// (preselecting already-added agents on appear) and applies by preserving
+/// visible default-row selections and unioning the chosen extras.
 struct PiAgentAddAgentsSheet: View {
     let addable: [EffectiveAgentRecord]
-    let description: (EffectiveAgentRecord) -> String?
-    let onAdd: (Set<String>) -> Void
+    let currentSelection: Set<String>
+    let launchDetail: (EffectiveAgentRecord) -> String
+    let onApply: (Set<String>) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var selected: Set<String> = []
@@ -912,16 +1269,15 @@ struct PiAgentAddAgentsSheet: View {
     @FocusState private var isSearchFocused: Bool
 
     private static let accent = PiAgentSessionSubagentPickerCard.accent
+    /// Fixed row height so every row is identical — no shifting when the model
+    /// chip content changes.
+    private static let rowHeight: CGFloat = 34
 
     private var filtered: [EffectiveAgentRecord] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !q.isEmpty else { return addable }
         return addable.filter { agent in
-            if agent.name.lowercased().contains(q) { return true }
-            if let detail = description(agent)?.lowercased(), detail.contains(q) {
-                return true
-            }
-            return false
+            agent.name.lowercased().contains(q) || launchDetail(agent).lowercased().contains(q)
         }
     }
 
@@ -938,7 +1294,14 @@ struct PiAgentAddAgentsSheet: View {
             footer
         }
         .frame(width: 540, height: 560)
-        .onAppear { isSearchFocused = true }
+        .onAppear {
+            // Preselect the agents already in the explicit selection that are
+            // part of the addable set, so added agents show as checked and can
+            // be removed by unchecking.
+            let addableNames = Set(addable.map(\.name))
+            selected = currentSelection.intersection(addableNames)
+            isSearchFocused = true
+        }
     }
 
     private var header: some View {
@@ -947,7 +1310,7 @@ struct PiAgentAddAgentsSheet: View {
                 Text("Add agents")
                     .font(.headline)
                     .fontWidth(.expanded)
-                Text("Pick agents to include in this session. Selected agents are added when you click Add.")
+                Text("Pick agents to include in this session. Existing default-row selections are preserved; chosen agents are added when you click Update.")
                     .font(.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1022,26 +1385,22 @@ struct PiAgentAddAgentsSheet: View {
         return Button {
             if isChecked { selected.remove(agent.name) } else { selected.insert(agent.name) }
         } label: {
-            HStack(alignment: .top, spacing: 10) {
+            // Single fixed-height line: check + name + model chip. No
+            // description caption, so rows never wrap or jump.
+            HStack(alignment: .center, spacing: 10) {
                 Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
                     .font(.body)
                     .foregroundStyle(isChecked ? Self.accent : AppTheme.mutedText)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(agent.name)
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(.primary)
-                    if let detail = description(agent) {
-                        Text(detail)
-                            .font(.caption)
-                            .foregroundStyle(AppTheme.mutedText)
-                            .lineLimit(3)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
+                Text(agent.name)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                PiAgentPickerModelChip(label: launchDetail(agent))
                 Spacer(minLength: 0)
             }
+            .frame(height: Self.rowHeight)
             .padding(.horizontal, 10)
-            .padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(isChecked ? Self.accent.opacity(0.10) : Color.clear)
@@ -1062,13 +1421,12 @@ struct PiAgentAddAgentsSheet: View {
             Button("Cancel") { dismiss() }
                 .appSecondaryButton()
                 .keyboardShortcut(.cancelAction)
-            Button(selected.isEmpty ? "Add" : "Add \(selected.count)") {
-                onAdd(selected)
+            Button(selected.isEmpty ? "Update" : "Update \(selected.count)") {
+                onApply(selected)
                 dismiss()
             }
             .appPrimaryButton()
             .keyboardShortcut(.defaultAction)
-            .disabled(selected.isEmpty)
         }
         .padding(16)
     }

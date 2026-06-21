@@ -302,6 +302,11 @@ final class AppViewModel: NSObject {
     private var globalSnapshot: ScanSnapshot = .empty {
         didSet { clearAgentUniverseCache() }
     }
+    /// Always-global resource catalog snapshot, independent of `selectedProjectPath`.
+    /// The Agents/Skills/Prompts management views read this so their listing is
+    /// global — project selection only drives Issues, Memory, GitHub, and
+    /// new-session context, never the resource catalog presentation.
+    var globalCatalogSnapshot: ScanSnapshot { globalSnapshot }
     private var gitHubSession: GitHubSession?
     private(set) var projectRootURL: URL?
     private var autoRefreshCancellable: AnyCancellable?
@@ -663,9 +668,38 @@ final class AppViewModel: NSObject {
             migrateAgentAssignmentsFromDiscoveredFiles(globalSnapshot: result.globalSnapshot, projectSnapshots: result.projectSnapshots)
         }
 
-        let catalogProjectSnapshots = Array(result.projectSnapshots.values)
+        // Merge the raw per-project snapshots FIRST so the catalog used to
+        // resolve `globalSnapshot.effectiveAgents` reflects EVERY enabled
+        // project — independent of which project triggered this (possibly
+        // partial) refresh. Without this, a partial rescan
+        // (`scanAllProjects: false`, e.g. the refresh fired by selecting a
+        // project) would scope `globalSnapshot` against only the freshly-scanned
+        // project, making the always-global Agents/Skills/Prompts views depend
+        // on the selected project. `scopedAgentSnapshot` only rewrites
+        // `effectiveAgents` (it preserves `projectAgents`/`libraryAgents`), so
+        // mixing already-scoped existing snapshots with raw fresh ones here is
+        // safe — the catalog only reads the preserved fields.
+        let discoveredProjectPaths = Set(result.discoveredProjects.map(\.path))
+        var mergedRawProjectSnapshots: [String: ScanSnapshot]
+        if result.includesAllProjectSnapshots {
+            mergedRawProjectSnapshots = result.projectSnapshots
+                .filter { discoveredProjectPaths.contains($0.key) }
+        } else {
+            mergedRawProjectSnapshots = allProjectSnapshots
+            mergedRawProjectSnapshots.merge(result.projectSnapshots) { _, fresh in fresh }
+            mergedRawProjectSnapshots = mergedRawProjectSnapshots
+                .filter { discoveredProjectPaths.contains($0.key) }
+        }
+        let catalogProjectSnapshots = Array(mergedRawProjectSnapshots.values)
+
         let newGlobalSnapshot = scopedAgentSnapshot(result.globalSnapshot, projectPath: nil, globalCatalogSnapshot: result.globalSnapshot, catalogProjectSnapshots: catalogProjectSnapshots)
         if globalSnapshot != newGlobalSnapshot { globalSnapshot = newGlobalSnapshot }
+
+        // Per-project scoping: only freshly-scanned projects are re-scoped
+        // (existing keep their prior effectiveAgents) and merged with the fresh
+        // set — same number of `scopedAgentSnapshot` calls as before, no perf
+        // change. The complete catalog above is what keeps the always-global
+        // resource views stable across project selection.
         let freshProjectSnapshots = result.projectSnapshots.mapValues { projectSnapshot in
             scopedAgentSnapshot(projectSnapshot, projectPath: projectSnapshot.projectRoot, globalCatalogSnapshot: result.globalSnapshot, catalogProjectSnapshots: catalogProjectSnapshots)
         }
@@ -675,7 +709,6 @@ final class AppViewModel: NSObject {
         } else {
             var merged = allProjectSnapshots
             merged.merge(freshProjectSnapshots) { _, fresh in fresh }
-            let discoveredProjectPaths = Set(result.discoveredProjects.map(\.path))
             newAllProjectSnapshots = merged.filter { discoveredProjectPaths.contains($0.key) }
         }
         if allProjectSnapshots != newAllProjectSnapshots { allProjectSnapshots = newAllProjectSnapshots }
@@ -708,13 +741,14 @@ final class AppViewModel: NSObject {
 
         // A fresh snapshot is authoritative. Drop pending deletions no longer
         // present (deletion confirmed); keep IDs still present so a stale
-        // in-flight refresh can't un-hide a row mid-deletion.
+        // in-flight refresh can't un-hide a row mid-deletion. Pruned against the
+        // global catalog — the resource views are always global.
         if !pendingDeletedSkillIDs.isEmpty {
-            let liveSkillIDs = Set((snapshot.skills + snapshot.librarySkills).map(\.id))
+            let liveSkillIDs = Set((globalSnapshot.skills + globalSnapshot.librarySkills).map(\.id))
             pendingDeletedSkillIDs.formIntersection(liveSkillIDs)
         }
         if !pendingDeletedPromptIDs.isEmpty {
-            let livePromptIDs = Set((snapshot.promptTemplates + snapshot.libraryPromptTemplates).map(\.id))
+            let livePromptIDs = Set((globalSnapshot.promptTemplates + globalSnapshot.libraryPromptTemplates).map(\.id))
             pendingDeletedPromptIDs.formIntersection(livePromptIDs)
         }
 
@@ -2535,7 +2569,8 @@ final class AppViewModel: NSObject {
             expandedProjectIDs: [],
             collapsedProjectIDs: [],
             capPreviews: false,
-            isWorking: { _ in false },
+            includeActiveRecent: true,
+            isWorking: { piAgentSessionIsWorking($0) },
             selectedSessionID: nil
         ).flatMap(\.items)
     }
@@ -3135,10 +3170,6 @@ final class AppViewModel: NSObject {
         }
         dirs.append(contentsOf: ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"])
         return "export PATH=\"\(dirs.joined(separator: ":")):$PATH\""
-    }
-
-    func togglePiAgentSessionPinned(_ id: UUID) {
-        piAgentSessionStore.togglePinned(id)
     }
 
     func resumeSelectedPiAgentSession() {
@@ -6233,10 +6264,42 @@ final class AppViewModel: NSObject {
     /// Cached — see `cachedAllDisplayAgents`. Rebuilt by `rebuildWarningCaches()`.
     var allDisplayAgents: [EffectiveAgentRecord] { cachedAllDisplayAgents }
 
+    /// Plain builtin rows for editors that must expose the bundled base even
+    /// when the regular display list shows a custom replacement of the same
+    /// name. These rows write settings overrides, never the bundled files.
+    var builtinAgentModelRecords: [EffectiveAgentRecord] {
+        let globalSettingsPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".pi/agent/settings.json")
+            .standardizedFileURL.path
+        let globalOverrides = globalSnapshot.settings
+            .first { URL(fileURLWithPath: $0.path).standardizedFileURL.path == globalSettingsPath }?
+            .agentOverrides ?? []
+        return globalSnapshot.builtinAgents
+            .map { builtin in
+                let userOverride = globalOverrides.first { $0.agentName == builtin.name }
+                return EffectiveAgentRecord(
+                    id: "builtin-model::\(builtin.name)",
+                    name: builtin.name,
+                    projectRoot: nil,
+                    builtin: builtin,
+                    globalCustom: nil,
+                    projectCustom: nil,
+                    userOverride: userOverride,
+                    projectOverride: nil,
+                    resolved: builtin.parsed,
+                    resolutionKind: userOverride == nil ? .builtin : .builtinWithOverride
+                )
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     /// The actual merge+sort. Called only from `rebuildWarningCaches()`.
     private func computeAllDisplayAgents() -> [EffectiveAgentRecord] {
+        // Sourced from `globalSnapshot` so the Agents view stays global even
+        // when a project is selected for Issues/Memory. Mirrors the prior
+        // no-project-selected presentation exactly.
         var byID: [EffectiveAgentRecord.ID: EffectiveAgentRecord] = [:]
-        for agent in snapshot.effectiveAgents { byID[agent.id] = agent }
+        for agent in globalSnapshot.effectiveAgents { byID[agent.id] = agent }
         for agent in catalogOnlyEffectiveAgents { byID[agent.id] = agent }
         for agent in libraryOnlyEffectiveAgents { byID[agent.id] = agent }
         for agent in projectAssignedLibraryAgentsForAggregateView { byID[agent.id] = agent }
@@ -6280,24 +6343,26 @@ final class AppViewModel: NSObject {
     }
 
     private var catalogOnlyEffectiveAgents: [EffectiveAgentRecord] {
-        let effectivePaths = Set(snapshot.effectiveAgents.compactMap(\.sourcePath).map(standardizedPath))
-        return agentCatalog(forProjectPath: selectedProjectPath)
+        // Global catalog: union of every project's catalog plus the global one,
+        // independent of `selectedProjectPath`. `nil` already unions all
+        // `allProjectSnapshots` in `agentCatalog(forProjectPath:)`.
+        let effectivePaths = Set(globalSnapshot.effectiveAgents.compactMap(\.sourcePath).map(standardizedPath))
+        return agentCatalog(forProjectPath: nil)
             .filter { $0.source.kind != .builtin }
             .filter { !effectivePaths.contains(standardizedPath($0.filePath)) }
             .filter { $0.source.kind != .library }
-            .map { catalogDisplayAgent(from: $0, projectRoot: snapshot.projectRoot) }
+            .map { catalogDisplayAgent(from: $0, projectRoot: nil) }
     }
 
     private var libraryOnlyEffectiveAgents: [EffectiveAgentRecord] {
-        // In the global view, project-local agents should not hide reusable library
-        // agents with the same name. Global/custom winners still hide library duplicates.
-        let agentsThatHideLibrary = snapshot.projectRoot == nil
-            ? snapshot.effectiveAgents.filter { $0.projectCustom == nil && $0.projectOverride == nil }
-            : snapshot.effectiveAgents
+        // Global view: project-local agents do not hide reusable library agents
+        // with the same name. Global/custom winners still hide library duplicates.
+        let agentsThatHideLibrary = globalSnapshot.effectiveAgents
+            .filter { $0.projectCustom == nil && $0.projectOverride == nil }
         let effectiveNames = Set(agentsThatHideLibrary.map(\.name))
-        return snapshot.libraryAgents
+        return globalSnapshot.libraryAgents
             .filter { !effectiveNames.contains($0.name) }
-            .map { libraryDisplayAgent(from: $0, projectRoot: snapshot.projectRoot) }
+            .map { libraryDisplayAgent(from: $0, projectRoot: nil) }
     }
 
     /// Every agent a session could pick for its subagent catalog: the
@@ -6459,11 +6524,12 @@ final class AppViewModel: NSObject {
     }
 
     private var projectAssignedLibraryAgentsForAggregateView: [EffectiveAgentRecord] {
-        guard snapshot.projectRoot == nil else { return [] }
-        let effectiveNames = Set(snapshot.effectiveAgents.map(\.name))
-        let libraryByName = Dictionary(uniqueKeysWithValues: snapshot.libraryAgents.map { ($0.name, $0) })
+        // Global view — `globalSnapshot.projectRoot` is always nil here.
+        guard globalSnapshot.projectRoot == nil else { return [] }
+        let effectiveNames = Set(globalSnapshot.effectiveAgents.map(\.name))
+        let libraryByName = Dictionary(uniqueKeysWithValues: globalSnapshot.libraryAgents.map { ($0.name, $0) })
         let assignedNames = Set(projectPreferencesByPath.values.flatMap(\.assignedAgentNames))
-        let libraryNames = Set(snapshot.libraryAgents.map(\.name))
+        let libraryNames = Set(globalSnapshot.libraryAgents.map(\.name))
         return assignedNames
             .filter { !effectiveNames.contains($0) && libraryNames.contains($0) }
             .compactMap { libraryByName[$0] }
@@ -6569,7 +6635,9 @@ final class AppViewModel: NSObject {
     }
 
     var allVisibleSkillRecords: [SkillRecord] {
-        let records = deduplicateByID(snapshot.skills + snapshot.librarySkills)
+        // Global resource catalog — independent of `selectedProjectPath` so the
+        // Skills view stays global even when a project is selected for Issues.
+        let records = deduplicateByID(globalSnapshot.skills + globalSnapshot.librarySkills)
             .sorted { lhs, rhs in
                 let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
                 if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
@@ -6602,7 +6670,9 @@ final class AppViewModel: NSObject {
     }
 
     var allVisiblePromptTemplateRecords: [PromptTemplateRecord] {
-        let records = deduplicateByID(snapshot.promptTemplates + snapshot.libraryPromptTemplates)
+        // Global resource catalog — independent of `selectedProjectPath` so the
+        // Prompts view stays global even when a project is selected for Issues.
+        let records = deduplicateByID(globalSnapshot.promptTemplates + globalSnapshot.libraryPromptTemplates)
             .sorted { lhs, rhs in
                 let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
                 if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
@@ -7739,7 +7809,9 @@ final class AppViewModel: NSObject {
         // on every render.
         var skillMetadataByID: [SkillRecord.ID: SkillListMetadata] = [:]
         var warningsBySkillID: [SkillRecord.ID: [DiagnosticWarning]] = [:]
-        let activeProject = selectedDiscoveredProject
+        // Resource catalog is always global; "active" = globally enabled (the
+        // global-view definition), independent of `selectedProjectPath`.
+        let activeProject: DiscoveredProject? = nil
         for record in allVisibleSkillRecords {
             let matchingWarnings = skillWarnings.filter { warning in
                 warning.id == "duplicate-skill:\(record.name)" ||
@@ -7758,7 +7830,8 @@ final class AppViewModel: NSObject {
             skillMetadataByID[record.id] = SkillListMetadata(
                 isAssigned: isAssigned,
                 hasWarnings: hasWarnings,
-                isActiveForCurrentProject: isActive
+                isActiveForCurrentProject: isActive,
+                isImported: isImportedSkill(record)
             )
         }
 
@@ -7776,7 +7849,7 @@ final class AppViewModel: NSObject {
     }
 
     private func buildSkillWarnings() -> [DiagnosticWarning] {
-        let baseWarnings = snapshot.warnings.filter { warning in
+        let baseWarnings = globalSnapshot.warnings.filter { warning in
             warning.id.hasPrefix("malformed-skill:") || warning.message.localizedCaseInsensitiveContains("skill")
         }
         let collisionWarnings = PiSkillLaunchResolver.collisions(in: allVisibleSkillRecords).map { collision in
@@ -7787,7 +7860,7 @@ final class AppViewModel: NSObject {
     }
 
     private func buildPromptWarnings() -> [DiagnosticWarning] {
-        let baseWarnings = snapshot.warnings.filter { warning in
+        let baseWarnings = globalSnapshot.warnings.filter { warning in
             warning.id.hasPrefix("duplicate-prompt:")
         }
         let collisionWarnings = PiPromptTemplateLaunchResolver.collisions(in: allVisiblePromptTemplateRecords).map { collision in
@@ -7806,7 +7879,7 @@ final class AppViewModel: NSObject {
                 .filter { !$0.isEmpty }
             guard !explicitSkills.isEmpty else { continue }
 
-            let managedRecord = snapshot.libraryAgents.first { $0.name == agent.name }
+            let managedRecord = globalSnapshot.libraryAgents.first { $0.name == agent.name }
                 ?? agent.globalCustom
                 ?? agent.projectCustom
             guard let managedRecord else { continue }
@@ -8805,13 +8878,13 @@ final class AppViewModel: NSObject {
     }
 
     private func computeWarnings(for agent: EffectiveAgentRecord) -> [DiagnosticWarning] {
-        snapshot.warnings.filter { warning in
+        globalSnapshot.warnings.filter { warning in
             warning.message.contains("Agent \(agent.name) ") || warning.message.contains("Agent \(agent.name)")
         }
     }
 
     func agentsExplicitlyUsingSkill(_ skill: SkillRecord) -> [EffectiveAgentRecord] {
-        snapshot.effectiveAgents
+        globalSnapshot.effectiveAgents
             .filter { $0.resolved.skills.contains(skill.name) }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }

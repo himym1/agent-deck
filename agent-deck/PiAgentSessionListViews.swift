@@ -353,11 +353,15 @@ struct PiAgentSessionRow: View, Equatable {
     let isRenaming: Bool
     let isGeneratingTitle: Bool
     let gitActivity: PiAgentSessionGitActivity
+    /// When `true`, a small project icon renders on the row's leading edge so
+    /// cross-project rows (the "Active / Recent" section) can be told apart.
+    /// The icon comes from `leadingProject` (a folder fallback when `nil`).
+    var showsLeadingProjectIcon: Bool = false
+    var leadingProject: DiscoveredProject? = nil
     let onSelect: () -> Void
     let onBeginRename: () -> Void
     let onEndRename: () -> Void
     let onRename: (String) -> Void
-    let onTogglePinned: () -> Void
     let onDelete: () -> Void
 
     // Equatable so `.equatable()` can short-circuit re-evaluation: the session list
@@ -374,6 +378,8 @@ struct PiAgentSessionRow: View, Equatable {
             && lhs.isRenaming == rhs.isRenaming
             && lhs.isGeneratingTitle == rhs.isGeneratingTitle
             && lhs.gitActivity == rhs.gitActivity
+            && lhs.showsLeadingProjectIcon == rhs.showsLeadingProjectIcon
+            && lhs.leadingProject == rhs.leadingProject
     }
 
     @State private var draftTitle = ""
@@ -382,6 +388,70 @@ struct PiAgentSessionRow: View, Equatable {
     @FocusState private var isTitleFocused: Bool
 
     var body: some View {
+        rowBody
+            .saturation(seenAppearanceAmount)
+            .opacity(seenContentOpacity)
+            // 6 (AppList inset) + 8 = 14pt from the panel edge, left-aligning the
+            // title with the header's project icon.
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .trailing) {
+                ZStack(alignment: .trailing) {
+                    attentionStatusSlot
+                        .opacity(isRowHovered ? 0 : 1)
+                        .allowsHitTesting(false)
+                    deleteButton
+                        .opacity(isRowHovered ? 1 : 0)
+                        .allowsHitTesting(isRowHovered)
+                }
+                .padding(.trailing, 8)
+                .animation(.easeInOut(duration: 0.15), value: isRowHovered)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onSelect)
+            .onHover { isRowHovered = $0 }
+            .help(statusHelp)
+            .onAppear {
+                draftTitle = sessionTitle
+            }
+            .onChange(of: session.id) { _, _ in resetRenameState() }
+            .onChange(of: session.title) { _, _ in draftTitle = sessionTitle }
+            .onChange(of: isTitleFocused) { _, focused in
+                // Commit on blur, but skip if we're already exiting rename mode —
+                // otherwise commitRename's onEndRename callback flips isRenaming,
+                // which can race the focus state into an AttributeGraph cycle.
+                guard !focused, isRenaming else { return }
+                commitRename()
+            }
+            .onDisappear(perform: commitRename)
+    }
+
+    /// The row's content, optionally prefixed with a project icon for
+    /// cross-project rows. Kept separate from `body` so the padding / overlay /
+    /// gesture modifiers apply uniformly whether or not the icon shows.
+    @ViewBuilder
+    private var rowBody: some View {
+        if showsLeadingProjectIcon {
+            HStack(alignment: .top, spacing: 8) {
+                leadingProjectIcon
+                innerContent
+            }
+        } else {
+            innerContent
+        }
+    }
+
+    private var leadingProjectIcon: some View {
+        ProjectIconView(
+            imageURL: leadingProject?.iconFileURL,
+            symbolName: leadingProject?.fallbackSymbolName ?? "folder",
+            size: 22,
+            assetName: leadingProject?.projectType.assetName
+        )
+    }
+
+    private var innerContent: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .center, spacing: 8) {
                 titleView
@@ -442,42 +512,6 @@ struct PiAgentSessionRow: View, Equatable {
                 SessionGitActivityStrip(activity: gitActivity, isSelected: isSelected)
             }
         }
-        .saturation(seenAppearanceAmount)
-        .opacity(seenContentOpacity)
-        // 6 (AppList inset) + 8 = 14pt from the panel edge, left-aligning the
-        // title with the header's project icon.
-        .padding(.horizontal, 8)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .trailing) {
-            ZStack(alignment: .trailing) {
-                attentionStatusSlot
-                    .opacity(isRowHovered ? 0 : 1)
-                    .allowsHitTesting(false)
-                deleteButton
-                    .opacity(isRowHovered ? 1 : 0)
-                    .allowsHitTesting(isRowHovered)
-            }
-            .padding(.trailing, 8)
-            .animation(.easeInOut(duration: 0.15), value: isRowHovered)
-        }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
-        .onHover { isRowHovered = $0 }
-        .help(statusHelp)
-        .onAppear {
-            draftTitle = sessionTitle
-        }
-        .onChange(of: session.id) { _, _ in resetRenameState() }
-        .onChange(of: session.title) { _, _ in draftTitle = sessionTitle }
-        .onChange(of: isTitleFocused) { _, focused in
-            // Commit on blur, but skip if we're already exiting rename mode —
-            // otherwise commitRename's onEndRename callback flips isRenaming,
-            // which can race the focus state into an AttributeGraph cycle.
-            guard !focused, isRenaming else { return }
-            commitRename()
-        }
-        .onDisappear(perform: commitRename)
     }
 
     private var selectedSessionIndicator: some View {

@@ -973,8 +973,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private var pendingScrollWork: DispatchWorkItem?
         private var pendingSettleScrollWork: DispatchWorkItem?
         private var pendingRemeasureWork: DispatchWorkItem?
+        private var pendingRemeasureIDs = Set<String>()
         private var pendingScrollSettle = false
         private var pendingWidthWork: DispatchWorkItem?
+        private var lastWidthChangeTime: CFTimeInterval = 0
         // Smooth auto-follow. The streaming follow doesn't snap to the bottom each
         // batch (that reads as a step every ~130ms); instead a 60fps timer eases
         // the clip origin toward the *current* bottom each frame, continuously
@@ -1102,22 +1104,48 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// Per-runloop-slice main-thread budget. Kept under half a 120Hz frame so a
         /// slice never itself drops a frame; construction is spread across ticks.
         private let prewarmSliceBudgetMs: Double = 4.0
+        /// Kill switch for the old offscreen height-measurement path. Keeping this
+        /// off by default avoids surprise main-thread TextKit/layout stalls while
+        /// preserving visible-row rendering and measurement behavior.
+        private static let prewarmMeasuresHeights: Bool = {
+            UserDefaults.standard.bool(forKey: "TranscriptPrewarmMeasureHeightsEnabled")
+        }()
+        private let prewarmWidthChangeCooldown: CFTimeInterval = 0.35
+        private let prewarmMaxEstimatedHeight: CGFloat = 420
 
         func schedulePrewarm() {
             guard !Self.prewarmDisabled, let tableView else { return }
+            let now = CACurrentMediaTime()
+            let widthSettlesIn = prewarmWidthChangeCooldown - (now - lastWidthChangeTime)
+            if widthSettlesIn > 0 {
+                guard !prewarmScheduled else { return }
+                prewarmScheduled = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + widthSettlesIn) { [weak self] in
+                    guard let self else { return }
+                    self.prewarmScheduled = false
+                    self.schedulePrewarm()
+                }
+                return
+            }
             // While streaming AND still pinned to the bottom, skip: new rows arrive
             // every pulse and the visible streaming row owns the main thread, so a
             // heavy pre-warm build would hitch what the reader is watching. But once
             // the reader has scrolled UP to read history (auto-follow off), the
             // stream is off-screen — pre-warm the history they're scrolling toward so
-            // those rows are already built+measured (no construction stutter, no
-            // estimate→real shift) even mid-stream.
+            // those rows are already built (no construction stutter) even mid-stream.
             guard !profiler.isStreamingRecently || !isAutoFollowing else { return }
             // Build the work list: every row without a live cached cell, in document
             // order, capped to the cache limit (pre-warming past it would just evict
             // what we built). Skip while streaming — new content is arriving and the
             // visible path takes priority.
-            let pending = orderedIDs.filter { cellCache[$0] == nil }
+            let pending = orderedIDs.filter { id in
+                guard cellCache[id] == nil else { return false }
+                // Heavy markdown/tool rows are exactly the rows that can block the
+                // main thread for a visible hitch if built speculatively. Let them
+                // build only when actually needed; prewarm the cheaper majority.
+                guard let item = itemByID[id] else { return false }
+                return item.estimatedHeight(contentWidth) <= prewarmMaxEstimatedHeight
+            }
             guard !pending.isEmpty, cellCache.count < cellCacheLimit else { return }
             // Build outward from the viewport: the user scrolls away from where they
             // are (the view opens pinned to the bottom), so rows nearest the visible
@@ -1137,11 +1165,15 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private func prewarmStep() {
             prewarmScheduled = false
             guard !Self.prewarmDisabled, tableView != nil else { prewarmQueue.removeAll(); return }
-            // Don't compete with an active scroll gesture or live streaming — retry
-            // shortly. (Streaming re-tiles + the follow glide own the main thread.)
-            if isUserScrollingRecently || profiler.isStreamingRecently {
+            // Don't compete with an active scroll gesture, live streaming, or a
+            // settling width change — retry shortly. (Streaming re-tiles + the
+            // follow glide own the main thread; width changes reconfigure visible
+            // cells and can otherwise cascade into speculative offscreen work.)
+            let widthSettlesIn = prewarmWidthChangeCooldown - (CACurrentMediaTime() - lastWidthChangeTime)
+            if isUserScrollingRecently || profiler.isStreamingRecently || widthSettlesIn > 0 {
                 prewarmScheduled = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.prewarmStep() }
+                let delay = max(0.2, widthSettlesIn)
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.prewarmStep() }
                 return
             }
             let start = CACurrentMediaTime()
@@ -1155,15 +1187,18 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                       let row = orderedIDs.firstIndex(of: id) else { continue }
                 let cell = cachedCell(for: id)
                 configure(cell, with: item, row: row, via: "prewarm")
-                // Also measure + cache the height now, so when the row scrolls into
-                // view `heightOfRow` already has its true height and AppKit doesn't
-                // re-tile it (the residual scroll cost after construction is moved
-                // off the path). Offscreen `fittingSize` is valid for these views.
-                let h = cell.forcedIntrinsicHeight()
-                if h > 0 {
-                    let height = ceil(h)
-                    measuredHeightByID[id, default: [:]][widthBucket] = height
-                    lastNotedHeight[id] = height
+                // Do not force an offscreen layout by default. The old path called
+                // `forcedIntrinsicHeight()` here, which is good for future scroll
+                // stability but can spend hundreds of milliseconds in TextKit/AppKit
+                // on the main thread after a sidebar/window width change. Visible
+                // rows still measure themselves through the normal on-layout path.
+                if Self.prewarmMeasuresHeights {
+                    let h = cell.forcedIntrinsicHeight()
+                    if h > 0 {
+                        let height = ceil(h)
+                        measuredHeightByID[id, default: [:]][widthBucket] = height
+                        lastNotedHeight[id] = height
+                    }
                 }
 #if DEBUG
                 builtThisSlice += 1
@@ -1337,6 +1372,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             pendingScrollWork?.cancel()
             pendingSettleScrollWork?.cancel()
             pendingRemeasureWork?.cancel()
+            pendingRemeasureIDs.removeAll()
             pendingWidthWork?.cancel()
             stopFollowGlide()
         }
@@ -1432,6 +1468,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     pendingHeightIDs.removeAll()
                     pendingHeightWork?.cancel()
                     pendingHeightWork = nil
+                    pendingRemeasureWork?.cancel()
+                    pendingRemeasureWork = nil
+                    pendingRemeasureIDs.removeAll()
                 }
                 let previousIDs = Set(orderedIDs)
                 let removedIDs = previousIDs.subtracting(nextIDs)
@@ -1867,6 +1906,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             let width = currentViewportWidth()
             guard abs(width - contentWidth) > 0.5 else { return }
             contentWidth = width
+            lastWidthChangeTime = CACurrentMediaTime()
+            prewarmQueue.removeAll()
             tableView.tableColumns.first?.width = width
             // Re-fit the table to the clip view so the document view shrinks
             // with it. Setting only the column width leaves the table's own
@@ -1924,21 +1965,47 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             }
         }
 
-        /// Force-lay-out the freshly-reconfigured visible cells for `ids` and
-        /// write their true heights into `measuredHeightByID` synchronously, so a
-        /// re-tile issued in this same pass uses the new content height. Returns
-        /// the ids whose tiled height actually needs to change.
-        private func measureChangedCellsSynchronously(_ ids: Set<String>) -> Set<String> {
+        /// Force-lay-out freshly-reconfigured visible cells for `ids` and write
+        /// their true heights into `measuredHeightByID` synchronously, so a re-tile
+        /// issued in this same pass uses the new content height. The pinned
+        /// streaming path passes a tiny budget and bottom-first ordering: measure
+        /// the newest visible changed row to preserve anti-wobble, then let any
+        /// remaining rows settle through the normal async height-report path.
+        /// Returns the ids whose tiled height actually needs to change.
+        private func measureChangedCellsSynchronously(
+            _ ids: Set<String>,
+            budgetMs: Double? = nil,
+            maxRows: Int? = nil,
+            deferUnmeasured: Bool = false
+        ) -> Set<String> {
             guard let tableView, !ids.isEmpty else { return [] }
             let visible = tableView.rows(in: tableView.visibleRect)
             guard visible.length > 0 else { return [] }
+            let visibleRows = (visible.location ..< visible.location + visible.length)
+                .filter { $0 < orderedIDs.count && ids.contains(orderedIDs[$0]) }
+                .sorted(by: >)
+            guard !visibleRows.isEmpty else { return [] }
+
             var needRetile = Set<String>()
+            var deferredIDs = Set<String>()
             let streaming = profiler.isStreamingRecently
-            for row in visible.location ..< visible.location + visible.length where row < orderedIDs.count {
+            let start = CACurrentMediaTime()
+            var measuredCount = 0
+
+            for row in visibleRows {
                 let id = orderedIDs[row]
-                guard ids.contains(id),
-                      let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? TranscriptTableCellView else { continue }
+                if let maxRows, measuredCount >= maxRows {
+                    deferredIDs.insert(id)
+                    continue
+                }
+                if measuredCount > 0, let budgetMs,
+                   (CACurrentMediaTime() - start) * 1000 >= budgetMs {
+                    deferredIDs.insert(id)
+                    continue
+                }
+                guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? TranscriptTableCellView else { continue }
                 let h = cell.forcedIntrinsicHeight()
+                measuredCount += 1
                 guard h > 0 else { continue }
                 var height = ceil(h)
                 let previousTiled = lastNotedHeight[id] ?? -1
@@ -1962,7 +2029,34 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     needRetile.insert(id)
                 }
             }
+
+            if deferUnmeasured, !deferredIDs.isEmpty {
+                scheduleVisibleHeightRemeasure(forIDs: deferredIDs)
+            }
             return needRetile
+        }
+
+        private func scheduleVisibleHeightRemeasure(forIDs ids: Set<String>) {
+            guard !ids.isEmpty else { return }
+            pendingRemeasureIDs.formUnion(ids)
+            guard pendingRemeasureWork == nil else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                let ids = self.pendingRemeasureIDs
+                self.pendingRemeasureIDs.removeAll()
+                self.pendingRemeasureWork = nil
+                guard !self.isUserScrollingRecently else {
+                    self.scheduleVisibleHeightRemeasure(forIDs: ids)
+                    return
+                }
+                let retileIDs = self.measureChangedCellsSynchronously(ids, budgetMs: 5, deferUnmeasured: true)
+                guard !retileIDs.isEmpty else { return }
+                self.flushPendingHeightWorkSynchronously()
+                self.noteHeightsChanged(forIDs: retileIDs)
+            }
+            pendingRemeasureWork = work
+            let delay = isUserScrollingRecently ? 0.05 : heightReportInterval
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
         }
 
         private func reconfigureAllVisibleCells() {
@@ -2690,14 +2784,14 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 #endif
                 lastIntrinsicHeight = -1
             }
-            // `settle` is the immediate layout pass that stops a layer painting at a
-            // stale position. With per-item cells (one cell per id, never recycled to a
-            // different item) most fresh builds can skip it; otherwise cold scrolling
-            // pays to lay out rows that pass by before display. User-question cards are
-            // the exception: their trailing-aligned card, header, and attachment flow
-            // need one synchronous first layout or the header can paint from transient
-            // geometry until a later relayout (session switch/resize) corrects it.
-            let needsInitialSettle = createdNow && spec.typeID == ObjectIdentifier(PiAgentNativeQuestionView.self)
+            // `settle` is the immediate layout pass that stops a layer-backed row
+            // painting at a stale position. Rows can be vended on cells that AppKit
+            // recycled from another item of the same native type; that path keeps the
+            // view (`createdNow == false`) but swaps content at the same width. Settle
+            // first paint for any real content row after creation or item reuse, plus
+            // later geometry changes. Spacers have no visible geometry to correct.
+            let hasVisibleNativeGeometry = spec.typeID != ObjectIdentifier(PiAgentNativeSpacerView.self)
+            let needsInitialSettle = hasVisibleNativeGeometry && (createdNow || itemChanged)
             if needsInitialSettle || (!createdNow && (widthChanged || insetChanged)) {
                 spec.settle(row)
             }
@@ -2801,6 +2895,13 @@ private struct SessionListContent: View, Equatable {
     let workingSessionIDs: Set<UUID>
     let generatingTitleIDs: Set<UUID>
     let activityByID: [UUID: PiAgentSessionGitActivity]
+    /// Sessions rendered in the cross-project "Active / Recent" section — each
+    /// gets a leading project icon so rows from different projects can be told
+    /// apart. Membership is the source of truth for "this row shows an icon".
+    let activeRecentSessionIDs: Set<UUID>
+    /// Resolves the leading project icon for Active / Recent rows. Passed in
+    /// (not read from a view model) so the `Equatable` gate owns the diff.
+    let projectByPath: [String: DiscoveredProject]
     /// Snapshot of `scrollRequest`'s value at construction, compared in `==`.
     /// The binding itself can't be compared: both sides read the same live
     /// state storage, so old-vs-new is always equal and the gate would
@@ -2815,7 +2916,6 @@ private struct SessionListContent: View, Equatable {
     let onBeginRename: (PiAgentSessionRecord) -> Void
     let onEndRename: () -> Void
     let onRename: (UUID, String) -> Void
-    let onTogglePinned: (UUID) -> Void
     let onDelete: (UUID) -> Void
     /// Toggle a project group's "Show more/less" state.
     let onToggleExpand: (String) -> Void
@@ -2837,6 +2937,8 @@ private struct SessionListContent: View, Equatable {
         else if lhs.workingSessionIDs != rhs.workingSessionIDs { diff = "workingSessionIDs" }
         else if lhs.generatingTitleIDs != rhs.generatingTitleIDs { diff = "generatingTitleIDs" }
         else if lhs.activityByID != rhs.activityByID { diff = "activityByID" }
+        else if lhs.activeRecentSessionIDs != rhs.activeRecentSessionIDs { diff = "activeRecentSessionIDs" }
+        else if lhs.projectByPath != rhs.projectByPath { diff = "projectByPath" }
         // A pending scroll request must defeat the equatable gate, or the
         // inner AppList's onChange never sees the new value and the jump to
         // the selected row silently doesn't happen.
@@ -2887,15 +2989,22 @@ private struct SessionListContent: View, Equatable {
     /// attaching a custom project-group header to any section that needs one.
     private var appSections: [AppListSection<PiAgentSessionRecord>] {
         sections.map { section in
-            AppListSection(
-                id: section.id,
-                header: shouldShowHeader(for: section)
-                    ? AnyView(PiAgentSessionGroupHeader(
+            let isActiveRecent = section.id == PiAgentSessionGrouping.activeRecentSectionID
+            let header: AnyView?
+            if shouldShowHeader(for: section) {
+                header = isActiveRecent
+                    ? AnyView(ActiveRecentSectionHeader(section: section))
+                    : AnyView(PiAgentSessionGroupHeader(
                         section: section,
                         onToggleCollapse: { onToggleCollapse(section.id) },
                         onCreateSession: { onCreateSessionForProject(section.id) }
                     ))
-                    : nil,
+            } else {
+                header = nil
+            }
+            return AppListSection(
+                id: section.id,
+                header: header,
                 footer: shouldShowFooter(for: section)
                     ? AnyView(PiAgentSessionGroupFooter(
                         section: section,
@@ -2921,6 +3030,7 @@ private struct SessionListContent: View, Equatable {
 
     @ViewBuilder
     private func row(_ session: PiAgentSessionRecord) -> some View {
+        let isLeading = activeRecentSessionIDs.contains(session.id)
         PiAgentSessionRow(
             session: session,
             isSelected: selectedSessionIDs.contains(session.id),
@@ -2928,26 +3038,46 @@ private struct SessionListContent: View, Equatable {
             isRenaming: renamingSessionID == session.id,
             isGeneratingTitle: generatingTitleIDs.contains(session.id),
             gitActivity: activityByID[session.id] ?? .none,
+            showsLeadingProjectIcon: isLeading,
+            leadingProject: isLeading ? projectByPath[session.projectPath] : nil,
             onSelect: { onSelect(session) },
             onBeginRename: { onBeginRename(session) },
             onEndRename: onEndRename,
             onRename: { onRename(session.id, $0) },
-            onTogglePinned: { onTogglePinned(session.id) },
             onDelete: { onDelete(session.id) }
         )
         .equatable()
         .contextMenu {
-            Button {
-                onTogglePinned(session.id)
-            } label: {
-                Label(session.isPinned ? "Unpin Session" : "Pin Session", systemImage: session.isPinned ? "pin.slash" : "pin")
-            }
             Button(role: .destructive) {
                 onDelete(session.id)
             } label: {
                 Label(selectedSessionIDs.contains(session.id) && selectedSessionIDs.count > 1 ? "Delete Selected Sessions" : "Delete Session", systemImage: "trash")
             }
         }
+    }
+}
+
+/// Lightweight header for the cross-project "Active / Recent" section: an accent
+/// symbol + label, no disclosure chevron or new-session affordance (it's an
+/// aggregate, not a project). Uses the same horizontal padding as project
+/// headers so it lines up with the rows below it.
+private struct ActiveRecentSectionHeader: View {
+    let section: PiAgentSessionListSection
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: section.fallbackSymbolName)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(AppTheme.brandAccent)
+                .frame(width: 22, height: 22, alignment: .center)
+            Text(section.title)
+                .font(AppTheme.Font.footnote.weight(.semibold))
+                .foregroundStyle(AppTheme.mutedText)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .frame(minHeight: 30, alignment: .center)
     }
 }
 
@@ -3120,6 +3250,8 @@ struct CodingAgentExpandedPanel: View {
                     workingSessionIDs: workingVisibleSessionIDs,
                     generatingTitleIDs: viewModel.piAgentTitleGeneratingSessionIDs,
                     activityByID: visibleSessionActivityByID,
+                    activeRecentSessionIDs: activeRecentSessionIDs,
+                    projectByPath: viewModel.projectByPath,
                     scrollRequestID: sessionScrollRequest,
                     scrollRequest: $sessionScrollRequest,
                     selection: $selectedSessionIDs,
@@ -3133,7 +3265,6 @@ struct CodingAgentExpandedPanel: View {
                     },
                     onEndRename: { renamingSessionID = nil },
                     onRename: { viewModel.renamePiAgentSession($0, title: $1) },
-                    onTogglePinned: { viewModel.togglePiAgentSessionPinned($0) },
                     onDelete: { id in requestDeleteSessions(selectedSessionIDs.contains(id) && selectedSessionIDs.count > 1 ? selectedSessionIDs : [id]) },
                     onToggleExpand: { projectID in
                         if viewModel.expandedProjects.contains(projectID) { viewModel.expandedProjects.remove(projectID) }
@@ -3257,6 +3388,13 @@ struct CodingAgentExpandedPanel: View {
 
     private var visibleSessionIDs: [UUID] { visibleSessions.map(\.id) }
 
+    /// Session ids rendered in the cross-project "Active / Recent" section —
+    /// each gets a leading project icon so rows from different projects can be
+    /// told apart.
+    private var activeRecentSessionIDs: Set<UUID> {
+        Set(visibleSections.first { $0.id == PiAgentSessionGrouping.activeRecentSectionID }?.items.map(\.id) ?? [])
+    }
+
     private func schedulePostExpandWork() {
         postExpandTask?.cancel()
         postExpandTask = Task { @MainActor in
@@ -3297,6 +3435,7 @@ struct CodingAgentExpandedPanel: View {
             expandedProjectIDs: viewModel.expandedProjects,
             collapsedProjectIDs: viewModel.collapsedProjects,
             capPreviews: capPreviews,
+            includeActiveRecent: capPreviews,
             isWorking: { viewModel.piAgentSessionIsWorking($0) },
             selectedSessionID: store.selectedSession?.id
         )
@@ -3694,6 +3833,7 @@ struct PiAgentScreen: View {
             expandedProjectIDs: viewModel.expandedProjects,
             collapsedProjectIDs: viewModel.collapsedProjects,
             capPreviews: capPreviews,
+            includeActiveRecent: capPreviews,
             isWorking: { viewModel.piAgentSessionIsWorking($0) },
             selectedSessionID: store.selectedSession?.id
         )
@@ -3701,6 +3841,13 @@ struct PiAgentScreen: View {
 
     private var visibleSessionIDs: [UUID] {
         visibleSessions.map(\.id)
+    }
+
+    /// Session ids rendered in the cross-project "Active / Recent" section —
+    /// each gets a leading project icon so rows from different projects can be
+    /// told apart.
+    private var activeRecentSessionIDs: Set<UUID> {
+        Set(visibleSections.first { $0.id == PiAgentSessionGrouping.activeRecentSectionID }?.items.map(\.id) ?? [])
     }
 
     private func rebuildSessionActivityCache() {
@@ -3837,6 +3984,8 @@ struct PiAgentScreen: View {
                             workingSessionIDs: workingVisibleSessionIDs,
                             generatingTitleIDs: viewModel.piAgentTitleGeneratingSessionIDs,
                             activityByID: visibleSessionActivityByID,
+                            activeRecentSessionIDs: activeRecentSessionIDs,
+                            projectByPath: viewModel.projectByPath,
                             selection: $selectedSessionIDs,
                             onSelect: { session in
                                 renamingSessionID = nil
@@ -3848,7 +3997,6 @@ struct PiAgentScreen: View {
                             },
                             onEndRename: { renamingSessionID = nil },
                             onRename: { viewModel.renamePiAgentSession($0, title: $1) },
-                            onTogglePinned: { viewModel.togglePiAgentSessionPinned($0) },
                             onDelete: { id in
                                 requestDeleteSessions(
                                     selectedSessionIDs.contains(id) && selectedSessionIDs.count > 1

@@ -294,15 +294,24 @@ struct ModelsScreen: View {
 
     // MARK: - Agent & Automation models
 
+    private var agentsForModelEditing: [EffectiveAgentRecord] {
+        let displayAgents = viewModel.allDisplayAgents
+        let plainBuiltinNames = Set(displayAgents.compactMap { agent -> String? in
+            agent.builtin != nil && agent.globalCustom == nil && agent.projectCustom == nil ? agent.name : nil
+        })
+        return (displayAgents + viewModel.builtinAgentModelRecords.filter { !plainBuiltinNames.contains($0.name) })
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     private var editableAgents: [EffectiveAgentRecord] {
-        viewModel.allDisplayAgents.filter { agentDrafts[$0.id] != nil }
+        agentsForModelEditing.filter { agentDrafts[$0.id] != nil }
     }
 
     /// Resyncs the per-agent editor drafts. Safe to call repeatedly: changes
     /// are saved immediately, so there are never unsaved drafts to clobber.
     private func seedAgentDrafts() {
         var seeded: [EffectiveAgentRecord.ID: AgentEditorDraft] = [:]
-        for agent in viewModel.allDisplayAgents where seeded[agent.id] == nil {
+        for agent in agentsForModelEditing where seeded[agent.id] == nil {
             if let draft = viewModel.makeAgentDraft(for: agent) {
                 seeded[agent.id] = draft
             }
@@ -342,10 +351,25 @@ struct ModelsScreen: View {
         let thinkingModel = selectedModel ?? viewModel.defaultPiAgentModel()
 
         HStack(alignment: .center, spacing: 12) {
-            Text(agent.name)
-                .font(.headline)
-                .fontWidth(.expanded)
-                .lineLimit(1)
+            HStack(spacing: 8) {
+                Text(agent.name)
+                    .font(.headline)
+                    .fontWidth(.expanded)
+                    .lineLimit(1)
+
+                if agent.id.hasPrefix("builtin-model::") {
+                    Text("Builtin")
+                        .font(.caption2.weight(.bold))
+                        .fontWidth(.expanded)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(AppTheme.contentSubtleFill)
+                        )
+                }
+            }
 
             Spacer(minLength: 12)
 

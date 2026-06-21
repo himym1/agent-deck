@@ -213,13 +213,13 @@ struct CodingAgentCollapsedPanel: View {
         if next != recentSessions { recentSessions = next }
     }
 
-    /// Live sessions (working / pinned / updated in the last 30 min) first in
+    /// Live sessions (working / updated in the last 30 min) first in
     /// recency order, then the remaining sessions in recency order. Used only
     /// for the All-Projects compact strip.
     private func interleaveByLiveness(_ sessions: [PiAgentSessionRecord]) -> [PiAgentSessionRecord] {
         let recentCutoff = Date().addingTimeInterval(-1_800)
         let liveIDs = Set(sessions.filter {
-            viewModel.piAgentSessionIsWorking($0) || $0.isPinned || $0.updatedAt >= recentCutoff
+            viewModel.piAgentSessionIsWorking($0) || $0.updatedAt >= recentCutoff
         }.map(\.id))
         let sortRecency: (PiAgentSessionRecord, PiAgentSessionRecord) -> Bool = {
             PiAgentSessionRecord.sessionListPrecedes($0, $1)

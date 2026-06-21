@@ -82,8 +82,8 @@ struct AgentsScreen: View {
                         agent: agent,
                         sourceColor: agentSourceColor(
                             for: agent,
-                            libraryBackedNames: Set(viewModel.snapshot.libraryAgents.map(\.name)),
-                            isInProjectContext: viewModel.selectedProjectPath != nil
+                            libraryBackedNames: Set(viewModel.globalCatalogSnapshot.libraryAgents.map(\.name)),
+                            isInProjectContext: false
                         ),
                         globalDisableBuiltinsActive: viewModel.userDisableBuiltins,
                         onSetBuiltinDisabled: { scope, isDisabled in
@@ -98,7 +98,7 @@ struct AgentsScreen: View {
                         onSetBuiltinDisabledInProject: { project, isDisabled in
                             viewModel.setBuiltinDisabled(isDisabled, for: agent, scope: .project, explicitProjectRoot: project.path)
                         },
-                        managedAgent: libraryManagedAgentRecord(for: agent, libraryAgents: viewModel.snapshot.libraryAgents),
+                        managedAgent: libraryManagedAgentRecord(for: agent, libraryAgents: viewModel.globalCatalogSnapshot.libraryAgents),
                         isAgentGlobal: { record in viewModel.agentIsEnabledGlobally(record) },
                         assignedAgentProjects: { record in viewModel.assignedProjects(for: record) },
                         skillVisibilityIssues: { viewModel.explicitSkillVisibilityIssues(for: $0) },
@@ -134,7 +134,7 @@ struct AgentsScreen: View {
         .appDebugLayout("Agents.rootHStack", logger: Self.layoutLog)
         .onAppear {
             #if DEBUG
-            Self.layoutLog.debug("Agents.state event=appear selected=\(viewModel.selectedAgent?.name ?? "nil", privacy: .public) project=\(viewModel.selectedDiscoveredProject?.name ?? "nil", privacy: .public)")
+            Self.layoutLog.debug("Agents.state event=appear selected=\(viewModel.selectedAgent?.name ?? "nil", privacy: .public)")
             #endif
         }
         .sheet(item: $agentBeingEdited) { presentation in
@@ -595,9 +595,6 @@ private struct AgentLibraryPane: View {
             cachedLayout = recomputeLayout()
             scheduleSelectionSynchronization()
         }
-        .onChange(of: viewModel.selectedDiscoveredProject) { _, _ in
-            cachedLayout = recomputeLayout()
-        }
         .onChange(of: viewModel.selectedAgentFilter) { _, _ in
             cachedLayout = recomputeLayout()
             scheduleSelectionSynchronization()
@@ -648,69 +645,47 @@ private struct AgentLibraryPane: View {
             }
         }
 
-        if viewModel.selectedDiscoveredProject != nil {
-            let active = activeCustomAgents
-            mark(active, inactive: false)
-            sections.append(AppListSection(
-                id: "active",
-                title: "Active",
-                items: active,
-                emptyMessage: "No custom agents are active for this project."
-            ))
-
-            if !catalogAgents.isEmpty {
-                mark(catalogAgents, inactive: true)
-                sections.append(AppListSection(
-                    id: "catalog",
-                    title: "Catalog Agents",
-                    info: "Catalog agents are discovered files that are not assigned to this project yet.",
-                    items: catalogAgents
-                ))
+        // Resource catalog is always global — Agents/Skills/Prompts views are
+        // decoupled from `selectedProjectPath`. Project assignment is managed in
+        // each agent's detail card (All Projects + per-project toggles), like MCP.
+        let global = globalCustomAgents
+        for item in global {
+            inactiveByID[item.id] = isCatalogOnly(item)
+            if !viewModel.warnings(for: item).isEmpty
+                || !viewModel.explicitSkillVisibilityIssues(for: item).isEmpty {
+                warningIDs.insert(item.id)
             }
+        }
+        sections.append(AppListSection(
+            id: "global",
+            title: "Global Agents",
+            info: "Custom agents available everywhere. Assign one to specific projects from its detail card.",
+            items: global,
+            emptyMessage: "No global custom agents."
+        ))
 
-            if !libraryAgents.isEmpty {
-                mark(libraryAgents, inactive: true)
-                sections.append(AppListSection(
-                    id: "library",
-                    title: "Library Agents",
-                    info: "Library agents are centrally stored and only become active when assigned to this project or enabled globally.",
-                    items: libraryAgents
-                ))
-            }
-        } else {
-            let global = globalCustomAgents
-            for item in global {
-                inactiveByID[item.id] = isCatalogOnly(item)
+        if !catalogAgents.isEmpty {
+            for item in catalogAgents {
+                inactiveByID[item.id] = !agentIsAssignedSomewhere(item)
                 if !viewModel.warnings(for: item).isEmpty
                     || !viewModel.explicitSkillVisibilityIssues(for: item).isEmpty {
                     warningIDs.insert(item.id)
                 }
             }
             sections.append(AppListSection(
-                id: "global",
-                title: "Global Agents",
-                info: "Select a project to see exactly which custom agents are active there and to manage project assignment.",
-                items: global,
-                emptyMessage: "No global custom agents."
+                id: "catalog",
+                title: "Catalog Agents",
+                items: catalogAgents
             ))
+        }
 
-            if !catalogAgents.isEmpty {
-                mark(catalogAgents, inactive: true)
-                sections.append(AppListSection(
-                    id: "catalog",
-                    title: "Catalog Agents",
-                    items: catalogAgents
-                ))
-            }
-
-            if !libraryAgents.isEmpty {
-                mark(libraryAgents, inactive: false)
-                sections.append(AppListSection(
-                    id: "library",
-                    title: "Library Agents",
-                    items: libraryAgents
-                ))
-            }
+        if !libraryAgents.isEmpty {
+            mark(libraryAgents, inactive: false)
+            sections.append(AppListSection(
+                id: "library",
+                title: "Library Agents",
+                items: libraryAgents
+            ))
         }
 
         mark(builtinAgents, inactive: false)
@@ -723,12 +698,6 @@ private struct AgentLibraryPane: View {
         ))
 
         return (sections, inactiveByID, warningIDs)
-    }
-
-    private var activeCustomAgents: [EffectiveAgentRecord] {
-        filteredAgents.filter { agent in
-            !isCatalogOnly(agent) && agent.resolutionKind != .library && !(agent.builtin != nil && agent.globalCustom == nil && agent.projectCustom == nil)
-        }
     }
 
     private var globalCustomAgents: [EffectiveAgentRecord] {
@@ -745,7 +714,7 @@ private struct AgentLibraryPane: View {
 
     private var libraryAgents: [EffectiveAgentRecord] {
         let candidates = filteredAgents.filter { agent in
-            if viewModel.selectedDiscoveredProject == nil, agent.winningRecord?.source.kind == .library { return true }
+            if agent.winningRecord?.source.kind == .library { return true }
             return agent.resolutionKind == .library
         }
         return preferredAgentsByName(candidates) { records in
@@ -761,7 +730,7 @@ private struct AgentLibraryPane: View {
     }
 
     private var libraryBackedActiveAgentNames: Set<String> {
-        Set(viewModel.snapshot.libraryAgents.map(\.name))
+        Set(viewModel.globalCatalogSnapshot.libraryAgents.map(\.name))
     }
 
     private var builtinAgents: [EffectiveAgentRecord] {
@@ -932,10 +901,8 @@ private struct AgentLibraryPane: View {
         if agent.id.hasPrefix("catalog::") { return "Catalog" }
         if agent.resolved.disabled == true { return "Disabled" }
         if libraryBackedActiveAgentNames.contains(agent.name) {
-            if viewModel.selectedProjectPath != nil, agent.resolutionKind != .library { return "Active" }
             return "Library"
         }
-        if viewModel.selectedProjectPath != nil, agent.resolutionKind != .library { return "Active" }
         return agent.resolutionKind.rawValue
     }
 
@@ -947,13 +914,21 @@ private struct AgentLibraryPane: View {
         agentSourceColor(
             for: agent,
             libraryBackedNames: libraryBackedActiveAgentNames,
-            isInProjectContext: viewModel.selectedProjectPath != nil
+            isInProjectContext: false
         )
+    }
+
+    private func agentIsAssignedSomewhere(_ agent: EffectiveAgentRecord) -> Bool {
+        guard let record = libraryManagedAgentRecord(
+            for: agent,
+            libraryAgents: viewModel.globalCatalogSnapshot.libraryAgents
+        ) else { return false }
+        return viewModel.agentIsEnabledGlobally(record) || !viewModel.assignedProjects(for: record).isEmpty
     }
 
     private func agentIsUnusedLibraryAgent(_ agent: EffectiveAgentRecord) -> Bool {
         guard agent.resolutionKind == .library,
-              let record = viewModel.snapshot.libraryAgents.first(where: { $0.name == agent.name }) else {
+              let record = viewModel.globalCatalogSnapshot.libraryAgents.first(where: { $0.name == agent.name }) else {
             return false
         }
         return !viewModel.agentIsEnabledGlobally(record) && viewModel.assignedProjects(for: record).isEmpty

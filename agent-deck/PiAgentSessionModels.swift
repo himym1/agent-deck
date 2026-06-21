@@ -848,7 +848,6 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
     var lastError: String?
     var lastSummary: String?
     var needsAttention: Bool
-    var isPinned: Bool
     var lastNotificationAt: Date?
     var inputTokens: Int?
     var outputTokens: Int?
@@ -923,7 +922,7 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, kind, title, projectPath, projectName, repository, issueNumber, issueURL, piSessionFile, piSessionId
         case model, modelProvider, modelOverrideID, modelOverrideProvider, commandInvocations, thinkingLevel, launchCommand, branchName, worktreePath, sourceBranch
-        case status, lastError, lastSummary, needsAttention, isPinned, lastNotificationAt
+        case status, lastError, lastSummary, needsAttention, lastNotificationAt
         case inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, totalTokens, toolCalls, toolResults, contextTokens, contextWindow, contextPercent, contextBreakdown, cost
         case finalSystemPrompt, finalSystemPromptCapturedAt
         case pendingSteeringMessages, pendingFollowUpMessages, subagentsEnabled, memoryEnabled, agentSelection, injectedExtensions, agentName, isCompacting, isTitleUserEdited, createdAt, updatedAt
@@ -956,7 +955,6 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
         lastError: String?,
         lastSummary: String?,
         needsAttention: Bool,
-        isPinned: Bool = false,
         lastNotificationAt: Date?,
         inputTokens: Int?,
         outputTokens: Int?,
@@ -1015,7 +1013,6 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
         self.lastError = lastError
         self.lastSummary = lastSummary
         self.needsAttention = needsAttention
-        self.isPinned = isPinned
         self.lastNotificationAt = lastNotificationAt
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
@@ -1078,7 +1075,6 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
             lastError: try container.decodeIfPresent(String.self, forKey: .lastError),
             lastSummary: try container.decodeIfPresent(String.self, forKey: .lastSummary),
             needsAttention: try container.decodeIfPresent(Bool.self, forKey: .needsAttention) ?? false,
-            isPinned: try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false,
             lastNotificationAt: try container.decodeIfPresent(Date.self, forKey: .lastNotificationAt),
             inputTokens: try container.decodeIfPresent(Int.self, forKey: .inputTokens),
             outputTokens: try container.decodeIfPresent(Int.self, forKey: .outputTokens),
@@ -1117,9 +1113,14 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
 }
 
 extension PiAgentSessionRecord {
+    /// Canonical session-list ordering, shared by every sort site (the grouped
+    /// All-Projects list, the compact recent strip, and the store).
+    ///
+    /// `updatedAt` is compared at `.day` granularity so a session that streams a
+    /// response (bumping `updatedAt` within the same day) does NOT reshuffle to
+    /// the top of the list — only a calendar-day change reorders. Within a day,
+    /// sessions settle by `createdAt` DESC then `id` for a stable tiebreak.
     static func sessionListPrecedes(_ lhs: PiAgentSessionRecord, _ rhs: PiAgentSessionRecord, calendar: Calendar = .current) -> Bool {
-        if lhs.isPinned != rhs.isPinned { return lhs.isPinned && !rhs.isPinned }
-
         let updatedDayComparison = calendar.compare(lhs.updatedAt, to: rhs.updatedAt, toGranularity: .day)
         if updatedDayComparison != .orderedSame { return updatedDayComparison == .orderedDescending }
 

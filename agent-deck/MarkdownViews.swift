@@ -419,18 +419,11 @@ final class MarkdownSourceApplier {
             return
         }
 
-        // First appearance of a large uncached block: parse synchronously so the
-        // row never flashes blank. Only an already-displayed block growing during
-        // streaming takes the async path below.
-        guard view.hasDocument else {
-            parseTask?.cancel()
-            pendingSource = nil
-            view.configure(document: MarkdownRenderCache.document(for: displaySource))
-            return
-        }
-
-        // Large, uncached source on an already-displayed block: parse off the main
-        // thread, keeping the prior document on screen until the parse lands.
+        // Large, uncached source: keep first paint cheap and parse off-main.
+        // If the view already has content (streaming growth), it stays on screen;
+        // if this is first appearance, the container remains empty until the
+        // cached document is applied below. This avoids a main-thread markdown
+        // rebuild/measurement hitch when a large transcript row first appears.
         if pendingSource == displaySource { return }
         pendingSource = displaySource
         parseTask?.cancel()
@@ -471,9 +464,8 @@ final class NativeMarkdownTextContainer: NSView {
     /// container and is set only by that container's `configure` calls.
     var lastConfigureWasRebuildInstance = false
 #endif
-    /// Whether a document has ever been applied. Lets the representable parse
-    /// the first appearance synchronously (no blank flash) and reserve the
-    /// off-main path for an already-displayed block growing during streaming.
+    /// Whether a document has ever been applied. Large uncached first paint can
+    /// intentionally leave this false while `MarkdownSourceApplier` parses off-main.
     var hasDocument: Bool { lastDocument != nil }
     private var widthConstraint: NSLayoutConstraint?
     private var pendingHeightMeasurement = false

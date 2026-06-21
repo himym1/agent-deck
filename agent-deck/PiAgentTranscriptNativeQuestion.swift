@@ -756,8 +756,8 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
 
             iconView.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: hPad),
             iconView.topAnchor.constraint(equalTo: cardView.topAnchor, constant: vPad),
-            iconView.widthAnchor.constraint(equalToConstant: 14),
-            iconView.heightAnchor.constraint(equalToConstant: 14),
+            iconView.widthAnchor.constraint(equalToConstant: NativeTranscriptFont.headerIconSize),
+            iconView.heightAnchor.constraint(equalToConstant: NativeTranscriptFont.headerIconSize),
 
             headerLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 7),
             headerLabel.centerYAnchor.constraint(equalTo: iconView.centerYAnchor),
@@ -836,9 +836,16 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
             bodyBottomC.isActive = true
         }
 
-        // Size + position the pills now (from the deterministic card width) so the
-        // names are full on first paint, instead of waiting for a layout pass.
-        if !chipViews.isEmpty { layoutChipRow(innerWidth: chipInnerWidth(), apply: true) }
+        // Size + position the pills now (from the deterministic card width) and
+        // commit their row height before first paint. Waiting for `measuredHeight`
+        // to mutate this constraint leaves a just-sent attachment card with a 0pt
+        // chip row for its first layout, which can pull the header/body into a
+        // transient solve until the session is reopened or the row is remeasured.
+        if !chipViews.isEmpty {
+            chipRowHeightC.constant = layoutChipRow(innerWidth: chipInnerWidth(), apply: true)
+        } else {
+            chipRowHeightC.constant = 0
+        }
 
         forkGlass.isHidden = payload.fork == nil
         rerunGlass.isHidden = payload.fork == nil
@@ -972,7 +979,7 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
     }
 
     private func headerRowHeight() -> CGFloat {
-        max(14, ceil(headerLabel.intrinsicContentSize.height))
+        max(NativeTranscriptFont.headerIconSize, ceil(headerLabel.intrinsicContentSize.height))
     }
 
     // MARK: Chrome colors

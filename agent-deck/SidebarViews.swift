@@ -128,6 +128,99 @@ struct SidebarTitleBar: View {
     }
 }
 
+/// Shared project-scope picker used by project-scoped screen toolbars
+/// (Issues, Memory, System Prompt). Shows the active project (or "Select
+/// Project") and opens a popover listing every enabled project; selection
+/// routes through `viewModel.setSelectedProject(_:)`.
+struct ProjectToolbarSelector: View {
+    @Bindable var viewModel: AppViewModel
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        Button {
+            isPresented.toggle()
+        } label: {
+            HStack(spacing: 7) {
+                if let project = viewModel.selectedDiscoveredProject {
+                    ProjectIconView(
+                        imageURL: project.iconFileURL,
+                        symbolName: project.fallbackSymbolName,
+                        size: 18,
+                        assetName: project.projectType.assetName
+                    )
+                    Text(project.repositoryDisplayName)
+                } else {
+                    Image(systemName: "folder")
+                    Text("Select Project")
+                }
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .toolbarNeutralChrome()
+        .help("Choose project")
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Projects")
+                    .font(.headline)
+                Button {
+                    viewModel.clearProjectRoot()
+                    isPresented = false
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "square.grid.2x2")
+                            .frame(width: 24, height: 24)
+                            .foregroundStyle(AppTheme.mutedText)
+                        Text("All Projects")
+                            .font(.body.weight(.medium))
+                        Spacer(minLength: 12)
+                        if viewModel.selectedProjectPath == nil {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(AppTheme.brandAccent)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                ForEach(viewModel.enabledProjects) { project in
+                    Button {
+                        viewModel.setSelectedProject(project.url)
+                        isPresented = false
+                    } label: {
+                        HStack(spacing: 10) {
+                            ProjectIconView(
+                                imageURL: project.iconFileURL,
+                                symbolName: project.fallbackSymbolName,
+                                size: 24,
+                                assetName: project.projectType.assetName
+                            )
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(project.repositoryDisplayName)
+                                    .font(.body.weight(.medium))
+                                if let remote = project.gitHubRemote {
+                                    Text(remote.nameWithOwner)
+                                        .font(.caption)
+                                        .foregroundStyle(AppTheme.mutedText)
+                                }
+                            }
+                            Spacer(minLength: 12)
+                            if project.path == viewModel.selectedProjectPath {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(AppTheme.brandAccent)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(14)
+            .frame(width: 300)
+        }
+    }
+}
+
 struct ProjectPickerPopover: View {
     let projects: [DiscoveredProject]
     let selectedProjectPath: String?

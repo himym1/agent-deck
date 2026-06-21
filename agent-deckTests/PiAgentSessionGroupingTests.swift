@@ -36,17 +36,15 @@ final class PiAgentSessionGroupingTests: XCTestCase {
         XCTAssertEqual(split.hidden.count, 3)
     }
 
-    func testWorkingAndPinnedDoNotOverrideRecencyRule() throws {
+    func testWorkingDoesNotOverrideRecencyRule() throws {
         let oldWorking = try makeSession(title: "working", updatedAt: now.addingTimeInterval(-100_000), status: .running)
-        let oldPinned = try makeSession(title: "pinned", updatedAt: now.addingTimeInterval(-100_001), isPinned: true)
         let newer = try (0..<5).map { i in
             try makeSession(title: "newer\(i)", updatedAt: now.addingTimeInterval(-Double(30_000 + i)))
         }
         let split = PiAgentSessionGrouping.previewSplit(
-            sessions: [oldWorking, oldPinned] + newer, isExpanded: false, capPreviews: true,
+            sessions: [oldWorking] + newer, isExpanded: false, capPreviews: true,
             isWorking: { $0.status == .running }, selectedSessionID: nil, now: now, options: .default)
         XCTAssertFalse(split.preview.contains { $0.title == "working" })
-        XCTAssertFalse(split.preview.contains { $0.title == "pinned" })
     }
 
     func testSelectedSessionAlwaysShown() throws {
@@ -211,6 +209,104 @@ final class PiAgentSessionGroupingTests: XCTestCase {
         XCTAssertEqual(sections.first?.totalCount, 4)
     }
 
+    // MARK: - Active / Recent section
+
+    /// Multi-project browsing: live sessions (updated inside the 30-minute
+    /// window) are lifted into a cross-project "Active / Recent" section pinned
+    /// above the project groups, and deduped out of their own project groups so
+    /// each session renders in exactly one place.
+    func testActiveRecentSurfacedAboveProjectGroupsAndDeduped() throws {
+        let deck = try makeProject(path: "/p/deck", repo: "agent-deck", owner: "a-streetcoder")
+        let meter = try makeProject(path: "/p/meter", repo: "claude-code-meter", owner: "a-streetcoder")
+        let projectByPath = [deck.path: deck, meter.path: meter]
+        let deckLive = try makeSession(title: "deck-live", updatedAt: now.addingTimeInterval(-60), projectPath: deck.path)
+        let deckOld = try makeSession(title: "deck-old", updatedAt: now.addingTimeInterval(-100_000), projectPath: deck.path)
+        let meterLive = try makeSession(title: "meter-live", updatedAt: now.addingTimeInterval(-120), projectPath: meter.path)
+        let meterOld = try makeSession(title: "meter-old", updatedAt: now.addingTimeInterval(-100_000), projectPath: meter.path)
+        let sections = PiAgentSessionGrouping.sections(
+            from: [deckLive, deckOld, meterLive, meterOld], projectByPath: projectByPath,
+            expandedProjectIDs: [], collapsedProjectIDs: [],
+            capPreviews: true, includeActiveRecent: true,
+            isWorking: { _ in false }, selectedSessionID: nil, now: now)
+        XCTAssertEqual(sections.first?.id, PiAgentSessionGrouping.activeRecentSectionID)
+        XCTAssertEqual(sections.first?.title, "Recent")
+        XCTAssertEqual(Set(sections.first!.items.map(\.id)), [deckLive.id, meterLive.id])
+        // Live sessions are deduped out of their own project groups.
+        XCTAssertEqual(sections.first { $0.id == deck.path }?.items.map(\.id), [deckOld.id])
+        XCTAssertEqual(sections.first { $0.id == meter.path }?.items.map(\.id), [meterOld.id])
+    }
+
+    /// A running session is always surfaced even when its timestamp is far
+    /// outside the live window, and the header reads "Active".
+    func testActiveRecentIncludesRunningEvenWhenOld() throws {
+        let deck = try makeProject(path: "/p/deck", repo: "agent-deck", owner: "a-streetcoder")
+        let meter = try makeProject(path: "/p/meter", repo: "claude-code-meter", owner: "a-streetcoder")
+        let projectByPath = [deck.path: deck, meter.path: meter]
+        let running = try makeSession(title: "running", updatedAt: now.addingTimeInterval(-1_000_000), status: .running, projectPath: deck.path)
+        let other = try makeSession(title: "other", updatedAt: now.addingTimeInterval(-1_000_000), projectPath: meter.path)
+        let sections = PiAgentSessionGrouping.sections(
+            from: [running, other], projectByPath: projectByPath,
+            expandedProjectIDs: [], collapsedProjectIDs: [],
+            capPreviews: true, includeActiveRecent: true,
+            isWorking: { $0.status == .running }, selectedSessionID: nil, now: now)
+        XCTAssertEqual(sections.first?.id, PiAgentSessionGrouping.activeRecentSectionID)
+        XCTAssertEqual(sections.first?.title, "Active")
+        XCTAssertEqual(Set(sections.first!.items.map(\.id)), [running.id])
+        // The running session renders ONLY in Active / Recent. Its project group
+        // is absent here because deck had no other sessions to show after the
+        // lift; what matters is it isn't duplicated elsewhere.
+        XCTAssertNil(sections.first { $0.id != PiAgentSessionGrouping.activeRecentSectionID && $0.items.contains { $0.id == running.id } })
+        XCTAssertEqual(sections.first { $0.id == meter.path }?.items.map(\.id), [other.id])
+    }
+
+    /// `includeActiveRecent == false` (search / attention filter / default) →
+    /// no section, and sessions stay in their project groups (no dedup).
+    func testActiveRecentOmittedWhenNotBrowsing() throws {
+        let deck = try makeProject(path: "/p/deck", repo: "agent-deck", owner: "a-streetcoder")
+        let meter = try makeProject(path: "/p/meter", repo: "claude-code-meter", owner: "a-streetcoder")
+        let projectByPath = [deck.path: deck, meter.path: meter]
+        let live = try makeSession(title: "live", updatedAt: now, projectPath: deck.path)
+        let other = try makeSession(title: "other", updatedAt: now, projectPath: meter.path)
+        let sections = PiAgentSessionGrouping.sections(
+            from: [live, other], projectByPath: projectByPath,
+            expandedProjectIDs: [], collapsedProjectIDs: [],
+            capPreviews: true, includeActiveRecent: false,
+            isWorking: { _ in false }, selectedSessionID: nil, now: now)
+        XCTAssertFalse(sections.contains { $0.id == PiAgentSessionGrouping.activeRecentSectionID })
+        XCTAssertEqual(sections.first { $0.id == deck.path }?.items.map(\.id), [live.id])
+    }
+
+    /// Single-project setup → no Active/Recent (it would just fragment that
+    /// project's list); the project keeps its full preview.
+    func testActiveRecentOmittedForSingleProjectSetup() throws {
+        let deck = try makeProject(path: "/p/deck", repo: "agent-deck", owner: "a-streetcoder")
+        let live = try makeSession(title: "live", updatedAt: now, projectPath: deck.path)
+        let old = try makeSession(title: "old", updatedAt: now.addingTimeInterval(-100_000), projectPath: deck.path)
+        let sections = PiAgentSessionGrouping.sections(
+            from: [live, old], projectByPath: [deck.path: deck],
+            expandedProjectIDs: [], collapsedProjectIDs: [],
+            capPreviews: true, includeActiveRecent: true,
+            isWorking: { _ in false }, selectedSessionID: nil, now: now)
+        XCTAssertFalse(sections.contains { $0.id == PiAgentSessionGrouping.activeRecentSectionID })
+        XCTAssertEqual(sections.first?.items.count, 2)
+    }
+
+    /// Multi-project but nothing live → no section (and nothing deduped).
+    func testActiveRecentOmittedWhenNothingLive() throws {
+        let deck = try makeProject(path: "/p/deck", repo: "agent-deck", owner: "a-streetcoder")
+        let meter = try makeProject(path: "/p/meter", repo: "claude-code-meter", owner: "a-streetcoder")
+        let projectByPath = [deck.path: deck, meter.path: meter]
+        let a = try makeSession(title: "a", updatedAt: now.addingTimeInterval(-100_000), projectPath: deck.path)
+        let b = try makeSession(title: "b", updatedAt: now.addingTimeInterval(-100_000), projectPath: meter.path)
+        let sections = PiAgentSessionGrouping.sections(
+            from: [a, b], projectByPath: projectByPath,
+            expandedProjectIDs: [], collapsedProjectIDs: [],
+            capPreviews: true, includeActiveRecent: true,
+            isWorking: { _ in false }, selectedSessionID: nil, now: now)
+        XCTAssertFalse(sections.contains { $0.id == PiAgentSessionGrouping.activeRecentSectionID })
+        XCTAssertEqual(sections.first { $0.id == deck.path }?.items.map(\.id), [a.id])
+    }
+
     // MARK: - nextSelectionAfterDeletion
 
     /// Three sessions, delete the middle (current) one → the row below it wins.
@@ -326,7 +422,6 @@ final class PiAgentSessionGroupingTests: XCTestCase {
         updatedAt: Date,
         createdAt: Date? = nil,
         status: PiAgentRunStatus = .idle,
-        isPinned: Bool = false,
         projectPath: String? = nil
     ) throws -> PiAgentSessionRecord {
         var session = try PiTestSupport.makeParentSession()
@@ -334,7 +429,6 @@ final class PiAgentSessionGroupingTests: XCTestCase {
         session.updatedAt = updatedAt
         session.createdAt = createdAt ?? updatedAt
         session.status = status
-        session.isPinned = isPinned
         if let projectPath {
             session.projectPath = projectPath
             session.projectName = (projectPath as NSString).lastPathComponent

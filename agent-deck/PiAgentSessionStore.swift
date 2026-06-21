@@ -252,7 +252,6 @@ final class PiAgentSessionStore {
             lastError: nil,
             lastSummary: nil,
             needsAttention: false,
-            isPinned: false,
             lastNotificationAt: nil,
             inputTokens: nil,
             outputTokens: nil,
@@ -362,7 +361,6 @@ final class PiAgentSessionStore {
             lastError: nil,
             lastSummary: nil,
             needsAttention: false,
-            isPinned: false,
             lastNotificationAt: nil,
             inputTokens: nil,
             outputTokens: nil,
@@ -452,7 +450,6 @@ final class PiAgentSessionStore {
             lastError: nil,
             lastSummary: nil,
             needsAttention: false,
-            isPinned: false,
             lastNotificationAt: nil,
             inputTokens: nil,
             outputTokens: nil,
@@ -550,9 +547,8 @@ final class PiAgentSessionStore {
         // Avoid an unconditional sortSessions() — every `sessions.sort` is an Observable
         // write on `sessions`, and many per-frame calls during streaming were tripping
         // SwiftUI's "onChange action ran multiple times per frame" warning. Only the
-        // fields used by `sessionListPrecedes` can change order: isPinned and updatedAt
-        // (compared at .day granularity, so same-day updates never reorder).
-        let preIsPinned = sessions[index].isPinned
+        // fields used by `sessionListPrecedes` can change order: `updatedAt` compared
+        // at .day granularity (so same-day updates never reorder).
         let preUpdatedAtDay = Calendar.current.startOfDay(for: sessions[index].updatedAt)
         let preNeedsAttention = sessions[index].needsAttention
         let preTitle = sessions[index].title
@@ -563,7 +559,7 @@ final class PiAgentSessionStore {
             sessions[index].updatedAt = Date()
         }
         let postUpdatedAtDay = Calendar.current.startOfDay(for: sessions[index].updatedAt)
-        if sessions[index].isPinned != preIsPinned || postUpdatedAtDay != preUpdatedAtDay {
+        if postUpdatedAtDay != preUpdatedAtDay {
             sortSessions()
         } else if sessions[index].needsAttention != preNeedsAttention
             || sessions[index].title != preTitle
@@ -595,15 +591,6 @@ final class PiAgentSessionStore {
             guard !record.isTitleUserEdited else { return }
             record.title = trimmedTitle
         }
-    }
-
-    func setPinned(_ id: UUID, isPinned: Bool) {
-        updateSession(id, bumpUpdatedAt: false) { $0.isPinned = isPinned }
-    }
-
-    func togglePinned(_ id: UUID) {
-        guard let session = sessions.first(where: { $0.id == id }) else { return }
-        setPinned(id, isPinned: !session.isPinned)
     }
 
     func setUIRequest(_ request: PiAgentUIRequest?) {

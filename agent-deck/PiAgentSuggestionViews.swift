@@ -596,9 +596,12 @@ struct PiAgentUIRequestCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            header
+            if isComposingFreeform {
+                freeformPage
+            } else {
+                header
 
-            switch request.method {
+                switch request.method {
             case .select:
                 selectOptions
             case .multiSelect:
@@ -615,6 +618,7 @@ struct PiAgentUIRequestCard: View {
                 }
             case .input, .editor:
                 textInput(submitTitle: "Submit", cancelTitle: "Cancel", cancelAction: onCancel) { submitTextInput() }
+                }
             }
         }
         .onAppear {
@@ -626,6 +630,70 @@ struct PiAgentUIRequestCard: View {
             draft = request.prefill ?? ""
             isComposingFreeform = false
             selectedOptions = []
+        }
+    }
+
+    private var freeformPage: some View {
+        // Full-surface second page for typing a custom response. Replaces the
+        // main card content while `isComposingFreeform` is true; Back returns to
+        // the option list. Mirrors MarkdownFileEditorSheet / memory editor chrome.
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Button {
+                    isComposingFreeform = false
+                } label: {
+                    Label("Back", systemImage: "chevron.left")
+                        .labelStyle(.titleAndIcon)
+                        .font(AppTheme.Font.subheadline.weight(.medium))
+                }
+                .appSecondaryButton()
+                Spacer(minLength: 0)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(request.title)
+                    .font(AppTheme.Font.headline)
+                    .fontWidth(.expanded)
+                if let message = request.message, !message.isEmpty, message != request.title {
+                    Text(message)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            ZStack(alignment: .topLeading) {
+                TextEditor(text: $draft)
+                    .font(.system(.body, design: .monospaced))
+                    .scrollContentBackground(.hidden)
+                    .padding(10)
+                if draft.isEmpty {
+                    Text("Type your custom response…")
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(AppTheme.mutedText.opacity(0.6))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 14)
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 200, idealHeight: 280, maxHeight: 460)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(AppTheme.textContentFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(AppTheme.contentStroke, lineWidth: 1)
+            )
+
+            HStack(spacing: 10) {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .appSecondaryButton()
+                Button("Submit") { submitFreeform() }
+                    .appPrimaryButton()
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
         }
     }
 
@@ -682,11 +750,6 @@ struct PiAgentUIRequestCard: View {
                         Spacer()
                         Button("Cancel", action: onCancel)
                             .appSecondaryButton()
-                        if isComposingFreeform {
-                            Button("Submit") { onSubmitFreeform(freeformSentinel, draft) }
-                                .appPrimaryButton()
-                                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        }
                     }
                     .padding(.top, 4)
                 }
@@ -695,44 +758,24 @@ struct PiAgentUIRequestCard: View {
     }
 
     private func freeformPill(label: String) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                isComposingFreeform.toggle()
-                if !isComposingFreeform { draft = "" }
-            } label: {
-                HStack {
-                    Text(label)
-                        .fontWeight(.semibold)
-                    Spacer()
-                    Image(systemName: isComposingFreeform ? "checkmark.circle.fill" : "square.and.pencil")
-                        .foregroundStyle(AppTheme.brandAccent)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .contentShape(Rectangle())
+        // Tapping navigates to the full-surface custom-response page
+        // (`freeformPage`) instead of expanding a cramped inline field.
+        Button {
+            isComposingFreeform = true
+        } label: {
+            HStack {
+                Text(label)
+                    .fontWeight(.semibold)
+                Spacer()
+                Image(systemName: "square.and.pencil")
+                    .foregroundStyle(AppTheme.brandAccent)
             }
-            .buttonStyle(.plain)
-
-            if isComposingFreeform {
-                Divider()
-                    .padding(.horizontal, 12)
-                TextField("Custom response", text: $draft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...4)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .onSubmit {
-                        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !trimmed.isEmpty {
-                            onSubmitFreeform(freeformSentinel, draft)
-                        }
-                    }
-            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
+            .contentShape(Rectangle())
         }
-        .background(
-            isComposingFreeform ? AppTheme.brandAccent.opacity(0.12) : AppTheme.contentSubtleFill,
-            in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous)
-        )
+        .buttonStyle(.plain)
     }
 
     private var multiSelectOptions: some View {
@@ -817,46 +860,26 @@ struct PiAgentUIRequestCard: View {
             }
 
             if request.allowsFreeform {
-                VStack(alignment: .leading, spacing: 0) {
-                    Button {
-                        selectedOptions = []
-                        isComposingFreeform.toggle()
-                        if !isComposingFreeform { draft = "" }
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: isComposingFreeform ? "checkmark.circle.fill" : "square.and.pencil")
-                                .foregroundStyle(isComposingFreeform ? AppTheme.brandAccent : AppTheme.mutedText)
-                                .frame(width: 18)
-                            Text("Type custom response")
-                                .fontWeight(.semibold)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .contentShape(Rectangle())
+                // Tapping navigates to the full-surface custom-response page
+                // (`freeformPage`) instead of expanding a cramped inline field.
+                Button {
+                    selectedOptions = []
+                    isComposingFreeform = true
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "square.and.pencil")
+                            .foregroundStyle(AppTheme.mutedText)
+                            .frame(width: 18)
+                        Text("Type custom response")
+                            .fontWeight(.semibold)
+                        Spacer(minLength: 0)
                     }
-                    .buttonStyle(.plain)
-
-                    if isComposingFreeform {
-                        Divider()
-                            .padding(.horizontal, 12)
-                        TextField("Custom response", text: $draft, axis: .vertical)
-                            .textFieldStyle(.plain)
-                            .lineLimit(1...4)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .onSubmit {
-                                let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                                if !trimmed.isEmpty {
-                                    onSubmitValue(request.nativeAskFreeformResponseValue(trimmed))
-                                }
-                            }
-                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
+                    .contentShape(Rectangle())
                 }
-                .background(
-                    isComposingFreeform ? AppTheme.brandAccent.opacity(0.12) : AppTheme.contentSubtleFill,
-                    in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous)
-                )
+                .buttonStyle(.plain)
             }
 
             HStack(spacing: 10) {
@@ -918,6 +941,16 @@ struct PiAgentUIRequestCard: View {
             return draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         return selectedOptions.isEmpty
+    }
+
+    private func submitFreeform() {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if request.responseFormat == .nativeAsk {
+            onSubmitValue(request.nativeAskFreeformResponseValue(draft))
+        } else {
+            onSubmitFreeform(freeformSentinel, draft)
+        }
     }
 
     private func submitTextInput() {

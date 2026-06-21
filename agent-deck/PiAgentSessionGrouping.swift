@@ -16,6 +16,27 @@ enum PiAgentSessionGrouping {
     /// `projectPath` no longer resolves to a discovered project.
     static let otherSectionID = "agent-deck.session-group.other"
 
+    /// Identity of the cross-project "Active / Recent" group pinned above the
+    /// per-project groups. Holds every running session plus anything touched
+    /// inside `PiAgentSessionGroupingOptions.activeRecentInterval`, deduped out
+    /// of their own project groups so each session renders in exactly one place
+    /// (`AppList` keys rows by session id, so a session can't appear twice).
+    static let activeRecentSectionID = "agent-deck.session-group.active-recent"
+
+    /// Session ids that belong in the cross-project "Active / Recent" section:
+    /// every running session plus every session updated inside the live window.
+    /// Mirrors the compact strip's `interleaveByLiveness` "live" definition so
+    /// the two views agree on what counts as in-flight work.
+    static func activeRecentSessionIDs(
+        from sessions: [PiAgentSessionRecord],
+        isWorking: (PiAgentSessionRecord) -> Bool,
+        now: Date,
+        options: PiAgentSessionGroupingOptions
+    ) -> Set<UUID> {
+        let cutoff = now.addingTimeInterval(-options.activeRecentInterval)
+        return Set(sessions.filter { isWorking($0) || $0.updatedAt >= cutoff }.map(\.id))
+    }
+
     /// Split one project's sessions into the preview set and the hidden set.
     ///
     /// - Parameters:
@@ -43,11 +64,16 @@ enum PiAgentSessionGrouping {
         now: Date,
         options: PiAgentSessionGroupingOptions
     ) -> PiAgentSessionPreviewSplit {
-        let sorted = sessions.sorted { lhs, rhs in
-            if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
-            if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
-            return lhs.id.uuidString < rhs.id.uuidString
-        }
+        // Use the canonical `sessionListPrecedes` comparator (`updatedAt` at day
+        // granularity, then `createdAt` DESC, then id) rather than a bespoke
+        // full-timestamp `updatedAt` sort. Comparing `updatedAt` at full
+        // granularity makes sessions re-sort on every response within the same
+        // day, so a session that's actively streaming jumps to the top of its
+        // group continuously — the exact jumble `sessionListPrecedes` was
+        // written to prevent. Matching the comparator used by every other sort
+        // site (compact strip, store, view model) keeps the list stable and
+        // consistent.
+        let sorted = sessions.sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
 
         // Expanded view or uncapped modes show everything.
         if isExpanded || !capPreviews || sorted.isEmpty {
@@ -83,23 +109,55 @@ enum PiAgentSessionGrouping {
     ///
     /// Sessions are partitioned by their (resolvable) `projectPath`; sessions
     /// whose path is no longer discovered collect into a trailing "Other"
-    /// group. Groups sort alphabetically by repo name (or folder name), with
-    /// "Other" always last — so `a-streetcoder/claude-code-meter` sorts as
+    /// group. Project groups sort alphabetically by repo name (or folder name),
+    /// with "Other" always last — so `a-streetcoder/claude-code-meter` sorts as
     /// "claude-code-meter" and `a-streetcoder/agent-deck` sorts as "agent-deck".
+    ///
+    /// When `includeActiveRecent` is true (the All-Projects browsing context —
+    /// never while searching or filtering by attention), a cross-project
+    /// "Active / Recent" section is pinned above the project groups. It holds
+    /// every running session plus anything touched inside the live window, and
+    /// those sessions are deduped out of their own project groups: a session
+    /// renders in exactly one place. The section only appears in genuine
+    /// multi-project setups (2+ groups) where the cross-project shortcut adds
+    /// value; with a single project it would just split that project's list.
     static func sections(
         from sessions: [PiAgentSessionRecord],
         projectByPath: [String: DiscoveredProject],
         expandedProjectIDs: Set<String>,
         collapsedProjectIDs: Set<String>,
         capPreviews: Bool,
+        includeActiveRecent: Bool = false,
         isWorking: (PiAgentSessionRecord) -> Bool,
         selectedSessionID: UUID?,
         now: Date = Date(),
         options: PiAgentSessionGroupingOptions = .default
     ) -> [PiAgentSessionListSection] {
+        // Resolve the cross-project "Active / Recent" set: every running session
+        // plus anything touched inside the live window.
+        let activeRecentIDs = activeRecentSessionIDs(
+            from: sessions, isWorking: isWorking, now: now, options: options
+        )
+        let candidateActiveRecent = includeActiveRecent && !activeRecentIDs.isEmpty
+
+        // Count distinct groups across ALL sessions (pre-dedup) to gate the
+        // section. Counting after dedup would let a project whose only session
+        // is live drop the count below 2 and wrongly hide the section.
+        let allProjectPaths = Set(sessions.filter { projectByPath[$0.projectPath] != nil }.map(\.projectPath))
+        let hasOrphans = sessions.contains { projectByPath[$0.projectPath] == nil }
+        let projectGroupCount = allProjectPaths.count + (hasOrphans ? 1 : 0)
+
+        // Active/Recent earns a section only in genuine multi-project setups
+        // (2+ groups) where the cross-project shortcut adds value; with a
+        // single project it would just split that project's list. Deduping is
+        // tied to this decision so a non-rendering section never fragments a
+        // project's own list.
+        let showsActiveRecent = candidateActiveRecent && projectGroupCount >= 2
+
         var byPath: [String: [PiAgentSessionRecord]] = [:]
         var orphans: [PiAgentSessionRecord] = []
         for session in sessions {
+            if showsActiveRecent, activeRecentIDs.contains(session.id) { continue }
             if projectByPath[session.projectPath] != nil {
                 byPath[session.projectPath, default: []].append(session)
             } else {
@@ -107,12 +165,12 @@ enum PiAgentSessionGrouping {
             }
         }
 
-        var sections: [PiAgentSessionListSection] = []
-        sections.reserveCapacity(byPath.count + (orphans.isEmpty ? 0 : 1))
+        var projectSections: [PiAgentSessionListSection] = []
+        projectSections.reserveCapacity(byPath.count + (orphans.isEmpty ? 0 : 1))
 
         for (path, projectSessions) in byPath {
             let project = projectByPath[path]!
-            sections.append(makeSection(
+            projectSections.append(makeSection(
                 id: path,
                 title: project.gitHubRemote?.repo ?? project.name,
                 subtitle: project.gitHubRemote?.owner,
@@ -131,10 +189,10 @@ enum PiAgentSessionGrouping {
             ))
         }
 
-        sections.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        projectSections.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
 
         if !orphans.isEmpty {
-            sections.append(makeSection(
+            projectSections.append(makeSection(
                 id: otherSectionID,
                 title: "Other",
                 subtitle: nil,
@@ -153,7 +211,30 @@ enum PiAgentSessionGrouping {
             ))
         }
 
-        return sections
+        guard showsActiveRecent else { return projectSections }
+
+        let live = sessions
+            .filter { activeRecentIDs.contains($0.id) }
+            .sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
+        let anyWorking = live.contains { isWorking($0) }
+        let activeRecentSection = PiAgentSessionListSection(
+            id: activeRecentSectionID,
+            // "Active" while anything is running (the typing dots reinforce it);
+            // "Recent" once everything has settled but is still within the live
+            // window.
+            title: anyWorking ? "Active" : "Recent",
+            subtitle: nil,
+            iconFileURL: nil,
+            fallbackSymbolName: anyWorking ? "bolt.fill" : "clock",
+            assetName: nil,
+            items: live,
+            hiddenCount: 0,
+            isShowMoreActive: false,
+            isCollapsed: false,
+            totalCount: live.count,
+            isProjectGroup: false
+        )
+        return [activeRecentSection] + projectSections
     }
 
     /// The session to make current after `deletedIDs` are removed from the
@@ -280,6 +361,10 @@ struct PiAgentSessionGroupingOptions: Equatable, Sendable {
     /// Sessions updated within this interval of `now` are always shown, even
     /// when that takes the preview over `maxRecentPerProject`.
     var recentAlwaysShownInterval: TimeInterval = 21_600       // 6 hours
+    /// Sessions that are running OR updated within this interval of `now` are
+    /// surfaced in the cross-project "Active / Recent" section (multi-project
+    /// browsing only). Matches the compact strip's 30-minute "live" window.
+    var activeRecentInterval: TimeInterval = 1_800             // 30 minutes
     /// Kept for source compatibility with older tests/callers; no longer used
     /// by the default preview rule.
     var recentBucketInterval: TimeInterval = 86_400            // unused
@@ -303,10 +388,11 @@ struct PiAgentSessionPreviewSplit: Equatable {
 /// SwiftUI) so `SessionListContent`'s `.equatable()` gate can compare it
 /// cheaply and skip rebuilds on streaming pulses.
 struct PiAgentSessionListSection: Equatable, Identifiable {
-    /// Stable identity: the project path, or `PiAgentSessionGrouping.otherSectionID`.
+    /// Stable identity: the project path, `PiAgentSessionGrouping.otherSectionID`,
+    /// or `PiAgentSessionGrouping.activeRecentSectionID`.
     let id: String
     /// Header title — the GitHub repo name, or the folder name; "Other" for the
-    /// catch-all.
+    /// catch-all; "Active"/"Recent" for the cross-project section.
     let title: String
     /// Muted header subtitle — the GitHub owner, when known.
     let subtitle: String?
