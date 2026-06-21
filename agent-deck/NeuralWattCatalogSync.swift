@@ -176,7 +176,7 @@ nonisolated struct NeuralWattCatalogSync: Sendable {
     // MARK: - Provider block
 
     static func buildProviderBlock(models: [[String: Any]]) -> [String: Any] {
-        var block: [String: Any] = [
+        let block: [String: Any] = [
             "name": NeuralWattProviderSpec.displayName,
             "baseUrl": NeuralWattProviderSpec.baseURL,
             "api": NeuralWattProviderSpec.api,

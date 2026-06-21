@@ -2895,13 +2895,6 @@ private struct SessionListContent: View, Equatable {
     let workingSessionIDs: Set<UUID>
     let generatingTitleIDs: Set<UUID>
     let activityByID: [UUID: PiAgentSessionGitActivity]
-    /// Sessions rendered in the cross-project "Active / Recent" section — each
-    /// gets a leading project icon so rows from different projects can be told
-    /// apart. Membership is the source of truth for "this row shows an icon".
-    let activeRecentSessionIDs: Set<UUID>
-    /// Resolves the leading project icon for Active / Recent rows. Passed in
-    /// (not read from a view model) so the `Equatable` gate owns the diff.
-    let projectByPath: [String: DiscoveredProject]
     /// Snapshot of `scrollRequest`'s value at construction, compared in `==`.
     /// The binding itself can't be compared: both sides read the same live
     /// state storage, so old-vs-new is always equal and the gate would
@@ -2937,8 +2930,6 @@ private struct SessionListContent: View, Equatable {
         else if lhs.workingSessionIDs != rhs.workingSessionIDs { diff = "workingSessionIDs" }
         else if lhs.generatingTitleIDs != rhs.generatingTitleIDs { diff = "generatingTitleIDs" }
         else if lhs.activityByID != rhs.activityByID { diff = "activityByID" }
-        else if lhs.activeRecentSessionIDs != rhs.activeRecentSessionIDs { diff = "activeRecentSessionIDs" }
-        else if lhs.projectByPath != rhs.projectByPath { diff = "projectByPath" }
         // A pending scroll request must defeat the equatable gate, or the
         // inner AppList's onChange never sees the new value and the jump to
         // the selected row silently doesn't happen.
@@ -2989,22 +2980,15 @@ private struct SessionListContent: View, Equatable {
     /// attaching a custom project-group header to any section that needs one.
     private var appSections: [AppListSection<PiAgentSessionRecord>] {
         sections.map { section in
-            let isActiveRecent = section.id == PiAgentSessionGrouping.activeRecentSectionID
-            let header: AnyView?
-            if shouldShowHeader(for: section) {
-                header = isActiveRecent
-                    ? AnyView(ActiveRecentSectionHeader(section: section))
-                    : AnyView(PiAgentSessionGroupHeader(
+            AppListSection(
+                id: section.id,
+                header: shouldShowHeader(for: section)
+                    ? AnyView(PiAgentSessionGroupHeader(
                         section: section,
                         onToggleCollapse: { onToggleCollapse(section.id) },
                         onCreateSession: { onCreateSessionForProject(section.id) }
                     ))
-            } else {
-                header = nil
-            }
-            return AppListSection(
-                id: section.id,
-                header: header,
+                    : nil,
                 footer: shouldShowFooter(for: section)
                     ? AnyView(PiAgentSessionGroupFooter(
                         section: section,
@@ -3030,7 +3014,6 @@ private struct SessionListContent: View, Equatable {
 
     @ViewBuilder
     private func row(_ session: PiAgentSessionRecord) -> some View {
-        let isLeading = activeRecentSessionIDs.contains(session.id)
         PiAgentSessionRow(
             session: session,
             isSelected: selectedSessionIDs.contains(session.id),
@@ -3038,8 +3021,6 @@ private struct SessionListContent: View, Equatable {
             isRenaming: renamingSessionID == session.id,
             isGeneratingTitle: generatingTitleIDs.contains(session.id),
             gitActivity: activityByID[session.id] ?? .none,
-            showsLeadingProjectIcon: isLeading,
-            leadingProject: isLeading ? projectByPath[session.projectPath] : nil,
             onSelect: { onSelect(session) },
             onBeginRename: { onBeginRename(session) },
             onEndRename: onEndRename,
@@ -3054,30 +3035,6 @@ private struct SessionListContent: View, Equatable {
                 Label(selectedSessionIDs.contains(session.id) && selectedSessionIDs.count > 1 ? "Delete Selected Sessions" : "Delete Session", systemImage: "trash")
             }
         }
-    }
-}
-
-/// Lightweight header for the cross-project "Active / Recent" section: an accent
-/// symbol + label, no disclosure chevron or new-session affordance (it's an
-/// aggregate, not a project). Uses the same horizontal padding as project
-/// headers so it lines up with the rows below it.
-private struct ActiveRecentSectionHeader: View {
-    let section: PiAgentSessionListSection
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: section.fallbackSymbolName)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(AppTheme.brandAccent)
-                .frame(width: 22, height: 22, alignment: .center)
-            Text(section.title)
-                .font(AppTheme.Font.footnote.weight(.semibold))
-                .foregroundStyle(AppTheme.mutedText)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 8)
-        .frame(minHeight: 30, alignment: .center)
     }
 }
 
@@ -3239,7 +3196,7 @@ struct CodingAgentExpandedPanel: View {
 
             if !hasAnyScopedSessions {
                 AppEmptyState("No sessions yet", systemImage: "square.and.pencil", description: emptySessionsMessage, layout: .fill)
-            } else if visibleSessions.isEmpty {
+            } else if visibleSections.isEmpty {
                 AppEmptyState("No sessions found", systemImage: "magnifyingglass", description: "Try another search.", layout: .fill)
             } else {
                 SessionListContent(
@@ -3250,8 +3207,6 @@ struct CodingAgentExpandedPanel: View {
                     workingSessionIDs: workingVisibleSessionIDs,
                     generatingTitleIDs: viewModel.piAgentTitleGeneratingSessionIDs,
                     activityByID: visibleSessionActivityByID,
-                    activeRecentSessionIDs: activeRecentSessionIDs,
-                    projectByPath: viewModel.projectByPath,
                     scrollRequestID: sessionScrollRequest,
                     scrollRequest: $sessionScrollRequest,
                     selection: $selectedSessionIDs,
@@ -3388,13 +3343,6 @@ struct CodingAgentExpandedPanel: View {
 
     private var visibleSessionIDs: [UUID] { visibleSessions.map(\.id) }
 
-    /// Session ids rendered in the cross-project "Active / Recent" section —
-    /// each gets a leading project icon so rows from different projects can be
-    /// told apart.
-    private var activeRecentSessionIDs: Set<UUID> {
-        Set(visibleSections.first { $0.id == PiAgentSessionGrouping.activeRecentSectionID }?.items.map(\.id) ?? [])
-    }
-
     private func schedulePostExpandWork() {
         postExpandTask?.cancel()
         postExpandTask = Task { @MainActor in
@@ -3435,7 +3383,6 @@ struct CodingAgentExpandedPanel: View {
             expandedProjectIDs: viewModel.expandedProjects,
             collapsedProjectIDs: viewModel.collapsedProjects,
             capPreviews: capPreviews,
-            includeActiveRecent: capPreviews,
             isWorking: { viewModel.piAgentSessionIsWorking($0) },
             selectedSessionID: store.selectedSession?.id
         )
@@ -3833,7 +3780,6 @@ struct PiAgentScreen: View {
             expandedProjectIDs: viewModel.expandedProjects,
             collapsedProjectIDs: viewModel.collapsedProjects,
             capPreviews: capPreviews,
-            includeActiveRecent: capPreviews,
             isWorking: { viewModel.piAgentSessionIsWorking($0) },
             selectedSessionID: store.selectedSession?.id
         )
@@ -3841,13 +3787,6 @@ struct PiAgentScreen: View {
 
     private var visibleSessionIDs: [UUID] {
         visibleSessions.map(\.id)
-    }
-
-    /// Session ids rendered in the cross-project "Active / Recent" section —
-    /// each gets a leading project icon so rows from different projects can be
-    /// told apart.
-    private var activeRecentSessionIDs: Set<UUID> {
-        Set(visibleSections.first { $0.id == PiAgentSessionGrouping.activeRecentSectionID }?.items.map(\.id) ?? [])
     }
 
     private func rebuildSessionActivityCache() {
@@ -3984,8 +3923,6 @@ struct PiAgentScreen: View {
                             workingSessionIDs: workingVisibleSessionIDs,
                             generatingTitleIDs: viewModel.piAgentTitleGeneratingSessionIDs,
                             activityByID: visibleSessionActivityByID,
-                            activeRecentSessionIDs: activeRecentSessionIDs,
-                            projectByPath: viewModel.projectByPath,
                             selection: $selectedSessionIDs,
                             onSelect: { session in
                                 renamingSessionID = nil

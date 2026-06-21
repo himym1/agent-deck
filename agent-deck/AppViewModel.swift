@@ -2569,8 +2569,7 @@ final class AppViewModel: NSObject {
             expandedProjectIDs: [],
             collapsedProjectIDs: [],
             capPreviews: false,
-            includeActiveRecent: true,
-            isWorking: { piAgentSessionIsWorking($0) },
+            isWorking: { _ in false },
             selectedSessionID: nil
         ).flatMap(\.items)
     }
