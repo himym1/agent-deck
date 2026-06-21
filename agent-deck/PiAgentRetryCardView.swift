@@ -218,15 +218,15 @@ struct PiAgentRetryCard: View {
     let timestamp: Date
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 7) {
             Image(systemName: icon)
-                .font(AppTheme.Font.callout.weight(.semibold))
                 .foregroundStyle(accent)
-                .frame(width: 18)
+                .frame(width: 16)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(headline)
-                    .font(AppTheme.Font.callout.weight(.semibold))
+                    .font(AppTheme.Font.footnote.weight(.semibold))
+                    .fontWidth(.expanded)
                 Text(detail)
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)

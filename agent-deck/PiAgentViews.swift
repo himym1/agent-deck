@@ -4573,8 +4573,9 @@ struct PiAgentScreen: View {
                 view.configure(payload: payload, width: width)
             })
         case .error(let entry):
-            // Fatal model/provider errors get the richer error row (headline +
-            // collapsible italic detail); per-tool failures keep the compact row.
+            // Fatal model/provider errors get the richer error row (fixed "Error"
+            // headline + full message as the detail body); per-tool failures keep
+            // the compact row.
             if entry.isModelError {
                 let payload = NativeErrorPayload.make(for: entry)
                 return .native(.of(PiAgentNativeErrorRowView.self) { view, width in
