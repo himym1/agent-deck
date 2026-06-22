@@ -565,6 +565,20 @@ struct PiAgentUIRequestSheet: View {
     let onConfirm: (Bool) -> Void
     let onCancel: () -> Void
 
+    @State private var parentWindowSize = CGSize(width: 1_000, height: 760)
+
+    private var sheetWidth: CGFloat {
+        let available = max(parentWindowSize.width - 80, 360)
+        let preferred = max(parentWindowSize.width * 0.82, min(720, available))
+        return min(preferred, available, 1_120)
+    }
+
+    private var sheetHeight: CGFloat {
+        let available = max(parentWindowSize.height - 120, 360)
+        let preferred = max(parentWindowSize.height * 0.74, min(540, available))
+        return min(preferred, available, 860)
+    }
+
     var body: some View {
         PiAgentUIRequestCard(
             request: request,
@@ -573,11 +587,72 @@ struct PiAgentUIRequestSheet: View {
             onConfirm: onConfirm,
             onCancel: onCancel
         )
-        .padding(22)
-        .frame(minWidth: 560, idealWidth: 680, maxWidth: 760, alignment: .topLeading)
-        .appGlassPanel(cornerRadius: AppTheme.Chat.glassPanelCornerRadius)
+        .padding(28)
+        .frame(width: sheetWidth, height: sheetHeight, alignment: .topLeading)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: AppTheme.Chat.glassPanelCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: AppTheme.Chat.glassPanelCornerRadius, style: .continuous)
+                .strokeBorder(AppTheme.contentStroke, lineWidth: 0.5)
+        )
+        .background(PiAgentParentWindowSizeReader(size: $parentWindowSize))
         .presentationSizing(.fitted)
         .presentationBackground(.clear)
+    }
+}
+
+private struct PiAgentParentWindowSizeReader: NSViewRepresentable {
+    @Binding var size: CGSize
+
+    func makeNSView(context: Context) -> ParentWindowSizeProbe {
+        let view = ParentWindowSizeProbe(frame: .zero)
+        view.onSizeChange = { newSize in
+            guard newSize.width > 0, newSize.height > 0, newSize != size else { return }
+            size = newSize
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: ParentWindowSizeProbe, context: Context) {
+        nsView.onSizeChange = { newSize in
+            guard newSize.width > 0, newSize.height > 0, newSize != size else { return }
+            size = newSize
+        }
+        nsView.refresh()
+    }
+
+    final class ParentWindowSizeProbe: NSView {
+        var onSizeChange: ((CGSize) -> Void)?
+        private var observedWindow: NSWindow?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            attachObserverIfNeeded()
+            refresh()
+        }
+
+        func refresh() {
+            attachObserverIfNeeded()
+            guard let window else { return }
+            onSizeChange?((window.sheetParent ?? window).contentLayoutRect.size)
+        }
+
+        @objc private func parentWindowDidResize(_ notification: Notification) {
+            refresh()
+        }
+
+        private func attachObserverIfNeeded() {
+            guard let sourceWindow = window?.sheetParent ?? window, sourceWindow !== observedWindow else { return }
+            if let observedWindow {
+                NotificationCenter.default.removeObserver(self, name: NSWindow.didResizeNotification, object: observedWindow)
+            }
+            observedWindow = sourceWindow
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(parentWindowDidResize(_:)),
+                name: NSWindow.didResizeNotification,
+                object: sourceWindow
+            )
+        }
     }
 }
 
@@ -595,32 +670,39 @@ struct PiAgentUIRequestCard: View {
     @State private var selectedOptions: Set<String> = []
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        Group {
             if isComposingFreeform {
                 freeformPage
             } else {
-                header
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        header
 
-                switch request.method {
-            case .select:
-                selectOptions
-            case .multiSelect:
-                multiSelectOptions
-            case .confirm:
-                HStack(spacing: 10) {
-                    Spacer()
-                    Button("Cancel", action: onCancel)
-                        .appSecondaryButton()
-                    Button("No") { onConfirm(false) }
-                        .appSecondaryButton()
-                    Button("Yes") { onConfirm(true) }
-                        .appPrimaryButton()
+                        switch request.method {
+                    case .select:
+                        selectOptions
+                    case .multiSelect:
+                        multiSelectOptions
+                    case .confirm:
+                        HStack(spacing: 10) {
+                            Spacer()
+                            Button("Cancel", action: onCancel)
+                                .appSecondaryButton()
+                            Button("No") { onConfirm(false) }
+                                .appSecondaryButton()
+                            Button("Yes") { onConfirm(true) }
+                                .appPrimaryButton()
+                        }
+                    case .input, .editor:
+                        textInput(submitTitle: "Submit", cancelTitle: "Cancel", cancelAction: onCancel) { submitTextInput() }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
-            case .input, .editor:
-                textInput(submitTitle: "Submit", cancelTitle: "Cancel", cancelAction: onCancel) { submitTextInput() }
-                }
+                .scrollIndicators(.automatic)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             if draft.isEmpty, let prefill = request.prefill {
                 draft = prefill
@@ -675,7 +757,7 @@ struct PiAgentUIRequestCard: View {
                         .allowsHitTesting(false)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 200, idealHeight: 280, maxHeight: 460)
+            .frame(maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(AppTheme.textContentFill)
@@ -852,9 +934,13 @@ struct PiAgentUIRequestCard: View {
                         }
                         Spacer(minLength: 0)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous)
+                            .strokeBorder(selectedOptions.contains(option) ? AppTheme.brandAccent.opacity(0.55) : AppTheme.contentStroke, lineWidth: selectedOptions.contains(option) ? 1 : 0.5)
+                    )
                 }
                 .buttonStyle(.plain)
             }
@@ -874,9 +960,13 @@ struct PiAgentUIRequestCard: View {
                             .fontWeight(.semibold)
                         Spacer(minLength: 0)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous)
+                            .strokeBorder(AppTheme.contentStroke, lineWidth: 0.5)
+                    )
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
