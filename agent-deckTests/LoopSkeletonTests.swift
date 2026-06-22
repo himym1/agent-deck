@@ -70,6 +70,69 @@ final class LoopSkeletonTests: XCTestCase {
         XCTAssertTrue(loopEntries[0].isLoopTranscriptCard)
     }
 
+    func testArtifactWriteTargetDoesNotModifyProjectTree() throws {
+        let stateFile = PiTestSupport.temporaryStateFile()
+        let projectURL = try PiTestSupport.temporaryProjectURL()
+        let sentinelURL = projectURL.appendingPathComponent("sentinel.txt")
+        try "original".write(to: sentinelURL, atomically: true, encoding: .utf8)
+        let before = try projectEntries(at: projectURL)
+        let store = PiAgentSessionStore(fileURL: stateFile)
+        let session = store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(url: projectURL), repository: nil)
+
+        let run = try XCTUnwrap(store.launchSmokeLoop(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(goal: "Artifact only", writeTarget: .artifactMarkdown, validationCommand: "/usr/bin/true")
+        ))
+
+        XCTAssertEqual(run.status, .completed)
+        XCTAssertEqual(try projectEntries(at: projectURL), before)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: projectURL.appendingPathComponent("loop-smoke-write-target.txt").path))
+    }
+
+    func testCurrentCheckoutWritesKnownFileOnlyWhenExplicitlySelected() throws {
+        let stateFile = PiTestSupport.temporaryStateFile()
+        let projectURL = try PiTestSupport.temporaryProjectURL()
+        let store = PiAgentSessionStore(fileURL: stateFile)
+        let session = store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(url: projectURL), repository: nil)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: projectURL.appendingPathComponent("loop-smoke-write-target.txt").path))
+        let run = try XCTUnwrap(store.launchSmokeLoop(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(goal: "Direct write", writeTarget: .currentCheckout, validationCommand: "/bin/pwd")
+        ))
+
+        let smokeURL = projectURL.appendingPathComponent("loop-smoke-write-target.txt")
+        XCTAssertEqual(run.status, .completed)
+        XCTAssertEqual(run.iterations.first?.changedFiles, ["loop-smoke-write-target.txt"])
+        XCTAssertEqual(run.iterations.first?.validationResult?.workingDirectory, projectURL.path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: smokeURL.path))
+    }
+
+    func testWorktreeTargetKeepsCurrentCheckoutUntouchedAndValidatesInWorktree() throws {
+        let stateFile = PiTestSupport.temporaryStateFile()
+        let projectURL = try makeTemporaryGitRepository()
+        let before = try projectEntries(at: projectURL)
+        let store = PiAgentSessionStore(fileURL: stateFile)
+        let session = store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(url: projectURL), repository: nil)
+
+        let run = try XCTUnwrap(store.launchSmokeLoop(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(goal: "Worktree write", writeTarget: .newWorktree, validationCommand: "test -f loop-smoke-write-target.txt")
+        ))
+
+        let worktreePath = try XCTUnwrap(run.iterations.first?.validationResult?.workingDirectory)
+        XCTAssertEqual(run.status, .completed)
+        XCTAssertEqual(run.stopReason, .success)
+        XCTAssertTrue(path(worktreePath, isUnder: try XCTUnwrap(run.artifactDirectoryPath)))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: URL(fileURLWithPath: worktreePath).appendingPathComponent("loop-smoke-write-target.txt").path))
+        XCTAssertEqual(try projectEntries(at: projectURL), before)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: projectURL.appendingPathComponent("loop-smoke-write-target.txt").path))
+        XCTAssertEqual(run.iterations.first?.changedFiles, ["loop-smoke-write-target.txt"])
+    }
+
     func testHydratingTranscriptWithoutLoopEntriesClearsCachedLoopRuns() throws {
         let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
         let session = store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(), repository: nil)
@@ -198,6 +261,44 @@ final class LoopSkeletonTests: XCTestCase {
         XCTAssertEqual(run.iterations.count, 1)
         XCTAssertNil(run.iterations[0].validationResult?.exitCode)
         XCTAssertEqual(run.iterations[0].validationResult?.stderr, "Validation command is empty.")
+    }
+
+    private func projectEntries(at url: URL) throws -> [String] {
+        let root = url.standardizedFileURL
+        let keys: [URLResourceKey] = [.isDirectoryKey]
+        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys) else { return [] }
+        var entries: [String] = []
+        for case let fileURL as URL in enumerator {
+            let relative = String(fileURL.standardizedFileURL.path.dropFirst(root.path.count + 1))
+            if relative == ".git" || relative.hasPrefix(".git/") {
+                enumerator.skipDescendants()
+                continue
+            }
+            entries.append(relative)
+        }
+        return entries.sorted()
+    }
+
+    private func makeTemporaryGitRepository() throws -> URL {
+        let projectURL = try PiTestSupport.temporaryProjectURL()
+        try "hello\n".write(to: projectURL.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
+        try runShell("git init && git config user.email test@example.com && git config user.name Test && git add README.md && git commit -m initial", in: projectURL)
+        return projectURL
+    }
+
+    private func runShell(_ command: String, in directory: URL) throws {
+        let process = Process()
+        let stderr = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-lc", command]
+        process.currentDirectoryURL = directory
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+        if process.terminationStatus != 0 {
+            let message = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            XCTFail(message)
+        }
     }
 
     private func path(_ path: String, isUnder parentPath: String) -> Bool {

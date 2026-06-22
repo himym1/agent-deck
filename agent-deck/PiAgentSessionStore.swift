@@ -848,7 +848,6 @@ final class PiAgentSessionStore {
     @discardableResult
     func launchSmokeLoop(sessionID: UUID, projectPath: String?, draft: LoopDraft, stopExistingActive: Bool = false) -> LoopRun? {
         guard !draft.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        guard draft.writeTarget == .artifactMarkdown else { return nil }
         if let active = activeLoopRun(for: sessionID) {
             guard stopExistingActive else { return nil }
             stopLoopRun(active.id, sessionID: sessionID)
@@ -864,42 +863,90 @@ final class PiAgentSessionStore {
         } catch {
             run.status = .failed
             run.endedAt = Date()
+            run.stopReason = .toolFailed
             upsertLoopRun(run)
             return nil
+        }
+
+        let executionContext: LoopExecutionContext
+        do {
+            executionContext = try prepareLoopExecutionContext(writeTarget: run.writeTarget, projectPath: projectPath, artifactDirectory: artifactDirectory)
+        } catch let error as LoopExecutionPreparationError {
+            run.status = .failed
+            run.endedAt = Date()
+            run.stopReason = error.stopReason
+            run.iterations.append(LoopIteration(
+                index: 0,
+                summary: error.localizedDescription,
+                artifacts: [],
+                validationResult: nil
+            ))
+            upsertLoopRun(run)
+            return run
+        } catch {
+            run.status = .failed
+            run.endedAt = Date()
+            run.stopReason = .toolFailed
+            run.iterations.append(LoopIteration(index: 0, summary: error.localizedDescription))
+            upsertLoopRun(run)
+            return run
         }
 
         let validationCommand = run.validationCommand
         for iterationIndex in 1...run.maxIterations {
             let iterationStartedAt = Date()
-            let markdown = "# Loop Smoke Output\n\nGoal: \(run.goal)\n\nIteration: \(iterationIndex)\n\nResult: Artifact smoke fixture completed."
-            let filename = iterationIndex == 1 ? "loop-smoke.md" : "loop-smoke-\(iterationIndex).md"
-            let artifactURL = artifactDirectory.appendingPathComponent(filename, isDirectory: false)
-            do {
-                try markdown.write(to: artifactURL, atomically: true, encoding: .utf8)
-            } catch {
-                run.status = .failed
-                run.endedAt = Date()
-                upsertLoopRun(run)
-                return nil
+            var artifacts: [LoopArtifact] = []
+            var changedFiles: [String] = []
+
+            switch run.writeTarget {
+            case .artifactMarkdown:
+                let markdown = "# Loop Smoke Output\n\nGoal: \(run.goal)\n\nIteration: \(iterationIndex)\n\nResult: Artifact smoke fixture completed."
+                let filename = iterationIndex == 1 ? "loop-smoke.md" : "loop-smoke-\(iterationIndex).md"
+                let artifactURL = artifactDirectory.appendingPathComponent(filename, isDirectory: false)
+                do {
+                    try markdown.write(to: artifactURL, atomically: true, encoding: .utf8)
+                } catch {
+                    run.status = .failed
+                    run.endedAt = Date()
+                    run.stopReason = .toolFailed
+                    upsertLoopRun(run)
+                    return nil
+                }
+                artifacts = [LoopArtifact(filename: filename, markdown: markdown, filePath: artifactURL.path)]
+            case .newWorktree, .currentCheckout:
+                do {
+                    guard let workingDirectory = executionContext.workingDirectory else {
+                        run.status = .failed
+                        run.endedAt = Date()
+                        run.stopReason = .unsafeWriteTarget
+                        upsertLoopRun(run)
+                        return run
+                    }
+                    let smokeURL = workingDirectory.appendingPathComponent("loop-smoke-write-target.txt", isDirectory: false)
+                    let text = "Loop smoke write target\nRun: \(run.id.uuidString)\nIteration: \(iterationIndex)\nTarget: \(run.writeTarget.rawValue)\n"
+                    try text.write(to: smokeURL, atomically: true, encoding: .utf8)
+                    changedFiles = ["loop-smoke-write-target.txt"]
+                } catch {
+                    run.status = .failed
+                    run.endedAt = Date()
+                    run.stopReason = .toolFailed
+                    upsertLoopRun(run)
+                    return nil
+                }
             }
 
-            let artifact = LoopArtifact(
-                filename: filename,
-                markdown: markdown,
-                filePath: artifactURL.path
-            )
             let validationResult: LoopValidationResult
             if validationCommand.isEmpty {
                 validationResult = LoopValidationResult(
                     command: "",
-                    workingDirectory: validationWorkingDirectory(projectPath: projectPath)?.path,
+                    workingDirectory: executionContext.workingDirectory?.path,
                     exitCode: nil,
                     duration: 0,
                     stdout: "",
                     stderr: "Validation command is empty."
                 )
             } else {
-                validationResult = runValidationCommand(validationCommand, projectPath: projectPath)
+                validationResult = runValidationCommand(validationCommand, workingDirectory: executionContext.workingDirectory)
             }
 
             let iterationEndedAt = Date()
@@ -909,8 +956,9 @@ final class PiAgentSessionStore {
                 startedAt: iterationStartedAt,
                 endedAt: iterationEndedAt,
                 summary: validationResult.didPass ? "Validation passed." : "Validation did not pass.",
-                artifacts: [artifact],
-                validationResult: validationResult
+                artifacts: artifacts,
+                validationResult: validationResult,
+                changedFiles: changedFiles
             ))
 
             if validationCommand.isEmpty {
@@ -939,6 +987,45 @@ final class PiAgentSessionStore {
         return run
     }
 
+    private struct LoopExecutionContext {
+        let workingDirectory: URL?
+    }
+
+    private struct LoopExecutionPreparationError: LocalizedError {
+        let stopReason: LoopStopReason
+        let message: String
+
+        var errorDescription: String? { message }
+    }
+
+    private func prepareLoopExecutionContext(writeTarget: LoopWriteTarget, projectPath: String?, artifactDirectory: URL) throws -> LoopExecutionContext {
+        switch writeTarget {
+        case .artifactMarkdown:
+            return LoopExecutionContext(workingDirectory: validationWorkingDirectory(projectPath: projectPath))
+        case .currentCheckout:
+            guard let workingDirectory = validationWorkingDirectory(projectPath: projectPath) else {
+                throw LoopExecutionPreparationError(stopReason: .unsafeWriteTarget, message: "Current checkout target requires an existing project directory.")
+            }
+            return LoopExecutionContext(workingDirectory: workingDirectory)
+        case .newWorktree:
+            guard let projectDirectory = validationWorkingDirectory(projectPath: projectPath) else {
+                throw LoopExecutionPreparationError(stopReason: .unsafeWriteTarget, message: "Worktree target requires an existing project directory.")
+            }
+            let worktreeURL = artifactDirectory.appendingPathComponent("worktree", isDirectory: true)
+            try? FileManager.default.removeItem(at: worktreeURL)
+            let repositoryCheck = runGitSynchronously(["-C", projectDirectory.path, "rev-parse", "--is-inside-work-tree"], currentDirectory: nil, timeout: 15)
+            guard repositoryCheck.exitCode == 0, repositoryCheck.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "true" else {
+                throw LoopExecutionPreparationError(stopReason: .unsafeWriteTarget, message: "Worktree target requires a git repository.")
+            }
+            let result = runGitSynchronously(["-C", projectDirectory.path, "worktree", "add", "--detach", worktreeURL.path, "HEAD"], currentDirectory: nil, timeout: 60)
+            guard result.exitCode == 0 else {
+                let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                throw LoopExecutionPreparationError(stopReason: .toolFailed, message: detail.isEmpty ? "git worktree add failed." : detail)
+            }
+            return LoopExecutionContext(workingDirectory: worktreeURL)
+        }
+    }
+
     private func validationWorkingDirectory(projectPath: String?) -> URL? {
         guard let projectPath, !projectPath.isEmpty else { return nil }
         var isDirectory: ObjCBool = false
@@ -946,9 +1033,8 @@ final class PiAgentSessionStore {
         return URL(fileURLWithPath: projectPath, isDirectory: true)
     }
 
-    private func runValidationCommand(_ command: String, projectPath: String?) -> LoopValidationResult {
+    private func runValidationCommand(_ command: String, workingDirectory: URL?) -> LoopValidationResult {
         let startedAt = Date()
-        let workingDirectory = validationWorkingDirectory(projectPath: projectPath)
         let outputDirectory = fileURL.deletingLastPathComponent().appendingPathComponent("loop-validation-output", isDirectory: true)
         let stdoutURL = outputDirectory.appendingPathComponent("\(UUID().uuidString)-stdout.txt")
         let stderrURL = outputDirectory.appendingPathComponent("\(UUID().uuidString)-stderr.txt")
@@ -1001,6 +1087,33 @@ final class PiAgentSessionStore {
                 stdout: "",
                 stderr: error.localizedDescription
             )
+        }
+    }
+
+    private func runGitSynchronously(_ arguments: [String], currentDirectory: URL?, timeout: TimeInterval) -> CommandResult {
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        let process = Process()
+        let terminationSemaphore = DispatchSemaphore(value: 0)
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git"] + arguments
+        process.currentDirectoryURL = currentDirectory
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+        process.terminationHandler = { _ in terminationSemaphore.signal() }
+        do {
+            try process.run()
+            let timedOut = terminationSemaphore.wait(timeout: .now() + timeout) == .timedOut
+            if timedOut {
+                process.terminate()
+                process.waitUntilExit()
+                return CommandResult(stdout: "", stderr: "git command timed out after \(Int(timeout)) seconds.", exitCode: -1)
+            }
+            let stdout = String(decoding: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let stderr = String(decoding: stderrPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            return CommandResult(stdout: stdout, stderr: stderr, exitCode: process.terminationStatus)
+        } catch {
+            return CommandResult(stdout: "", stderr: error.localizedDescription, exitCode: -1)
         }
     }
 

@@ -87,6 +87,8 @@ struct LoopLaunchSheet: View {
                     }
                 }
 
+                writeTargetExplanation
+
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Goal")
                     TextEditor(text: $draft.goal)
@@ -145,6 +147,24 @@ struct LoopLaunchSheet: View {
         .onChange(of: saveToLoopBank) { _, enabled in
             guard enabled, saveName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             saveName = defaultSaveName()
+        }
+    }
+
+    @ViewBuilder
+    private var writeTargetExplanation: some View {
+        switch draft.writeTarget {
+        case .artifactMarkdown:
+            Text("Writes only to the loop artifact directory. Project files are not modified.")
+                .font(AppTheme.Font.caption)
+                .foregroundStyle(AppTheme.mutedText)
+        case .newWorktree:
+            Text("Explicit coding target. Agent Deck creates a per-run git worktree and runs validation there; the current checkout remains untouched.")
+                .font(AppTheme.Font.caption)
+                .foregroundStyle(AppTheme.mutedText)
+        case .currentCheckout:
+            Text("Explicit/direct coding target. The loop writes in the current checkout and runs validation in this project path: \(session.projectPath.isEmpty ? "Unavailable" : session.projectPath)")
+                .font(AppTheme.Font.caption)
+                .foregroundStyle(.orange)
         }
     }
 

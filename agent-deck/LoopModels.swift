@@ -14,12 +14,16 @@ nonisolated enum LoopStructureKind: String, Codable, CaseIterable, Identifiable,
 
 nonisolated enum LoopWriteTarget: String, Codable, CaseIterable, Identifiable, Sendable {
     case artifactMarkdown
+    case newWorktree
+    case currentCheckout
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
         case .artifactMarkdown: return "Artifact / Markdown output"
+        case .newWorktree: return "New worktree (explicit coding target)"
+        case .currentCheckout: return "Current checkout (explicit/direct)"
         }
     }
 }
@@ -56,6 +60,8 @@ nonisolated enum LoopStopReason: String, Codable, CaseIterable, Identifiable, Se
     case userStopped
     case validationUnavailable
     case validationFailedAfterFinalIteration
+    case unsafeWriteTarget
+    case toolFailed
     case appInterrupted
 
     var id: String { rawValue }
@@ -67,6 +73,8 @@ nonisolated enum LoopStopReason: String, Codable, CaseIterable, Identifiable, Se
         case .userStopped: return "User stopped"
         case .validationUnavailable: return "Validation unavailable"
         case .validationFailedAfterFinalIteration: return "Validation failed after final iteration"
+        case .unsafeWriteTarget: return "Unsafe write target"
+        case .toolFailed: return "Tool failed"
         case .appInterrupted: return "App interrupted"
         }
     }
@@ -228,8 +236,9 @@ nonisolated struct LoopIteration: Identifiable, Codable, Equatable, Sendable {
     var summary: String
     var artifacts: [LoopArtifact]
     var validationResult: LoopValidationResult?
+    var changedFiles: [String]
 
-    init(id: UUID = UUID(), index: Int, startedAt: Date = Date(), endedAt: Date? = nil, summary: String = "", artifacts: [LoopArtifact] = [], validationResult: LoopValidationResult? = nil) {
+    init(id: UUID = UUID(), index: Int, startedAt: Date = Date(), endedAt: Date? = nil, summary: String = "", artifacts: [LoopArtifact] = [], validationResult: LoopValidationResult? = nil, changedFiles: [String] = []) {
         self.id = id
         self.index = index
         self.startedAt = startedAt
@@ -237,6 +246,23 @@ nonisolated struct LoopIteration: Identifiable, Codable, Equatable, Sendable {
         self.summary = summary
         self.artifacts = artifacts
         self.validationResult = validationResult
+        self.changedFiles = changedFiles
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, index, startedAt, endedAt, summary, artifacts, validationResult, changedFiles
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        index = try container.decode(Int.self, forKey: .index)
+        startedAt = try container.decode(Date.self, forKey: .startedAt)
+        endedAt = try container.decodeIfPresent(Date.self, forKey: .endedAt)
+        summary = try container.decode(String.self, forKey: .summary)
+        artifacts = try container.decode([LoopArtifact].self, forKey: .artifacts)
+        validationResult = try container.decodeIfPresent(LoopValidationResult.self, forKey: .validationResult)
+        changedFiles = try container.decodeIfPresent([String].self, forKey: .changedFiles) ?? []
     }
 }
 
@@ -346,6 +372,9 @@ enum LoopRunTranscriptCodec {
         if let validation = run.iterations.last?.validationResult {
             lines.append("Validation exit code: \(validation.exitCode.map(String.init) ?? "unavailable")")
             lines.append("Validation duration: \(String(format: "%.2fs", validation.duration))")
+        }
+        if let changedFiles = run.iterations.last?.changedFiles, !changedFiles.isEmpty {
+            lines.append("Changed files: \(changedFiles.joined(separator: ", "))")
         }
         if let artifact = run.iterations.last?.artifacts.first {
             lines.append("")
