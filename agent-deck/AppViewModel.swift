@@ -312,6 +312,7 @@ final class AppViewModel: NSObject {
     private var autoRefreshCancellable: AnyCancellable?
     private var watchFingerprintTask: Task<Void, Never>?
     private var watchEventDebounceTask: Task<Void, Never>?
+    private var deferredWatchRefreshTask: Task<Void, Never>?
     private var fileWatchEventMonitor: FileWatchEventMonitor?
     private var lastWatchFingerprint: String = ""
     private var watchedURLsForAutoRefresh: [URL] = []
@@ -327,6 +328,7 @@ final class AppViewModel: NSObject {
     private let githubDiffCacheLimit = 64
     private let repositoryChangesCacheLifetime: TimeInterval = 5
     private let watchEventDebounceNanoseconds: UInt64 = 1_000_000_000
+    private let watchRefreshQuietNanoseconds: UInt64 = 1_200_000_000
     private let fallbackAutoRefreshInterval: TimeInterval = 300
     private var nativeParallelSchedulersByID: [UUID: NativeParallelGraphScheduler] = [:]
     private let lastSelectedProjectDefaultsKey = "lastSelectedProjectPath"
@@ -9140,6 +9142,8 @@ final class AppViewModel: NSObject {
         fileWatchEventMonitor = nil
         watchEventDebounceTask?.cancel()
         watchEventDebounceTask = nil
+        deferredWatchRefreshTask?.cancel()
+        deferredWatchRefreshTask = nil
         autoRefreshCancellable?.cancel()
         autoRefreshCancellable = nil
         if cancelPendingScan {
@@ -9161,6 +9165,12 @@ final class AppViewModel: NSObject {
 
     private func scheduleRefreshForWatchedFileEvent() {
         guard !didShutdown else { return }
+        if shouldDeferWatchedFileRefresh {
+            watchEventDebounceTask?.cancel()
+            watchEventDebounceTask = nil
+            scheduleDeferredWatchedFileRefresh()
+            return
+        }
         watchEventDebounceTask?.cancel()
         let delay = watchEventDebounceNanoseconds
         watchEventDebounceTask = Task { @MainActor [weak self, delay] in
@@ -9171,8 +9181,30 @@ final class AppViewModel: NSObject {
         }
     }
 
+    private var shouldDeferWatchedFileRefresh: Bool {
+        TranscriptInteractionGate.isInteractingRecently || TranscriptInteractionGate.isStreamingRecently
+    }
+
+    private func scheduleDeferredWatchedFileRefresh() {
+        guard !didShutdown, deferredWatchRefreshTask == nil else { return }
+        let quietDelay = watchRefreshQuietNanoseconds
+        deferredWatchRefreshTask = Task { @MainActor [weak self, quietDelay] in
+            while true {
+                try? await Task.sleep(nanoseconds: quietDelay)
+                guard let self, !Task.isCancelled, !self.didShutdown else { return }
+                guard self.shouldDeferWatchedFileRefresh else { break }
+            }
+            self.deferredWatchRefreshTask = nil
+            self.refreshIfWatchedFilesChanged()
+        }
+    }
+
     private func refreshIfWatchedFilesChanged() {
         guard watchFingerprintTask == nil else { return }
+        guard !shouldDeferWatchedFileRefresh else {
+            scheduleDeferredWatchedFileRefresh()
+            return
+        }
         let previousFingerprint = lastWatchFingerprint
         let urls = currentWatchedURLsForAutoRefresh()
         watchFingerprintTask = Task.detached(priority: .utility) { [weak self, previousFingerprint, urls] in
@@ -9188,11 +9220,11 @@ final class AppViewModel: NSObject {
         guard fingerprint != previousFingerprint else { return }
         // A real on-disk change, but reassigning project state mid-scroll or
         // mid-stream re-evals the screen body (transcript itemsBuild +
-        // updateNSView) and drops frames. Re-arm the debounce WITHOUT committing
-        // the new fingerprint, so once the gesture/stream settles the next check
-        // still sees the change and refreshes.
-        if TranscriptInteractionGate.isInteractingRecently || TranscriptInteractionGate.isStreamingRecently {
-            scheduleRefreshForWatchedFileEvent()
+        // updateNSView) and drops frames. Keep one deferred refresh armed
+        // WITHOUT committing the new fingerprint, so once interaction/streaming
+        // settles the next check still sees the change and refreshes.
+        if shouldDeferWatchedFileRefresh {
+            scheduleDeferredWatchedFileRefresh()
             return
         }
         lastWatchFingerprint = fingerprint

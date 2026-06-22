@@ -972,6 +972,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private var pendingHeightWork: DispatchWorkItem?
         private var pendingScrollWork: DispatchWorkItem?
         private var pendingSettleScrollWork: DispatchWorkItem?
+        private var pendingGlideLandingSettleWork: DispatchWorkItem?
         private var pendingRemeasureWork: DispatchWorkItem?
         private var pendingRemeasureIDs = Set<String>()
         private var pendingScrollSettle = false
@@ -983,7 +984,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         // chasing the growing document so the motion is a glide. It disengages the
         // instant the user scrolls (checked per tick + on live-scroll start + on
         // any user-driven bounds change). Explicit scrolls (send, jump-to-latest,
-        // session switch) still snap — see `performScrollToBottom(_:animated:)`.
+        // session switch) still snap — see `performScrollToBottom(_:animated:forceLayout:)`.
         private var followGlideTimer: Timer?
         // Fraction of the remaining gap consumed per frame. Higher = snappier /
         // smaller trailing gap during fast streaming; lower = softer glide.
@@ -1318,6 +1319,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                         self.pendingScrollWork = nil
                         self.pendingSettleScrollWork?.cancel()
                         self.pendingSettleScrollWork = nil
+                        self.pendingGlideLandingSettleWork?.cancel()
+                        self.pendingGlideLandingSettleWork = nil
                         self.pendingScrollSettle = false
                     }
                     // Clip-view bounds change before the scrollView frame notification fires,
@@ -1353,6 +1356,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     self.isLiveScrolling = true
                     self.profiler.gestureStart()
                     self.stopFollowGlide()
+                    self.pendingGlideLandingSettleWork?.cancel()
+                    self.pendingGlideLandingSettleWork = nil
                     // The user grabbed the scroll — drop follow intent until they
                     // either land back at the bottom or jump to latest.
                     self.isAutoFollowing = false
@@ -1395,6 +1400,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             pendingHeightWork?.cancel()
             pendingScrollWork?.cancel()
             pendingSettleScrollWork?.cancel()
+            pendingGlideLandingSettleWork?.cancel()
             pendingRemeasureWork?.cancel()
             pendingRemeasureIDs.removeAll()
             pendingWidthWork?.cancel()
@@ -2383,6 +2389,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 isAutoFollowing = true
                 pendingScrollWork?.cancel()
                 pendingScrollWork = nil
+                pendingGlideLandingSettleWork?.cancel()
+                pendingGlideLandingSettleWork = nil
                 pendingScrollSettle = false
                 performScrollToBottom(scrollView, animated: false)
                 settleVisibleRowsAfterSessionSwitch()
@@ -2405,7 +2413,17 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         }
 
         private func scrollToBottom(settle: Bool) {
+            if settle {
+                pendingGlideLandingSettleWork?.cancel()
+                pendingGlideLandingSettleWork = nil
+            }
             pendingScrollSettle = pendingScrollSettle || settle
+            // While the passive streaming glide is already following, additional
+            // non-settle requests do not need even a runloop-hop work item. The
+            // timer re-reads the current document height each frame, so new tokens
+            // are naturally coalesced into that in-flight glide. Explicit settle
+            // requests still pierce through and snap to the authoritative bottom.
+            if !settle, followGlideTimer != nil { return }
             guard pendingScrollWork == nil else { return }
             let work = DispatchWorkItem { [weak self] in
                 guard let self, let scrollView = self.scrollView else { return }
@@ -2415,22 +2433,22 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 // Re-check at fire time: this item runs a runloop hop after it
                 // was scheduled, and the user may have grabbed the scroll in
                 // between. Explicit jumps (settle) still win; the passive follow
-                // yields — its glide would be stopped by the next user tick
-                // anyway, but only after paying the height flush + full-document
-                // layout in performScrollToBottom mid-gesture.
+                // yields without paying a synchronous height flush or full-document
+                // layout mid-gesture.
                 if !shouldSettle, self.isUserScrollingRecently { return }
-                // Streaming follow (settle == false) glides; explicit / session
-                // switch (settle == true) snaps.
-                self.performScrollToBottom(scrollView, animated: !shouldSettle)
+                // Streaming follow (settle == false) glides using current geometry;
+                // explicit settle/session-switch paths snap after an authoritative
+                // height flush + layout.
+                self.performScrollToBottom(scrollView, animated: !shouldSettle, forceLayout: shouldSettle)
                 guard shouldSettle else { return }
                 self.pendingSettleScrollWork?.cancel()
                 let settleWork = DispatchWorkItem { [weak self] in
                     guard let self, let scrollView = self.scrollView else { return }
                     self.pendingSettleScrollWork = nil
-                    // Don't force a re-measure here — pre-measurement and the synchronous
-                    // height-work flush inside performScrollToBottom mean heights are already
-                    // accurate. Re-measuring would risk a small secondary scroll jump.
-                    self.performScrollToBottom(scrollView, animated: false)
+                    // The delayed settle is explicit: pay the synchronous flush once
+                    // here so jump-to-latest/send lands on the true bottom after any
+                    // pending cell measurements have arrived.
+                    self.performScrollToBottom(scrollView, animated: false, forceLayout: true)
                 }
                 self.pendingSettleScrollWork = settleWork
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: settleWork)
@@ -2439,46 +2457,29 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             DispatchQueue.main.async(execute: work)
         }
 
-        private func performScrollToBottom(_ scrollView: NSScrollView, animated: Bool) {
+        private func performScrollToBottom(_ scrollView: NSScrollView, animated: Bool, forceLayout: Bool = true) {
             guard let documentView = scrollView.documentView else { return }
             // An auto-follow glide already eases toward the (growing) bottom every
-            // frame and re-reads the document height as it goes, so re-running the
-            // synchronous height flush + full-document `layoutSubtreeIfNeeded` here
-            // on every streaming re-tile is wasted work (this was the steady ~33ms
-            // streaming hitch). Skip it while a glide is in flight; `stepFollowGlide`
-            // forces an authoritative layout before it ever stops, so the glide
-            // cannot settle above the true bottom even if these ticks are skipped.
+            // frame and re-reads the document height as it goes, so repeated
+            // streaming requests should collapse into that in-flight timer instead
+            // of flushing heights or forcing full-document layout.
             if animated, followGlideTimer != nil { return }
-            // Cheap pre-check: when no height work is pending (so the content
-            // height is already settled) and the current bounds already place us at
-            // the bottom, skip the forced flush + full-document layout below. This
-            // is the common case for auto-follow glide ticks and bounds-callback
-            // re-checks — running `layoutSubtreeIfNeeded()` there cost a full layout
-            // pass (~50ms on large transcripts) just to confirm we hadn't moved.
-            if pendingHeightIDs.isEmpty {
-                let clipView = scrollView.contentView
-                let maxY = max(0, documentView.bounds.height - clipView.bounds.height)
-                if abs(clipView.bounds.origin.y - maxY) <= 1 {
-                    stopFollowGlide()
-                    publishPinnedState(true)
-                    return
-                }
-            }
-            // Flush any debounced height work and force a layout pass so the documentView's
-            // bounds reflect current row heights. Without this, the math below uses stale
-            // heights and ends up scrolling short of the true bottom — which crops the last
-            // assistant message during streaming.
-            flushPendingHeightWorkSynchronously()
-            documentView.layoutSubtreeIfNeeded()
-            let maxY = max(0, documentView.bounds.height - scrollView.contentView.bounds.height)
             let clipView = scrollView.contentView
+            if forceLayout {
+                // Explicit settle/session-switch paths need authoritative geometry.
+                // Keep this synchronous work out of normal streaming auto-follow,
+                // where samples showed it repeatedly forcing full document layout.
+                flushPendingHeightWorkSynchronously()
+                documentView.layoutSubtreeIfNeeded()
+            }
+            let maxY = max(0, documentView.bounds.height - clipView.bounds.height)
             guard abs(clipView.bounds.origin.y - maxY) > 1 else {
-                stopFollowGlide()
+                if !animated { stopFollowGlide() }
                 publishPinnedState(true)
                 return
             }
             // Streaming follow: hand off to the glide timer, which eases toward the
-            // (still-growing) bottom over the next frames instead of snapping.
+            // current bottom and picks up future height changes on later ticks.
             if animated {
                 startFollowGlide()
                 return
@@ -2547,39 +2548,47 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 isProgrammaticScroll = false
                 return
             }
-            // Looks settled — but the height may be stale if a streaming re-tile has
-            // not laid out yet. Force the pending height work + a layout once here
-            // (cheap: only at the landing, not per tick) to confirm the TRUE bottom
-            // before stopping. If content grew under us, keep gliding toward it; this
-            // is what guarantees the glide never settles above the last line, even
-            // though `performScrollToBottom` skips its layout while we run.
-            flushPendingHeightWorkSynchronously()
-            documentView.layoutSubtreeIfNeeded()
-            let trueMaxY = max(0, documentView.bounds.height - clipView.bounds.height)
-            let trueGap = trueMaxY - clipView.bounds.origin.y
+            // Looks settled against the geometry AppKit has already produced.
+            // Do not force pending height work or document layout here: during
+            // streaming this landing check can happen for every token batch, and
+            // samples showed that synchronous full-document layout dominating the
+            // main thread. If height work is still pending, schedule one deferred
+            // authoritative snap after streaming goes quiet so the glide cannot
+            // remain permanently short of the final measured bottom.
 #if DEBUG
-            // Glide-side smoking-gun: trueGap<0 = eased past the true bottom and now
-            // pulling back UP (downward content nudge); trueGap large = chased a
-            // stale, too-short bottom for many frames then jumps.
             TranscriptStreamWobbleProbe.shared.noteGlideLanding(
-                trueGap: trueGap, docHeight: documentView.bounds.height, clipHeight: clipView.bounds.height)
+                trueGap: gap, docHeight: documentView.bounds.height, clipHeight: clipView.bounds.height)
 #endif
-            guard abs(trueGap) > 0.5 else {
-                if abs(trueGap) > 0.01 {
-                    isProgrammaticScroll = true
-                    clipView.scroll(to: NSPoint(x: 0, y: trueMaxY))
-                    scrollView.reflectScrolledClipView(clipView)
-                    isProgrammaticScroll = false
+            scheduleGlideLandingSettleIfNeeded()
+            stopFollowGlide()
+            publishPinnedState(true)
+            return
+        }
+
+        private func scheduleGlideLandingSettleIfNeeded(
+            delay: TimeInterval = 0.12,
+            requirePendingHeightWork: Bool = true
+        ) {
+            guard pendingGlideLandingSettleWork == nil,
+                  !requirePendingHeightWork || pendingHeightWork != nil || !pendingHeightIDs.isEmpty else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.pendingGlideLandingSettleWork = nil
+                guard self.isAutoFollowing, !self.isUserScrollingRecently else { return }
+                // While tokens are still arriving, keep deferring instead of
+                // turning the landing check back into a per-token forced layout.
+                // Preserve the one requested settle even if the original pending
+                // height work drained meanwhile; the point is to confirm the final
+                // measured bottom after the stream goes quiet.
+                if self.profiler.isStreamingRecently {
+                    self.scheduleGlideLandingSettleIfNeeded(delay: 0.2, requirePendingHeightWork: false)
+                    return
                 }
-                stopFollowGlide()
-                publishPinnedState(true)
-                return
+                guard let scrollView = self.scrollView else { return }
+                self.performScrollToBottom(scrollView, animated: false, forceLayout: true)
             }
-            let nextY = clipView.bounds.origin.y + trueGap * followGlideFactor
-            isProgrammaticScroll = true
-            clipView.scroll(to: NSPoint(x: 0, y: nextY))
-            scrollView.reflectScrolledClipView(clipView)
-            isProgrammaticScroll = false
+            pendingGlideLandingSettleWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
         }
 
         /// Forwarded to the render cache (via the host) to gate streaming pulses

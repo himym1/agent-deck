@@ -221,32 +221,96 @@ nonisolated struct FileWatchFingerprint: Sendable {
     }
 }
 
-nonisolated final class FileWatchEventMonitor {
+nonisolated final class FileWatchEventMonitor: @unchecked Sendable {
+    private static let stateQueueKey = DispatchSpecificKey<Bool>()
+
     private let queue = DispatchQueue(label: "app.agent-deck.file-watch-events", qos: .utility)
+    private let pathQueue = DispatchQueue(label: "app.agent-deck.file-watch-paths", qos: .utility)
+    private let stateQueue = DispatchQueue(label: "app.agent-deck.file-watch-state", qos: .utility)
+    private let generationLock = NSLock()
     private let latency: CFTimeInterval
     private let onChange: () -> Void
 
+    private var generation: UInt64 = 0
+    private var isStopped = true
     private var stream: FSEventStreamRef?
     private var watchedPaths: [String] = []
 
     init(latency: CFTimeInterval = 0.75, onChange: @escaping () -> Void) {
         self.latency = latency
         self.onChange = onChange
+        stateQueue.setSpecific(key: Self.stateQueueKey, value: true)
     }
 
     deinit {
-        stop()
+        stopSynchronously()
     }
 
     func updateWatchedURLs(_ urls: [URL]) {
-        let paths = Self.watchPaths(for: urls)
-        guard paths != watchedPaths else { return }
-        stop()
-        watchedPaths = paths
-        start(paths: paths)
+        // Resolving watch roots can touch a large imported skill tree. Keep it
+        // off the main actor and off the stream-state queue, so lifecycle stops
+        // do not wait behind a long path rebuild.
+        let updateGeneration = nextGeneration(isStopped: false)
+        pathQueue.async { [self, urls, updateGeneration] in
+            let paths = Self.watchPaths(for: urls)
+            stateQueue.async { [self, paths, updateGeneration] in
+                guard isCurrentGeneration(updateGeneration), paths != watchedPaths else { return }
+                stopOnStateQueue()
+                watchedPaths = paths
+                startOnStateQueue(paths: paths)
+            }
+        }
     }
 
     func stop() {
+        let stopGeneration = nextGeneration(isStopped: true)
+        let stopStreams = {
+            guard self.isCurrentGeneration(stopGeneration) else { return }
+            self.stopOnStateQueue()
+            self.watchedPaths = []
+        }
+        if DispatchQueue.getSpecific(key: Self.stateQueueKey) == true {
+            stopStreams()
+        } else {
+            stateQueue.async { stopStreams() }
+        }
+    }
+
+    private func stopSynchronously() {
+        let stopGeneration = nextGeneration(isStopped: true)
+        let stopStreams = {
+            guard self.isCurrentGeneration(stopGeneration) else { return }
+            self.stopOnStateQueue()
+            self.watchedPaths = []
+        }
+        if DispatchQueue.getSpecific(key: Self.stateQueueKey) == true {
+            stopStreams()
+        } else {
+            stateQueue.sync(execute: stopStreams)
+        }
+    }
+
+    private func nextGeneration(isStopped: Bool) -> UInt64 {
+        generationLock.lock()
+        defer { generationLock.unlock() }
+        generation &+= 1
+        self.isStopped = isStopped
+        return generation
+    }
+
+    private func isCurrentGeneration(_ value: UInt64) -> Bool {
+        generationLock.lock()
+        defer { generationLock.unlock() }
+        return generation == value
+    }
+
+    private func shouldDeliverEvents() -> Bool {
+        generationLock.lock()
+        defer { generationLock.unlock() }
+        return !isStopped
+    }
+
+    private func stopOnStateQueue() {
         guard let stream else { return }
         FSEventStreamStop(stream)
         FSEventStreamInvalidate(stream)
@@ -254,7 +318,7 @@ nonisolated final class FileWatchEventMonitor {
         self.stream = nil
     }
 
-    private func start(paths: [String]) {
+    private func startOnStateQueue(paths: [String]) {
         guard !paths.isEmpty else { return }
 
         var context = FSEventStreamContext(
@@ -268,6 +332,7 @@ nonisolated final class FileWatchEventMonitor {
         let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
             guard let info else { return }
             let monitor = Unmanaged<FileWatchEventMonitor>.fromOpaque(info).takeUnretainedValue()
+            guard monitor.shouldDeliverEvents() else { return }
             monitor.onChange()
         }
 
