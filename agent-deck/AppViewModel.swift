@@ -8573,6 +8573,7 @@ final class AppViewModel: NSObject {
             writeTarget: draft.writeTarget,
             maxIterations: draft.maxIterations,
             validationCommand: draft.validationCommand,
+            makerChecker: draft.makerChecker,
             source: .user,
             availability: request.availability,
             projectPaths: projectPaths

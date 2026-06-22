@@ -104,6 +104,24 @@ struct LoopLaunchSheet: View {
                     Text("Max iterations: \(draft.maxIterations)")
                 }
 
+                if draft.structure == .makerChecker {
+                    Section("Maker + Checker") {
+                        TextField("Maker name", text: $draft.makerChecker.makerName)
+                        TextField("Checker name", text: $draft.makerChecker.checkerName)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Checker rubric")
+                            TextField("approve, reject once, ask human, or fail", text: $draft.makerChecker.checkerRubric, axis: .vertical)
+                                .lineLimit(2...4)
+                            Text("Checker is report-only. In this deterministic preview runner, the rubric controls the checker result.")
+                                .font(AppTheme.Font.caption)
+                                .foregroundStyle(AppTheme.mutedText)
+                        }
+                        Stepper(value: $draft.makerChecker.maxReviewRounds, in: 1...20) {
+                            Text("Max review rounds: \(draft.makerChecker.maxReviewRounds)")
+                        }
+                    }
+                }
+
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Validation command")
                     TextField("Example: swift test", text: $draft.validationCommand)

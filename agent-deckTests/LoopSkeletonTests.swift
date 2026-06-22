@@ -263,6 +263,76 @@ final class LoopSkeletonTests: XCTestCase {
         XCTAssertEqual(run.iterations[0].validationResult?.stderr, "Validation command is empty.")
     }
 
+    func testMakerCheckerRunsMakerBeforeCheckerTimeline() throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(), repository: nil)
+
+        let run = try XCTUnwrap(store.launchSmokeLoop(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(goal: "Review the artifact", structure: .makerChecker, makerChecker: LoopMakerCheckerConfig(makerName: "Maker A", checkerName: "Checker B", checkerRubric: "approve"))
+        ))
+
+        let iteration = try XCTUnwrap(run.iterations.first)
+        XCTAssertEqual(run.status, .completed)
+        XCTAssertEqual(iteration.checkerResult, .approve)
+        XCTAssertEqual(iteration.timeline.map(\.step), [.makerAct, .checkerReview])
+        XCTAssertEqual(iteration.timeline.map(\.roleName), ["Maker A", "Checker B"])
+        let makerTimestamp = try XCTUnwrap(iteration.timeline.first?.timestamp)
+        let checkerTimestamp = try XCTUnwrap(iteration.timeline.last?.timestamp)
+        XCTAssertTrue(makerTimestamp <= checkerTimestamp)
+    }
+
+    func testMakerCheckerApprovalStopsSuccessfully() throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(), repository: nil)
+
+        let run = try XCTUnwrap(store.launchSmokeLoop(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(goal: "Approve immediately", structure: .makerChecker, maxIterations: 3, makerChecker: LoopMakerCheckerConfig(checkerRubric: "approve"))
+        ))
+
+        XCTAssertEqual(run.status, .completed)
+        XCTAssertEqual(run.stopReason, .success)
+        XCTAssertEqual(run.currentIteration, 1)
+        XCTAssertEqual(run.iterations.map(\.checkerResult), [.approve])
+    }
+
+    func testMakerCheckerRejectionRevisesUntilApproved() throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(), repository: nil)
+
+        let run = try XCTUnwrap(store.launchSmokeLoop(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(goal: "Revise once", structure: .makerChecker, maxIterations: 3, makerChecker: LoopMakerCheckerConfig(checkerRubric: "reject once then approve", maxReviewRounds: 3))
+        ))
+
+        XCTAssertEqual(run.status, .completed)
+        XCTAssertEqual(run.stopReason, .success)
+        XCTAssertEqual(run.currentIteration, 2)
+        XCTAssertEqual(run.iterations.map(\.checkerResult), [.reject, .approve])
+        XCTAssertEqual(run.iterations.flatMap { $0.timeline.map(\.step) }, [.makerAct, .checkerReview, .makerAct, .checkerReview])
+    }
+
+    func testMakerCheckerAskHumanStopsForInput() throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(), repository: nil)
+
+        let run = try XCTUnwrap(store.launchSmokeLoop(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(goal: "Needs decision", structure: .makerChecker, maxIterations: 3, makerChecker: LoopMakerCheckerConfig(checkerRubric: "ask human"))
+        ))
+
+        XCTAssertEqual(run.status, .stopped)
+        XCTAssertEqual(run.stopReason, .humanInputRequired)
+        XCTAssertEqual(run.currentIteration, 1)
+        XCTAssertEqual(run.iterations.map(\.checkerResult), [.askHuman])
+        XCTAssertNil(store.activeLoopRun(for: session.id))
+    }
+
     private func projectEntries(at url: URL) throws -> [String] {
         let root = url.standardizedFileURL
         let keys: [URLResourceKey] = [.isDirectoryKey]

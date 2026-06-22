@@ -2,12 +2,14 @@ import Foundation
 
 nonisolated enum LoopStructureKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case singleAgent
+    case makerChecker
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
         case .singleAgent: return "Single Agent"
+        case .makerChecker: return "Maker + Checker"
         }
     }
 }
@@ -61,6 +63,8 @@ nonisolated enum LoopStopReason: String, Codable, CaseIterable, Identifiable, Se
     case validationUnavailable
     case validationFailedAfterFinalIteration
     case unsafeWriteTarget
+    case humanInputRequired
+    case agentFailed
     case toolFailed
     case appInterrupted
 
@@ -74,9 +78,66 @@ nonisolated enum LoopStopReason: String, Codable, CaseIterable, Identifiable, Se
         case .validationUnavailable: return "Validation unavailable"
         case .validationFailedAfterFinalIteration: return "Validation failed after final iteration"
         case .unsafeWriteTarget: return "Unsafe write target"
+        case .humanInputRequired: return "Human input required"
+        case .agentFailed: return "Agent failed"
         case .toolFailed: return "Tool failed"
         case .appInterrupted: return "App interrupted"
         }
+    }
+}
+
+nonisolated struct LoopMakerCheckerConfig: Codable, Equatable, Hashable, Sendable {
+    var makerName: String
+    var checkerName: String
+    var checkerRubric: String
+    var maxReviewRounds: Int
+
+    static let defaultMaxReviewRounds = 3
+
+    init(makerName: String = "Maker", checkerName: String = "Checker", checkerRubric: String = "approve", maxReviewRounds: Int = Self.defaultMaxReviewRounds) {
+        self.makerName = makerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Maker" : makerName
+        self.checkerName = checkerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Checker" : checkerName
+        self.checkerRubric = checkerRubric
+        self.maxReviewRounds = max(1, maxReviewRounds)
+    }
+}
+
+nonisolated enum LoopCheckerResult: String, Codable, CaseIterable, Identifiable, Sendable {
+    case approve
+    case reject
+    case askHuman
+    case fail
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .approve: return "Approve"
+        case .reject: return "Reject"
+        case .askHuman: return "Ask human"
+        case .fail: return "Fail"
+        }
+    }
+}
+
+nonisolated enum LoopTimelineStepKind: String, Codable, Sendable {
+    case makerAct
+    case checkerReview
+}
+
+nonisolated struct LoopTimelineEvent: Identifiable, Codable, Equatable, Sendable {
+    var id: UUID
+    var step: LoopTimelineStepKind
+    var roleName: String
+    var note: String
+    var timestamp: Date
+
+    init(id: UUID = UUID(), step: LoopTimelineStepKind, roleName: String, note: String, timestamp: Date = Date()) {
+        self.id = id
+        self.step = step
+        self.roleName = roleName
+        self.note = note
+        self.timestamp = timestamp
     }
 }
 
@@ -86,15 +147,17 @@ nonisolated struct LoopDraft: Codable, Equatable, Sendable {
     var writeTarget: LoopWriteTarget
     var maxIterations: Int
     var validationCommand: String
+    var makerChecker: LoopMakerCheckerConfig
 
     static let defaultMaxIterations = 3
 
-    init(goal: String = "", structure: LoopStructureKind = .singleAgent, writeTarget: LoopWriteTarget = .artifactMarkdown, maxIterations: Int = Self.defaultMaxIterations, validationCommand: String = "") {
+    init(goal: String = "", structure: LoopStructureKind = .singleAgent, writeTarget: LoopWriteTarget = .artifactMarkdown, maxIterations: Int = Self.defaultMaxIterations, validationCommand: String = "", makerChecker: LoopMakerCheckerConfig = LoopMakerCheckerConfig()) {
         self.goal = goal
         self.structure = structure
         self.writeTarget = writeTarget
         self.maxIterations = max(1, maxIterations)
         self.validationCommand = validationCommand
+        self.makerChecker = makerChecker
     }
 }
 
@@ -128,6 +191,7 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
     var writeTarget: LoopWriteTarget
     var maxIterations: Int
     var validationCommand: String
+    var makerChecker: LoopMakerCheckerConfig
     var source: LoopDefinitionSource
     var availability: LoopDefinitionAvailability
     var projectPaths: [String]
@@ -144,6 +208,7 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
         writeTarget: LoopWriteTarget = .artifactMarkdown,
         maxIterations: Int = LoopDraft.defaultMaxIterations,
         validationCommand: String = "",
+        makerChecker: LoopMakerCheckerConfig = LoopMakerCheckerConfig(),
         source: LoopDefinitionSource = .user,
         availability: LoopDefinitionAvailability = .allProjects,
         projectPaths: [String] = [],
@@ -159,6 +224,7 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
         self.writeTarget = writeTarget
         self.maxIterations = max(1, maxIterations)
         self.validationCommand = validationCommand
+        self.makerChecker = makerChecker
         self.source = source
         self.availability = availability
         self.projectPaths = projectPaths
@@ -183,7 +249,8 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
             structure: structure,
             writeTarget: writeTarget,
             maxIterations: maxIterations,
-            validationCommand: validationCommand
+            validationCommand: validationCommand,
+            makerChecker: makerChecker
         )
     }
 }
@@ -236,9 +303,11 @@ nonisolated struct LoopIteration: Identifiable, Codable, Equatable, Sendable {
     var summary: String
     var artifacts: [LoopArtifact]
     var validationResult: LoopValidationResult?
+    var checkerResult: LoopCheckerResult?
+    var timeline: [LoopTimelineEvent]
     var changedFiles: [String]
 
-    init(id: UUID = UUID(), index: Int, startedAt: Date = Date(), endedAt: Date? = nil, summary: String = "", artifacts: [LoopArtifact] = [], validationResult: LoopValidationResult? = nil, changedFiles: [String] = []) {
+    init(id: UUID = UUID(), index: Int, startedAt: Date = Date(), endedAt: Date? = nil, summary: String = "", artifacts: [LoopArtifact] = [], validationResult: LoopValidationResult? = nil, checkerResult: LoopCheckerResult? = nil, timeline: [LoopTimelineEvent] = [], changedFiles: [String] = []) {
         self.id = id
         self.index = index
         self.startedAt = startedAt
@@ -246,11 +315,13 @@ nonisolated struct LoopIteration: Identifiable, Codable, Equatable, Sendable {
         self.summary = summary
         self.artifacts = artifacts
         self.validationResult = validationResult
+        self.checkerResult = checkerResult
+        self.timeline = timeline
         self.changedFiles = changedFiles
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, index, startedAt, endedAt, summary, artifacts, validationResult, changedFiles
+        case id, index, startedAt, endedAt, summary, artifacts, validationResult, checkerResult, timeline, changedFiles
     }
 
     init(from decoder: Decoder) throws {
@@ -262,6 +333,8 @@ nonisolated struct LoopIteration: Identifiable, Codable, Equatable, Sendable {
         summary = try container.decode(String.self, forKey: .summary)
         artifacts = try container.decode([LoopArtifact].self, forKey: .artifacts)
         validationResult = try container.decodeIfPresent(LoopValidationResult.self, forKey: .validationResult)
+        checkerResult = try container.decodeIfPresent(LoopCheckerResult.self, forKey: .checkerResult)
+        timeline = try container.decodeIfPresent([LoopTimelineEvent].self, forKey: .timeline) ?? []
         changedFiles = try container.decodeIfPresent([String].self, forKey: .changedFiles) ?? []
     }
 }
@@ -277,6 +350,7 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
     var currentIteration: Int
     var maxIterations: Int
     var validationCommand: String
+    var makerChecker: LoopMakerCheckerConfig
     var startedAt: Date
     var endedAt: Date?
     var stopReason: LoopStopReason?
@@ -295,6 +369,7 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
         self.currentIteration = 0
         self.maxIterations = max(1, draft.maxIterations)
         self.validationCommand = draft.validationCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.makerChecker = draft.makerChecker
         self.startedAt = startedAt
         self.endedAt = nil
         self.stopReason = nil
@@ -304,7 +379,7 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, sessionID, projectPath, goal, structure, status, writeTarget, currentIteration, maxIterations, validationCommand, startedAt, endedAt, stopReason, iterations, artifactDirectoryPath, transcriptEntryID
+        case id, sessionID, projectPath, goal, structure, status, writeTarget, currentIteration, maxIterations, validationCommand, makerChecker, startedAt, endedAt, stopReason, iterations, artifactDirectoryPath, transcriptEntryID
     }
 
     init(from decoder: Decoder) throws {
@@ -319,6 +394,7 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
         currentIteration = try container.decode(Int.self, forKey: .currentIteration)
         maxIterations = try container.decode(Int.self, forKey: .maxIterations)
         validationCommand = try container.decodeIfPresent(String.self, forKey: .validationCommand) ?? ""
+        makerChecker = try container.decodeIfPresent(LoopMakerCheckerConfig.self, forKey: .makerChecker) ?? LoopMakerCheckerConfig()
         startedAt = try container.decode(Date.self, forKey: .startedAt)
         endedAt = try container.decodeIfPresent(Date.self, forKey: .endedAt)
         stopReason = try container.decodeIfPresent(LoopStopReason.self, forKey: .stopReason)
@@ -362,6 +438,14 @@ enum LoopRunTranscriptCodec {
         ]
         if !run.validationCommand.isEmpty {
             lines.append("Validation command: \(run.validationCommand)")
+        }
+        if run.structure == .makerChecker {
+            lines.append("Maker: \(run.makerChecker.makerName)")
+            lines.append("Checker: \(run.makerChecker.checkerName) (report-only)")
+            lines.append("Checker rubric: \(run.makerChecker.checkerRubric)")
+            if let checkerResult = run.iterations.last?.checkerResult {
+                lines.append("Checker result: \(checkerResult.displayName)")
+            }
         }
         if let stopReason = run.stopReason {
             lines.append("Stop reason: \(stopReason.displayName)")

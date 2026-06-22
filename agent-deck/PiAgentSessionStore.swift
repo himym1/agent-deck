@@ -893,7 +893,8 @@ final class PiAgentSessionStore {
         }
 
         let validationCommand = run.validationCommand
-        for iterationIndex in 1...run.maxIterations {
+        let maxLoopIterations = run.structure == .makerChecker ? min(run.maxIterations, run.makerChecker.maxReviewRounds) : run.maxIterations
+        for iterationIndex in 1...maxLoopIterations {
             let iterationStartedAt = Date()
             var artifacts: [LoopArtifact] = []
             var changedFiles: [String] = []
@@ -951,6 +952,54 @@ final class PiAgentSessionStore {
 
             let iterationEndedAt = Date()
             run.currentIteration = iterationIndex
+
+            if run.structure == .makerChecker {
+                let checkerResult = deterministicCheckerResult(
+                    rubric: run.makerChecker.checkerRubric,
+                    validationResult: validationCommand.isEmpty ? nil : validationResult,
+                    iterationIndex: iterationIndex
+                )
+                let timeline = [
+                    LoopTimelineEvent(step: .makerAct, roleName: run.makerChecker.makerName, note: "Maker act step completed for iteration \(iterationIndex).", timestamp: iterationStartedAt),
+                    LoopTimelineEvent(step: .checkerReview, roleName: run.makerChecker.checkerName, note: "Report-only checker returned \(checkerResult.displayName).", timestamp: iterationEndedAt)
+                ]
+                run.iterations.append(LoopIteration(
+                    index: iterationIndex,
+                    startedAt: iterationStartedAt,
+                    endedAt: iterationEndedAt,
+                    summary: "Report-only checker returned \(checkerResult.displayName).",
+                    artifacts: artifacts,
+                    validationResult: validationCommand.isEmpty ? nil : validationResult,
+                    checkerResult: checkerResult,
+                    timeline: timeline,
+                    changedFiles: changedFiles
+                ))
+
+                switch checkerResult {
+                case .approve:
+                    run.status = .completed
+                    run.endedAt = iterationEndedAt
+                    run.stopReason = .success
+                    upsertLoopRun(run)
+                    return run
+                case .reject:
+                    upsertLoopRun(run)
+                    continue
+                case .askHuman:
+                    run.status = .stopped
+                    run.endedAt = iterationEndedAt
+                    run.stopReason = .humanInputRequired
+                    upsertLoopRun(run)
+                    return run
+                case .fail:
+                    run.status = .failed
+                    run.endedAt = iterationEndedAt
+                    run.stopReason = .agentFailed
+                    upsertLoopRun(run)
+                    return run
+                }
+            }
+
             run.iterations.append(LoopIteration(
                 index: iterationIndex,
                 startedAt: iterationStartedAt,
@@ -982,9 +1031,20 @@ final class PiAgentSessionStore {
 
         run.status = .failed
         run.endedAt = Date()
-        run.stopReason = .validationFailedAfterFinalIteration
+        run.stopReason = run.structure == .makerChecker ? .maxIterationsReached : .validationFailedAfterFinalIteration
         upsertLoopRun(run)
         return run
+    }
+
+    private func deterministicCheckerResult(rubric: String, validationResult: LoopValidationResult?, iterationIndex: Int) -> LoopCheckerResult {
+        let normalized = rubric.lowercased().replacingOccurrences(of: "-", with: " ")
+        if normalized.contains("ask human") || normalized.contains("askhuman") { return .askHuman }
+        if normalized.contains("fail") { return .fail }
+        if normalized.contains("reject once") { return iterationIndex == 1 ? .reject : .approve }
+        if normalized.contains("reject") && !normalized.contains("approve") { return .reject }
+        if normalized.contains("approve") { return .approve }
+        if let validationResult { return validationResult.didPass ? .approve : .reject }
+        return .approve
     }
 
     private struct LoopExecutionContext {

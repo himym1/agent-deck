@@ -93,6 +93,28 @@ final class LoopDefinitionStoreTests: XCTestCase {
         })
     }
 
+    func testAppViewModelSavesMakerCheckerDraftConfiguration() throws {
+        let directory = PiTestSupport.temporaryStateFile().deletingLastPathComponent().appendingPathComponent("loops", isDirectory: true)
+        let viewModel = AppViewModel()
+        viewModel.configureLoopDefinitionStoreForTesting(directoryURL: directory)
+        let makerChecker = LoopMakerCheckerConfig(
+            makerName: "Builder",
+            checkerName: "Reviewer",
+            checkerRubric: "reject once then approve",
+            maxReviewRounds: 4
+        )
+
+        _ = try viewModel.saveLoopDefinitionFromDraft(
+            LoopDraft(goal: "Review this", structure: .makerChecker, makerChecker: makerChecker),
+            request: LoopSaveRequest(name: "Review Loop", description: "", availability: .allProjects, projectPaths: [])
+        )
+
+        let saved = try XCTUnwrap(viewModel.loopDefinitions.first)
+        XCTAssertEqual(saved.structure, .makerChecker)
+        XCTAssertEqual(saved.makerChecker, makerChecker)
+        XCTAssertEqual(saved.makeDraft().makerChecker, makerChecker)
+    }
+
     func testSavedLoopConvertsToFreshLaunchDraft() {
         let definition = LoopDefinition(
             name: "Reusable",
