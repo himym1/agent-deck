@@ -719,7 +719,7 @@ struct PiAgentUIRequestCard: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
-                .scrollIndicators(.automatic)
+                .scrollIndicators(.hidden)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
