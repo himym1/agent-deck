@@ -848,17 +848,33 @@ final class PiAgentSessionStore {
     @discardableResult
     func launchSmokeLoop(sessionID: UUID, projectPath: String?, draft: LoopDraft, stopExistingActive: Bool = false) -> LoopRun? {
         guard !draft.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        guard draft.writeTarget == .artifactMarkdown else { return nil }
         if let active = activeLoopRun(for: sessionID) {
             guard stopExistingActive else { return nil }
             stopLoopRun(active.id, sessionID: sessionID)
         }
 
         var run = LoopRun(sessionID: sessionID, projectPath: projectPath, draft: draft)
+        let artifactDirectory = loopArtifactDirectoryURL(sessionID: sessionID, runID: run.id)
+        run.artifactDirectoryPath = artifactDirectory.path
         upsertLoopRun(run)
 
+        let markdown = "# Loop Smoke Output\n\nGoal: \(run.goal)\n\nResult: Artifact smoke fixture completed."
+        let filename = "loop-smoke.md"
+        let artifactURL = artifactDirectory.appendingPathComponent(filename, isDirectory: false)
+        do {
+            try FileManager.default.createDirectory(at: artifactDirectory, withIntermediateDirectories: true)
+            try markdown.write(to: artifactURL, atomically: true, encoding: .utf8)
+        } catch {
+            run.status = .failed
+            run.endedAt = Date()
+            upsertLoopRun(run)
+            return nil
+        }
         let artifact = LoopArtifact(
-            filename: "loop-smoke.md",
-            markdown: "# Loop Smoke Output\n\nGoal: \(run.goal)\n\nResult: Artifact smoke fixture completed."
+            filename: filename,
+            markdown: markdown,
+            filePath: artifactURL.path
         )
         let now = Date()
         run.currentIteration = 1
@@ -868,6 +884,13 @@ final class PiAgentSessionStore {
         run.iterations = [LoopIteration(index: 1, startedAt: run.startedAt, endedAt: now, summary: "Artifact smoke fixture completed.", artifacts: [artifact])]
         upsertLoopRun(run)
         return run
+    }
+
+    private func loopArtifactDirectoryURL(sessionID: UUID, runID: UUID) -> URL {
+        fileURL.deletingLastPathComponent()
+            .appendingPathComponent("loop-artifacts", isDirectory: true)
+            .appendingPathComponent(sessionID.uuidString, isDirectory: true)
+            .appendingPathComponent(runID.uuidString, isDirectory: true)
     }
 
     @discardableResult

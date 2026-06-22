@@ -185,12 +185,14 @@ nonisolated struct LoopArtifact: Identifiable, Codable, Equatable, Sendable {
     var id: UUID
     var filename: String
     var markdown: String
+    var filePath: String?
     var createdAt: Date
 
-    init(id: UUID = UUID(), filename: String, markdown: String, createdAt: Date = Date()) {
+    init(id: UUID = UUID(), filename: String, markdown: String, filePath: String? = nil, createdAt: Date = Date()) {
         self.id = id
         self.filename = filename
         self.markdown = markdown
+        self.filePath = filePath
         self.createdAt = createdAt
     }
 }
@@ -227,9 +229,10 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
     var endedAt: Date?
     var stopReason: LoopStopReason?
     var iterations: [LoopIteration]
+    var artifactDirectoryPath: String?
     var transcriptEntryID: UUID
 
-    init(id: UUID = UUID(), sessionID: UUID, projectPath: String?, draft: LoopDraft, startedAt: Date = Date(), transcriptEntryID: UUID = UUID()) {
+    init(id: UUID = UUID(), sessionID: UUID, projectPath: String?, draft: LoopDraft, startedAt: Date = Date(), artifactDirectoryPath: String? = nil, transcriptEntryID: UUID = UUID()) {
         self.id = id
         self.sessionID = sessionID
         self.projectPath = projectPath
@@ -243,6 +246,7 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
         self.endedAt = nil
         self.stopReason = nil
         self.iterations = []
+        self.artifactDirectoryPath = artifactDirectoryPath
         self.transcriptEntryID = transcriptEntryID
     }
 
@@ -282,9 +286,15 @@ enum LoopRunTranscriptCodec {
         if let stopReason = run.stopReason {
             lines.append("Stop reason: \(stopReason.displayName)")
         }
+        if let directoryPath = run.artifactDirectoryPath {
+            lines.append("Artifact directory: \(directoryPath)")
+        }
         if let artifact = run.iterations.last?.artifacts.first {
             lines.append("")
             lines.append("Artifact: \(artifact.filename)")
+            if let filePath = artifact.filePath {
+                lines.append("Artifact path: \(filePath)")
+            }
             lines.append(artifact.markdown)
         }
         return lines.joined(separator: "\n")
