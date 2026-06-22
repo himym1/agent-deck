@@ -3497,8 +3497,22 @@ struct CodingAgentExpandedPanel: View {
             let oldIDs = Set(oldSection.items.map(\.id))
             // Preserve prior order, refreshing payloads of rows still present.
             var merged = oldSection.items.compactMap { newByID[$0.id] }
-            // Append rows newly present this rebuild, in computed order.
-            merged.append(contentsOf: newSection.items.filter { !oldIDs.contains($0.id) })
+            // Insert newly-present rows at their natural computed position
+            // relative to the frozen rows. Appending them made a freshly-created
+            // draft appear at the bottom whenever another session was working,
+            // even though the list sorts newest-first.
+            for newItem in newSection.items where !oldIDs.contains(newItem.id) {
+                let newIndex = newSection.items.firstIndex(where: { item in item.id == newItem.id })
+                let followingFrozenID = newIndex.flatMap { index in
+                    newSection.items[(index + 1)...].first(where: { item in oldIDs.contains(item.id) })?.id
+                }
+                if let followingFrozenID,
+                   let insertIndex = merged.firstIndex(where: { item in item.id == followingFrozenID }) {
+                    merged.insert(newItem, at: insertIndex)
+                } else {
+                    merged.append(newItem)
+                }
+            }
             if merged == newSection.items { return newSection }
             frozeAny = true
             return newSection.withItems(merged)
