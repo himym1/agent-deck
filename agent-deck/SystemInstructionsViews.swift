@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 import SwiftUI
 
 /// Top-level "System Prompt" screen. Always available — no project required.
@@ -14,6 +15,8 @@ import SwiftUI
 /// The active project is picked from a menu in this screen's toolbar (not the
 /// sidebar), so the user can stay here while switching scope.
 struct SystemInstructionsScreen: View {
+    private static let layoutLog = Logger(subsystem: "streetcoding.agent-deck", category: "ResourceLayout")
+
     let viewModel: AppViewModel
 
     @State private var drafts: [String: String] = [:]
@@ -34,9 +37,12 @@ struct SystemInstructionsScreen: View {
     var body: some View {
         SplitView {
             listPane
+                .appDebugLayout("SystemPrompt.libraryPane", logger: Self.layoutLog)
         } detail: {
             detailPane
+                .appDebugLayout("SystemPrompt.detailPane", logger: Self.layoutLog)
         }
+        .appDebugLayout("SystemPrompt.hsplit", logger: Self.layoutLog)
         .sheet(isPresented: $isPreviewPresented) {
             PiPromptPreviewSheet(
                 title: "System Prompt Preview",
@@ -147,65 +153,28 @@ struct SystemInstructionsScreen: View {
             sections: sections,
             selection: .single($selectedFileID)
         ) { file in
-            fileRow(file)
-        }
-    }
-
-    /// One compact list row: a status dot, the file title, its path, and an
-    /// unsaved marker. No badges, dimming, or preview snippets — the right
-    /// pane is the editor, so the row only needs to be scannable.
-    private func fileRow(_ file: PiInstructionFile) -> some View {
-        HStack(alignment: .center, spacing: 10) {
-            statusDot(file.status)
-                .frame(width: 9, height: 9)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(file.title)
-                        .font(.subheadline.weight(.medium))
-                        .fontWidth(.expanded)
-                        .lineLimit(1)
-                    if isDirtyFile(file) {
-                        Circle()
-                            .fill(.orange)
-                            .frame(width: 6, height: 6)
-                            .help("Unsaved edits")
-                    }
+            SystemPromptFileRowView(
+                file: file,
+                isDirty: isDirtyFile(file),
+                statusHelp: statusDotHelp(file),
+                onReveal: { revealInFinder(file) }
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .contextMenu {
+                Button(file.exists ? "Reveal in Finder" : "Reveal Parent Folder") {
+                    revealInFinder(file)
                 }
-                HStack(spacing: 5) {
-                    if let prefix = file.status.rowPrefix {
-                        Text(prefix)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(file.status.color)
-                    }
-                    Text(file.displayPath)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(AppTheme.mutedText)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                Button("Copy Path") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(file.url.path, forType: .string)
                 }
             }
-            Spacer(minLength: 4)
         }
-        .padding(.vertical, 5)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .help(statusDotHelp(file))
     }
 
     private func isDirtyFile(_ file: PiInstructionFile) -> Bool {
         drafts[file.id, default: ""] != originals[file.id, default: ""]
-    }
-
-    @ViewBuilder
-    private func statusDot(_ status: PiInstructionFile.Status) -> some View {
-        switch status {
-        case .active:
-            Circle().fill(.green)
-        case .shadowed:
-            Circle().fill(AppTheme.mutedText.opacity(0.6))
-        case .available:
-            // Hollow circle — file doesn't exist yet but can be created here.
-            Circle().stroke(AppTheme.mutedText.opacity(0.5), lineWidth: 1.5)
-        }
     }
 
     private func statusDotHelp(_ file: PiInstructionFile) -> String {
@@ -328,6 +297,62 @@ private final class PiInstructionDraftStore {
     static var unsavedDrafts: [String: String] = [:]
 }
 
+private struct SystemPromptFileRowView: View {
+    let file: PiInstructionFile
+    let isDirty: Bool
+    let statusHelp: String
+    let onReveal: () -> Void
+    @State private var isHovered = false
+
+    private var isInactive: Bool { file.status != .active }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: file.status.systemImage)
+                .imageScale(.large)
+                .foregroundStyle(file.status.color)
+                .frame(width: 18)
+                .help(statusHelp)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(file.title)
+                        .font(.headline)
+                        .fontWidth(.expanded)
+                        .lineLimit(1)
+                    if isDirty {
+                        Circle()
+                            .fill(.orange)
+                            .frame(width: 6, height: 6)
+                            .help("Unsaved edits")
+                    }
+                }
+
+                Text(file.displayPath)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(AppTheme.mutedText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 0)
+
+            Button { onReveal() } label: {
+                Label("Reveal", systemImage: "folder")
+                    .labelStyle(.titleAndIcon)
+            }
+            .appSmallSecondaryButton()
+            .opacity(isHovered ? 1 : 0)
+            .animation(.easeInOut(duration: 0.15), value: isHovered)
+            .help(file.exists ? "Reveal in Finder" : "Reveal parent folder in Finder")
+        }
+        .padding(.vertical, 6)
+        .opacity(isInactive ? 0.62 : 1)
+        .saturation(isInactive ? 0.25 : 1)
+        .onHover { isHovered = $0 }
+    }
+}
+
 /// Right-hand editor pane for the selected instruction file. Replaces the old
 /// per-card editor + modal sheet: one full-height monospaced `TextEditor` with
 /// a compact header (role chip, status, path) and a single Save / Reveal
@@ -339,58 +364,62 @@ struct SystemPromptFileDetail: View {
     let statusMessage: String?
     let onSave: () -> Void
     let onReveal: () -> Void
+    @FocusState private var isEditorFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider()
-            note
-            Divider()
-            editor
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
-            roleChip
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 8) {
-                    Text(file.title)
-                        .font(.headline)
-                        .fontWidth(.expanded)
-                }
-                Text(file.displayPath)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(AppTheme.mutedText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                statusLine
-                if let statusMessage {
-                    Text(statusMessage)
-                        .font(.caption2)
-                        .foregroundStyle(AppTheme.mutedText)
-                        .lineLimit(2)
+        AppPage(file.title, subtitle: file.displayPath, constrainsContentToViewport: true) {
+            AppCard(trailing: { headerActions }) {
+                VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
+                    HStack(spacing: 10) {
+                        roleChip
+                        statusLine
+                    }
+                    AppKeyValueList(rows: metadataRows)
+                    if let statusMessage {
+                        Text(statusMessage)
+                            .font(AppTheme.Font.caption)
+                            .foregroundStyle(AppTheme.mutedText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
-            Spacer(minLength: 12)
+
+            AppCard(title: "Prompt Role", info: "Explains how this instruction file participates in Pi's prompt assembly.") {
+                note
+            }
+
+            AppCard(title: file.exists ? "Markdown Instructions" : "Create Markdown Instructions") {
+                editor
+            }
+        }
+    }
+
+    private var headerActions: some View {
+        HStack(spacing: 8) {
             Button { onReveal() } label: {
                 Label("Reveal", systemImage: "folder")
                     .labelStyle(.titleAndIcon)
             }
-            .appSecondaryButton()
+            .appSmallSecondaryButton()
             .help(file.exists ? "Reveal in Finder" : "Reveal parent folder in Finder")
-            Button {
-                onSave()
-            } label: {
-                Text(file.exists ? "Save" : "Create")
+
+            Button { onSave() } label: {
+                Label(file.exists ? "Save" : "Create", systemImage: file.exists ? "square.and.arrow.down" : "plus")
+                    .labelStyle(.titleAndIcon)
             }
             .appPrimaryButton()
             .disabled(!isDirty)
             .help(file.exists ? "Save changes to disk" : "Create this file on disk")
             .keyboardShortcut("s", modifiers: .command)
         }
-        .padding(18)
+    }
+
+    private var metadataRows: [(String, String)] {
+        [
+            ("File", file.displayPath),
+            ("Status", file.status.label),
+            ("Scope", file.scopeLabel)
+        ]
     }
 
     private var roleChip: some View {
@@ -412,28 +441,29 @@ struct SystemPromptFileDetail: View {
     }
 
     private var note: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(file.note)
-                .font(.caption)
+                .font(AppTheme.Font.caption)
                 .foregroundStyle(AppTheme.mutedText)
             if !file.exists {
                 Label(createImpactMessage, systemImage: "square.and.pencil")
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
     }
 
+    // Baseline-align explicitly; `Label` centers the symbol bounds and reads low here.
     private var statusLine: some View {
-        Label(file.status.label, systemImage: file.status.systemImage)
-            .font(AppTheme.Font.caption.weight(.semibold))
-            .foregroundStyle(file.status.color)
-            .labelStyle(.titleAndIcon)
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Image(systemName: file.status.systemImage)
+            Text(file.status.label)
+        }
+        .font(AppTheme.Font.caption.weight(.semibold))
+        .foregroundStyle(file.status.color)
     }
 
     private var editor: some View {
@@ -441,9 +471,15 @@ struct SystemPromptFileDetail: View {
             TextEditor(text: $text)
                 .font(.system(.body, design: .monospaced))
                 .scrollContentBackground(.hidden)
+                .focused($isEditorFocused)
                 .padding(12)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            if text.isEmpty {
+                .frame(maxWidth: .infinity, minHeight: 420, alignment: .topLeading)
+                .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
+                        .stroke(AppTheme.contentStroke, lineWidth: 1)
+                }
+            if text.isEmpty && !isEditorFocused {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(file.exists ? "Empty file" : "Start writing Markdown instructions")
                         .font(AppTheme.Font.callout.weight(.semibold))
@@ -463,11 +499,11 @@ struct SystemPromptFileDetail: View {
     private var createImpactMessage: String {
         switch file.role {
         case .base:
-            return "Creating this SYSTEM.md replaces Pi’s built-in base prompt for this scope. Save a complete prompt, not only a small append."
+            return "Creating SYSTEM.md overrides Pi’s built-in base prompt here."
         case .append:
-            return "Creating this APPEND_SYSTEM.md adds extra instructions after the base prompt for this scope."
+            return "Creating APPEND_SYSTEM.md adds extra instructions here."
         case .context:
-            return "Creating this context file makes Pi read it with sessions in this scope."
+            return "Creating this file adds fallback context for sessions here."
         }
     }
 }
@@ -695,14 +731,6 @@ struct PiInstructionFile: Identifiable, Hashable {
             case .available: "circle.dashed"
             }
         }
-
-        var rowPrefix: String? {
-            switch self {
-            case .active: nil
-            case .shadowed: "Inactive"
-            case .available: "Not created"
-            }
-        }
     }
 
     let url: URL
@@ -714,6 +742,7 @@ struct PiInstructionFile: Identifiable, Hashable {
 
     var id: String { url.path }
     var displayPath: String { url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~") }
+    var scopeLabel: String { title.hasPrefix("Project") ? "Project" : "Global" }
 
     static func globalCatalog(existingPaths: Set<String>) -> [PiInstructionFile] {
         let globalDir = globalAgentDirectory

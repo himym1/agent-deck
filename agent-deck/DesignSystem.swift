@@ -625,17 +625,35 @@ struct AppIndeterminateBar: View {
     }
 }
 
-/// Themed indeterminate spinner. Use everywhere instead of `ProgressView()`
-/// so the spinner stroke tracks the active app theme accent. macOS otherwise
-/// paints `NSProgressIndicator` from `NSColor.controlAccentColor`, which
-/// ignores in-app theme switches.
-///
-/// Apple-blessed approach: `View.tint(_:)` colors `ProgressView`'s stroke.
+/// Themed indeterminate spinner. Use everywhere instead of `ProgressView()`.
+/// It is drawn in SwiftUI so the stroke tracks the active app theme accent and
+/// avoids AppKit `NSProgressIndicator` intrinsic-size warnings on launch.
 /// `.controlSize(...)` still works as expected — chain it after `AppSpinner`
 /// and the environment override drives the size as usual.
 struct AppSpinner: View {
+    @Environment(\.controlSize) private var controlSize
+    @State private var isSpinning = false
+
+    private var size: CGFloat {
+        switch controlSize {
+        case .mini: 12
+        case .small: 14
+        case .regular: 18
+        case .large: 24
+        case .extraLarge: 30
+        @unknown default: 18
+        }
+    }
+
     var body: some View {
-        ProgressView().appBrandTint()
+        Circle()
+            .trim(from: 0.18, to: 0.86)
+            .stroke(AppTheme.brandAccent, style: StrokeStyle(lineWidth: max(2, size * 0.12), lineCap: .round))
+            .frame(width: size, height: size)
+            .rotationEffect(.degrees(isSpinning ? 360 : 0))
+            .animation(.linear(duration: 0.9).repeatForever(autoreverses: false), value: isSpinning)
+            .accessibilityLabel("Loading")
+            .onAppear { isSpinning = true }
     }
 }
 

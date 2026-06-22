@@ -10,8 +10,10 @@ final class PiAgentSessionGroupingTests: XCTestCase {
     // MARK: - previewSplit
 
     func testRecentPreviewCappedAtFiveWhenAllOld() throws {
-        // 8 sessions outside the 6-hour always-shown window → 5 newest shown,
-        // 3 hidden behind Show more.
+        // 8 sessions outside the (now-removed) 6-hour always-shown window →
+        // 5 newest shown, 3 hidden behind Show more. Recency alone no longer
+        // promotes sessions beyond the top-N cap; only this-run touches and the
+        // current selection can.
         let sessions = try (0..<8).map { i in
             try makeSession(title: "s\(i)", updatedAt: now.addingTimeInterval(-Double(30_000 + i)))
         }
@@ -22,21 +24,94 @@ final class PiAgentSessionGroupingTests: XCTestCase {
         XCTAssertEqual(split.hidden.count, 3)
     }
 
-    func testSixHourWindowAlwaysShownAndCanExceedFive() throws {
+    func testNoSixHourAlwaysVisibleException() throws {
+        // The 6-hour always-shown window is removed. Five recent updates within
+        // the same day do NOT push beyond the top-5 cap on recency alone — only
+        // this-run touches or selection promote beyond the cap.
         let recent = try (0..<8).map { i in
             try makeSession(title: "r\(i)", updatedAt: now.addingTimeInterval(-Double(3600 + i)))
         }
-        let old = try (0..<3).map { i in
-            try makeSession(title: "old\(i)", updatedAt: now.addingTimeInterval(-Double(30_000 + i)))
-        }
         let split = PiAgentSessionGrouping.previewSplit(
-            sessions: recent + old, isExpanded: false, capPreviews: true,
+            sessions: recent, isExpanded: false, capPreviews: true,
             isWorking: { _ in false }, selectedSessionID: nil, now: now, options: .default)
-        XCTAssertEqual(split.preview.count, 8)
+        XCTAssertEqual(split.preview.count, 5)
         XCTAssertEqual(split.hidden.count, 3)
     }
 
-    func testWorkingDoesNotOverrideRecencyRule() throws {
+    func testTouchedThisRunSurfacesAbove5Cap() throws {
+        // Sessions older than the top-5 default cap appear in the preview when
+        // they were touched during the current app run, mirroring the store's
+        // createSession / touchSession(bumpUpdatedAt: true) path.
+        let top5 = try (0..<5).map { i in
+            try makeSession(title: "top\(i)", updatedAt: now.addingTimeInterval(-Double(1_000 + i)))
+        }
+        let olderTouched = try makeSession(title: "touched", updatedAt: now.addingTimeInterval(-200_000))
+        let olderUntouched = try makeSession(title: "old", updatedAt: now.addingTimeInterval(-300_000))
+        let split = PiAgentSessionGrouping.previewSplit(
+            sessions: top5 + [olderTouched, olderUntouched],
+            isExpanded: false, capPreviews: true,
+            isWorking: { _ in false }, selectedSessionID: nil, now: now, options: .default,
+            exactSort: true, touchedThisRunSessionIDs: [olderTouched.id])
+        XCTAssertEqual(split.preview.count, 6)
+        XCTAssertTrue(split.preview.contains { $0.id == olderTouched.id })
+        XCTAssertFalse(split.preview.contains { $0.id == olderUntouched.id })
+        XCTAssertEqual(split.hidden.count, 1)
+    }
+
+    func testExactSortUsesExactUpdatedAtWithinSameDay() throws {
+        // `sessionListPrecedes` (day-granular) treats same-day messages as equal
+        // and orders by createdAt DESC; `sessionListPrecedesExact` respects the
+        // within-day updatedAt so a richer chat wins.
+        let s1 = try makeSession(
+            title: "s1",
+            updatedAt: now.addingTimeInterval(-3_600),
+            createdAt: now.addingTimeInterval(-3_600))
+        let s2 = try makeSession(
+            title: "s2",
+            updatedAt: now.addingTimeInterval(-1_800),
+            createdAt: now.addingTimeInterval(-7_200))
+        let daySorted = [s1, s2].sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
+        XCTAssertEqual(daySorted.first?.title, "s1")
+        let exactSorted = [s1, s2].sorted { PiAgentSessionRecord.sessionListPrecedesExact($0, $1) }
+        XCTAssertEqual(exactSorted.first?.title, "s2")
+    }
+
+    func testExactSortPreviewOrderMatchesExactComparator() throws {
+        // With `exactSort: true` the preview's row order reflects the strict
+        // `sessionListPrecedesExact` comparator, not the day-granular one.
+        let s1 = try makeSession(title: "s1", updatedAt: now.addingTimeInterval(-100))
+        let s2 = try makeSession(title: "s2", updatedAt: now.addingTimeInterval(-50))
+        let s3 = try makeSession(title: "s3", updatedAt: now.addingTimeInterval(-200))
+        let split = PiAgentSessionGrouping.previewSplit(
+            sessions: [s1, s2, s3], isExpanded: false, capPreviews: true,
+            isWorking: { _ in false }, selectedSessionID: nil, now: now, options: .default,
+            exactSort: true)
+        XCTAssertEqual(split.preview.map(\.title), ["s2", "s1", "s3"])
+    }
+
+    func testDeletionFollowsExactSortedVisibleOrder() throws {
+        // Visible order driving `nextSelectionAfterDeletion` matches the
+        // exact-sort preview order, so deleting the most-recent chat picks the
+        // next-most-recent visible row, regardless of the underlying store
+        // order.
+        let sessions = try (0..<6).map { i in
+            try makeSession(title: "s\(i)", updatedAt: now.addingTimeInterval(-Double(3600 * (i + 1))))
+        }
+        let split = PiAgentSessionGrouping.previewSplit(
+            sessions: sessions, isExpanded: false, capPreviews: true,
+            isWorking: { _ in false }, selectedSessionID: sessions[0].id, now: now, options: .default,
+            exactSort: true)
+        // sessions[0] is most recent → preview[0]. Deleting it picks preview[1].
+        XCTAssertEqual(split.preview.first?.id, sessions[0].id)
+        let next = PiAgentSessionGrouping.nextSelectionAfterDeletion(
+            visibleSessions: split.preview, deletedIDs: [sessions[0].id], selectedID: sessions[0].id)
+        XCTAssertEqual(next, split.preview[1].id)
+    }
+
+    func testWorkingAloneDoesNotPromoteBeyondRecency() throws {
+        // `isWorking` is no longer consulted by the preview rule. An older
+        // working session stays hidden unless it's also in `touchedThisRunSessionIDs`
+        // or is the current selection.
         let oldWorking = try makeSession(title: "working", updatedAt: now.addingTimeInterval(-100_000), status: .running)
         let newer = try (0..<5).map { i in
             try makeSession(title: "newer\(i)", updatedAt: now.addingTimeInterval(-Double(30_000 + i)))
@@ -45,6 +120,21 @@ final class PiAgentSessionGroupingTests: XCTestCase {
             sessions: [oldWorking] + newer, isExpanded: false, capPreviews: true,
             isWorking: { $0.status == .running }, selectedSessionID: nil, now: now, options: .default)
         XCTAssertFalse(split.preview.contains { $0.title == "working" })
+    }
+
+    func testWorkingWithTouchedThisRunSurfacesAboveCap() throws {
+        // An older working session surfaces when it's also recorded as
+        // touched this run, showing that the touch-set (not the working
+        // predicate) is what promotes above the cap.
+        let oldWorking = try makeSession(title: "working", updatedAt: now.addingTimeInterval(-100_000), status: .running)
+        let newer = try (0..<5).map { i in
+            try makeSession(title: "newer\(i)", updatedAt: now.addingTimeInterval(-Double(30_000 + i)))
+        }
+        let split = PiAgentSessionGrouping.previewSplit(
+            sessions: [oldWorking] + newer, isExpanded: false, capPreviews: true,
+            isWorking: { $0.status == .running }, selectedSessionID: nil, now: now, options: .default,
+            exactSort: true, touchedThisRunSessionIDs: [oldWorking.id])
+        XCTAssertTrue(split.preview.contains { $0.id == oldWorking.id })
     }
 
     func testSelectedSessionAlwaysShown() throws {

@@ -45,11 +45,9 @@ final class PiRPCClient: @unchecked Sendable {
         process = try PiAgentProcess(
             configuration: .init(arguments: args, currentDirectoryURL: cwd, environment: environment),
             onStdoutLines: { lines in
-                NSLog("PiRPCClient onStdoutLines received %d lines", lines.count)
                 let events = lines.map { line in
                     let data = Data(line.utf8)
                     let event = try? JSONDecoder().decode(PiAgentRPCEvent.self, from: data)
-                    NSLog("PiRPCClient decoded event: %@", event == nil ? "nil" : "nonnil")
                     return EventLine(rawLine: line, event: event)
                 }
                 onEvent(events)

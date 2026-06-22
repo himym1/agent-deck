@@ -24,4 +24,21 @@ enum TranscriptInteractionGate {
     static var isInteractingRecently: Bool {
         CACurrentMediaTime() - lastInteraction < activeWindow
     }
+
+    // MARK: - Streaming stamp
+    //
+    // Mirrors the profiler's streaming-activity tracking so non-UI services
+    // (file-watch refresh) can defer main-thread work during live generation
+    // without grabbing the profiler instance. The Coordinator stamps this
+    // alongside `profiler.noteStreamingActivity()` in `apply()`.
+    private static var lastStreaming: CFTimeInterval = 0
+    /// Matches the profiler's streaming recency window (~600ms) so the gate
+    /// and the profiler agree on whether a stream is in flight.
+    private static let streamingWindow: CFTimeInterval = 0.6
+
+    static func noteStreaming() { lastStreaming = CACurrentMediaTime() }
+
+    static var isStreamingRecently: Bool {
+        CACurrentMediaTime() - lastStreaming < streamingWindow
+    }
 }

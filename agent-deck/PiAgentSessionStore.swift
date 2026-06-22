@@ -40,6 +40,14 @@ final class PiAgentSessionStore {
     /// Live, RPC-derived activity for sessions with a turn in flight. Not persisted —
     /// it only describes the current process and is cleared when a turn ends.
     private(set) var processingActivityBySessionID: [UUID: PiAgentProcessingActivity] = [:]
+    /// Sessions created or touched (`updatedAt` bumped) during the current app
+    /// run. Populated by `createSession` and `touchSession(bumpUpdatedAt: true)`
+    /// — disk-load paths (`applyPersistedIndex`, `applyFullPersistedState`) do
+    /// NOT touch it, so launch-time recovery of previously-active sessions does
+    /// not pollute the run's touched set. Drives the expanded sidebar's preview:
+    /// touched-this-run sessions surface above the top-N cap so a freshly-jostled
+    /// older chat stays reachable without taking the whole project over the cap.
+    private(set) var sessionsTouchedThisRun: Set<UUID> = []
     var selectedSessionID: UUID?
     var lastError: String?
     var newSessionSubagentsEnabled = true
@@ -275,6 +283,7 @@ final class PiAgentSessionStore {
             updatedAt: now
         )
         sessions.insert(record, at: 0)
+        sessionsTouchedThisRun.insert(record.id)
         sortSessions()
         transcriptsBySessionID[record.id] = []
         transcriptRevisionsBySessionID[record.id] = 0
@@ -391,6 +400,7 @@ final class PiAgentSessionStore {
             updatedAt: now
         )
         sessions.insert(record, at: 0)
+        sessionsTouchedThisRun.insert(record.id)
         sortSessions()
         transcriptsBySessionID[record.id] = []
         transcriptRevisionsBySessionID[record.id] = 0
@@ -481,6 +491,7 @@ final class PiAgentSessionStore {
             updatedAt: now
         )
         sessions.insert(record, at: 0)
+        sessionsTouchedThisRun.insert(record.id)
         sortSessions()
         transcriptsBySessionID[record.id] = []
         transcriptRevisionsBySessionID[record.id] = 0
@@ -1007,6 +1018,7 @@ final class PiAgentSessionStore {
             sessionPlansBySessionID[sessionID] = nil
             sessionPlanEventsBySessionID[sessionID] = nil
             processingActivityBySessionID[sessionID] = nil
+            sessionsTouchedThisRun.remove(sessionID)
         }
         if let currentSelectedSessionID = selectedSessionID, existingIDs.contains(currentSelectedSessionID) {
             // Prefer the caller-supplied neighbor (the row below the deleted set
@@ -1313,6 +1325,10 @@ final class PiAgentSessionStore {
             let preDay = calendar.startOfDay(for: sessions[index].updatedAt)
             let newDay = calendar.startOfDay(for: now)
             sessions[index].updatedAt = now
+            // Record the touch as part of the current app run, even when the
+            // store's sort order doesn't change. The expanded sidebar uses this
+            // set to surface recently-jostled sessions above its top-N cap.
+            sessionsTouchedThisRun.insert(id)
             if preDay != newDay {
                 sortSessions()
             }

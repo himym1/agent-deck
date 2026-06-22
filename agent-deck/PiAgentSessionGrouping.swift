@@ -26,12 +26,24 @@ enum PiAgentSessionGrouping {
     ///   - capPreviews: when `false`, previews are uncapped — every session is
     ///     shown. Used while a search query or the attention-only filter is
     ///     active.
-    ///   - isWorking: retained for call-site compatibility; recency now drives
-    ///     the preview.
+    ///   - isWorking: retained for call-site compatibility; the preview rule no
+    ///     longer consults it (working sessions surface via `touchedThisRunSessionIDs`
+    ///     or the top-N cap instead).
     ///   - selectedSessionID: the currently selected session, always shown so
     ///     selection never lands behind a collapsed group.
-    ///   - now: the reference instant for the recency windows.
+    ///   - now: retained as a reference instant for call-site stability; the
+    ///     preview rule no longer derives recency windows from it.
     ///   - options: the tunable thresholds.
+    ///   - exactSort: when `true`, sort within-day activity by the strict
+    ///     `sessionListPrecedesExact` comparator (full `updatedAt` granularity)
+    ///     so the expanded/full sidebar's most-recently-touched chat leads.
+    ///     Defaults to `false`, preserving the day-granular `sessionListPrecedes`
+    ///     used by the compact strip.
+    ///   - touchedThisRunSessionIDs: sessions created or touched during the
+    ///     current app run. These are surfaced in the preview even when they
+    ///     fall outside the top-N most-recent exact-updated sessions, so a
+    ///     just-created/jostled older session stays reachable without taking
+    ///     the preview over the cap arbitrarily.
     /// - Returns: `all` (the sorted input), `preview` (what to render), and
     ///   `hidden` (what sits behind "Show more"). `preview + hidden == all`.
     static func previewSplit(
@@ -41,36 +53,44 @@ enum PiAgentSessionGrouping {
         isWorking: (PiAgentSessionRecord) -> Bool,
         selectedSessionID: UUID?,
         now: Date,
-        options: PiAgentSessionGroupingOptions
+        options: PiAgentSessionGroupingOptions,
+        exactSort: Bool = false,
+        touchedThisRunSessionIDs: Set<UUID> = []
     ) -> PiAgentSessionPreviewSplit {
-        // Use the canonical `sessionListPrecedes` comparator (`updatedAt` at day
-        // granularity, then `createdAt` DESC, then id) rather than a bespoke
-        // full-timestamp `updatedAt` sort. Comparing `updatedAt` at full
-        // granularity makes sessions re-sort on every response within the same
-        // day, so a session that's actively streaming jumps to the top of its
-        // group continuously — the exact jumble `sessionListPrecedes` was
-        // written to prevent. Matching the comparator used by every other sort
-        // site (compact strip, store, view model) keeps the list stable and
-        // consistent.
-        let sorted = sessions.sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
+        // Sort by either the day-granular comparator (compact strip's stability
+        // contract) or the strict exact comparator (expanded/full sidebar's
+        // most-recently-touched-first rule). The expanded panel wraps rebuilds
+        // in a hybrid freeze so a streaming `updatedAt` bump does not reshuffle
+        // rows live; the comparator only decides the natural top-of-list winner
+        // once the freeze releases.
+        let sorted: [PiAgentSessionRecord]
+        if exactSort {
+            sorted = sessions.sorted { PiAgentSessionRecord.sessionListPrecedesExact($0, $1) }
+        } else {
+            sorted = sessions.sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
+        }
 
         // Expanded view or uncapped modes show everything.
         if isExpanded || !capPreviews || sorted.isEmpty {
             return PiAgentSessionPreviewSplit(all: sorted, preview: sorted, hidden: [])
         }
 
-        let alwaysCutoff = now.addingTimeInterval(-options.recentAlwaysShownInterval)
         var includedIDs = Set<UUID>()
 
-        // 1. Show the most recently updated sessions, regardless of age.
+        // 1. Show the N most-recently-updated sessions (exact order when the
+        //    caller asked for `exactSort`). This is the per-project preview cap.
         for session in sorted.prefix(options.maxRecentPerProject) {
             includedIDs.insert(session.id)
         }
 
-        // 2. Also include everything updated in the always-visible window. This
-        //    can take the preview over the five-session cap, matching Codex.
-        for session in sorted where session.updatedAt >= alwaysCutoff {
-            includedIDs.insert(session.id)
+        // 2. Surface sessions touched during the current app run, even when
+        //    they fall outside the top-N. These are typically chats the runner
+        //    just created or jostled via a follow-up; they should remain
+        //    reachable while still respecting the cap for the bulk of old rows.
+        if !touchedThisRunSessionIDs.isEmpty {
+            for session in sorted where touchedThisRunSessionIDs.contains(session.id) {
+                includedIDs.insert(session.id)
+            }
         }
 
         // 3. Keep the current selection reachable even when it is older than
@@ -91,6 +111,12 @@ enum PiAgentSessionGrouping {
     /// group. Groups sort alphabetically by repo name (or folder name), with
     /// "Other" always last — so `a-streetcoder/claude-code-meter` sorts as
     /// "claude-code-meter" and `a-streetcoder/agent-deck` sorts as "agent-deck".
+    ///
+    /// `exactSort` and `touchedThisRunSessionIDs` are forwarded to
+    /// `previewSplit`; the expanded/full sidebar passes `exactSort: true` and
+    /// the store's per-run touch set, while the compact strip computes its own
+    /// flat list (see `CodingAgentCollapsedPanel.interleaveByLiveness`) and
+    /// never calls through here.
     static func sections(
         from sessions: [PiAgentSessionRecord],
         projectByPath: [String: DiscoveredProject],
@@ -100,7 +126,9 @@ enum PiAgentSessionGrouping {
         isWorking: (PiAgentSessionRecord) -> Bool,
         selectedSessionID: UUID?,
         now: Date = Date(),
-        options: PiAgentSessionGroupingOptions = .default
+        options: PiAgentSessionGroupingOptions = .default,
+        exactSort: Bool = false,
+        touchedThisRunSessionIDs: Set<UUID> = []
     ) -> [PiAgentSessionListSection] {
         var byPath: [String: [PiAgentSessionRecord]] = [:]
         var orphans: [PiAgentSessionRecord] = []
@@ -132,7 +160,9 @@ enum PiAgentSessionGrouping {
                 isWorking: isWorking,
                 selectedSessionID: selectedSessionID,
                 now: now,
-                options: options
+                options: options,
+                exactSort: exactSort,
+                touchedThisRunSessionIDs: touchedThisRunSessionIDs
             ))
         }
 
@@ -154,7 +184,9 @@ enum PiAgentSessionGrouping {
                 isWorking: isWorking,
                 selectedSessionID: selectedSessionID,
                 now: now,
-                options: options
+                options: options,
+                exactSort: exactSort,
+                touchedThisRunSessionIDs: touchedThisRunSessionIDs
             ))
         }
 
@@ -233,7 +265,9 @@ enum PiAgentSessionGrouping {
         isWorking: (PiAgentSessionRecord) -> Bool,
         selectedSessionID: UUID?,
         now: Date,
-        options: PiAgentSessionGroupingOptions
+        options: PiAgentSessionGroupingOptions,
+        exactSort: Bool = false,
+        touchedThisRunSessionIDs: Set<UUID> = []
     ) -> PiAgentSessionListSection {
         // Always evaluate the *collapsed* split so we can tell whether the
         // group actually has anything to collapse (a group with ≤ preview-size
@@ -246,7 +280,9 @@ enum PiAgentSessionGrouping {
             isWorking: isWorking,
             selectedSessionID: selectedSessionID,
             now: now,
-            options: options
+            options: options,
+            exactSort: exactSort,
+            touchedThisRunSessionIDs: touchedThisRunSessionIDs
         )
         let isShowMore = requested && !split.hidden.isEmpty
         // Items rendered: nothing when disclosure-collapsed; every session when
@@ -282,14 +318,9 @@ enum PiAgentSessionGrouping {
 /// shipped product rule; kept as a type so tests and future tuning have one
 /// knob to turn.
 struct PiAgentSessionGroupingOptions: Equatable, Sendable {
-    /// Sessions updated within this interval of `now` are always shown, even
-    /// when that takes the preview over `maxRecentPerProject`.
-    var recentAlwaysShownInterval: TimeInterval = 21_600       // 6 hours
-    /// Kept for source compatibility with older tests/callers; no longer used
-    /// by the default preview rule.
-    var recentBucketInterval: TimeInterval = 86_400            // unused
     /// Maximum most-recent sessions shown per project before the rest collapse
-    /// behind "Show more". The six-hour always-visible window can exceed this.
+    /// behind "Show more". Sessions touched during the current app run and the
+    /// currently-selected session are surfaced on top of this cap.
     var maxRecentPerProject: Int = 5
 
     static let `default` = PiAgentSessionGroupingOptions()
@@ -341,4 +372,24 @@ struct PiAgentSessionListSection: Equatable, Identifiable {
     /// group. The header's "new session" affordance only renders for real
     /// projects.
     let isProjectGroup: Bool
+
+    /// Returns a copy of this section with `items` replaced. Used by the
+    /// expanded panel's hybrid freeze, which preserves the prior visible row
+    /// order during active work without rebuilding the rest of the section.
+    func withItems(_ items: [PiAgentSessionRecord]) -> PiAgentSessionListSection {
+        PiAgentSessionListSection(
+            id: id,
+            title: title,
+            subtitle: subtitle,
+            iconFileURL: iconFileURL,
+            fallbackSymbolName: fallbackSymbolName,
+            assetName: assetName,
+            items: items,
+            hiddenCount: hiddenCount,
+            isShowMoreActive: isShowMoreActive,
+            isCollapsed: isCollapsed,
+            totalCount: totalCount,
+            isProjectGroup: isProjectGroup
+        )
+    }
 }

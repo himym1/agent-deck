@@ -2532,17 +2532,41 @@ final class AppViewModel: NSObject {
         return piAgentSessionStore.sessions.filter { $0.projectPath == path }
     }
 
-    /// Move selection by `offset` within the scoped session list, in grouped
-    /// display order (alphabetical by repo, each group sorted by recency).
-    /// The target's group is auto-revealed — its disclosure expands if collapsed
-    /// and "Show more" activates if capped — so the selection always lands on a
-    /// rendered row. `wrap == true` wraps at both ends (⌘]/⌘[); `false` stops at
-    /// the ends (↑/↓). No-op when there are no sessions.
+    /// Sessions created or touched (`updatedAt` bumped) during the current app
+    /// run. Populated by the store's `createSession`/
+    /// `touchSession(bumpUpdatedAt: true)` paths; disk-reload paths keep it clean.
+    /// The expanded sidebar surfaces these above its top-N preview cap so a
+    /// freshly-created or jostled older chat stays reachable.
+    var piAgentSessionsTouchedThisRunIDs: Set<UUID> {
+        piAgentSessionStore.sessionsTouchedThisRun
+    }
+
+    /// Visible session rows of the ACTIVE sidebar panel (expanded or collapsed),
+    /// refreshed by that panel whenever it rebuilds its cached sections. Keyboard
+    /// navigation (`selectAdjacentPiAgentSession`, ⌘]/⌘[, in-list ↑/↓) operates
+    /// within this list only — no navigation into hidden preview/collapsed rows
+    /// and no auto-reveal. Empty until the first panel reports in; navigation
+    /// falls back to `scopedPiAgentSessionsInOrder` in that brief window.
+    var piAgentVisibleSessionsForNavigation: [PiAgentSessionRecord] = []
+
+    /// Move selection by `offset` within the active panel's visible session
+    /// list, in display order. `wrap == true` wraps at both ends (⌘]/⌘[);
+    /// `false` stops at the ends (↑/↓). No-op when there are no sessions.
+    ///
+    /// Navigation operates on the visible rows the active sidebar panel reports
+    /// via `piAgentVisibleSessionsForNavigation`. It does NOT auto-expand a
+    /// disclosure-collapsed group or activate "Show more" for a capped one — the
+    /// target row must already be visible. When no panel has reported in yet
+    /// (e.g. before the first rebuild), it falls back to the scoped session
+    /// list in stable order so keyboard shortcuts still work at the start of an
+    /// app launch.
     ///
     /// Both ⌘]/⌘[ and the in-list ↑/↓ arrows go through here so the two entry
-    /// points share one navigation order and one reveal rule.
+    /// points share one navigation order.
     func selectAdjacentPiAgentSession(offset: Int, wrap: Bool = true) {
-        let ordered = orderedAllSessionsForNavigation()
+        let ordered = piAgentVisibleSessionsForNavigation.isEmpty
+            ? scopedPiAgentSessionsInOrder()
+            : piAgentVisibleSessionsForNavigation
         guard !ordered.isEmpty else { return }
         let currentID = piAgentSessionStore.selectedSessionID
         let currentIndex = ordered.firstIndex { $0.id == currentID } ?? 0
@@ -2554,14 +2578,18 @@ final class AppViewModel: NSObject {
             nextIndex = min(max(currentIndex + offset, 0), count - 1)
         }
         let target = ordered[nextIndex]
-        revealSessionGroup(target)
+        // No auto-reveal: the target row is already visible (it's in `ordered`,
+        // which is the panel's visible row set). The previous `revealSessionGroup`
+        // call here drove navigation into hidden preview/collapsed rows, which
+        // is no longer desired for the expanded/full sidebar UX.
         selectPiAgentSession(target.id)
     }
 
     /// Every scoped session in grouped display order, ignoring group collapse
-    /// and "Show more" caps — the full navigation surface, so arrows/⌘] can
-    /// reach hidden sessions and reveal them. Mirrors the list's grouped order
-    /// (alphabetical by repo name, each group sorted by `sessionListPrecedes`).
+    /// and "Show more" caps — the full pre-`exactSort`/visible-rows rework
+    /// navigation surface. Retained for the rare fallback (e.g. nil visible
+    /// panels at cold start) and any future caller needing the full set, but
+    /// `selectAdjacentPiAgentSession` no longer routes through here.
     private func orderedAllSessionsForNavigation() -> [PiAgentSessionRecord] {
         PiAgentSessionGrouping.sections(
             from: scopedPiAgentSessionsInOrder(),
@@ -2577,7 +2605,9 @@ final class AppViewModel: NSObject {
     /// Auto-reveal the group owning `session` so it lands on a rendered row:
     /// expand a disclosure-collapsed group and activate "Show more" for a
     /// capped one. State is shared on the view model so every mounted session
-    /// list stays consistent.
+    /// list stays consistent. Used by selection paths that intentionally force
+    /// a hidden target visible (e.g. notification tap); keyboard navigation no
+    /// longer calls this.
     private func revealSessionGroup(_ session: PiAgentSessionRecord) {
         let groupID = projectByPath[session.projectPath] != nil
             ? session.projectPath
@@ -9156,11 +9186,12 @@ final class AppViewModel: NSObject {
         guard !Task.isCancelled else { return }
         watchFingerprintTask = nil
         guard fingerprint != previousFingerprint else { return }
-        // A real on-disk change, but reassigning project state mid-scroll re-evals
-        // the screen body (transcript itemsBuild + updateNSView) and drops frames.
-        // Re-arm the debounce WITHOUT committing the new fingerprint, so once the
-        // gesture settles the next check still sees the change and refreshes.
-        if TranscriptInteractionGate.isInteractingRecently {
+        // A real on-disk change, but reassigning project state mid-scroll or
+        // mid-stream re-evals the screen body (transcript itemsBuild +
+        // updateNSView) and drops frames. Re-arm the debounce WITHOUT committing
+        // the new fingerprint, so once the gesture/stream settles the next check
+        // still sees the change and refreshes.
+        if TranscriptInteractionGate.isInteractingRecently || TranscriptInteractionGate.isStreamingRecently {
             scheduleRefreshForWatchedFileEvent()
             return
         }

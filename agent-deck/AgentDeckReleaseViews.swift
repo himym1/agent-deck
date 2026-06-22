@@ -95,7 +95,7 @@ struct AgentDeckReleaseSheet: View {
         switch phase {
         case .loading:
             HStack(spacing: 10) {
-                ProgressView().controlSize(.small)
+                AppSpinner().controlSize(.small)
                 Text("Checking \(ReleaseService.mainBranch)…")
                     .foregroundStyle(AppTheme.mutedText)
             }
@@ -110,7 +110,7 @@ struct AgentDeckReleaseSheet: View {
 
         case .releasing:
             HStack(spacing: 10) {
-                ProgressView().controlSize(.small)
+                AppSpinner().controlSize(.small)
                 Text("Tagging and pushing \(preflight?.tag(for: bump) ?? "")…")
                     .foregroundStyle(AppTheme.mutedText)
             }
@@ -213,7 +213,7 @@ struct AgentDeckReleaseSheet: View {
 
                 if notesState == .generating {
                     HStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
+                        AppSpinner().controlSize(.small)
                         Text("Writing release notes…")
                             .foregroundStyle(AppTheme.mutedText)
                     }

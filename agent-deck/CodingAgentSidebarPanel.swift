@@ -211,6 +211,13 @@ struct CodingAgentCollapsedPanel: View {
         // not change the session strip.
         let next = interleaveByLiveness(scoped)
         if next != recentSessions { recentSessions = next }
+        // Report the collapsed strip's flat visible row snapshot to the view
+        // model so keyboard navigation operates on rendered rows only. Only
+        // reports when this strip is the active panel (i.e. the expanded panel
+        // is hidden); the expanded panel owns the report when it's showing.
+        if !viewModel.isCodingAgentPanelExpanded {
+            viewModel.piAgentVisibleSessionsForNavigation = next
+        }
     }
 
     /// Live sessions (working / updated in the last 30 min) first in

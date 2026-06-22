@@ -1113,8 +1113,10 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
 }
 
 extension PiAgentSessionRecord {
-    /// Canonical session-list ordering, shared by every sort site (the grouped
-    /// All-Projects list, the compact recent strip, and the store).
+    /// Canonical session-list ordering, shared by the compact recent strip and
+    /// the store's persistent order. Keep this comparator on the collapsed strip
+    /// and the on-disk session list so a streaming pulse (bumping `updatedAt`
+    /// within the same day) does NOT reshuffle the compact strip's rows.
     ///
     /// `updatedAt` is compared at `.day` granularity so a session that streams a
     /// response (bumping `updatedAt` within the same day) does NOT reshuffle to
@@ -1124,6 +1126,22 @@ extension PiAgentSessionRecord {
         let updatedDayComparison = calendar.compare(lhs.updatedAt, to: rhs.updatedAt, toGranularity: .day)
         if updatedDayComparison != .orderedSame { return updatedDayComparison == .orderedDescending }
 
+        if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    /// Strict exact-precision ordering used by the expanded/full coding-agent
+    /// sidebar: sort by exact `updatedAt` DESC, then `createdAt` DESC, then `id`
+    /// ASC. Within-day activity promotes a session to the top of its project
+    /// group, so the most-recently-touched chat leads the expanded list. The
+    /// compact strip keeps the day-granular `sessionListPrecedes` for stability.
+    ///
+    /// Streaming-induced reshuffling of the expanded list is suppressed by the
+    /// panel's hybrid freeze (see `CodingAgentExpandedPanel`), not by this
+    /// comparator; the comparator merely defines the natural top-of-list winner
+    /// once the freeze releases.
+    static func sessionListPrecedesExact(_ lhs: PiAgentSessionRecord, _ rhs: PiAgentSessionRecord) -> Bool {
+        if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
         if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
         return lhs.id.uuidString < rhs.id.uuidString
     }

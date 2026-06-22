@@ -2,6 +2,15 @@ import AppKit
 import ImageIO
 import SwiftUI
 
+private func loadingRow(_ text: String) -> some View {
+    HStack(spacing: 10) {
+        AppSpinner()
+            .controlSize(.small)
+        Text(text)
+            .foregroundStyle(AppTheme.mutedText)
+    }
+}
+
 struct ProjectAssignmentToggleRow: View {
     let project: DiscoveredProject
     @Binding var isOn: Bool
@@ -162,7 +171,7 @@ struct ProjectIconView: View {
                     .resizable()
                     .scaledToFill()
             } else if imageURL != nil {
-                ProgressView()
+                AppSpinner()
                     .controlSize(.small)
             } else if let assetName, !assetName.isEmpty, NSImage(named: assetName) != nil {
                 Image(assetName)
@@ -628,7 +637,7 @@ private struct ProjectAgentsRecapSheet: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 32)
                     } else {
-                        ProgressView("Loading agents…")
+                        loadingRow("Loading agents…")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 32)
                     }
@@ -780,7 +789,7 @@ private struct ProjectSkillsRecapSheet: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 32)
                     } else {
-                        ProgressView("Loading skills…")
+                        loadingRow("Loading skills…")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 32)
                     }
@@ -928,7 +937,7 @@ private struct ProjectMcpServersRecapSheet: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 32)
                     } else {
-                        ProgressView("Loading MCP servers…")
+                        loadingRow("Loading MCP servers…")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 32)
                     }

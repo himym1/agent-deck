@@ -893,6 +893,7 @@ private struct PiAgentSubagentPickerRow: View {
     /// Fixed row height so every row is identical — nothing shifts when the
     /// hover chat button reveals or launch chips change state.
     private static let rowHeight: CGFloat = 40
+    private static let agentColumnWidth: CGFloat = 340
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -914,6 +915,7 @@ private struct PiAgentSubagentPickerRow: View {
                         .truncationMode(.tail)
                         .opacity(checked ? 1 : 0.66)
                 }
+                .frame(width: Self.agentColumnWidth, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -982,11 +984,15 @@ private struct PiAgentPickerLaunchControls: View {
     @State private var isThinkingPresented = false
 
     private static let chipHeight: CGFloat = 22
+    private static let modelChipWidth: CGFloat = 300
+    private static let thinkingChipWidth: CGFloat = 220
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 8) {
             modelChip
+                .frame(width: Self.modelChipWidth, alignment: .leading)
             thinkingChip
+                .frame(width: Self.thinkingChipWidth, alignment: .leading)
         }
         .frame(height: Self.chipHeight)
         .help(launchDetail)
@@ -1011,6 +1017,7 @@ private struct PiAgentPickerLaunchControls: View {
                 Text(modelLabel)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                Spacer(minLength: 0)
                 Image(systemName: "chevron.down")
                     .font(AppTheme.Font.caption2.weight(.bold))
                     .foregroundStyle(AppTheme.mutedText)
@@ -1018,8 +1025,8 @@ private struct PiAgentPickerLaunchControls: View {
             .font(AppTheme.Font.caption2.weight(.semibold))
             .foregroundStyle(.primary)
             .padding(.horizontal, 8)
-            .frame(height: Self.chipHeight)
-            .appGlassCapsule()
+            .frame(maxWidth: .infinity, minHeight: Self.chipHeight, maxHeight: Self.chipHeight, alignment: .leading)
+            .glassEffect(.regular, in: Capsule(style: .continuous))
             .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
@@ -1036,7 +1043,8 @@ private struct PiAgentPickerLaunchControls: View {
                 Image(systemName: "brain.head.profile")
                 Text("Thinking: \(thinkingLabel)")
                     .lineLimit(1)
-                    .truncationMode(.head)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
                 Image(systemName: "chevron.down")
                     .font(AppTheme.Font.caption2.weight(.bold))
                     .foregroundStyle(AppTheme.mutedText)
@@ -1044,8 +1052,8 @@ private struct PiAgentPickerLaunchControls: View {
             .font(AppTheme.Font.caption2.weight(.semibold))
             .foregroundStyle(.primary)
             .padding(.horizontal, 8)
-            .frame(height: Self.chipHeight)
-            .appGlassCapsule()
+            .frame(maxWidth: .infinity, minHeight: Self.chipHeight, maxHeight: Self.chipHeight, alignment: .leading)
+            .glassEffect(.regular, in: Capsule(style: .continuous))
             .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)

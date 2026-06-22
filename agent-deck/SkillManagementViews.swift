@@ -1355,7 +1355,7 @@ struct SkillsScreen: View {
                             .fontWidth(.expanded)
                             .foregroundStyle(AppTheme.mutedText)
                         HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
+                            AppSpinner().controlSize(.small)
                             Text("Summarising with AI…")
                                 .foregroundStyle(AppTheme.mutedText)
                         }
@@ -1398,7 +1398,7 @@ struct SkillsScreen: View {
         ) {
             switch state {
             case .loading:
-                ProgressView().controlSize(.small)
+                AppSpinner().controlSize(.small)
             case .failed:
                 Image(systemName: "arrow.clockwise")
             default:

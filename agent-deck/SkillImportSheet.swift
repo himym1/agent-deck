@@ -812,7 +812,7 @@ struct SkillImportSheet: View {
             switch summaryState {
             case .loading:
                 HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
+                    AppSpinner().controlSize(.small)
                     Text("Summarising with AI…")
                         .font(.caption)
                         .foregroundStyle(AppTheme.mutedText)
@@ -855,7 +855,7 @@ struct SkillImportSheet: View {
             ) {
                 switch summaryState {
                 case .loading:
-                    ProgressView().controlSize(.small)
+                    AppSpinner().controlSize(.small)
                 case .failed:
                     Image(systemName: "arrow.clockwise")
                 default:

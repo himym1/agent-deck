@@ -127,15 +127,14 @@ struct ModelsScreen: View {
         VStack(alignment: .leading, spacing: 8) {
             modelsSectionHeader(
                 systemImage: "paperplane",
-                title: "Agent Models"
+                title: "Agent Models",
+                showsThinking: true
             )
 
             if editableAgents.isEmpty {
                 emptyModelsCard("No editable agents. Agents you add in the Agents view show up here.")
             } else {
                 modelsBorderedCard {
-                    controlsHeader(showsThinking: true)
-                    Divider()
                     ForEach(Array(editableAgents.enumerated()), id: \.element.id) { index, agent in
                         agentModelRow(agent)
                         if index < editableAgents.count - 1 {
@@ -180,11 +179,12 @@ struct ModelsScreen: View {
             Spacer(minLength: 12)
 
             HStack(spacing: AppTheme.contentSpacing) {
-                fixedModelPicker(
+                modelPickerWithCapabilityGlyphs(
                     models: viewModel.enabledAvailableModels,
                     selectedIdentifier: draft?.config.model,
                     allowsDefault: true,
                     nilLabel: "Pi default model",
+                    capabilityModel: thinkingModel,
                     onSelect: { model in
                         applyAgentModelChange(agent, modelIdentifier: model?.identifier)
                     }
@@ -200,10 +200,7 @@ struct ModelsScreen: View {
                         }
                     )
                 } else {
-                    Text("Not supported")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(AppTheme.mutedText)
-                        .frame(width: thinkingControlWidth, alignment: .leading)
+                    disabledThinkingPlaceholder()
                 }
             }
             .frame(width: modelControlWidth + thinkingControlWidth + AppTheme.contentSpacing, alignment: .leading)
@@ -274,6 +271,51 @@ struct ModelsScreen: View {
         .help(selectedIdentifier ?? nilLabel)
     }
 
+    /// Native `.menu` picker (via `fixedModelPicker`) with capability glyphs
+    /// (brain/photo) overlaid on the trailing side, inside the picker's
+    /// bounds — to the left of the native disclosure chevron. Keeps the
+    /// system rounded dropdown chrome without replacing it with a custom
+    /// `Menu`.
+    private func modelPickerWithCapabilityGlyphs(
+        models: [AvailableModel],
+        selectedIdentifier: String?,
+        allowsDefault: Bool,
+        nilLabel: String,
+        capabilityModel: AvailableModel?,
+        onSelect: @escaping (AvailableModel?) -> Void
+    ) -> some View {
+        fixedModelPicker(
+            models: models,
+            selectedIdentifier: selectedIdentifier,
+            allowsDefault: allowsDefault,
+            nilLabel: nilLabel,
+            onSelect: onSelect
+        )
+        .overlay(alignment: .trailing) {
+            capabilityGlyphs(for: capabilityModel)
+                .padding(.trailing, 24)
+                .allowsHitTesting(false)
+        }
+    }
+
+    @ViewBuilder
+    private func capabilityGlyphs(for model: AvailableModel?) -> some View {
+        HStack(spacing: 5) {
+            if let model, model.supportsThinking {
+                Image(systemName: "brain.head.profile")
+                    .help("Supports thinking")
+                    .accessibilityLabel("Supports thinking")
+            }
+            if let model, model.supportsImages {
+                Image(systemName: "photo")
+                    .help("Supports image input")
+                    .accessibilityLabel("Supports image input")
+            }
+        }
+        .imageScale(.small)
+        .foregroundStyle(AppTheme.mutedText)
+    }
+
     private func fixedThinkingPicker(
         selectedLevel: String,
         levels: [String],
@@ -296,6 +338,21 @@ struct ModelsScreen: View {
         .help("Thinking level: \(selectedLevel.capitalized)")
     }
 
+    /// Visual placeholder for the thinking column when the selected model has
+    /// no thinking support. Renders a disabled menu-style control labeled
+    /// "Not available" so rows remain visually consistent with models that do
+    /// support thinking (task: no plain "Not supported" text).
+    private func disabledThinkingPlaceholder() -> some View {
+        Picker("Thinking", selection: .constant("Not available")) {
+            Text("Not available").tag("Not available")
+        }
+        .labelsHidden()
+        .appMenuPicker()
+        .frame(width: thinkingControlWidth, alignment: .leading)
+        .disabled(true)
+        .help("Thinking is not available for this model")
+    }
+
     /// Persists one agent's model/thinking immediately. The local draft mirrors
     /// the saved state for this row; for plain builtin overrides the snapshot
     /// catches up on the next rescan, which is cosmetic.
@@ -312,11 +369,10 @@ struct ModelsScreen: View {
         VStack(alignment: .leading, spacing: 8) {
             modelsSectionHeader(
                 systemImage: "wand.and.stars",
-                title: "Automation Models"
+                title: "Automation Models",
+                showsThinking: false
             )
             modelsBorderedCard {
-                controlsHeader(showsThinking: false)
-                Divider()
                 ForEach(Array(automationRows.enumerated()), id: \.element.id) { index, item in
                     automationModelRow(item)
                     if index < automationRows.count - 1 {
@@ -393,39 +449,33 @@ struct ModelsScreen: View {
 
             Spacer(minLength: 12)
 
-            fixedModelPicker(
-                models: item.models,
-                selectedIdentifier: selectedModel?.identifier,
-                allowsDefault: true,
-                nilLabel: item.nilLabel,
-                onSelect: item.onSelect
-            )
-            .frame(width: modelControlWidth, alignment: .leading)
+            // Reserve the full trailing grid width (model + thinking columns
+            // + spacing) so the model picker starts at the same x-position as
+            // Agent Models rows, even though Automation has no thinking picker.
+            HStack(spacing: AppTheme.contentSpacing) {
+                modelPickerWithCapabilityGlyphs(
+                    models: item.models,
+                    selectedIdentifier: selectedModel?.identifier,
+                    allowsDefault: true,
+                    nilLabel: item.nilLabel,
+                    capabilityModel: selectedModel,
+                    onSelect: item.onSelect
+                )
+                .frame(width: modelControlWidth, alignment: .leading)
+
+                // Thinking column is reserved but empty for Automation rows,
+                // keeping the trailing grid width identical to Agent Models.
+                Color.clear
+                    .frame(width: thinkingControlWidth, alignment: .leading)
+            }
+            .frame(width: modelControlWidth + thinkingControlWidth + AppTheme.contentSpacing, alignment: .leading)
             .opacity(item.isDisabled ? 0.5 : 1)
         }
         .padding(.vertical, 10)
     }
 
     @ViewBuilder
-    private func controlsHeader(showsThinking: Bool) -> some View {
-        HStack(spacing: AppTheme.contentSpacing) {
-            Spacer(minLength: 12)
-            HStack(spacing: AppTheme.contentSpacing) {
-                AgentModelColumnHeader("Model")
-                    .frame(width: modelControlWidth, alignment: .leading)
-                if showsThinking {
-                    AgentModelColumnHeader("Thinking")
-                        .frame(width: thinkingControlWidth, alignment: .leading)
-                }
-            }
-            .frame(width: modelControlWidth + (showsThinking ? thinkingControlWidth + AppTheme.contentSpacing : 0), alignment: .leading)
-        }
-        .padding(.top, 4)
-        .padding(.bottom, 8)
-    }
-
-    @ViewBuilder
-    private func modelsSectionHeader(systemImage: String, title: String) -> some View {
+    private func modelsSectionHeader(systemImage: String, title: String, showsThinking: Bool = false) -> some View {
         HStack(alignment: .center, spacing: 8) {
             Image(systemName: systemImage)
                 .foregroundStyle(AppTheme.brandAccent)
@@ -435,7 +485,25 @@ struct ModelsScreen: View {
                 .font(.title3.weight(.bold))
                 .fontWidth(.expanded)
                 .foregroundStyle(.primary)
-            Spacer(minLength: 0)
+            Spacer(minLength: 12)
+            HStack(spacing: AppTheme.contentSpacing) {
+                AgentModelColumnHeader("Model")
+                    .frame(width: modelControlWidth, alignment: .leading)
+                if showsThinking {
+                    AgentModelColumnHeader("Thinking")
+                        .frame(width: thinkingControlWidth, alignment: .leading)
+                }
+            }
+            // Always reserve the full trailing grid width so the Model column
+            // header (and the model pickers in rows below) start at the same
+            // x-position across all sections, regardless of whether a Thinking
+            // column is shown.
+            .frame(width: modelControlWidth + thinkingControlWidth + AppTheme.contentSpacing, alignment: .leading)
+            // Align the column headers with the controls inside the bordered
+            // card below, which is inset by `AppTheme.cardPadding`. The header
+            // row itself is inset by 2pt, so push the right-aligned cluster in
+            // by the remainder so the trailing edges line up.
+            .padding(.trailing, max(0, AppTheme.cardPadding - 2))
         }
         .padding(.horizontal, 2)
     }
@@ -524,31 +592,17 @@ struct ModelsScreen: View {
     }
 
     private var defaultModelCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 10) {
-                Image(systemName: "cpu")
-                    .foregroundStyle(AppTheme.brandAccent)
-                    .font(.title3.weight(.semibold))
-                    .frame(width: 22)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Pi default model")
-                        .font(.headline)
-                        .fontWidth(.expanded)
-                    Text("Used for new Pi Agent sessions unless a session or agent overrides it.")
-                        .font(.caption)
-                        .foregroundStyle(AppTheme.mutedText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
+        HStack(alignment: .top, spacing: AppTheme.contentSpacing) {
+            Spacer(minLength: 12)
             HStack(alignment: .top, spacing: AppTheme.contentSpacing) {
                 VStack(alignment: .leading, spacing: 5) {
                     AgentModelColumnHeader("Model")
-                    fixedModelPicker(
+                    modelPickerWithCapabilityGlyphs(
                         models: viewModel.enabledAvailableModels,
                         selectedIdentifier: selectedDefaultModel?.identifier,
                         allowsDefault: false,
                         nilLabel: "Select model",
+                        capabilityModel: selectedDefaultModel,
                         onSelect: { model in
                             guard let model else { return }
                             defaultModelBinding.wrappedValue = model.identifier
@@ -559,32 +613,27 @@ struct ModelsScreen: View {
 
                 VStack(alignment: .leading, spacing: 5) {
                     AgentModelColumnHeader("Thinking")
-                    fixedThinkingPicker(
-                        selectedLevel: defaultThinkingBinding.wrappedValue,
-                        levels: defaultThinkingLevels,
-                        onSelect: { level in
-                            defaultThinkingBinding.wrappedValue = level
-                        }
-                    )
+                    if let selectedDefaultModel,
+                       selectedDefaultModel.supportsThinking,
+                       !selectedDefaultModel.supportedThinkingLevels.isEmpty {
+                        fixedThinkingPicker(
+                            selectedLevel: defaultThinkingBinding.wrappedValue,
+                            levels: defaultThinkingLevels,
+                            onSelect: { level in
+                                defaultThinkingBinding.wrappedValue = level
+                            }
+                        )
+                    } else {
+                        disabledThinkingPlaceholder()
+                    }
                 }
                 .frame(width: thinkingControlWidth, alignment: .leading)
-
-                Spacer(minLength: 0)
             }
-
-            if let model = selectedDefaultModel {
-                Text(defaultModelSummary(model))
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-                    .lineLimit(1)
-            } else {
-                Text("No enabled models available")
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-            }
+            .frame(width: modelControlWidth + thinkingControlWidth + AppTheme.contentSpacing, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(16)
+        .padding(.horizontal, AppTheme.cardPadding)
+        .padding(.vertical, 16)
         .background(
             RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
                 .stroke(AppTheme.contentStroke, lineWidth: 1)
@@ -624,17 +673,6 @@ struct ModelsScreen: View {
     private var selectedDefaultModel: AvailableModel? {
         let identifier = defaultModelBinding.wrappedValue
         return viewModel.enabledAvailableModels.first { $0.identifier == identifier }
-    }
-
-    private var currentDefaultThinkingLabel: String {
-        let current = defaultThinkingBinding.wrappedValue
-        return current.capitalized
-    }
-
-    private func defaultModelSummary(_ model: AvailableModel) -> String {
-        var parts: [String] = [model.supportsImages ? "Images" : "Text only"]
-        parts.append(model.supportsThinking ? "Thinking: \(currentDefaultThinkingLabel)" : "No thinking")
-        return parts.joined(separator: " · ")
     }
 
     private func modelRow(_ model: AvailableModel) -> some View {

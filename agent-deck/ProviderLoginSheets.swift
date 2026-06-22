@@ -549,7 +549,7 @@ struct ProviderLoginPhaseView: View {
 
     private func busyRow(_ text: String) -> some View {
         HStack(spacing: 10) {
-            ProgressView()
+            AppSpinner()
                 .controlSize(.small)
             Text(text)
                 .font(.subheadline)

@@ -1097,6 +1097,17 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         // gesture or streaming is in flight, resumed when idle.
         private var prewarmQueue: [String] = []
         private var prewarmScheduled = false
+        /// IDs blocked from prewarm because a single build exceeded the per-row
+        /// cost cap — a heavy row that eats the whole slice budget would otherwise
+        /// be retried every idle tick and starve the rows behind it. Cleared on
+        /// session switch and width change (geometry/content invalidate the
+        /// block — the row may be cheaper to build at the new width or not exist).
+        private var prewarmBlockedIDs: Set<String> = []
+        /// Hard per-row cost cap: if a single prewarm build exceeds this, the row
+        /// is blocked from future prewarm attempts so the budget goes to cheaper
+        /// rows instead. Kept well above the per-slice budget so a normal row is
+        /// never blocked, but a pathological 20ms+ markdown stack is.
+        private let prewarmPerRowCostCapMs: Double = 15.0
         /// Kill switch for A/B: `defaults write streetcoding.agent-deck TranscriptPrewarmDisabled -bool YES`.
         private static let prewarmDisabled: Bool = {
             UserDefaults.standard.bool(forKey: "TranscriptPrewarmDisabled")
@@ -1139,7 +1150,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // what we built). Skip while streaming — new content is arriving and the
             // visible path takes priority.
             let pending = orderedIDs.filter { id in
-                guard cellCache[id] == nil else { return false }
+                guard cellCache[id] == nil, !prewarmBlockedIDs.contains(id) else { return false }
                 // Heavy markdown/tool rows are exactly the rows that can block the
                 // main thread for a visible hitch if built speculatively. Let them
                 // build only when actually needed; prewarm the cheaper majority.
@@ -1183,10 +1194,23 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             while !prewarmQueue.isEmpty {
                 let id = prewarmQueue.removeFirst()
                 // Skip rows that scrolled into view (already built) or vanished.
-                guard cellCache[id] == nil, let item = itemByID[id],
+                guard cellCache[id] == nil, !prewarmBlockedIDs.contains(id),
+                      let item = itemByID[id],
                       let row = orderedIDs.firstIndex(of: id) else { continue }
                 let cell = cachedCell(for: id)
+                let rowStart = CACurrentMediaTime()
                 configure(cell, with: item, row: row, via: "prewarm")
+                // Hard per-row cap: if this single build exceeded the cost
+                // threshold, block it from future prewarm so a pathological row
+                // can't starve the budget every idle tick. The row will still
+                // build on the scroll path when actually needed.
+                let rowCostMs = (CACurrentMediaTime() - rowStart) * 1000
+                if rowCostMs >= prewarmPerRowCostCapMs {
+                    prewarmBlockedIDs.insert(id)
+#if DEBUG
+                    TranscriptScrollProfiler.fileLog("PREWARM blocked id=\(id.suffix(6)) cost=\(String(format: "%.1f", rowCostMs))ms")
+#endif
+                }
                 // Do not force an offscreen layout by default. The old path called
                 // `forcedIntrinsicHeight()` here, which is good for future scroll
                 // stability but can spend hundreds of milliseconds in TextKit/AppKit
@@ -1433,7 +1457,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // the builds/re-tiles below is tagged [stream] vs [static] — the shared
             // capture mixes "scrolling a finished transcript" with "live generation"
             // and they need opposite fixes.
-            if streamingUpdate { profiler.noteStreamingActivity() }
+            if streamingUpdate {
+                profiler.noteStreamingActivity()
+                TranscriptInteractionGate.noteStreaming()
+            }
 #if DEBUG
             if streamingUpdate { maybeRunStreamScrollTest() }
 #endif
@@ -1471,6 +1498,11 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     pendingRemeasureWork?.cancel()
                     pendingRemeasureWork = nil
                     pendingRemeasureIDs.removeAll()
+                    // A new session's rows may have completely different
+                    // construction costs; clear the block list so rows that
+                    // were too expensive in the previous session get a fresh
+                    // evaluation.
+                    prewarmBlockedIDs.removeAll()
                 }
                 let previousIDs = Set(orderedIDs)
                 let removedIDs = previousIDs.subtracting(nextIDs)
@@ -1908,6 +1940,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             contentWidth = width
             lastWidthChangeTime = CACurrentMediaTime()
             prewarmQueue.removeAll()
+            // Width changes can alter which rows are expensive to build (text
+            // reflow changes block count), so clear the block list and let
+            // rows be re-evaluated at the new width.
+            prewarmBlockedIDs.removeAll()
             tableView.tableColumns.first?.width = width
             // Re-fit the table to the clip view so the document view shrinks
             // with it. Setting only the column width leaves the table's own
@@ -2786,13 +2822,17 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             }
             // `settle` is the immediate layout pass that stops a layer-backed row
             // painting at a stale position. Rows can be vended on cells that AppKit
-            // recycled from another item of the same native type; that path keeps the
-            // view (`createdNow == false`) but swaps content at the same width. Settle
+            // recycled from another item of the same native view type; that path keeps
+            // the view (`createdNow == false`) but swaps content at the same width. Settle
             // first paint for any real content row after creation or item reuse, plus
             // later geometry changes. Spacers have no visible geometry to correct.
+            // Skip for offscreen prewarm: the row is not on screen so there is no
+            // stale paint to correct, and the layout cost (up to 60ms for heavy rows)
+            // is wasted work that stalls the main thread during idle pre-warm slices.
+            // The cell will lay out naturally when it scrolls into view.
             let hasVisibleNativeGeometry = spec.typeID != ObjectIdentifier(PiAgentNativeSpacerView.self)
             let needsInitialSettle = hasVisibleNativeGeometry && (createdNow || itemChanged)
-            if needsInitialSettle || (!createdNow && (widthChanged || insetChanged)) {
+            if via != "prewarm", needsInitialSettle || (!createdNow && (widthChanged || insetChanged)) {
                 spec.settle(row)
             }
             configuredItemID = item.id
@@ -3194,7 +3234,15 @@ struct CodingAgentExpandedPanel: View {
                 .padding(.horizontal, 14)
                 .padding(.bottom, 10)
 
-            if !hasAnyScopedSessions {
+            if isActive && !hasBuiltVisibleSessions {
+                // Lightweight placeholder during the expand animation's first
+                // frames: computing visibleSections (grouping) or even reading
+                // hasAnyScopedSessions here would force synchronous work that
+                // competes with the spring animation. After the deferred
+                // schedulePostExpandWork rebuild lands, this branch disappears.
+                Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if !hasAnyScopedSessions {
                 AppEmptyState("No sessions yet", systemImage: "square.and.pencil", description: emptySessionsMessage, layout: .fill)
             } else if visibleSections.isEmpty {
                 AppEmptyState("No sessions found", systemImage: "magnifyingglass", description: "Try another search.", layout: .fill)
@@ -3245,10 +3293,19 @@ struct CodingAgentExpandedPanel: View {
         // expanding sheds the container so the list gets the whole sidebar.
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .onAppear {
-            rebuildVisibleSessions()
-            syncVisibleSessionSelection()
-            syncMultiSelectionToSelectedSession()
-            if isActive { schedulePostExpandWork() }
+            if isActive {
+                // Defer the initial rebuild/sync past the expand animation's
+                // first frames so grouping, selection reconciliation, and git
+                // activity parsing don't fight the spring for main-thread time.
+                // The placeholder branch above covers the gap.
+                schedulePostExpandWork()
+            } else {
+                // Background prebuild while hidden — no animation to compete
+                // with, so the next expand shows the list immediately.
+                rebuildVisibleSessions()
+                syncVisibleSessionSelection()
+                syncMultiSelectionToSelectedSession()
+            }
         }
         .onDisappear {
             postExpandTask?.cancel()
@@ -3262,15 +3319,15 @@ struct CodingAgentExpandedPanel: View {
                 postExpandTask = nil
             }
         }
-        .onChange(of: store.sessionListRevision) { _, _ in rebuildVisibleSessions() }
-        .onChange(of: sessionSearchText) { _, _ in rebuildVisibleSessions() }
-        .onChange(of: viewModel.showPiAgentAttentionOnly) { _, _ in rebuildVisibleSessions() }
-        .onChange(of: viewModel.expandedProjects) { _, _ in rebuildVisibleSessions() }
-        .onChange(of: viewModel.collapsedProjects) { _, _ in rebuildVisibleSessions() }
+        .onChange(of: store.sessionListRevision) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
+        .onChange(of: sessionSearchText) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
+        .onChange(of: viewModel.showPiAgentAttentionOnly) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
+        .onChange(of: viewModel.expandedProjects) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
+        .onChange(of: viewModel.collapsedProjects) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
         // Projects load asynchronously after sessions on first launch; without
         // this trigger the cached sections stayed grouped under "Other" until a
         // later rebuild (the original first-launch "all Other" symptom).
-        .onChange(of: viewModel.discoveredProjectsRevision) { _, _ in rebuildVisibleSessions() }
+        .onChange(of: viewModel.discoveredProjectsRevision) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
         .onChange(of: store.selectedSession?.id) { _, _ in
             syncMultiSelectionToSelectedSession()
             // Keep the selected row in view for both click selection and keyboard
@@ -3333,7 +3390,13 @@ struct CodingAgentExpandedPanel: View {
     private var isAllProjects: Bool { true }
 
     private var visibleSections: [PiAgentSessionListSection] {
-        hasBuiltVisibleSessions ? cachedSections : computedSections()
+        // When active and not yet built, the placeholder branch is rendering —
+        // return [] so `.onChange(of: visibleSessionIDs)` and other getters
+        // referencing visibleSections don't compute grouping synchronously
+        // during the expand animation. When inactive, allow computedSections()
+        // for the background prebuild path (no animation to compete with).
+        if !hasBuiltVisibleSessions { return isActive ? [] : computedSections() }
+        return cachedSections
     }
 
     /// Flattened rendered sessions (preview sets only) for helpers that still
@@ -3352,20 +3415,86 @@ struct CodingAgentExpandedPanel: View {
             // expanded sidebar to hitch and could trip AppKit layout recursion.
             try? await Task.sleep(for: .milliseconds(260))
             guard !Task.isCancelled, isActive else { return }
+            rebuildVisibleSessions()
+            syncVisibleSessionSelection()
+            syncMultiSelectionToSelectedSession()
             sessionScrollRequest = store.selectedSession?.id
             rebuildSessionActivityCache()
             postExpandTask = nil
         }
     }
 
+    /// Guarded rebuild for reactive `.onChange` triggers: during the deferred
+    /// first-expand window (`isActive && !hasBuiltVisibleSessions`), reschedule
+    /// `schedulePostExpandWork` instead of rebuilding immediately — a reactive
+    /// rebuild would set `hasBuiltVisibleSessions = true` and kill the
+    /// placeholder before the expand animation finishes. Once the initial build
+    /// has landed, rebuilds happen immediately as before.
+    private func rebuildVisibleSessionsDeferredIfNeeded() {
+        if isActive && !hasBuiltVisibleSessions {
+            schedulePostExpandWork()
+        } else {
+            rebuildVisibleSessions()
+        }
+    }
+
     private func rebuildVisibleSessions() {
         let scoped = scopedSessions
         if hasAnyScopedSessions != !scoped.isEmpty { hasAnyScopedSessions = !scoped.isEmpty }
-        let next = computedSections(from: scoped)
+        let computed = computedSections(from: scoped)
+        // Pragmatic hybrid freeze: while any visible session is actively
+        // working, preserve the existing visible row order so a streaming
+        // `updatedAt` bump doesn't reshuffle rows live. Only newly-present
+        // rows (typically just-created or this-run-touched sessions surfacing
+        // from the cap) may join the visible list; they're appended in their
+        // natural computed order without re-sorting the frozen rows. Once no
+        // session is working, the next rebuild re-sorts via the exact rule.
+        let next = freezeVisibleOrderDuringActiveWork(computed) ?? computed
         if !hasBuiltVisibleSessions || next != cachedSections {
             cachedSections = next
         }
         hasBuiltVisibleSessions = true
+        // Publish the visible row snapshot to the view model so keyboard
+        // navigation (⌘]/⌘[ and in-list ↑/↓) operates on rendered rows only —
+        // no navigation into hidden preview/collapsed rows, no auto-reveal.
+        // Only the active panel reports in, so the collapsed strip's flat
+        // list isn't overwritten while the expanded panel is hidden.
+        if isActive {
+            viewModel.piAgentVisibleSessionsForNavigation = visibleSessions
+        }
+    }
+
+    /// Returns a frozen copy of `computed` preserving the prior visible row
+    /// order, or `nil` when no freeze should apply (no working session, or the
+    /// cache isn't populated yet). Frozen sections keep the cached `items`
+    /// order with two adjustments per section: drop rows that are no longer
+    /// present, and append newly-present rows (newly visible this rebuild).
+    /// Structural changes (collapse / Show more toggle) bypass the freeze so
+    /// those user actions take effect immediately.
+    private func freezeVisibleOrderDuringActiveWork(_ computed: [PiAgentSessionListSection]) -> [PiAgentSessionListSection]? {
+        let anyWorking = computed.flatMap(\.items).contains { viewModel.piAgentSessionIsWorking($0) }
+        guard anyWorking, hasBuiltVisibleSessions, !cachedSections.isEmpty else { return nil }
+        var frozeAny = false
+        let frozen = computed.map { newSection -> PiAgentSessionListSection in
+            guard let oldSection = cachedSections.first(where: { $0.id == newSection.id }),
+                  // Skip the freeze when the user's collapse / Show-more state
+                  // changed between rebuilds — let the new section win so the
+                  // structural action takes effect immediately.
+                  oldSection.isCollapsed == newSection.isCollapsed,
+                  oldSection.isShowMoreActive == newSection.isShowMoreActive else {
+                return newSection
+            }
+            let newByID = Dictionary(uniqueKeysWithValues: newSection.items.map { ($0.id, $0) })
+            let oldIDs = Set(oldSection.items.map(\.id))
+            // Preserve prior order, refreshing payloads of rows still present.
+            var merged = oldSection.items.compactMap { newByID[$0.id] }
+            // Append rows newly present this rebuild, in computed order.
+            merged.append(contentsOf: newSection.items.filter { !oldIDs.contains($0.id) })
+            if merged == newSection.items { return newSection }
+            frozeAny = true
+            return newSection.withItems(merged)
+        }
+        return frozeAny ? frozen : nil
     }
 
     private func computedSections(from scoped: [PiAgentSessionRecord]? = nil) -> [PiAgentSessionListSection] {
@@ -3384,7 +3513,15 @@ struct CodingAgentExpandedPanel: View {
             collapsedProjectIDs: viewModel.collapsedProjects,
             capPreviews: capPreviews,
             isWorking: { viewModel.piAgentSessionIsWorking($0) },
-            selectedSessionID: store.selectedSession?.id
+            selectedSessionID: store.selectedSession?.id,
+            // Expanded/full sidebar uses the strict exact-`updatedAt` comparator
+            // so the most-recently-touched chat leads its project group within
+            // the same day. The hybrid freeze in `rebuildVisibleSessions` keeps
+            // a streaming pulse from reshuffling rows live.
+            exactSort: true,
+            // Surface sessions created or touched during this app run above
+            // the top-N cap, so a freshly-jostled older chat stays reachable.
+            touchedThisRunSessionIDs: viewModel.piAgentSessionsTouchedThisRunIDs
         )
     }
 
