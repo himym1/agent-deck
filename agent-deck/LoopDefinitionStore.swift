@@ -41,6 +41,11 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
+    func loadDefinitions() -> [LoopDefinition] {
+        (Self.builtinDefinitions + loadUserDefinitions())
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     @discardableResult
     func saveUserDefinition(_ definition: LoopDefinition) throws -> LoopDefinition {
         guard definition.source == .user else { throw StoreError.userDefinitionsOnly }
@@ -76,7 +81,6 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
     }
 
     func duplicateUserDefinition(_ definition: LoopDefinition, name: String? = nil) throws -> LoopDefinition {
-        guard definition.source == .user else { throw StoreError.userDefinitionsOnly }
         var duplicate = definition
         duplicate.id = UUID().uuidString
         duplicate.name = (name?.nonEmpty ?? "Copy of \(definition.name)")
@@ -132,6 +136,10 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
             checkerRubric: fm["checkerRubric"]?.nonEmpty ?? "approve",
             maxReviewRounds: Int(fm["maxReviewRounds"]?.nonEmpty ?? "") ?? LoopMakerCheckerConfig.defaultMaxReviewRounds
         )
+        let pipeline = LoopPipelineConfig(stageNames: splitList(fm["pipelineStages"]))
+        let parallel = LoopParallelConfig(branchNames: splitList(fm["parallelBranches"]))
+        let discoveryTriage = LoopDiscoveryTriageConfig(classificationPrompt: fm["classificationPrompt"]?.nonEmpty ?? "Classify findings by severity and summarize recommended next action.")
+        let humanApproval = LoopHumanApprovalConfig(checkpointPrompt: fm["checkpointPrompt"]?.nonEmpty ?? "Review the proposal before continuing.")
         let availability = LoopDefinitionAvailability(rawValue: fm["availability"]?.nonEmpty ?? "") ?? .allProjects
         let projectPaths = decodeProjectPaths(json: fm["projectPathsJSON"]) ?? splitProjectPaths(fm["projectPaths"])
         let parsedSource = LoopDefinitionSource(rawValue: fm["source"]?.nonEmpty ?? "") ?? source
@@ -147,6 +155,10 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
             maxIterations: max(1, maxIterations),
             validationCommand: validationCommand,
             makerChecker: makerChecker,
+            pipeline: pipeline,
+            parallel: parallel,
+            discoveryTriage: discoveryTriage,
+            humanApproval: humanApproval,
             source: parsedSource,
             availability: availability,
             projectPaths: projectPaths,
@@ -172,6 +184,18 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
             lines.append("checkerName: \(oneLine(definition.makerChecker.checkerName))")
             lines.append("checkerRubric: \(oneLine(definition.makerChecker.checkerRubric))")
             lines.append("maxReviewRounds: \(definition.makerChecker.maxReviewRounds)")
+        }
+        if definition.structure == .agentPipeline {
+            lines.append("pipelineStages: \(oneLine(definition.pipeline.stageNames.joined(separator: " | ")))")
+        }
+        if definition.structure == .parallelAgents {
+            lines.append("parallelBranches: \(oneLine(definition.parallel.branchNames.joined(separator: " | ")))")
+        }
+        if definition.structure == .discoveryTriage {
+            lines.append("classificationPrompt: \(oneLine(definition.discoveryTriage.classificationPrompt))")
+        }
+        if definition.structure == .humanApproval {
+            lines.append("checkpointPrompt: \(oneLine(definition.humanApproval.checkpointPrompt))")
         }
         lines.append("availability: \(definition.availability.rawValue)")
         if !definition.projectPaths.isEmpty {
@@ -211,6 +235,10 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
     }
 
     private static func splitProjectPaths(_ value: String?) -> [String] {
+        splitList(value)
+    }
+
+    private static func splitList(_ value: String?) -> [String] {
         (value ?? "")
             .components(separatedBy: "|")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -233,6 +261,64 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
     private static func parseDate(_ value: String?) -> Date? {
         guard let value = value?.nonEmpty else { return nil }
         return isoFormatter().date(from: value)
+    }
+
+    static var builtinDefinitions: [LoopDefinition] {
+        [
+            LoopDefinition(
+                id: "builtin:research-markdown-artifact",
+                name: "Research / Markdown Artifact",
+                description: "Research or audit a topic and write a Markdown artifact.",
+                goalTemplate: "Research the requested topic and produce a concise Markdown artifact with findings, evidence, and open questions.",
+                structure: .singleAgent,
+                writeTarget: .artifactMarkdown,
+                validationCommand: "/usr/bin/true",
+                source: .builtin
+            ),
+            LoopDefinition(
+                id: "builtin:pipeline-research-verify",
+                name: "Pipeline / Research → Verify",
+                description: "Preview a fixed explorer, implementer, verifier handoff timeline.",
+                goalTemplate: "Run a deterministic pipeline preview for this goal and summarize each stage handoff.",
+                structure: .agentPipeline,
+                writeTarget: .artifactMarkdown,
+                validationCommand: "/usr/bin/true",
+                pipeline: LoopPipelineConfig(stageNames: ["Explorer", "Implementer", "Verifier"]),
+                source: .builtin
+            ),
+            LoopDefinition(
+                id: "builtin:parallel-hypotheses",
+                name: "Parallel Agents / Compare Hypotheses",
+                description: "Preview parallel branches and compare their results.",
+                goalTemplate: "Run two deterministic branches for the same goal and summarize the comparison.",
+                structure: .parallelAgents,
+                writeTarget: .artifactMarkdown,
+                validationCommand: "/usr/bin/true",
+                parallel: LoopParallelConfig(branchNames: ["Hypothesis A", "Hypothesis B"]),
+                source: .builtin
+            ),
+            LoopDefinition(
+                id: "builtin:discovery-triage-report",
+                name: "Discovery / Triage Report",
+                description: "Classify findings and write a triage summary artifact.",
+                goalTemplate: "Inspect the requested signals, classify findings, and recommend the next action.",
+                structure: .discoveryTriage,
+                writeTarget: .artifactMarkdown,
+                validationCommand: "/usr/bin/true",
+                discoveryTriage: LoopDiscoveryTriageConfig(),
+                source: .builtin
+            ),
+            LoopDefinition(
+                id: "builtin:human-approval-checkpoint",
+                name: "Human Approval / Checkpoint",
+                description: "Stop at a human-input checkpoint before continuing.",
+                goalTemplate: "Prepare a proposal and stop for human approval before taking further action.",
+                structure: .humanApproval,
+                writeTarget: .artifactMarkdown,
+                humanApproval: LoopHumanApprovalConfig(),
+                source: .builtin
+            )
+        ]
     }
 
     private static func isoFormatter() -> ISO8601DateFormatter {

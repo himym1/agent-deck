@@ -3,6 +3,10 @@ import Foundation
 nonisolated enum LoopStructureKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case singleAgent
     case makerChecker
+    case agentPipeline
+    case parallelAgents
+    case discoveryTriage
+    case humanApproval
 
     var id: String { rawValue }
 
@@ -10,6 +14,10 @@ nonisolated enum LoopStructureKind: String, Codable, CaseIterable, Identifiable,
         switch self {
         case .singleAgent: return "Single Agent"
         case .makerChecker: return "Maker + Checker"
+        case .agentPipeline: return "Agent Pipeline"
+        case .parallelAgents: return "Parallel Agents"
+        case .discoveryTriage: return "Discovery / Triage"
+        case .humanApproval: return "Human Approval"
         }
     }
 }
@@ -102,6 +110,40 @@ nonisolated struct LoopMakerCheckerConfig: Codable, Equatable, Hashable, Sendabl
     }
 }
 
+nonisolated struct LoopPipelineConfig: Codable, Equatable, Hashable, Sendable {
+    var stageNames: [String]
+
+    init(stageNames: [String] = ["Explorer", "Implementer", "Verifier"]) {
+        let trimmed = stageNames.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        self.stageNames = trimmed.isEmpty ? ["Explorer", "Implementer", "Verifier"] : trimmed
+    }
+}
+
+nonisolated struct LoopParallelConfig: Codable, Equatable, Hashable, Sendable {
+    var branchNames: [String]
+
+    init(branchNames: [String] = ["Branch A", "Branch B"]) {
+        let trimmed = branchNames.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        self.branchNames = trimmed.isEmpty ? ["Branch A", "Branch B"] : trimmed
+    }
+}
+
+nonisolated struct LoopDiscoveryTriageConfig: Codable, Equatable, Hashable, Sendable {
+    var classificationPrompt: String
+
+    init(classificationPrompt: String = "Classify findings by severity and summarize recommended next action.") {
+        self.classificationPrompt = classificationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Classify findings by severity and summarize recommended next action." : classificationPrompt
+    }
+}
+
+nonisolated struct LoopHumanApprovalConfig: Codable, Equatable, Hashable, Sendable {
+    var checkpointPrompt: String
+
+    init(checkpointPrompt: String = "Review the proposal before continuing.") {
+        self.checkpointPrompt = checkpointPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Review the proposal before continuing." : checkpointPrompt
+    }
+}
+
 nonisolated enum LoopCheckerResult: String, Codable, CaseIterable, Identifiable, Sendable {
     case approve
     case reject
@@ -123,6 +165,10 @@ nonisolated enum LoopCheckerResult: String, Codable, CaseIterable, Identifiable,
 nonisolated enum LoopTimelineStepKind: String, Codable, Sendable {
     case makerAct
     case checkerReview
+    case pipelineStage
+    case parallelBranch
+    case discoveryTriage
+    case humanApprovalCheckpoint
 }
 
 nonisolated struct LoopTimelineEvent: Identifiable, Codable, Equatable, Sendable {
@@ -148,16 +194,24 @@ nonisolated struct LoopDraft: Codable, Equatable, Sendable {
     var maxIterations: Int
     var validationCommand: String
     var makerChecker: LoopMakerCheckerConfig
+    var pipeline: LoopPipelineConfig
+    var parallel: LoopParallelConfig
+    var discoveryTriage: LoopDiscoveryTriageConfig
+    var humanApproval: LoopHumanApprovalConfig
 
     static let defaultMaxIterations = 3
 
-    init(goal: String = "", structure: LoopStructureKind = .singleAgent, writeTarget: LoopWriteTarget = .artifactMarkdown, maxIterations: Int = Self.defaultMaxIterations, validationCommand: String = "", makerChecker: LoopMakerCheckerConfig = LoopMakerCheckerConfig()) {
+    init(goal: String = "", structure: LoopStructureKind = .singleAgent, writeTarget: LoopWriteTarget = .artifactMarkdown, maxIterations: Int = Self.defaultMaxIterations, validationCommand: String = "", makerChecker: LoopMakerCheckerConfig = LoopMakerCheckerConfig(), pipeline: LoopPipelineConfig = LoopPipelineConfig(), parallel: LoopParallelConfig = LoopParallelConfig(), discoveryTriage: LoopDiscoveryTriageConfig = LoopDiscoveryTriageConfig(), humanApproval: LoopHumanApprovalConfig = LoopHumanApprovalConfig()) {
         self.goal = goal
         self.structure = structure
         self.writeTarget = writeTarget
         self.maxIterations = max(1, maxIterations)
         self.validationCommand = validationCommand
         self.makerChecker = makerChecker
+        self.pipeline = pipeline
+        self.parallel = parallel
+        self.discoveryTriage = discoveryTriage
+        self.humanApproval = humanApproval
     }
 }
 
@@ -192,6 +246,10 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
     var maxIterations: Int
     var validationCommand: String
     var makerChecker: LoopMakerCheckerConfig
+    var pipeline: LoopPipelineConfig
+    var parallel: LoopParallelConfig
+    var discoveryTriage: LoopDiscoveryTriageConfig
+    var humanApproval: LoopHumanApprovalConfig
     var source: LoopDefinitionSource
     var availability: LoopDefinitionAvailability
     var projectPaths: [String]
@@ -209,6 +267,10 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
         maxIterations: Int = LoopDraft.defaultMaxIterations,
         validationCommand: String = "",
         makerChecker: LoopMakerCheckerConfig = LoopMakerCheckerConfig(),
+        pipeline: LoopPipelineConfig = LoopPipelineConfig(),
+        parallel: LoopParallelConfig = LoopParallelConfig(),
+        discoveryTriage: LoopDiscoveryTriageConfig = LoopDiscoveryTriageConfig(),
+        humanApproval: LoopHumanApprovalConfig = LoopHumanApprovalConfig(),
         source: LoopDefinitionSource = .user,
         availability: LoopDefinitionAvailability = .allProjects,
         projectPaths: [String] = [],
@@ -225,6 +287,10 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
         self.maxIterations = max(1, maxIterations)
         self.validationCommand = validationCommand
         self.makerChecker = makerChecker
+        self.pipeline = pipeline
+        self.parallel = parallel
+        self.discoveryTriage = discoveryTriage
+        self.humanApproval = humanApproval
         self.source = source
         self.availability = availability
         self.projectPaths = projectPaths
@@ -250,7 +316,11 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
             writeTarget: writeTarget,
             maxIterations: maxIterations,
             validationCommand: validationCommand,
-            makerChecker: makerChecker
+            makerChecker: makerChecker,
+            pipeline: pipeline,
+            parallel: parallel,
+            discoveryTriage: discoveryTriage,
+            humanApproval: humanApproval
         )
     }
 }
@@ -351,6 +421,10 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
     var maxIterations: Int
     var validationCommand: String
     var makerChecker: LoopMakerCheckerConfig
+    var pipeline: LoopPipelineConfig
+    var parallel: LoopParallelConfig
+    var discoveryTriage: LoopDiscoveryTriageConfig
+    var humanApproval: LoopHumanApprovalConfig
     var startedAt: Date
     var endedAt: Date?
     var stopReason: LoopStopReason?
@@ -370,6 +444,10 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
         self.maxIterations = max(1, draft.maxIterations)
         self.validationCommand = draft.validationCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         self.makerChecker = draft.makerChecker
+        self.pipeline = draft.pipeline
+        self.parallel = draft.parallel
+        self.discoveryTriage = draft.discoveryTriage
+        self.humanApproval = draft.humanApproval
         self.startedAt = startedAt
         self.endedAt = nil
         self.stopReason = nil
@@ -379,7 +457,7 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, sessionID, projectPath, goal, structure, status, writeTarget, currentIteration, maxIterations, validationCommand, makerChecker, startedAt, endedAt, stopReason, iterations, artifactDirectoryPath, transcriptEntryID
+        case id, sessionID, projectPath, goal, structure, status, writeTarget, currentIteration, maxIterations, validationCommand, makerChecker, pipeline, parallel, discoveryTriage, humanApproval, startedAt, endedAt, stopReason, iterations, artifactDirectoryPath, transcriptEntryID
     }
 
     init(from decoder: Decoder) throws {
@@ -395,6 +473,10 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
         maxIterations = try container.decode(Int.self, forKey: .maxIterations)
         validationCommand = try container.decodeIfPresent(String.self, forKey: .validationCommand) ?? ""
         makerChecker = try container.decodeIfPresent(LoopMakerCheckerConfig.self, forKey: .makerChecker) ?? LoopMakerCheckerConfig()
+        pipeline = try container.decodeIfPresent(LoopPipelineConfig.self, forKey: .pipeline) ?? LoopPipelineConfig()
+        parallel = try container.decodeIfPresent(LoopParallelConfig.self, forKey: .parallel) ?? LoopParallelConfig()
+        discoveryTriage = try container.decodeIfPresent(LoopDiscoveryTriageConfig.self, forKey: .discoveryTriage) ?? LoopDiscoveryTriageConfig()
+        humanApproval = try container.decodeIfPresent(LoopHumanApprovalConfig.self, forKey: .humanApproval) ?? LoopHumanApprovalConfig()
         startedAt = try container.decode(Date.self, forKey: .startedAt)
         endedAt = try container.decodeIfPresent(Date.self, forKey: .endedAt)
         stopReason = try container.decodeIfPresent(LoopStopReason.self, forKey: .stopReason)
@@ -439,13 +521,27 @@ enum LoopRunTranscriptCodec {
         if !run.validationCommand.isEmpty {
             lines.append("Validation command: \(run.validationCommand)")
         }
-        if run.structure == .makerChecker {
+        switch run.structure {
+        case .makerChecker:
             lines.append("Maker: \(run.makerChecker.makerName)")
             lines.append("Checker: \(run.makerChecker.checkerName) (report-only)")
             lines.append("Checker rubric: \(run.makerChecker.checkerRubric)")
             if let checkerResult = run.iterations.last?.checkerResult {
                 lines.append("Checker result: \(checkerResult.displayName)")
             }
+        case .agentPipeline:
+            lines.append("Pipeline stages: \(run.pipeline.stageNames.joined(separator: " → "))")
+        case .parallelAgents:
+            lines.append("Parallel branches: \(run.parallel.branchNames.joined(separator: ", "))")
+        case .discoveryTriage:
+            lines.append("Classification prompt: \(run.discoveryTriage.classificationPrompt)")
+        case .humanApproval:
+            lines.append("Checkpoint: \(run.humanApproval.checkpointPrompt)")
+        case .singleAgent:
+            break
+        }
+        if let timeline = run.iterations.last?.timeline, !timeline.isEmpty {
+            lines.append("Timeline: \(timeline.map { $0.roleName }.joined(separator: " → "))")
         }
         if let stopReason = run.stopReason {
             lines.append("Stop reason: \(stopReason.displayName)")

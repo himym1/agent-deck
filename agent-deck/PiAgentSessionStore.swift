@@ -892,6 +892,36 @@ final class PiAgentSessionStore {
             return run
         }
 
+        if run.structure == .humanApproval {
+            let now = Date()
+            let artifact = makeMarkdownArtifact(
+                filename: "human-approval-checkpoint.md",
+                markdown: "# Human Approval Checkpoint\n\nGoal: \(run.goal)\n\nCheckpoint: \(run.humanApproval.checkpointPrompt)\n\nStatus: Waiting for human input.",
+                artifactDirectory: artifactDirectory
+            )
+            guard let artifact else {
+                run.status = .failed
+                run.endedAt = now
+                run.stopReason = .toolFailed
+                upsertLoopRun(run)
+                return nil
+            }
+            run.currentIteration = 1
+            run.iterations.append(LoopIteration(
+                index: 1,
+                startedAt: now,
+                endedAt: now,
+                summary: "Stopped at human approval checkpoint.",
+                artifacts: [artifact],
+                timeline: [LoopTimelineEvent(step: .humanApprovalCheckpoint, roleName: "Human Approval", note: run.humanApproval.checkpointPrompt, timestamp: now)]
+            ))
+            run.status = .stopped
+            run.endedAt = now
+            run.stopReason = .humanInputRequired
+            upsertLoopRun(run)
+            return run
+        }
+
         let validationCommand = run.validationCommand
         let maxLoopIterations = run.structure == .makerChecker ? min(run.maxIterations, run.makerChecker.maxReviewRounds) : run.maxIterations
         for iterationIndex in 1...maxLoopIterations {
@@ -901,19 +931,30 @@ final class PiAgentSessionStore {
 
             switch run.writeTarget {
             case .artifactMarkdown:
-                let markdown = "# Loop Smoke Output\n\nGoal: \(run.goal)\n\nIteration: \(iterationIndex)\n\nResult: Artifact smoke fixture completed."
-                let filename = iterationIndex == 1 ? "loop-smoke.md" : "loop-smoke-\(iterationIndex).md"
-                let artifactURL = artifactDirectory.appendingPathComponent(filename, isDirectory: false)
-                do {
-                    try markdown.write(to: artifactURL, atomically: true, encoding: .utf8)
-                } catch {
+                let filename: String
+                let markdown: String
+                switch run.structure {
+                case .discoveryTriage:
+                    filename = iterationIndex == 1 ? "discovery-triage.md" : "discovery-triage-\(iterationIndex).md"
+                    markdown = "# Discovery / Triage\n\nGoal: \(run.goal)\n\nClassification: \(run.discoveryTriage.classificationPrompt)\n\nSummary: Deterministic triage preview classified the input and recommends a focused follow-up."
+                case .agentPipeline:
+                    filename = iterationIndex == 1 ? "pipeline-summary.md" : "pipeline-summary-\(iterationIndex).md"
+                    markdown = "# Agent Pipeline Summary\n\nGoal: \(run.goal)\n\nStages: \(run.pipeline.stageNames.joined(separator: " → "))\n\nResult: Deterministic pipeline preview completed the ordered handoff."
+                case .parallelAgents:
+                    filename = iterationIndex == 1 ? "parallel-summary.md" : "parallel-summary-\(iterationIndex).md"
+                    markdown = "# Parallel Agents Summary\n\nGoal: \(run.goal)\n\nBranches: \(run.parallel.branchNames.joined(separator: ", "))\n\nResult: Deterministic parallel preview compared branch outputs."
+                default:
+                    filename = iterationIndex == 1 ? "loop-smoke.md" : "loop-smoke-\(iterationIndex).md"
+                    markdown = "# Loop Smoke Output\n\nGoal: \(run.goal)\n\nIteration: \(iterationIndex)\n\nResult: Artifact smoke fixture completed."
+                }
+                guard let artifact = makeMarkdownArtifact(filename: filename, markdown: markdown, artifactDirectory: artifactDirectory) else {
                     run.status = .failed
                     run.endedAt = Date()
                     run.stopReason = .toolFailed
                     upsertLoopRun(run)
                     return nil
                 }
-                artifacts = [LoopArtifact(filename: filename, markdown: markdown, filePath: artifactURL.path)]
+                artifacts = [artifact]
             case .newWorktree, .currentCheckout:
                 do {
                     guard let workingDirectory = executionContext.workingDirectory else {
@@ -952,6 +993,100 @@ final class PiAgentSessionStore {
 
             let iterationEndedAt = Date()
             run.currentIteration = iterationIndex
+
+            if run.structure == .agentPipeline {
+                let timeline = run.pipeline.stageNames.enumerated().map { offset, stage in
+                    LoopTimelineEvent(step: .pipelineStage, roleName: stage, note: "Pipeline stage \(offset + 1) completed for iteration \(iterationIndex).", timestamp: iterationStartedAt.addingTimeInterval(TimeInterval(offset)))
+                }
+                run.iterations.append(LoopIteration(
+                    index: iterationIndex,
+                    startedAt: iterationStartedAt,
+                    endedAt: iterationEndedAt,
+                    summary: "Pipeline completed stages: \(run.pipeline.stageNames.joined(separator: " → ")).",
+                    artifacts: artifacts,
+                    validationResult: validationCommand.isEmpty ? nil : validationResult,
+                    timeline: timeline,
+                    changedFiles: changedFiles
+                ))
+                if validationCommand.isEmpty {
+                    run.status = .failed
+                    run.endedAt = iterationEndedAt
+                    run.stopReason = .validationUnavailable
+                    upsertLoopRun(run)
+                    return run
+                }
+                if validationResult.didPass {
+                    run.status = .completed
+                    run.endedAt = iterationEndedAt
+                    run.stopReason = .success
+                    upsertLoopRun(run)
+                    return run
+                }
+                upsertLoopRun(run)
+                continue
+            }
+
+            if run.structure == .parallelAgents {
+                let timeline = run.parallel.branchNames.enumerated().map { offset, branch in
+                    LoopTimelineEvent(step: .parallelBranch, roleName: branch, note: "Parallel branch \(offset + 1) completed for iteration \(iterationIndex).", timestamp: iterationStartedAt.addingTimeInterval(TimeInterval(offset)))
+                }
+                run.iterations.append(LoopIteration(
+                    index: iterationIndex,
+                    startedAt: iterationStartedAt,
+                    endedAt: iterationEndedAt,
+                    summary: "Parallel preview completed branches: \(run.parallel.branchNames.joined(separator: ", ")).",
+                    artifacts: artifacts,
+                    validationResult: validationCommand.isEmpty ? nil : validationResult,
+                    timeline: timeline,
+                    changedFiles: changedFiles
+                ))
+                if validationCommand.isEmpty {
+                    run.status = .failed
+                    run.endedAt = iterationEndedAt
+                    run.stopReason = .validationUnavailable
+                    upsertLoopRun(run)
+                    return run
+                }
+                if validationResult.didPass {
+                    run.status = .completed
+                    run.endedAt = iterationEndedAt
+                    run.stopReason = .success
+                    upsertLoopRun(run)
+                    return run
+                }
+                upsertLoopRun(run)
+                continue
+            }
+
+            if run.structure == .discoveryTriage {
+                let timeline = [LoopTimelineEvent(step: .discoveryTriage, roleName: "Triage", note: run.discoveryTriage.classificationPrompt, timestamp: iterationEndedAt)]
+                run.iterations.append(LoopIteration(
+                    index: iterationIndex,
+                    startedAt: iterationStartedAt,
+                    endedAt: iterationEndedAt,
+                    summary: "Discovery/triage classification artifact recorded.",
+                    artifacts: artifacts,
+                    validationResult: validationCommand.isEmpty ? nil : validationResult,
+                    timeline: timeline,
+                    changedFiles: changedFiles
+                ))
+                if validationCommand.isEmpty {
+                    run.status = .failed
+                    run.endedAt = iterationEndedAt
+                    run.stopReason = .validationUnavailable
+                    upsertLoopRun(run)
+                    return run
+                }
+                if validationResult.didPass {
+                    run.status = .completed
+                    run.endedAt = iterationEndedAt
+                    run.stopReason = .success
+                    upsertLoopRun(run)
+                    return run
+                }
+                upsertLoopRun(run)
+                continue
+            }
 
             if run.structure == .makerChecker {
                 let checkerResult = deterministicCheckerResult(
@@ -1034,6 +1169,16 @@ final class PiAgentSessionStore {
         run.stopReason = run.structure == .makerChecker ? .maxIterationsReached : .validationFailedAfterFinalIteration
         upsertLoopRun(run)
         return run
+    }
+
+    private func makeMarkdownArtifact(filename: String, markdown: String, artifactDirectory: URL) -> LoopArtifact? {
+        let artifactURL = artifactDirectory.appendingPathComponent(filename, isDirectory: false)
+        do {
+            try markdown.write(to: artifactURL, atomically: true, encoding: .utf8)
+            return LoopArtifact(filename: filename, markdown: markdown, filePath: artifactURL.path)
+        } catch {
+            return nil
+        }
     }
 
     private func deterministicCheckerResult(rubric: String, validationResult: LoopValidationResult?, iterationIndex: Int) -> LoopCheckerResult {

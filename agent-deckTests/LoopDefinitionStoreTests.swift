@@ -110,7 +110,8 @@ final class LoopDefinitionStoreTests: XCTestCase {
         viewModel.configureLoopDefinitionStoreForTesting(directoryURL: directory)
         let universe = viewModel.slashUniverse(forProjectPath: "/tmp/project-a")
 
-        XCTAssertEqual(universe.loops.map(\.displayName), ["Create New Loop…", "Global Loop", "Project Loop"])
+        let userLoopNames = universe.loops.filter { $0.scopeLabel == "User" }.map(\.displayName)
+        XCTAssertEqual(userLoopNames, ["Global Loop", "Project Loop"])
         XCTAssertTrue(universe.loops.dropFirst().allSatisfy { item in
             if case .loopDefinition = item.payload { return true }
             return false
@@ -133,7 +134,7 @@ final class LoopDefinitionStoreTests: XCTestCase {
             request: LoopSaveRequest(name: "Review Loop", description: "", availability: .allProjects, projectPaths: [])
         )
 
-        let saved = try XCTUnwrap(viewModel.loopDefinitions.first)
+        let saved = try XCTUnwrap(viewModel.loopDefinitions.first { $0.name == "Review Loop" })
         XCTAssertEqual(saved.structure, .makerChecker)
         XCTAssertEqual(saved.makerChecker, makerChecker)
         XCTAssertEqual(saved.makeDraft().makerChecker, makerChecker)
@@ -153,5 +154,37 @@ final class LoopDefinitionStoreTests: XCTestCase {
         XCTAssertEqual(draft.writeTarget, .artifactMarkdown)
         XCTAssertEqual(draft.maxIterations, 7)
         XCTAssertEqual(draft.validationCommand, "swift test")
+    }
+
+    func testBuiltInTemplatesLoadIntoLoopBankAndSlashUniverse() throws {
+        let directory = PiTestSupport.temporaryStateFile().deletingLastPathComponent().appendingPathComponent("loops", isDirectory: true)
+        let viewModel = AppViewModel()
+        viewModel.configureLoopDefinitionStoreForTesting(directoryURL: directory)
+
+        let builtins = viewModel.loopDefinitions.filter { $0.source == .builtin }
+        XCTAssertTrue(builtins.contains { $0.name == "Research / Markdown Artifact" && $0.structure == .singleAgent })
+        XCTAssertTrue(builtins.contains { $0.structure == .agentPipeline })
+        XCTAssertTrue(builtins.contains { $0.structure == .parallelAgents })
+        XCTAssertTrue(builtins.contains { $0.structure == .discoveryTriage })
+        XCTAssertTrue(builtins.contains { $0.structure == .humanApproval })
+
+        let universe = viewModel.slashUniverse(forProjectPath: "/tmp/project-a")
+        XCTAssertTrue(universe.loops.contains { $0.displayName == "Research / Markdown Artifact" && $0.scopeLabel == "Built-in" })
+    }
+
+    func testBuiltInTemplatesAreReadOnlyButDuplicateCreatesUserCopy() throws {
+        let directory = PiTestSupport.temporaryStateFile().deletingLastPathComponent().appendingPathComponent("loops", isDirectory: true)
+        let store = LoopDefinitionStore(directoryURL: directory)
+        let builtin = try XCTUnwrap(store.loadDefinitions().first { $0.source == .builtin && $0.structure == .agentPipeline })
+
+        XCTAssertThrowsError(try store.saveUserDefinition(builtin))
+        XCTAssertThrowsError(try store.deleteUserDefinition(builtin))
+
+        let copy = try store.duplicateUserDefinition(builtin)
+        XCTAssertEqual(copy.source, .user)
+        XCTAssertNotNil(copy.filePath)
+        XCTAssertEqual(copy.structure, builtin.structure)
+        XCTAssertEqual(copy.pipeline, builtin.pipeline)
+        XCTAssertTrue(store.loadUserDefinitions().contains { $0.name == copy.name && $0.source == .user })
     }
 }

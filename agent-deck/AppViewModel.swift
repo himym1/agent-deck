@@ -8560,7 +8560,7 @@ final class AppViewModel: NSObject {
     }
 
     func reloadLoopDefinitions() {
-        loopDefinitions = loopDefinitionStore.loadUserDefinitions()
+        loopDefinitions = loopDefinitionStore.loadDefinitions()
         if let selectedLoopDefinitionID,
            !loopDefinitions.contains(where: { $0.id == selectedLoopDefinitionID }) {
             self.selectedLoopDefinitionID = loopDefinitions.first?.id
@@ -8605,6 +8605,10 @@ final class AppViewModel: NSObject {
             maxIterations: draft.maxIterations,
             validationCommand: draft.validationCommand,
             makerChecker: draft.makerChecker,
+            pipeline: draft.pipeline,
+            parallel: draft.parallel,
+            discoveryTriage: draft.discoveryTriage,
+            humanApproval: draft.humanApproval,
             source: .user,
             availability: request.availability,
             projectPaths: projectPaths

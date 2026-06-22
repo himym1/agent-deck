@@ -14,6 +14,11 @@ private struct LoopDefinitionEditorDraft: Equatable {
     var checkerName: String
     var checkerRubric: String
     var maxReviewRounds: Int
+    var pipelineStagesText: String
+    var parallelBranchesText: String
+    var classificationPrompt: String
+    var checkpointPrompt: String
+    var source: LoopDefinitionSource
     var availability: LoopDefinitionAvailability
     var projectPathsText: String
     var createdAt: Date?
@@ -34,13 +39,19 @@ private struct LoopDefinitionEditorDraft: Equatable {
         checkerName = makerChecker.checkerName
         checkerRubric = makerChecker.checkerRubric
         maxReviewRounds = makerChecker.maxReviewRounds
+        pipelineStagesText = (definition?.pipeline.stageNames ?? LoopPipelineConfig().stageNames).joined(separator: " | ")
+        parallelBranchesText = (definition?.parallel.branchNames ?? LoopParallelConfig().branchNames).joined(separator: " | ")
+        classificationPrompt = definition?.discoveryTriage.classificationPrompt ?? LoopDiscoveryTriageConfig().classificationPrompt
+        checkpointPrompt = definition?.humanApproval.checkpointPrompt ?? LoopHumanApprovalConfig().checkpointPrompt
+        source = definition?.source ?? .user
         availability = definition?.availability ?? .allProjects
         projectPathsText = (definition?.projectPaths ?? currentProjectPath.map { [$0] } ?? []).joined(separator: "\n")
         createdAt = definition?.createdAt
         updatedAt = definition?.updatedAt
     }
 
-    var isNew: Bool { filePath == nil }
+    var isNew: Bool { id == nil }
+    var isBuiltin: Bool { source == .builtin }
 
     var trimmedName: String {
         name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -71,6 +82,10 @@ private struct LoopDefinitionEditorDraft: Equatable {
                 checkerRubric: checkerRubric,
                 maxReviewRounds: maxReviewRounds
             ),
+            pipeline: LoopPipelineConfig(stageNames: splitList(pipelineStagesText)),
+            parallel: LoopParallelConfig(branchNames: splitList(parallelBranchesText)),
+            discoveryTriage: LoopDiscoveryTriageConfig(classificationPrompt: classificationPrompt),
+            humanApproval: LoopHumanApprovalConfig(checkpointPrompt: checkpointPrompt),
             source: .user,
             availability: availability,
             projectPaths: availability == .projectPaths ? projectPaths : [],
@@ -78,6 +93,12 @@ private struct LoopDefinitionEditorDraft: Equatable {
             createdAt: createdAt,
             updatedAt: updatedAt
         )
+    }
+
+    private func splitList(_ value: String) -> [String] {
+        value.components(separatedBy: "|")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 }
 
@@ -177,6 +198,12 @@ struct LoopBankScreen: View {
                     }
 
                     Form {
+                        if editorDraft.isBuiltin {
+                            Text("Built-in templates are read-only. Duplicate to create an editable user copy.")
+                                .font(AppTheme.Font.caption)
+                                .foregroundStyle(AppTheme.mutedText)
+                        }
+
                         TextField("Name", text: $editorDraft.name)
                         TextField("Description", text: $editorDraft.description, axis: .vertical)
                             .lineLimit(2...4)
@@ -211,7 +238,8 @@ struct LoopBankScreen: View {
                         TextField("Validation command", text: $editorDraft.validationCommand)
                             .textFieldStyle(.roundedBorder)
 
-                        if editorDraft.structure == .makerChecker {
+                        switch editorDraft.structure {
+                        case .makerChecker:
                             Section("Maker + Checker") {
                                 TextField("Maker name", text: $editorDraft.makerName)
                                 TextField("Checker name", text: $editorDraft.checkerName)
@@ -221,6 +249,26 @@ struct LoopBankScreen: View {
                                     Text("Max review rounds: \(editorDraft.maxReviewRounds)")
                                 }
                             }
+                        case .agentPipeline:
+                            Section("Agent Pipeline") {
+                                TextField("Stages, separated by |", text: $editorDraft.pipelineStagesText)
+                            }
+                        case .parallelAgents:
+                            Section("Parallel Agents") {
+                                TextField("Branches, separated by |", text: $editorDraft.parallelBranchesText)
+                            }
+                        case .discoveryTriage:
+                            Section("Discovery / Triage") {
+                                TextField("Classification prompt", text: $editorDraft.classificationPrompt, axis: .vertical)
+                                    .lineLimit(2...4)
+                            }
+                        case .humanApproval:
+                            Section("Human Approval") {
+                                TextField("Checkpoint prompt", text: $editorDraft.checkpointPrompt, axis: .vertical)
+                                    .lineLimit(2...4)
+                            }
+                        case .singleAgent:
+                            EmptyView()
                         }
 
                         Section("Availability") {
@@ -245,18 +293,21 @@ struct LoopBankScreen: View {
                         }
                     }
                     .formStyle(.grouped)
+                    .disabled(editorDraft.isBuiltin)
 
                     HStack {
                         if let selected = viewModel.selectedLoopDefinition, !editorDraft.isNew {
                             Button("Duplicate") { duplicate(selected) }
-                            Button("Delete", role: .destructive) { pendingDelete = selected }
+                            if selected.source == .user {
+                                Button("Delete", role: .destructive) { pendingDelete = selected }
+                            }
                         }
                         Spacer()
                         Button("Revert") { resetEditor(to: viewModel.selectedLoopDefinition) }
                             .disabled(editorDraft.isNew && editorDraft.trimmedName.isEmpty && editorDraft.goalTemplate.isEmpty)
                         Button("Save") { save() }
                             .keyboardShortcut(.defaultAction)
-                            .disabled(editorDraft.trimmedName.isEmpty)
+                            .disabled(editorDraft.trimmedName.isEmpty || editorDraft.isBuiltin)
                     }
                 }
             }
@@ -265,6 +316,7 @@ struct LoopBankScreen: View {
 
     private var detailSubtitle: String {
         if editorDraft.isNew { return "Create a saved user loop without editing bundled resources" }
+        if editorDraft.isBuiltin { return "Built-in template · duplicate to customize" }
         return "Edit explicit fields and save changes to the user Loop Bank"
     }
 
@@ -333,6 +385,7 @@ struct LoopBankScreen: View {
     }
 
     private func save() {
+        guard !editorDraft.isBuiltin else { return }
         do {
             let saved = try viewModel.saveLoopDefinition(editorDraft.makeDefinition())
             resetEditor(to: saved)

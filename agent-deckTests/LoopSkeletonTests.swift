@@ -333,6 +333,101 @@ final class LoopSkeletonTests: XCTestCase {
         XCTAssertNil(store.activeLoopRun(for: session.id))
     }
 
+    func testAgentPipelineRecordsOrderedStageTimeline() throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(), repository: nil)
+
+        let run = try XCTUnwrap(store.launchSmokeLoop(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(
+                goal: "Pipeline preview",
+                structure: .agentPipeline,
+                validationCommand: "/usr/bin/true",
+                pipeline: LoopPipelineConfig(stageNames: ["Explore", "Build", "Verify"])
+            )
+        ))
+
+        let iteration = try XCTUnwrap(run.iterations.first)
+        XCTAssertEqual(run.status, .completed)
+        XCTAssertEqual(iteration.timeline.map(\.step), [.pipelineStage, .pipelineStage, .pipelineStage])
+        XCTAssertEqual(iteration.timeline.map(\.roleName), ["Explore", "Build", "Verify"])
+        XCTAssertEqual(iteration.artifacts.first?.filename, "pipeline-summary.md")
+    }
+
+    func testParallelAgentsRecordsBranchesAndWorktreeKeepsCheckoutUntouched() throws {
+        let stateFile = PiTestSupport.temporaryStateFile()
+        let projectURL = try makeTemporaryGitRepository()
+        let before = try projectEntries(at: projectURL)
+        let store = PiAgentSessionStore(fileURL: stateFile)
+        let session = store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(url: projectURL), repository: nil)
+
+        let run = try XCTUnwrap(store.launchSmokeLoop(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(
+                goal: "Parallel preview",
+                structure: .parallelAgents,
+                writeTarget: .newWorktree,
+                validationCommand: "test -f loop-smoke-write-target.txt",
+                parallel: LoopParallelConfig(branchNames: ["A", "B", "C"])
+            )
+        ))
+
+        let iteration = try XCTUnwrap(run.iterations.first)
+        XCTAssertEqual(run.status, .completed)
+        XCTAssertEqual(iteration.timeline.map(\.step), [.parallelBranch, .parallelBranch, .parallelBranch])
+        XCTAssertEqual(iteration.timeline.map(\.roleName), ["A", "B", "C"])
+        XCTAssertEqual(try projectEntries(at: projectURL), before)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: projectURL.appendingPathComponent("loop-smoke-write-target.txt").path))
+        XCTAssertEqual(iteration.changedFiles, ["loop-smoke-write-target.txt"])
+    }
+
+    func testDiscoveryTriageRecordsClassificationArtifact() throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(), repository: nil)
+
+        let run = try XCTUnwrap(store.launchSmokeLoop(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(
+                goal: "Triage failures",
+                structure: .discoveryTriage,
+                validationCommand: "/usr/bin/true",
+                discoveryTriage: LoopDiscoveryTriageConfig(classificationPrompt: "severity then owner")
+            )
+        ))
+
+        let artifact = try XCTUnwrap(run.iterations.first?.artifacts.first)
+        XCTAssertEqual(run.status, .completed)
+        XCTAssertEqual(run.iterations.first?.timeline.map(\.step), [.discoveryTriage])
+        XCTAssertEqual(artifact.filename, "discovery-triage.md")
+        XCTAssertTrue(artifact.markdown.contains("severity then owner"))
+    }
+
+    func testHumanApprovalStopsWithHumanInputCheckpoint() throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(), repository: nil)
+
+        let run = try XCTUnwrap(store.launchSmokeLoop(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(
+                goal: "Needs approval",
+                structure: .humanApproval,
+                validationCommand: "/usr/bin/true",
+                humanApproval: LoopHumanApprovalConfig(checkpointPrompt: "Approve plan?")
+            )
+        ))
+
+        XCTAssertEqual(run.status, .stopped)
+        XCTAssertEqual(run.stopReason, .humanInputRequired)
+        XCTAssertEqual(run.currentIteration, 1)
+        XCTAssertEqual(run.iterations.first?.timeline.map(\.step), [.humanApprovalCheckpoint])
+        XCTAssertEqual(run.iterations.first?.artifacts.first?.filename, "human-approval-checkpoint.md")
+        XCTAssertNil(store.activeLoopRun(for: session.id))
+    }
+
     private func projectEntries(at url: URL) throws -> [String] {
         let root = url.standardizedFileURL
         let keys: [URLResourceKey] = [.isDirectoryKey]

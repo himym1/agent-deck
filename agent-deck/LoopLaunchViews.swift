@@ -45,6 +45,20 @@ struct LoopLaunchSheet: View {
         sourceDefinition == nil
     }
 
+    private var pipelineStagesBinding: Binding<String> {
+        Binding(
+            get: { draft.pipeline.stageNames.joined(separator: " | ") },
+            set: { draft.pipeline = LoopPipelineConfig(stageNames: splitList($0)) }
+        )
+    }
+
+    private var parallelBranchesBinding: Binding<String> {
+        Binding(
+            get: { draft.parallel.branchNames.joined(separator: " | ") },
+            set: { draft.parallel = LoopParallelConfig(branchNames: splitList($0)) }
+        )
+    }
+
     private var title: String {
         sourceDefinition?.name ?? "Create Loop"
     }
@@ -104,7 +118,8 @@ struct LoopLaunchSheet: View {
                     Text("Max iterations: \(draft.maxIterations)")
                 }
 
-                if draft.structure == .makerChecker {
+                switch draft.structure {
+                case .makerChecker:
                     Section("Maker + Checker") {
                         TextField("Maker name", text: $draft.makerChecker.makerName)
                         TextField("Checker name", text: $draft.makerChecker.checkerName)
@@ -120,6 +135,35 @@ struct LoopLaunchSheet: View {
                             Text("Max review rounds: \(draft.makerChecker.maxReviewRounds)")
                         }
                     }
+                case .agentPipeline:
+                    Section("Agent Pipeline") {
+                        TextField("Stages, separated by |", text: pipelineStagesBinding)
+                        Text("Runs stages in this fixed order and records the timeline.")
+                            .font(AppTheme.Font.caption)
+                            .foregroundStyle(AppTheme.mutedText)
+                    }
+                case .parallelAgents:
+                    Section("Parallel Agents") {
+                        TextField("Branches, separated by |", text: parallelBranchesBinding)
+                        Text("Records branch timeline. Choose New worktree for isolated coding-preview writes.")
+                            .font(AppTheme.Font.caption)
+                            .foregroundStyle(AppTheme.mutedText)
+                    }
+                case .discoveryTriage:
+                    Section("Discovery / Triage") {
+                        TextField("Classification prompt", text: $draft.discoveryTriage.classificationPrompt, axis: .vertical)
+                            .lineLimit(2...4)
+                    }
+                case .humanApproval:
+                    Section("Human Approval") {
+                        TextField("Checkpoint prompt", text: $draft.humanApproval.checkpointPrompt, axis: .vertical)
+                            .lineLimit(2...4)
+                        Text("The deterministic preview runner stops with Human input required at this checkpoint.")
+                            .font(AppTheme.Font.caption)
+                            .foregroundStyle(AppTheme.mutedText)
+                    }
+                case .singleAgent:
+                    EmptyView()
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -202,5 +246,11 @@ struct LoopLaunchSheet: View {
         let trimmed = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return "Untitled Loop" }
         return String(trimmed.prefix(64))
+    }
+
+    private func splitList(_ value: String) -> [String] {
+        value.components(separatedBy: "|")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 }
