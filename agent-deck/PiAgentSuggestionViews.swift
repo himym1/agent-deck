@@ -564,6 +564,7 @@ struct PiAgentUIRequestSheet: View {
     let onSubmitFreeform: (String, String) -> Void
     let onConfirm: (Bool) -> Void
     let onCancel: () -> Void
+    var initiallyComposingFreeform = false
 
     @State private var parentWindowSize = CGSize(width: 1_000, height: 760)
 
@@ -585,18 +586,14 @@ struct PiAgentUIRequestSheet: View {
             onSubmitValue: onSubmitValue,
             onSubmitFreeform: onSubmitFreeform,
             onConfirm: onConfirm,
-            onCancel: onCancel
+            onCancel: onCancel,
+            initiallyComposingFreeform: initiallyComposingFreeform
         )
         .padding(28)
-        .frame(width: sheetWidth, height: sheetHeight, alignment: .topLeading)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: AppTheme.Chat.glassPanelCornerRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: AppTheme.Chat.glassPanelCornerRadius, style: .continuous)
-                .strokeBorder(AppTheme.contentStroke, lineWidth: 0.5)
-        )
+        .frame(width: sheetWidth, alignment: .topLeading)
+        .frame(maxHeight: sheetHeight, alignment: .topLeading)
         .background(PiAgentParentWindowSizeReader(size: $parentWindowSize))
         .presentationSizing(.fitted)
-        .presentationBackground(.clear)
     }
 }
 
@@ -666,8 +663,24 @@ struct PiAgentUIRequestCard: View {
     let onCancel: () -> Void
 
     @State private var draft = ""
-    @State private var isComposingFreeform = false
+    @State private var isComposingFreeform: Bool
     @State private var selectedOptions: Set<String> = []
+
+    init(
+        request: PiAgentUIRequest,
+        onSubmitValue: @escaping (String) -> Void,
+        onSubmitFreeform: @escaping (String, String) -> Void,
+        onConfirm: @escaping (Bool) -> Void,
+        onCancel: @escaping () -> Void,
+        initiallyComposingFreeform: Bool = false
+    ) {
+        self.request = request
+        self.onSubmitValue = onSubmitValue
+        self.onSubmitFreeform = onSubmitFreeform
+        self.onConfirm = onConfirm
+        self.onCancel = onCancel
+        _isComposingFreeform = State(initialValue: initiallyComposingFreeform)
+    }
 
     var body: some View {
         Group {
@@ -736,6 +749,7 @@ struct PiAgentUIRequestCard: View {
                 Text(request.title)
                     .font(AppTheme.Font.headline)
                     .fontWidth(.expanded)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let message = request.message, !message.isEmpty, message != request.title {
                     Text(message)
                         .foregroundStyle(AppTheme.mutedText)
@@ -757,14 +771,12 @@ struct PiAgentUIRequestCard: View {
                         .allowsHitTesting(false)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(AppTheme.textContentFill)
-            )
+            .frame(maxWidth: .infinity, minHeight: 240, idealHeight: 360, maxHeight: .infinity)
+            .layoutPriority(1)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(AppTheme.contentStroke, lineWidth: 1)
+                RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous)
+                    .strokeBorder(AppTheme.contentStroke, lineWidth: 0.5)
             )
 
             HStack(spacing: 10) {
@@ -777,6 +789,7 @@ struct PiAgentUIRequestCard: View {
                     .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var header: some View {
