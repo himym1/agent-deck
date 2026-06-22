@@ -264,7 +264,7 @@ nonisolated final class FileWatchEventMonitor: @unchecked Sendable {
 
     func stop() {
         let stopGeneration = nextGeneration(isStopped: true)
-        let stopStreams = {
+        let stopStreams: @Sendable () -> Void = {
             guard self.isCurrentGeneration(stopGeneration) else { return }
             self.stopOnStateQueue()
             self.watchedPaths = []
@@ -278,7 +278,7 @@ nonisolated final class FileWatchEventMonitor: @unchecked Sendable {
 
     private func stopSynchronously() {
         let stopGeneration = nextGeneration(isStopped: true)
-        let stopStreams = {
+        let stopStreams: @Sendable () -> Void = {
             guard self.isCurrentGeneration(stopGeneration) else { return }
             self.stopOnStateQueue()
             self.watchedPaths = []

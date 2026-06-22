@@ -9194,6 +9194,7 @@ final class AppViewModel: NSObject {
                 guard let self, !Task.isCancelled, !self.didShutdown else { return }
                 guard self.shouldDeferWatchedFileRefresh else { break }
             }
+            guard let self, !Task.isCancelled, !self.didShutdown else { return }
             self.deferredWatchRefreshTask = nil
             self.refreshIfWatchedFilesChanged()
         }
