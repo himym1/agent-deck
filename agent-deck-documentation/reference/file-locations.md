@@ -29,13 +29,15 @@ This page lists the important paths Agent Deck scans or writes.
 | Assignment state | Agent Deck app settings/project preferences |
 | Builtin overrides | `settings.json -> subagents.agentOverrides` |
 
-## Chains
+## Retired chain files
 
-| Scope | Path |
+Chains were retired before release. Agent Deck does not load `.chain.md` files as active resources. For one release, the scanner surfaces a diagnostic warning if it finds retired chain files at historical locations such as:
+
+| Historical scope | Path |
 |---|---|
-| Global active | `~/.pi/agent/chains/*.chain.md` |
+| Global | `~/.pi/agent/chains/*.chain.md` |
 | Library | `~/.pi/agent/agent-library/chains/*.chain.md` |
-| Project active | `PROJECT/.pi/chains/*.chain.md` |
+| Project | `PROJECT/.pi/chains/*.chain.md` |
 
 ## Skills
 

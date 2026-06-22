@@ -62,7 +62,7 @@ When editing behavior, verify these areas:
 - **Scanning**: global/project resources detected; malformed files produce warnings, not crashes; effective agent resolution matches precedence rules.
 - **Persistence**: builtin edits write settings overrides (not read-only bundled files); custom agents write to the correct scope; env updates preserve unrelated lines and hide secrets.
 - **Pi Agent**: `pi --mode rpc` launches; prompts stream; model/thinking/session controls work.
-- **Native subagents**: report-only runs write artifacts without modifying project files; worktree runs create and patch correctly; blocking supervisor requests appear in UI and can be answered; chain/parallel status updates propagate.
+- **Native subagents**: report-only runs write artifacts without modifying project files; worktree runs create and patch correctly; blocking supervisor requests appear in UI and can be answered; sequential/parallel graph status updates propagate.
 - **GitHub/Git**: auth detection works; issue boards load; git status/diff/stage/commit/push behaves correctly.
 
 ## Documentation Update Policy

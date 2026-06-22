@@ -4,7 +4,7 @@ Use this file to quickly find the source of a behavior.
 
 ## Core models
 
-- `agent-deck/Models.swift` — resource records, agent configs, effective agents, chains, skills, prompts, settings summaries, env keys, snapshots
+- `agent-deck/Models.swift` — resource records, agent configs, effective agents, skills, prompts, settings summaries, env keys, snapshots
 - `agent-deck/PiAgentSessionModels.swift` — Pi Agent session state, native subagent records, bridge request payloads, supervisor request models
 - `agent-deck/GitHubModels.swift` — GitHub auth, issue, board, and repository change models
 
@@ -19,7 +19,6 @@ Use this file to quickly find the source of a behavior.
 ## Persistence and editing
 
 - `agent-deck/AgentPersistence.swift` — custom agents and builtin overrides
-- `agent-deck/ChainPersistence.swift` — chain serialization and writes
 - `agent-deck/EnvPersistence.swift` — `.env` key updates
 - `agent-deck/SubagentConfigPersistence.swift` — native/subagent config JSON
 - `agent-deck/ExtensionManagement.swift` — extension/package scanning and settings toggles
@@ -41,7 +40,7 @@ Use this file to quickly find the source of a behavior.
 ## UI
 
 - `agent-deck/ContentView.swift` — main navigation, toolbar commands, sheets, and screen routing
-- `agent-deck/AgentManagementViews.swift`, `ChainManagementViews.swift`, `SkillManagementViews.swift` — resource management screens
+- `agent-deck/AgentManagementViews.swift`, `SkillManagementViews.swift` — resource management screens
 - `agent-deck/PiAgentViews.swift` — Pi Agent screen shell and transcript cache
 - `agent-deck/PiAgentComposerViews.swift`, `PiAgentTranscriptViews.swift`, `PiAgentSubagentViews.swift` — Pi Agent composer, transcript, and native subagent UI
 - `agent-deck/PiAgentActivityPanelViews.swift`, `PiAgentInspectorPanelViews.swift`, `PiAgentRepoChangesPanelViews.swift` — activity, inspector, and repo change panels
