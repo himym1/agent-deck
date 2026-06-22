@@ -2942,6 +2942,7 @@ private struct SessionListContent: View, Equatable {
     let selectedSessionIDs: Set<UUID>
     let renamingSessionID: UUID?
     let workingSessionIDs: Set<UUID>
+    let uiRequestSessionIDs: Set<UUID>
     let generatingTitleIDs: Set<UUID>
     let activityByID: [UUID: PiAgentSessionGitActivity]
     /// Snapshot of `scrollRequest`'s value at construction, compared in `==`.
@@ -2977,6 +2978,7 @@ private struct SessionListContent: View, Equatable {
         else if lhs.selectedSessionIDs != rhs.selectedSessionIDs { diff = "selectedSessionIDs" }
         else if lhs.renamingSessionID != rhs.renamingSessionID { diff = "renamingSessionID" }
         else if lhs.workingSessionIDs != rhs.workingSessionIDs { diff = "workingSessionIDs" }
+        else if lhs.uiRequestSessionIDs != rhs.uiRequestSessionIDs { diff = "uiRequestSessionIDs" }
         else if lhs.generatingTitleIDs != rhs.generatingTitleIDs { diff = "generatingTitleIDs" }
         else if lhs.activityByID != rhs.activityByID { diff = "activityByID" }
         // A pending scroll request must defeat the equatable gate, or the
@@ -3067,6 +3069,7 @@ private struct SessionListContent: View, Equatable {
             session: session,
             isSelected: selectedSessionIDs.contains(session.id),
             isRunning: workingSessionIDs.contains(session.id),
+            hasUIRequest: uiRequestSessionIDs.contains(session.id),
             isRenaming: renamingSessionID == session.id,
             isGeneratingTitle: generatingTitleIDs.contains(session.id),
             gitActivity: activityByID[session.id] ?? .none,
@@ -3262,6 +3265,7 @@ struct CodingAgentExpandedPanel: View {
                     selectedSessionIDs: selectedSessionIDs,
                     renamingSessionID: renamingSessionID,
                     workingSessionIDs: workingVisibleSessionIDs,
+                    uiRequestSessionIDs: uiRequestVisibleSessionIDs,
                     generatingTitleIDs: viewModel.piAgentTitleGeneratingSessionIDs,
                     activityByID: visibleSessionActivityByID,
                     scrollRequestID: sessionScrollRequest,
@@ -3550,6 +3554,12 @@ struct CodingAgentExpandedPanel: View {
 
     private var workingVisibleSessionIDs: Set<UUID> {
         Set(visibleSessions.filter { viewModel.piAgentSessionIsWorking($0) }.map(\.id))
+    }
+
+    private var uiRequestVisibleSessionIDs: Set<UUID> {
+        Set(visibleSessions.compactMap { session in
+            store.uiRequestsBySessionID[session.id] == nil ? nil : session.id
+        })
     }
 
     private var visibleSessionActivityByID: [UUID: PiAgentSessionGitActivity] {
@@ -4081,6 +4091,7 @@ struct PiAgentScreen: View {
                             selectedSessionIDs: selectedSessionIDs,
                             renamingSessionID: renamingSessionID,
                             workingSessionIDs: workingVisibleSessionIDs,
+                            uiRequestSessionIDs: uiRequestVisibleSessionIDs,
                             generatingTitleIDs: viewModel.piAgentTitleGeneratingSessionIDs,
                             activityByID: visibleSessionActivityByID,
                             selection: $selectedSessionIDs,
@@ -4132,6 +4143,12 @@ struct PiAgentScreen: View {
     // contents actually changed. Each iterates only the (cached) visible sessions.
     private var workingVisibleSessionIDs: Set<UUID> {
         Set(visibleSessions.filter { viewModel.piAgentSessionIsWorking($0) }.map(\.id))
+    }
+
+    private var uiRequestVisibleSessionIDs: Set<UUID> {
+        Set(visibleSessions.compactMap { session in
+            store.uiRequestsBySessionID[session.id] == nil ? nil : session.id
+        })
     }
 
     private var visibleSessionActivityByID: [UUID: PiAgentSessionGitActivity] {

@@ -350,6 +350,7 @@ struct PiAgentSessionRow: View, Equatable {
     let session: PiAgentSessionRecord
     let isSelected: Bool
     let isRunning: Bool
+    let hasUIRequest: Bool
     let isRenaming: Bool
     let isGeneratingTitle: Bool
     let gitActivity: PiAgentSessionGitActivity
@@ -370,6 +371,7 @@ struct PiAgentSessionRow: View, Equatable {
         lhs.session == rhs.session
             && lhs.isSelected == rhs.isSelected
             && lhs.isRunning == rhs.isRunning
+            && lhs.hasUIRequest == rhs.hasUIRequest
             && lhs.isRenaming == rhs.isRenaming
             && lhs.isGeneratingTitle == rhs.isGeneratingTitle
             && lhs.gitActivity == rhs.gitActivity
@@ -488,7 +490,7 @@ struct PiAgentSessionRow: View, Equatable {
     }
 
     private var isSeenInactive: Bool {
-        !isSelected && !isRunning && !session.needsAttention
+        !isSelected && !hasUIRequest && !isRunning && !session.needsAttention
     }
 
     private var seenAppearanceAmount: Double {
@@ -502,7 +504,10 @@ struct PiAgentSessionRow: View, Equatable {
     @ViewBuilder
     private var attentionStatusSlot: some View {
         ZStack(alignment: .trailing) {
-            if isRunning {
+            if hasUIRequest {
+                askUserBadge
+                    .transition(.opacity)
+            } else if isRunning {
                 PiAgentTypingIndicator()
                     .transition(.opacity)
             } else if session.needsAttention {
@@ -510,8 +515,17 @@ struct PiAgentSessionRow: View, Equatable {
                     .transition(.opacity)
             }
         }
+        .animation(.snappy(duration: 0.24), value: hasUIRequest)
         .animation(.snappy(duration: 0.24), value: isRunning)
         .animation(.snappy(duration: 0.24), value: session.needsAttention)
+    }
+
+    private var askUserBadge: some View {
+        Image(systemName: "questionmark.bubble.fill")
+            .font(AppTheme.Font.caption.weight(.semibold))
+            .foregroundStyle(AppTheme.brandAccent)
+            .help("Pi Agent is waiting for your response")
+            .accessibilityLabel("Waiting for your response")
     }
 
     private var needsAttentionBell: some View {
@@ -628,6 +642,7 @@ struct PiAgentSessionRow: View, Equatable {
     }
 
     private var statusHelp: String {
+        if hasUIRequest { return "Waiting for your response" }
         if isRunning { return "Active" }
         return session.status.rawValue
     }
