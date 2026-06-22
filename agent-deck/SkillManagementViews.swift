@@ -1914,6 +1914,7 @@ private struct SkillListRowView: View {
     @State private var isHovered = false
 
     var body: some View {
+        let showsRowActions = isHovered || isUpdating
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: iconName)
                 .foregroundStyle(iconColor)
@@ -1947,34 +1948,35 @@ private struct SkillListRowView: View {
                     .help("Synced from GitHub · \(repositoryDisplayName)")
                 }
             }
+            .layoutPriority(1)
 
             Spacer(minLength: 0)
 
-            if let onUpdate {
-                Button(action: onUpdate) {
-                    if isUpdating {
-                        AppSpinner().controlSize(.small)
-                    } else {
-                        Text("Update")
-                            .font(.caption.weight(.semibold))
+            if showsRowActions {
+                HStack(spacing: 6) {
+                    if let onUpdate {
+                        Button(action: onUpdate) {
+                            if isUpdating {
+                                AppSpinner().controlSize(.small)
+                            } else {
+                                Label("Update Skill", systemImage: "arrow.down.circle")
+                                    .labelStyle(.iconOnly)
+                            }
+                        }
+                        .appSmallSecondaryButton()
+                        .disabled(isUpdating)
+                        .help(hasUpdate ? "Update available — sync this skill from GitHub" : "Sync this skill from GitHub")
+                    }
+
+                    if canRename {
+                        Button(action: onEdit) {
+                            Label("Edit SKILL.md", systemImage: "square.and.pencil")
+                                .labelStyle(.iconOnly)
+                        }
+                        .appSmallSecondaryButton()
+                        .help("Edit SKILL.md")
                     }
                 }
-                .appSmallSecondaryButton()
-                .opacity(isHovered ? 1 : 0)
-                .disabled(isUpdating)
-                .help(hasUpdate ? "Update available — sync this skill from GitHub" : "Sync this skill from GitHub")
-                .animation(.easeInOut(duration: 0.15), value: isHovered)
-            }
-
-            if canRename {
-                Button(action: onEdit) {
-                    Text("Edit")
-                        .font(.caption.weight(.semibold))
-                }
-                .appSmallSecondaryButton()
-                .opacity(isHovered ? 1 : 0)
-                .help("Edit SKILL.md")
-                .animation(.easeInOut(duration: 0.15), value: isHovered)
             }
         }
         .onHover { isHovered = $0 }
