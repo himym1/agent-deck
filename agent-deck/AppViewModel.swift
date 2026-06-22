@@ -191,6 +191,7 @@ final class AppViewModel: NSObject {
     var githubLastError: String?
     var githubLastStatusCheckAt: Date?
     var loopDefinitions: [LoopDefinition] = []
+    var selectedLoopDefinitionID: LoopDefinition.ID?
     @ObservationIgnored private var loopDefinitionStore = LoopDefinitionStore()
 
     var appSettings: AppSettings = AppSettings() {
@@ -8560,6 +8561,36 @@ final class AppViewModel: NSObject {
 
     func reloadLoopDefinitions() {
         loopDefinitions = loopDefinitionStore.loadUserDefinitions()
+        if let selectedLoopDefinitionID,
+           !loopDefinitions.contains(where: { $0.id == selectedLoopDefinitionID }) {
+            self.selectedLoopDefinitionID = loopDefinitions.first?.id
+        }
+    }
+
+    var selectedLoopDefinition: LoopDefinition? {
+        guard let selectedLoopDefinitionID else { return nil }
+        return loopDefinitions.first { $0.id == selectedLoopDefinitionID }
+    }
+
+    @discardableResult
+    func saveLoopDefinition(_ definition: LoopDefinition) throws -> LoopDefinition {
+        let saved = try loopDefinitionStore.saveUserDefinition(definition)
+        reloadLoopDefinitions()
+        selectedLoopDefinitionID = saved.filePath ?? saved.id
+        return saved
+    }
+
+    @discardableResult
+    func duplicateLoopDefinition(_ definition: LoopDefinition) throws -> LoopDefinition {
+        let saved = try loopDefinitionStore.duplicateUserDefinition(definition)
+        reloadLoopDefinitions()
+        selectedLoopDefinitionID = saved.filePath ?? saved.id
+        return saved
+    }
+
+    func deleteLoopDefinition(_ definition: LoopDefinition) throws {
+        try loopDefinitionStore.deleteUserDefinition(definition)
+        reloadLoopDefinitions()
     }
 
     @discardableResult

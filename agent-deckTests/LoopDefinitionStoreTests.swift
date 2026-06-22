@@ -60,6 +60,30 @@ final class LoopDefinitionStoreTests: XCTestCase {
         XCTAssertEqual(store.loadUserDefinitions().map(\.goalTemplate).sorted(), ["First", "Second"])
     }
 
+    func testUpdateDuplicateAndDeleteUserDefinition() throws {
+        let directory = PiTestSupport.temporaryStateFile().deletingLastPathComponent().appendingPathComponent("loops", isDirectory: true)
+        let store = LoopDefinitionStore(directoryURL: directory)
+
+        var saved = try store.saveUserDefinition(LoopDefinition(name: "Original", goalTemplate: "First"))
+        saved.name = "Updated"
+        saved.goalTemplate = "Second"
+        let updated = try store.saveUserDefinition(saved)
+        XCTAssertEqual(updated.filePath, saved.filePath)
+        XCTAssertEqual(store.loadUserDefinitions().map(\.name), ["Updated"])
+
+        let duplicate = try store.duplicateUserDefinition(updated)
+        XCTAssertNotEqual(duplicate.filePath, updated.filePath)
+        XCTAssertEqual(store.loadUserDefinitions().map(\.name).sorted(), ["Copy of Updated", "Updated"])
+
+        try store.deleteUserDefinition(updated)
+        XCTAssertEqual(store.loadUserDefinitions().map(\.name), ["Copy of Updated"])
+    }
+
+    func testSidebarIncludesLoopsInResourceSection() {
+        XCTAssertTrue(SidebarItem.allCases.contains(.loops))
+        XCTAssertTrue(SidebarSection.piResources.items.contains(.loops))
+    }
+
     func testAppViewModelSlashUniverseIncludesCreateThenAvailableSavedLoops() throws {
         let directory = PiTestSupport.temporaryStateFile().deletingLastPathComponent().appendingPathComponent("loops", isDirectory: true)
         let store = LoopDefinitionStore(directoryURL: directory)

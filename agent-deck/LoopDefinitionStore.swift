@@ -52,6 +52,7 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
         saved.name = name
         saved.description = definition.description.trimmingCharacters(in: .whitespacesAndNewlines)
         saved.goalTemplate = definition.goalTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
+        saved.projectPaths = definition.availability == .projectPaths ? sanitizedProjectPaths(definition.projectPaths) : []
         let targetURL: URL
         if let existingPath = saved.filePath, !existingPath.isEmpty {
             targetURL = URL(fileURLWithPath: existingPath)
@@ -64,6 +65,34 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
 
         try Self.encode(saved).write(to: targetURL, atomically: true, encoding: .utf8)
         return saved
+    }
+
+    func deleteUserDefinition(_ definition: LoopDefinition) throws {
+        guard definition.source == .user else { throw StoreError.userDefinitionsOnly }
+        guard let path = definition.filePath?.nonEmpty ?? definition.id.nonEmpty else { return }
+        let url = URL(fileURLWithPath: path)
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        try fileManager.removeItem(at: url)
+    }
+
+    func duplicateUserDefinition(_ definition: LoopDefinition, name: String? = nil) throws -> LoopDefinition {
+        guard definition.source == .user else { throw StoreError.userDefinitionsOnly }
+        var duplicate = definition
+        duplicate.id = UUID().uuidString
+        duplicate.name = (name?.nonEmpty ?? "Copy of \(definition.name)")
+        duplicate.source = .user
+        duplicate.filePath = nil
+        duplicate.createdAt = nil
+        duplicate.updatedAt = nil
+        return try saveUserDefinition(duplicate)
+    }
+
+    private func sanitizedProjectPaths(_ paths: [String]) -> [String] {
+        var seen = Set<String>()
+        return paths
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .filter { seen.insert($0).inserted }
     }
 
     private func uniqueFileURL(forName name: String) -> URL {

@@ -1750,6 +1750,8 @@ struct ContentView: View {
             )
         case .prompts:
             PromptsScreen(viewModel: viewModel, searchText: $promptSearchText)
+        case .loops:
+            LoopBankScreen(viewModel: viewModel)
         case .agent:
             // Handled by the always-mounted layer above.
             EmptyView()
