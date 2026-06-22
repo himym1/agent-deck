@@ -102,6 +102,15 @@ struct LoopLaunchSheet: View {
                     Text("Max iterations: \(draft.maxIterations)")
                 }
 
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Validation command")
+                    TextField("Example: swift test", text: $draft.validationCommand)
+                        .textFieldStyle(.roundedBorder)
+                    Text("Runs through your shell in the project directory when available. Leave empty to stop with Validation unavailable.")
+                        .font(AppTheme.Font.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                }
+
                 if canSaveToLoopBank {
                     Section("Loop Bank") {
                         Toggle("Save to Loop Bank before launch", isOn: $saveToLoopBank)

@@ -96,6 +96,7 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
         let structure = LoopStructureKind(rawValue: fm["structure"]?.nonEmpty ?? "") ?? .singleAgent
         let writeTarget = LoopWriteTarget(rawValue: fm["writeTarget"]?.nonEmpty ?? "") ?? .artifactMarkdown
         let maxIterations = Int(fm["maxIterations"]?.nonEmpty ?? "") ?? LoopDraft.defaultMaxIterations
+        let validationCommand = fm["validationCommand"]?.nonEmpty ?? ""
         let availability = LoopDefinitionAvailability(rawValue: fm["availability"]?.nonEmpty ?? "") ?? .allProjects
         let projectPaths = decodeProjectPaths(json: fm["projectPathsJSON"]) ?? splitProjectPaths(fm["projectPaths"])
         let parsedSource = LoopDefinitionSource(rawValue: fm["source"]?.nonEmpty ?? "") ?? source
@@ -109,6 +110,7 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
             structure: structure,
             writeTarget: writeTarget,
             maxIterations: max(1, maxIterations),
+            validationCommand: validationCommand,
             source: parsedSource,
             availability: availability,
             projectPaths: projectPaths,
@@ -126,6 +128,9 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
         lines.append("structure: \(definition.structure.rawValue)")
         lines.append("writeTarget: \(definition.writeTarget.rawValue)")
         lines.append("maxIterations: \(definition.maxIterations)")
+        if !definition.validationCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.append("validationCommand: \(oneLine(definition.validationCommand))")
+        }
         lines.append("availability: \(definition.availability.rawValue)")
         if !definition.projectPaths.isEmpty {
             lines.append("projectPathsJSON: \(jsonString(definition.projectPaths))")

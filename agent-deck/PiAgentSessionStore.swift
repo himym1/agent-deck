@@ -859,31 +859,161 @@ final class PiAgentSessionStore {
         run.artifactDirectoryPath = artifactDirectory.path
         upsertLoopRun(run)
 
-        let markdown = "# Loop Smoke Output\n\nGoal: \(run.goal)\n\nResult: Artifact smoke fixture completed."
-        let filename = "loop-smoke.md"
-        let artifactURL = artifactDirectory.appendingPathComponent(filename, isDirectory: false)
         do {
             try FileManager.default.createDirectory(at: artifactDirectory, withIntermediateDirectories: true)
-            try markdown.write(to: artifactURL, atomically: true, encoding: .utf8)
         } catch {
             run.status = .failed
             run.endedAt = Date()
             upsertLoopRun(run)
             return nil
         }
-        let artifact = LoopArtifact(
-            filename: filename,
-            markdown: markdown,
-            filePath: artifactURL.path
-        )
-        let now = Date()
-        run.currentIteration = 1
-        run.status = .completed
-        run.endedAt = now
-        run.stopReason = .success
-        run.iterations = [LoopIteration(index: 1, startedAt: run.startedAt, endedAt: now, summary: "Artifact smoke fixture completed.", artifacts: [artifact])]
+
+        let validationCommand = run.validationCommand
+        for iterationIndex in 1...run.maxIterations {
+            let iterationStartedAt = Date()
+            let markdown = "# Loop Smoke Output\n\nGoal: \(run.goal)\n\nIteration: \(iterationIndex)\n\nResult: Artifact smoke fixture completed."
+            let filename = iterationIndex == 1 ? "loop-smoke.md" : "loop-smoke-\(iterationIndex).md"
+            let artifactURL = artifactDirectory.appendingPathComponent(filename, isDirectory: false)
+            do {
+                try markdown.write(to: artifactURL, atomically: true, encoding: .utf8)
+            } catch {
+                run.status = .failed
+                run.endedAt = Date()
+                upsertLoopRun(run)
+                return nil
+            }
+
+            let artifact = LoopArtifact(
+                filename: filename,
+                markdown: markdown,
+                filePath: artifactURL.path
+            )
+            let validationResult: LoopValidationResult
+            if validationCommand.isEmpty {
+                validationResult = LoopValidationResult(
+                    command: "",
+                    workingDirectory: validationWorkingDirectory(projectPath: projectPath)?.path,
+                    exitCode: nil,
+                    duration: 0,
+                    stdout: "",
+                    stderr: "Validation command is empty."
+                )
+            } else {
+                validationResult = runValidationCommand(validationCommand, projectPath: projectPath)
+            }
+
+            let iterationEndedAt = Date()
+            run.currentIteration = iterationIndex
+            run.iterations.append(LoopIteration(
+                index: iterationIndex,
+                startedAt: iterationStartedAt,
+                endedAt: iterationEndedAt,
+                summary: validationResult.didPass ? "Validation passed." : "Validation did not pass.",
+                artifacts: [artifact],
+                validationResult: validationResult
+            ))
+
+            if validationCommand.isEmpty {
+                run.status = .failed
+                run.endedAt = iterationEndedAt
+                run.stopReason = .validationUnavailable
+                upsertLoopRun(run)
+                return run
+            }
+
+            if validationResult.didPass {
+                run.status = .completed
+                run.endedAt = iterationEndedAt
+                run.stopReason = .success
+                upsertLoopRun(run)
+                return run
+            }
+
+            upsertLoopRun(run)
+        }
+
+        run.status = .failed
+        run.endedAt = Date()
+        run.stopReason = .validationFailedAfterFinalIteration
         upsertLoopRun(run)
         return run
+    }
+
+    private func validationWorkingDirectory(projectPath: String?) -> URL? {
+        guard let projectPath, !projectPath.isEmpty else { return nil }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: projectPath, isDirectory: &isDirectory), isDirectory.boolValue else { return nil }
+        return URL(fileURLWithPath: projectPath, isDirectory: true)
+    }
+
+    private func runValidationCommand(_ command: String, projectPath: String?) -> LoopValidationResult {
+        let startedAt = Date()
+        let workingDirectory = validationWorkingDirectory(projectPath: projectPath)
+        let outputDirectory = fileURL.deletingLastPathComponent().appendingPathComponent("loop-validation-output", isDirectory: true)
+        let stdoutURL = outputDirectory.appendingPathComponent("\(UUID().uuidString)-stdout.txt")
+        let stderrURL = outputDirectory.appendingPathComponent("\(UUID().uuidString)-stderr.txt")
+        do {
+            try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: stdoutURL.path, contents: nil)
+            FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
+            let stdoutHandle = try FileHandle(forWritingTo: stdoutURL)
+            let stderrHandle = try FileHandle(forWritingTo: stderrURL)
+            defer {
+                try? stdoutHandle.close()
+                try? stderrHandle.close()
+                try? FileManager.default.removeItem(at: stdoutURL)
+                try? FileManager.default.removeItem(at: stderrURL)
+            }
+
+            let process = Process()
+            let terminationSemaphore = DispatchSemaphore(value: 0)
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-lc", command]
+            process.currentDirectoryURL = workingDirectory
+            process.standardOutput = stdoutHandle
+            process.standardError = stderrHandle
+            process.terminationHandler = { _ in terminationSemaphore.signal() }
+            try process.run()
+            let timedOut = terminationSemaphore.wait(timeout: .now() + 30) == .timedOut
+            if timedOut {
+                process.terminate()
+                process.waitUntilExit()
+            }
+
+            var stderr = cappedText(at: stderrURL)
+            if timedOut {
+                stderr += stderr.isEmpty ? "Validation command timed out after 30 seconds." : "\nValidation command timed out after 30 seconds."
+            }
+            return LoopValidationResult(
+                command: command,
+                workingDirectory: workingDirectory?.path,
+                exitCode: timedOut ? nil : Int(process.terminationStatus),
+                duration: Date().timeIntervalSince(startedAt),
+                stdout: cappedText(at: stdoutURL),
+                stderr: stderr
+            )
+        } catch {
+            return LoopValidationResult(
+                command: command,
+                workingDirectory: workingDirectory?.path,
+                exitCode: nil,
+                duration: Date().timeIntervalSince(startedAt),
+                stdout: "",
+                stderr: error.localizedDescription
+            )
+        }
+    }
+
+    private func cappedText(at url: URL, byteLimit: Int = 16 * 1024) -> String {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return "" }
+        defer { try? handle.close() }
+        let data = (try? handle.read(upToCount: byteLimit + 1)) ?? Data()
+        let capped = data.count > byteLimit ? data.prefix(byteLimit) : data[...]
+        var text = String(decoding: capped, as: UTF8.self)
+        if data.count > byteLimit {
+            text += "\n… output truncated …"
+        }
+        return text
     }
 
     private func loopArtifactDirectoryURL(sessionID: UUID, runID: UUID) -> URL {

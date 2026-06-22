@@ -42,7 +42,7 @@ final class LoopSkeletonTests: XCTestCase {
         let run = try XCTUnwrap(store.launchSmokeLoop(
             sessionID: session.id,
             projectPath: session.projectPath,
-            draft: LoopDraft(goal: "Produce a markdown smoke artifact")
+            draft: LoopDraft(goal: "Produce a markdown smoke artifact", validationCommand: "/usr/bin/true")
         ))
         let artifact = try XCTUnwrap(run.iterations.first?.artifacts.first)
         let artifactPath = try XCTUnwrap(artifact.filePath)
@@ -52,6 +52,7 @@ final class LoopSkeletonTests: XCTestCase {
         XCTAssertEqual(run.stopReason, .success)
         XCTAssertEqual(run.currentIteration, 1)
         XCTAssertEqual(artifact.filename, "loop-smoke.md")
+        XCTAssertEqual(run.iterations.first?.validationResult?.exitCode, 0)
         XCTAssertTrue(FileManager.default.fileExists(atPath: artifactPath))
         XCTAssertEqual(try String(contentsOfFile: artifactPath, encoding: .utf8), artifact.markdown)
         XCTAssertTrue(path(artifactPath, isUnder: stateFile.deletingLastPathComponent().path))
@@ -75,7 +76,7 @@ final class LoopSkeletonTests: XCTestCase {
         _ = try XCTUnwrap(store.launchSmokeLoop(
             sessionID: session.id,
             projectPath: session.projectPath,
-            draft: LoopDraft(goal: "Temporary loop")
+            draft: LoopDraft(goal: "Temporary loop", validationCommand: "/usr/bin/true")
         ))
         XCTAssertFalse(store.loopRuns(for: session.id).isEmpty)
 
@@ -96,7 +97,7 @@ final class LoopSkeletonTests: XCTestCase {
         let run = try XCTUnwrap(firstStore.launchSmokeLoop(
             sessionID: session.id,
             projectPath: session.projectPath,
-            draft: LoopDraft(goal: "Persist this loop card")
+            draft: LoopDraft(goal: "Persist this loop card", validationCommand: "/usr/bin/true")
         ))
         firstStore.flushForTesting()
 
@@ -110,7 +111,93 @@ final class LoopSkeletonTests: XCTestCase {
         XCTAssertEqual(hydratedRun.stopReason, .success)
         XCTAssertEqual(hydratedRun.artifactDirectoryPath, run.artifactDirectoryPath)
         XCTAssertEqual(hydratedArtifact.filePath, run.iterations.first?.artifacts.first?.filePath)
+        XCTAssertEqual(hydratedRun.iterations.first?.validationResult?.exitCode, 0)
         XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(hydratedArtifact.filePath)))
+    }
+
+    func testLegacyLoopRunJSONWithoutValidationCommandStillDecodes() throws {
+        let sessionID = UUID()
+        let run = LoopRun(
+            sessionID: sessionID,
+            projectPath: nil,
+            draft: LoopDraft(goal: "Legacy", validationCommand: "/usr/bin/true")
+        )
+        let rawJSON = try XCTUnwrap(LoopRunTranscriptCodec.rawJSON(for: run))
+        let data = try XCTUnwrap(rawJSON.data(using: .utf8))
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "validationCommand")
+        let legacyData = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        let legacyRawJSON = try XCTUnwrap(String(data: legacyData, encoding: .utf8))
+        let entry = PiAgentTranscriptEntry(
+            sessionID: sessionID,
+            role: .status,
+            title: LoopRunTranscriptCodec.title,
+            text: "Loop",
+            rawJSON: legacyRawJSON
+        )
+
+        let decoded = try XCTUnwrap(LoopRunTranscriptCodec.decode(from: entry))
+        XCTAssertEqual(decoded.id, run.id)
+        XCTAssertEqual(decoded.validationCommand, "")
+    }
+
+    func testPassingValidationCommandStopsFirstIteration() throws {
+        let stateFile = PiTestSupport.temporaryStateFile()
+        let projectURL = try PiTestSupport.temporaryProjectURL()
+        let store = PiAgentSessionStore(fileURL: stateFile)
+        let session = store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(url: projectURL), repository: nil)
+
+        let run = try XCTUnwrap(store.launchSmokeLoop(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(goal: "Validate once", maxIterations: 3, validationCommand: "/usr/bin/true")
+        ))
+
+        XCTAssertEqual(run.status, .completed)
+        XCTAssertEqual(run.stopReason, .success)
+        XCTAssertEqual(run.currentIteration, 1)
+        XCTAssertEqual(run.iterations.count, 1)
+        XCTAssertEqual(run.iterations[0].validationResult?.exitCode, 0)
+    }
+
+    func testFailingValidationRepeatsToMaxIterationsAndRecordsFinalStopReason() throws {
+        let stateFile = PiTestSupport.temporaryStateFile()
+        let projectURL = try PiTestSupport.temporaryProjectURL()
+        let store = PiAgentSessionStore(fileURL: stateFile)
+        let session = store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(url: projectURL), repository: nil)
+
+        let run = try XCTUnwrap(store.launchSmokeLoop(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(goal: "Retry validation", maxIterations: 3, validationCommand: "/usr/bin/false")
+        ))
+
+        XCTAssertEqual(run.status, .failed)
+        XCTAssertEqual(run.stopReason, .validationFailedAfterFinalIteration)
+        XCTAssertEqual(run.currentIteration, 3)
+        XCTAssertEqual(run.iterations.count, 3)
+        XCTAssertEqual(run.iterations.map { $0.validationResult?.exitCode }, [1, 1, 1])
+        XCTAssertEqual(run.iterations.map { $0.artifacts.first?.filename }, ["loop-smoke.md", "loop-smoke-2.md", "loop-smoke-3.md"])
+    }
+
+    func testMissingValidationCommandRecordsValidationUnavailable() throws {
+        let stateFile = PiTestSupport.temporaryStateFile()
+        let projectURL = try PiTestSupport.temporaryProjectURL()
+        let store = PiAgentSessionStore(fileURL: stateFile)
+        let session = store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(url: projectURL), repository: nil)
+
+        let run = try XCTUnwrap(store.launchSmokeLoop(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(goal: "No validation", maxIterations: 3)
+        ))
+
+        XCTAssertEqual(run.status, .failed)
+        XCTAssertEqual(run.stopReason, .validationUnavailable)
+        XCTAssertEqual(run.currentIteration, 1)
+        XCTAssertEqual(run.iterations.count, 1)
+        XCTAssertNil(run.iterations[0].validationResult?.exitCode)
+        XCTAssertEqual(run.iterations[0].validationResult?.stderr, "Validation command is empty.")
     }
 
     private func path(_ path: String, isUnder parentPath: String) -> Bool {
@@ -136,7 +223,7 @@ final class LoopSkeletonTests: XCTestCase {
         XCTAssertNil(store.launchSmokeLoop(sessionID: session.id, projectPath: session.projectPath, draft: LoopDraft(goal: "Second")))
         XCTAssertNotNil(store.activeLoopRun(for: session.id))
 
-        let second = try XCTUnwrap(store.launchSmokeLoop(sessionID: session.id, projectPath: session.projectPath, draft: LoopDraft(goal: "Second"), stopExistingActive: true))
+        let second = try XCTUnwrap(store.launchSmokeLoop(sessionID: session.id, projectPath: session.projectPath, draft: LoopDraft(goal: "Second", validationCommand: "/usr/bin/true"), stopExistingActive: true))
         XCTAssertEqual(second.status, .completed)
         XCTAssertNil(store.activeLoopRun(for: session.id))
         XCTAssertTrue(store.loopRuns(for: session.id).contains { $0.id == active.id && $0.stopReason == .userStopped })

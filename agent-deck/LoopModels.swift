@@ -52,7 +52,10 @@ nonisolated enum LoopRunStatus: String, Codable, CaseIterable, Identifiable, Sen
 
 nonisolated enum LoopStopReason: String, Codable, CaseIterable, Identifiable, Sendable {
     case success
+    case maxIterationsReached
     case userStopped
+    case validationUnavailable
+    case validationFailedAfterFinalIteration
     case appInterrupted
 
     var id: String { rawValue }
@@ -60,7 +63,10 @@ nonisolated enum LoopStopReason: String, Codable, CaseIterable, Identifiable, Se
     var displayName: String {
         switch self {
         case .success: return "Success"
+        case .maxIterationsReached: return "Max iterations reached"
         case .userStopped: return "User stopped"
+        case .validationUnavailable: return "Validation unavailable"
+        case .validationFailedAfterFinalIteration: return "Validation failed after final iteration"
         case .appInterrupted: return "App interrupted"
         }
     }
@@ -71,14 +77,16 @@ nonisolated struct LoopDraft: Codable, Equatable, Sendable {
     var structure: LoopStructureKind
     var writeTarget: LoopWriteTarget
     var maxIterations: Int
+    var validationCommand: String
 
     static let defaultMaxIterations = 3
 
-    init(goal: String = "", structure: LoopStructureKind = .singleAgent, writeTarget: LoopWriteTarget = .artifactMarkdown, maxIterations: Int = Self.defaultMaxIterations) {
+    init(goal: String = "", structure: LoopStructureKind = .singleAgent, writeTarget: LoopWriteTarget = .artifactMarkdown, maxIterations: Int = Self.defaultMaxIterations, validationCommand: String = "") {
         self.goal = goal
         self.structure = structure
         self.writeTarget = writeTarget
         self.maxIterations = max(1, maxIterations)
+        self.validationCommand = validationCommand
     }
 }
 
@@ -111,6 +119,7 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
     var structure: LoopStructureKind
     var writeTarget: LoopWriteTarget
     var maxIterations: Int
+    var validationCommand: String
     var source: LoopDefinitionSource
     var availability: LoopDefinitionAvailability
     var projectPaths: [String]
@@ -126,6 +135,7 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
         structure: LoopStructureKind = .singleAgent,
         writeTarget: LoopWriteTarget = .artifactMarkdown,
         maxIterations: Int = LoopDraft.defaultMaxIterations,
+        validationCommand: String = "",
         source: LoopDefinitionSource = .user,
         availability: LoopDefinitionAvailability = .allProjects,
         projectPaths: [String] = [],
@@ -140,6 +150,7 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
         self.structure = structure
         self.writeTarget = writeTarget
         self.maxIterations = max(1, maxIterations)
+        self.validationCommand = validationCommand
         self.source = source
         self.availability = availability
         self.projectPaths = projectPaths
@@ -163,7 +174,8 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
             goal: goalTemplate,
             structure: structure,
             writeTarget: writeTarget,
-            maxIterations: maxIterations
+            maxIterations: maxIterations,
+            validationCommand: validationCommand
         )
     }
 }
@@ -197,6 +209,17 @@ nonisolated struct LoopArtifact: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+nonisolated struct LoopValidationResult: Codable, Equatable, Sendable {
+    var command: String
+    var workingDirectory: String?
+    var exitCode: Int?
+    var duration: TimeInterval
+    var stdout: String
+    var stderr: String
+
+    var didPass: Bool { exitCode == 0 }
+}
+
 nonisolated struct LoopIteration: Identifiable, Codable, Equatable, Sendable {
     var id: UUID
     var index: Int
@@ -204,14 +227,16 @@ nonisolated struct LoopIteration: Identifiable, Codable, Equatable, Sendable {
     var endedAt: Date?
     var summary: String
     var artifacts: [LoopArtifact]
+    var validationResult: LoopValidationResult?
 
-    init(id: UUID = UUID(), index: Int, startedAt: Date = Date(), endedAt: Date? = nil, summary: String = "", artifacts: [LoopArtifact] = []) {
+    init(id: UUID = UUID(), index: Int, startedAt: Date = Date(), endedAt: Date? = nil, summary: String = "", artifacts: [LoopArtifact] = [], validationResult: LoopValidationResult? = nil) {
         self.id = id
         self.index = index
         self.startedAt = startedAt
         self.endedAt = endedAt
         self.summary = summary
         self.artifacts = artifacts
+        self.validationResult = validationResult
     }
 }
 
@@ -225,6 +250,7 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
     var writeTarget: LoopWriteTarget
     var currentIteration: Int
     var maxIterations: Int
+    var validationCommand: String
     var startedAt: Date
     var endedAt: Date?
     var stopReason: LoopStopReason?
@@ -242,12 +268,37 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
         self.writeTarget = draft.writeTarget
         self.currentIteration = 0
         self.maxIterations = max(1, draft.maxIterations)
+        self.validationCommand = draft.validationCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         self.startedAt = startedAt
         self.endedAt = nil
         self.stopReason = nil
         self.iterations = []
         self.artifactDirectoryPath = artifactDirectoryPath
         self.transcriptEntryID = transcriptEntryID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, sessionID, projectPath, goal, structure, status, writeTarget, currentIteration, maxIterations, validationCommand, startedAt, endedAt, stopReason, iterations, artifactDirectoryPath, transcriptEntryID
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        sessionID = try container.decode(UUID.self, forKey: .sessionID)
+        projectPath = try container.decodeIfPresent(String.self, forKey: .projectPath)
+        goal = try container.decode(String.self, forKey: .goal)
+        structure = try container.decode(LoopStructureKind.self, forKey: .structure)
+        status = try container.decode(LoopRunStatus.self, forKey: .status)
+        writeTarget = try container.decode(LoopWriteTarget.self, forKey: .writeTarget)
+        currentIteration = try container.decode(Int.self, forKey: .currentIteration)
+        maxIterations = try container.decode(Int.self, forKey: .maxIterations)
+        validationCommand = try container.decodeIfPresent(String.self, forKey: .validationCommand) ?? ""
+        startedAt = try container.decode(Date.self, forKey: .startedAt)
+        endedAt = try container.decodeIfPresent(Date.self, forKey: .endedAt)
+        stopReason = try container.decodeIfPresent(LoopStopReason.self, forKey: .stopReason)
+        iterations = try container.decode([LoopIteration].self, forKey: .iterations)
+        artifactDirectoryPath = try container.decodeIfPresent(String.self, forKey: .artifactDirectoryPath)
+        transcriptEntryID = try container.decode(UUID.self, forKey: .transcriptEntryID)
     }
 
     var isActive: Bool { status.isActive }
@@ -283,11 +334,18 @@ enum LoopRunTranscriptCodec {
             "Goal: \(run.goal)",
             "Iterations: \(run.currentIteration)/\(run.maxIterations)"
         ]
+        if !run.validationCommand.isEmpty {
+            lines.append("Validation command: \(run.validationCommand)")
+        }
         if let stopReason = run.stopReason {
             lines.append("Stop reason: \(stopReason.displayName)")
         }
         if let directoryPath = run.artifactDirectoryPath {
             lines.append("Artifact directory: \(directoryPath)")
+        }
+        if let validation = run.iterations.last?.validationResult {
+            lines.append("Validation exit code: \(validation.exitCode.map(String.init) ?? "unavailable")")
+            lines.append("Validation duration: \(String(format: "%.2fs", validation.duration))")
         }
         if let artifact = run.iterations.last?.artifacts.first {
             lines.append("")

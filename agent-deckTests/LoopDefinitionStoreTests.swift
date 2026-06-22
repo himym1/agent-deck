@@ -11,6 +11,7 @@ final class LoopDefinitionStoreTests: XCTestCase {
             description: "Write a markdown report",
             goalTemplate: "Research this topic and produce Markdown.",
             maxIterations: 5,
+            validationCommand: "swift test",
             availability: .projectPaths,
             projectPaths: ["/tmp/project-a"]
         )
@@ -25,6 +26,7 @@ final class LoopDefinitionStoreTests: XCTestCase {
         XCTAssertEqual(loaded.structure, .singleAgent)
         XCTAssertEqual(loaded.writeTarget, .artifactMarkdown)
         XCTAssertEqual(loaded.maxIterations, 5)
+        XCTAssertEqual(loaded.validationCommand, "swift test")
         XCTAssertEqual(loaded.source, .user)
         XCTAssertEqual(loaded.availability, .projectPaths)
         XCTAssertEqual(loaded.projectPaths, ["/tmp/project-a"])
@@ -95,7 +97,8 @@ final class LoopDefinitionStoreTests: XCTestCase {
         let definition = LoopDefinition(
             name: "Reusable",
             goalTemplate: "Use this saved goal",
-            maxIterations: 7
+            maxIterations: 7,
+            validationCommand: "swift test"
         )
 
         let draft = definition.makeDraft()
@@ -103,5 +106,6 @@ final class LoopDefinitionStoreTests: XCTestCase {
         XCTAssertEqual(draft.structure, .singleAgent)
         XCTAssertEqual(draft.writeTarget, .artifactMarkdown)
         XCTAssertEqual(draft.maxIterations, 7)
+        XCTAssertEqual(draft.validationCommand, "swift test")
     }
 }
