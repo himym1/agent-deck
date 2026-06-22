@@ -241,27 +241,23 @@ jobs:
           xcrun stapler staple "$DMG"
           spctl --assess --type open --context context:primary-signature -v "$DMG"
 
-      - name: Stable-name copy and checksums
+      - name: DMG checksum
         # Must run AFTER stapling: the staple rewrites the DMG, so hashes taken
-        # earlier would not match what users download. The stable-named copy
-        # (identical bytes) gives the website and install script a permanent
-        # `releases/latest/download/Agent-Deck.dmg` URL; the .sha256 files let
-        # the install script and the Homebrew cask verify downloads.
+        # earlier would not match what users download. Keep a single versioned
+        # DMG asset on the release; the .sha256 file lets installers and casks
+        # verify the downloaded artifact.
         id: shasum
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          cp "$DMG" "build/release/Agent-Deck.dmg"
-          # Bare filenames inside the .sha256 files so `shasum -c` works from
+          # Bare filename inside the .sha256 file so `shasum -c` works from
           # any directory containing the download.
           (
             cd build/release
             shasum -a 256 "Agent-Deck-${VERSION}.dmg" > "Agent-Deck-${VERSION}.dmg.sha256"
-            shasum -a 256 "Agent-Deck.dmg" > "Agent-Deck.dmg.sha256"
-            cat ./*.sha256
+            cat "Agent-Deck-${VERSION}.dmg.sha256"
           )
-          echo "STABLE_DMG=build/release/Agent-Deck.dmg" >> "$GITHUB_ENV"
           echo "sha256=$(cut -d' ' -f1 < "build/release/Agent-Deck-${VERSION}.dmg.sha256")" >> "$GITHUB_OUTPUT"
 
       - name: Sign update with Sparkle EdDSA key
@@ -322,7 +318,7 @@ jobs:
           gh release create "$TAG" \
             --title "Agent Deck $VERSION" \
             --notes-file release-notes.md \
-            "$DMG" "$STABLE_DMG" "${DMG}.sha256" "${STABLE_DMG}.sha256"
+            "$DMG" "${DMG}.sha256"
 
       - name: Publish appcast item asset
         # Instead of committing docs/appcast.xml back to main (which polluted
