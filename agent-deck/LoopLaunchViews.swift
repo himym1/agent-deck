@@ -64,152 +64,262 @@ struct LoopLaunchSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 0) {
+            sheetHeader
+
+            Divider()
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
+                    if let activeRun {
+                        activeLoopWarning(activeRun)
+                    }
+
+                    AppCard(title: "Loop") {
+                        VStack(alignment: .leading, spacing: 14) {
+                            pickerRow("Structure") {
+                                Picker("Structure", selection: $draft.structure) {
+                                    ForEach(LoopStructureKind.allCases) { kind in
+                                        Text(kind.displayName).tag(kind)
+                                    }
+                                }
+                                .labelsHidden()
+                                .appMenuPicker()
+                            }
+
+                            pickerRow("Write Target") {
+                                Picker("Write Target", selection: $draft.writeTarget) {
+                                    ForEach(LoopWriteTarget.allCases) { target in
+                                        Text(target.displayName).tag(target)
+                                    }
+                                }
+                                .labelsHidden()
+                                .appMenuPicker()
+                            }
+
+                            writeTargetExplanation
+
+                            fieldGroup("Goal") {
+                                TextEditor(text: $draft.goal)
+                                    .font(AppTheme.Font.body)
+                                    .scrollContentBackground(.hidden)
+                                    .padding(8)
+                                    .frame(minHeight: 104)
+                                    .background(AppTheme.textContentFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .stroke(AppTheme.contentStroke, lineWidth: 1)
+                                    }
+                            }
+
+                            Stepper(value: $draft.maxIterations, in: 1...20) {
+                                Text("Max iterations: \(draft.maxIterations)")
+                                    .font(AppTheme.Font.body)
+                            }
+                        }
+                    }
+
+                    structureFields
+
+                    AppCard(title: "Validation") {
+                        fieldGroup("Validation command") {
+                            AppTextField(text: $draft.validationCommand, placeholder: "Example: swift test")
+                                .frame(maxWidth: .infinity)
+                            Text("Runs through your shell in the project directory when available. Leave empty to stop with Validation unavailable.")
+                                .font(AppTheme.Font.caption)
+                                .foregroundStyle(AppTheme.mutedText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+
+                    if canSaveToLoopBank {
+                        loopBankSection
+                    }
+                }
+                .padding(24)
+            }
+
+            Divider()
+
+            sheetFooter
+        }
+        .frame(width: 560, height: 640)
+        .onChange(of: saveToLoopBank) { _, enabled in
+            guard enabled, saveName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            saveName = defaultSaveName()
+        }
+    }
+
+    private var sheetHeader: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "infinity")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(AppTheme.brandAccent)
+                .frame(width: 34, height: 34)
+                .background(AppTheme.brandAccent.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.title2.bold())
+                    .font(.headline.weight(.semibold))
+                    .fontWidth(.expanded)
                 Text(sourceDefinition == nil ? "Unsaved loop · \(session.title)" : "Saved loop · \(session.title)")
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .lineLimit(1)
             }
 
-            if let activeRun {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("This transcript already has an active loop.", systemImage: "infinity")
-                        .font(AppTheme.Font.body.weight(.semibold))
-                    Text(activeRun.goal)
-                        .font(AppTheme.Font.caption)
-                        .foregroundStyle(AppTheme.mutedText)
-                        .lineLimit(2)
-                    Toggle("Stop it and start this loop", isOn: $stopExistingActive)
-                }
-                .padding(12)
-                .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 18)
+    }
+
+    private var sheetFooter: some View {
+        HStack(spacing: 12) {
+            Spacer(minLength: 0)
+            Button("Cancel", action: onCancel)
+                .appSecondaryButton()
+                .keyboardShortcut(.cancelAction)
+            Button(saveToLoopBank ? "Save & Launch" : "Launch") {
+                onLaunch(LoopLaunchRequest(
+                    draft: draft,
+                    stopExistingActive: stopExistingActive,
+                    saveRequest: makeSaveRequest()
+                ))
             }
+            .appPrimaryButton()
+            .keyboardShortcut(.defaultAction)
+            .disabled(!canLaunch)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+    }
 
-            Form {
-                Picker("Structure", selection: $draft.structure) {
-                    ForEach(LoopStructureKind.allCases) { kind in
-                        Text(kind.displayName).tag(kind)
-                    }
-                }
+    private func activeLoopWarning(_ activeRun: LoopRun) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("This transcript already has an active loop.", systemImage: "exclamationmark.triangle.fill")
+                .font(AppTheme.Font.body.weight(.semibold))
+                .foregroundStyle(.orange)
+            Text(activeRun.goal)
+                .font(AppTheme.Font.caption)
+                .foregroundStyle(AppTheme.mutedText)
+                .lineLimit(2)
+            Toggle("Stop it and start this loop", isOn: $stopExistingActive)
+                .appSwitch()
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(.orange.opacity(0.20), lineWidth: 1)
+        }
+    }
 
-                Picker("Write Target", selection: $draft.writeTarget) {
-                    ForEach(LoopWriteTarget.allCases) { target in
-                        Text(target.displayName).tag(target)
-                    }
-                }
-
-                writeTargetExplanation
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Goal")
-                    TextEditor(text: $draft.goal)
-                        .font(AppTheme.Font.body)
-                        .frame(minHeight: 96)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(Color.secondary.opacity(0.25))
-                        }
-                }
-
-                Stepper(value: $draft.maxIterations, in: 1...20) {
-                    Text("Max iterations: \(draft.maxIterations)")
-                }
-
+    private var structureFields: some View {
+        AppCard(title: draft.structure.displayName) {
+            VStack(alignment: .leading, spacing: 14) {
                 switch draft.structure {
                 case .makerChecker:
-                    Section("Maker + Checker") {
-                        TextField("Maker name", text: $draft.makerChecker.makerName)
-                        TextField("Checker name", text: $draft.makerChecker.checkerName)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Checker rubric")
-                            TextField("approve, reject once, ask human, or fail", text: $draft.makerChecker.checkerRubric, axis: .vertical)
-                                .lineLimit(2...4)
-                            Text("Checker is report-only. In this deterministic preview runner, the rubric controls the checker result.")
-                                .font(AppTheme.Font.caption)
-                                .foregroundStyle(AppTheme.mutedText)
-                        }
-                        Stepper(value: $draft.makerChecker.maxReviewRounds, in: 1...20) {
-                            Text("Max review rounds: \(draft.makerChecker.maxReviewRounds)")
-                        }
+                    fieldGroup("Maker name") {
+                        AppTextField(text: $draft.makerChecker.makerName, placeholder: "Maker name")
+                    }
+                    fieldGroup("Checker name") {
+                        AppTextField(text: $draft.makerChecker.checkerName, placeholder: "Checker name")
+                    }
+                    fieldGroup("Checker rubric") {
+                        AppTextField(
+                            text: $draft.makerChecker.checkerRubric,
+                            placeholder: "approve, reject once, ask human, or fail",
+                            axis: .vertical
+                        )
+                        .lineLimit(2...4)
+                        Text("Checker is report-only. In this deterministic preview runner, the rubric controls the checker result.")
+                            .font(AppTheme.Font.caption)
+                            .foregroundStyle(AppTheme.mutedText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Stepper(value: $draft.makerChecker.maxReviewRounds, in: 1...20) {
+                        Text("Max review rounds: \(draft.makerChecker.maxReviewRounds)")
+                            .font(AppTheme.Font.body)
                     }
                 case .agentPipeline:
-                    Section("Agent Pipeline") {
-                        TextField("Stages, separated by |", text: pipelineStagesBinding)
+                    fieldGroup("Stages") {
+                        AppTextField(text: pipelineStagesBinding, placeholder: "Stages, separated by |")
                         Text("Runs stages in this fixed order and records the timeline.")
                             .font(AppTheme.Font.caption)
                             .foregroundStyle(AppTheme.mutedText)
                     }
                 case .parallelAgents:
-                    Section("Parallel Agents") {
-                        TextField("Branches, separated by |", text: parallelBranchesBinding)
+                    fieldGroup("Branches") {
+                        AppTextField(text: parallelBranchesBinding, placeholder: "Branches, separated by |")
                         Text("Records branch timeline. Choose New worktree for isolated coding-preview writes.")
                             .font(AppTheme.Font.caption)
                             .foregroundStyle(AppTheme.mutedText)
                     }
                 case .discoveryTriage:
-                    Section("Discovery / Triage") {
-                        TextField("Classification prompt", text: $draft.discoveryTriage.classificationPrompt, axis: .vertical)
+                    fieldGroup("Classification prompt") {
+                        AppTextField(text: $draft.discoveryTriage.classificationPrompt, placeholder: "Classification prompt", axis: .vertical)
                             .lineLimit(2...4)
                     }
                 case .humanApproval:
-                    Section("Human Approval") {
-                        TextField("Checkpoint prompt", text: $draft.humanApproval.checkpointPrompt, axis: .vertical)
+                    fieldGroup("Checkpoint prompt") {
+                        AppTextField(text: $draft.humanApproval.checkpointPrompt, placeholder: "Checkpoint prompt", axis: .vertical)
                             .lineLimit(2...4)
                         Text("The deterministic preview runner stops with Human input required at this checkpoint.")
                             .font(AppTheme.Font.caption)
                             .foregroundStyle(AppTheme.mutedText)
                     }
                 case .singleAgent:
-                    EmptyView()
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Validation command")
-                    TextField("Example: swift test", text: $draft.validationCommand)
-                        .textFieldStyle(.roundedBorder)
-                    Text("Runs through your shell in the project directory when available. Leave empty to stop with Validation unavailable.")
+                    Text("Runs one agent loop against the selected write target.")
                         .font(AppTheme.Font.caption)
                         .foregroundStyle(AppTheme.mutedText)
                 }
+            }
+        }
+    }
 
-                if canSaveToLoopBank {
-                    Section("Loop Bank") {
-                        Toggle("Save to Loop Bank before launch", isOn: $saveToLoopBank)
-                        if saveToLoopBank {
-                            TextField("Name", text: $saveName)
-                            TextField("Description", text: $saveDescription, axis: .vertical)
-                                .lineLimit(2...4)
-                            Toggle("Available only in this project", isOn: $saveForCurrentProjectOnly)
-                                .disabled(session.projectPath.isEmpty)
-                        }
+    private var loopBankSection: some View {
+        AppCard(title: "Loop Bank") {
+            VStack(alignment: .leading, spacing: 14) {
+                Toggle("Save to Loop Bank before launch", isOn: $saveToLoopBank)
+                    .appSwitch()
+                if saveToLoopBank {
+                    fieldGroup("Name") {
+                        AppTextField(text: $saveName, placeholder: "Name")
                     }
+                    fieldGroup("Description") {
+                        AppTextField(text: $saveDescription, placeholder: "Description", axis: .vertical)
+                            .lineLimit(2...4)
+                    }
+                    Toggle("Available only in this project", isOn: $saveForCurrentProjectOnly)
+                        .appSwitch()
+                        .disabled(session.projectPath.isEmpty)
                 }
             }
-            .formStyle(.grouped)
+        }
+    }
 
-            HStack {
-                Spacer()
-                Button("Cancel", action: onCancel)
-                Button(saveToLoopBank ? "Save & Launch" : "Launch") {
-                    onLaunch(LoopLaunchRequest(
-                        draft: draft,
-                        stopExistingActive: stopExistingActive,
-                        saveRequest: makeSaveRequest()
-                    ))
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!canLaunch)
-            }
+    private func pickerRow<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(label)
+                .font(AppTheme.Font.caption.weight(.semibold))
+                .foregroundStyle(AppTheme.mutedText)
+                .frame(width: 96, alignment: .leading)
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(22)
-        .frame(width: 460)
-        .onChange(of: saveToLoopBank) { _, enabled in
-            guard enabled, saveName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-            saveName = defaultSaveName()
+    }
+
+    private func fieldGroup<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(AppTheme.Font.caption.weight(.semibold))
+                .foregroundStyle(AppTheme.mutedText)
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
