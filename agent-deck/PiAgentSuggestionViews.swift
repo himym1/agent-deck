@@ -440,6 +440,7 @@ struct PiAgentSlashSuggestions: View {
         case .command: return "terminal"
         case .prompt: return AppSymbols.promptTemplate
         case .skill: return "sparkles"
+        case .loop: return "infinity"
         }
     }
 
@@ -448,6 +449,7 @@ struct PiAgentSlashSuggestions: View {
         case .command: return "Commands"
         case .prompt: return "Prompts"
         case .skill: return "Skills"
+        case .loop: return "Loops"
         }
     }
 }
@@ -484,6 +486,7 @@ struct PiAgentSlashSelectionChip: View {
         case .command: return "terminal"
         case .prompt: return AppSymbols.promptTemplate
         case .skill: return "sparkles"
+        case .loop: return "infinity"
         }
     }
 
@@ -495,6 +498,8 @@ struct PiAgentSlashSelectionChip: View {
             return name
         case .skill(let name, _):
             return name
+        case .loopCreateNew:
+            return "Create New Loop"
         }
     }
 }

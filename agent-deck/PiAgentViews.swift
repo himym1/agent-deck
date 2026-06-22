@@ -503,6 +503,7 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
             return isMeaningfulAssistantEntry(entry)
         case .status:
             return entry.isNativeSubagentCard
+                || entry.isLoopTranscriptCard
                 || entry.agentMemoryEvent != nil
                 || entry.title == "Compaction"
                 || entry.title == "Retry"
@@ -3701,6 +3702,7 @@ struct PiAgentScreen: View {
     /// The picked slash item — when non-nil, the composer shows it as a glass
     /// capsule chip above the editor and includes it in the send payload.
     @State private var slashSelection: SlashItem?
+    @State private var isLoopLaunchSheetPresented = false
     @State private var lastSlashTriggerActive = false
     @State private var inputMode: PiAgentInputMode = .steer
     @State private var selectedSessionTitleDraft = ""
@@ -3821,6 +3823,24 @@ struct PiAgentScreen: View {
                     onSubmitFreeform: { sentinel, value in viewModel.respondToPiAgentFreeformUIRequest(request, sentinel: sentinel, value: value) },
                     onConfirm: { confirmed in viewModel.confirmPiAgentUIRequest(request, confirmed: confirmed) },
                     onCancel: { viewModel.cancelPiAgentUIRequest(request) }
+                )
+            }
+        }
+        .sheet(isPresented: $isLoopLaunchSheetPresented) {
+            if let session = store.selectedSession {
+                LoopLaunchSheet(
+                    session: session,
+                    activeRun: store.activeLoopRun(for: session.id),
+                    onCancel: { isLoopLaunchSheetPresented = false },
+                    onLaunch: { draft, stopExistingActive in
+                        _ = store.launchSmokeLoop(
+                            sessionID: session.id,
+                            projectPath: session.projectPath,
+                            draft: draft,
+                            stopExistingActive: stopExistingActive
+                        )
+                        isLoopLaunchSheetPresented = false
+                    }
                 )
             }
         }
@@ -5648,6 +5668,7 @@ struct PiAgentScreen: View {
             case .command: return "Commands"
             case .prompt: return "Prompts"
             case .skill: return "Skills"
+            case .loop: return "Loops"
             }
         }
     }
@@ -5742,6 +5763,15 @@ struct PiAgentScreen: View {
             composerText.replaceSubrange(token.range, with: "")
         }
         composerText = composerText.trimmingCharacters(in: .whitespaces)
+
+        if case .loopCreateNew = item.payload {
+            slashSelection = nil
+            slashState = SlashSuggestionState()
+            slashUniverse = .empty
+            composerSuggestionsDismissed = true
+            isLoopLaunchSheetPresented = true
+            return
+        }
 
         // For prompts, seed the editor with the body so the user can edit
         // before sending. Commands and skills leave the editor alone — any
@@ -6314,6 +6344,7 @@ private struct PiAgentComposerPanel: View {
     @State private var slashUniverse: SlashUniverse = .empty
     @State private var slashState = SlashSuggestionState()
     @State private var slashSelection: SlashItem?
+    @State private var isLoopLaunchSheetPresented = false
     @State private var lastSlashTriggerActive = false
     @State private var inputMode: PiAgentInputMode = .steer
     @State private var composerPasteAttachments: [PiAgentPasteAttachment] = []
@@ -6398,6 +6429,24 @@ private struct PiAgentComposerPanel: View {
             )
         }
         .animation(.easeOut(duration: 0.12), value: hasComposerSuggestions)
+        .sheet(isPresented: $isLoopLaunchSheetPresented) {
+            if let session = store.selectedSession {
+                LoopLaunchSheet(
+                    session: session,
+                    activeRun: store.activeLoopRun(for: session.id),
+                    onCancel: { isLoopLaunchSheetPresented = false },
+                    onLaunch: { draft, stopExistingActive in
+                        _ = store.launchSmokeLoop(
+                            sessionID: session.id,
+                            projectPath: session.projectPath,
+                            draft: draft,
+                            stopExistingActive: stopExistingActive
+                        )
+                        isLoopLaunchSheetPresented = false
+                    }
+                )
+            }
+        }
         .onChange(of: composerText) { _, _ in
             composerSuggestionIndex = 0
             composerSuggestionsDismissed = false
@@ -6486,6 +6535,7 @@ private struct PiAgentComposerPanel: View {
             case .command: return "Commands"
             case .prompt: return "Prompts"
             case .skill: return "Skills"
+            case .loop: return "Loops"
             }
         }
     }
@@ -6580,6 +6630,15 @@ private struct PiAgentComposerPanel: View {
             composerText.replaceSubrange(token.range, with: "")
         }
         composerText = composerText.trimmingCharacters(in: .whitespaces)
+
+        if case .loopCreateNew = item.payload {
+            slashSelection = nil
+            slashState = SlashSuggestionState()
+            slashUniverse = .empty
+            composerSuggestionsDismissed = true
+            isLoopLaunchSheetPresented = true
+            return
+        }
 
         // For prompts, seed the editor with the body so the user can edit
         // before sending. Commands and skills leave the editor alone — any

@@ -37,6 +37,7 @@ final class PiAgentSessionStore {
     private(set) var supervisorRequestsBySessionID: [UUID: [PiSubagentSupervisorRequest]] = [:]
     private(set) var sessionPlansBySessionID: [UUID: PiSessionPlanRecord] = [:]
     private(set) var sessionPlanEventsBySessionID: [UUID: [PiSessionPlanEventRecord]] = [:]
+    private(set) var loopRunsBySessionID: [UUID: [LoopRun]] = [:]
     /// Live, RPC-derived activity for sessions with a turn in flight. Not persisted —
     /// it only describes the current process and is cleared when a turn ends.
     private(set) var processingActivityBySessionID: [UUID: PiAgentProcessingActivity] = [:]
@@ -836,6 +837,73 @@ final class PiAgentSessionStore {
         return candidate
     }
 
+    func loopRuns(for sessionID: UUID) -> [LoopRun] {
+        loopRunsBySessionID[sessionID] ?? []
+    }
+
+    func activeLoopRun(for sessionID: UUID) -> LoopRun? {
+        loopRuns(for: sessionID).last(where: \.isActive)
+    }
+
+    @discardableResult
+    func launchSmokeLoop(sessionID: UUID, projectPath: String?, draft: LoopDraft, stopExistingActive: Bool = false) -> LoopRun? {
+        guard !draft.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        if let active = activeLoopRun(for: sessionID) {
+            guard stopExistingActive else { return nil }
+            stopLoopRun(active.id, sessionID: sessionID)
+        }
+
+        var run = LoopRun(sessionID: sessionID, projectPath: projectPath, draft: draft)
+        upsertLoopRun(run)
+
+        let artifact = LoopArtifact(
+            filename: "loop-smoke.md",
+            markdown: "# Loop Smoke Output\n\nGoal: \(run.goal)\n\nResult: Artifact smoke fixture completed."
+        )
+        let now = Date()
+        run.currentIteration = 1
+        run.status = .completed
+        run.endedAt = now
+        run.stopReason = .success
+        run.iterations = [LoopIteration(index: 1, startedAt: run.startedAt, endedAt: now, summary: "Artifact smoke fixture completed.", artifacts: [artifact])]
+        upsertLoopRun(run)
+        return run
+    }
+
+    @discardableResult
+    func stopLoopRun(_ runID: UUID, sessionID: UUID) -> LoopRun? {
+        guard var runs = loopRunsBySessionID[sessionID], let index = runs.firstIndex(where: { $0.id == runID }) else { return nil }
+        var run = runs[index]
+        guard run.isActive else { return run }
+        run.status = .stopped
+        run.endedAt = Date()
+        run.stopReason = .userStopped
+        runs[index] = run
+        loopRunsBySessionID[sessionID] = runs
+        upsert(LoopRunTranscriptCodec.transcriptEntry(for: run))
+        return run
+    }
+
+    func hydrateLoopRunsFromTranscript(sessionID: UUID) {
+        let runs = (transcriptsBySessionID[sessionID] ?? []).compactMap(LoopRunTranscriptCodec.decode(from:))
+        if runs.isEmpty {
+            loopRunsBySessionID.removeValue(forKey: sessionID)
+        } else {
+            loopRunsBySessionID[sessionID] = runs
+        }
+    }
+
+    private func upsertLoopRun(_ run: LoopRun) {
+        var runs = loopRunsBySessionID[run.sessionID] ?? []
+        if let index = runs.firstIndex(where: { $0.id == run.id }) {
+            runs[index] = run
+        } else {
+            runs.append(run)
+        }
+        loopRunsBySessionID[run.sessionID] = runs
+        upsert(LoopRunTranscriptCodec.transcriptEntry(for: run))
+    }
+
     func upsertSubagentRun(_ run: PiSubagentRunRecord) {
         var runs = subagentRunsBySessionID[run.parentSessionID] ?? []
         if let index = runs.firstIndex(where: { $0.id == run.id }) {
@@ -1371,6 +1439,7 @@ final class PiAgentSessionStore {
     private func loadTranscriptIfNeeded(_ sessionID: UUID) {
         guard transcriptsBySessionID[sessionID] == nil, persistedTranscriptSessionIDs.contains(sessionID) else { return }
         transcriptsBySessionID[sessionID] = (try? Self.readParentTranscript(from: parentTranscriptURL(sessionID))) ?? []
+        hydrateLoopRunsFromTranscript(sessionID: sessionID)
     }
 
     private func finishRequestedTranscriptLoad(_ sessionID: UUID, entries: [PiAgentTranscriptEntry]) {
@@ -1381,6 +1450,7 @@ final class PiAgentSessionStore {
 
         if transcriptsBySessionID[sessionID] == nil {
             transcriptsBySessionID[sessionID] = entries
+            hydrateLoopRunsFromTranscript(sessionID: sessionID)
         }
         transcriptRevisionsBySessionID[sessionID, default: 0] += 1
         markTranscriptSessionUsed(sessionID)

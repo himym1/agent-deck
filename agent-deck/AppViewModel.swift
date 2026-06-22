@@ -8633,7 +8633,19 @@ final class AppViewModel: NSObject {
                 )
             }
 
-        return SlashUniverse(skills: skills, prompts: prompts, commands: commands)
+        let loops = [
+            SlashItem(
+                id: "loop:create-new",
+                kind: .loop,
+                displayName: "Create New Loop…",
+                description: "Configure and launch an unsaved loop for this transcript.",
+                scopeLabel: "Unsaved",
+                isActive: true,
+                payload: .loopCreateNew
+            )
+        ]
+
+        return SlashUniverse(skills: skills, prompts: prompts, commands: commands, loops: loops)
     }
 
     private func skillDeletionTargetURL(for skill: SkillRecord) -> URL {
