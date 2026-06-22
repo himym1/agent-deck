@@ -3703,6 +3703,8 @@ struct PiAgentScreen: View {
     /// capsule chip above the editor and includes it in the send payload.
     @State private var slashSelection: SlashItem?
     @State private var isLoopLaunchSheetPresented = false
+    @State private var loopLaunchDraft = LoopDraft()
+    @State private var loopLaunchDefinition: LoopDefinition?
     @State private var lastSlashTriggerActive = false
     @State private var inputMode: PiAgentInputMode = .steer
     @State private var selectedSessionTitleDraft = ""
@@ -3831,14 +3833,31 @@ struct PiAgentScreen: View {
                 LoopLaunchSheet(
                     session: session,
                     activeRun: store.activeLoopRun(for: session.id),
+                    initialDraft: loopLaunchDraft,
+                    sourceDefinition: loopLaunchDefinition,
                     onCancel: { isLoopLaunchSheetPresented = false },
-                    onLaunch: { draft, stopExistingActive in
-                        _ = store.launchSmokeLoop(
+                    onLaunch: { request in
+                        if store.activeLoopRun(for: session.id) != nil && !request.stopExistingActive {
+                            store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "This transcript already has an active loop."))
+                            return
+                        }
+                        if let saveRequest = request.saveRequest {
+                            do {
+                                try viewModel.saveLoopDefinitionFromDraft(request.draft, request: saveRequest)
+                            } catch {
+                                store.append(.init(sessionID: session.id, role: .error, title: "Loop Save Failed", text: error.localizedDescription))
+                                return
+                            }
+                        }
+                        guard store.launchSmokeLoop(
                             sessionID: session.id,
                             projectPath: session.projectPath,
-                            draft: draft,
-                            stopExistingActive: stopExistingActive
-                        )
+                            draft: request.draft,
+                            stopExistingActive: request.stopExistingActive
+                        ) != nil else {
+                            store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "The loop could not be started."))
+                            return
+                        }
                         isLoopLaunchSheetPresented = false
                     }
                 )
@@ -5764,13 +5783,27 @@ struct PiAgentScreen: View {
         }
         composerText = composerText.trimmingCharacters(in: .whitespaces)
 
-        if case .loopCreateNew = item.payload {
+        switch item.payload {
+        case .loopCreateNew:
+            loopLaunchDraft = LoopDraft()
+            loopLaunchDefinition = nil
             slashSelection = nil
             slashState = SlashSuggestionState()
             slashUniverse = .empty
             composerSuggestionsDismissed = true
             isLoopLaunchSheetPresented = true
             return
+        case .loopDefinition(let definition):
+            loopLaunchDraft = definition.makeDraft()
+            loopLaunchDefinition = definition
+            slashSelection = nil
+            slashState = SlashSuggestionState()
+            slashUniverse = .empty
+            composerSuggestionsDismissed = true
+            isLoopLaunchSheetPresented = true
+            return
+        default:
+            break
         }
 
         // For prompts, seed the editor with the body so the user can edit
@@ -6345,6 +6378,8 @@ private struct PiAgentComposerPanel: View {
     @State private var slashState = SlashSuggestionState()
     @State private var slashSelection: SlashItem?
     @State private var isLoopLaunchSheetPresented = false
+    @State private var loopLaunchDraft = LoopDraft()
+    @State private var loopLaunchDefinition: LoopDefinition?
     @State private var lastSlashTriggerActive = false
     @State private var inputMode: PiAgentInputMode = .steer
     @State private var composerPasteAttachments: [PiAgentPasteAttachment] = []
@@ -6434,14 +6469,31 @@ private struct PiAgentComposerPanel: View {
                 LoopLaunchSheet(
                     session: session,
                     activeRun: store.activeLoopRun(for: session.id),
+                    initialDraft: loopLaunchDraft,
+                    sourceDefinition: loopLaunchDefinition,
                     onCancel: { isLoopLaunchSheetPresented = false },
-                    onLaunch: { draft, stopExistingActive in
-                        _ = store.launchSmokeLoop(
+                    onLaunch: { request in
+                        if store.activeLoopRun(for: session.id) != nil && !request.stopExistingActive {
+                            store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "This transcript already has an active loop."))
+                            return
+                        }
+                        if let saveRequest = request.saveRequest {
+                            do {
+                                try viewModel.saveLoopDefinitionFromDraft(request.draft, request: saveRequest)
+                            } catch {
+                                store.append(.init(sessionID: session.id, role: .error, title: "Loop Save Failed", text: error.localizedDescription))
+                                return
+                            }
+                        }
+                        guard store.launchSmokeLoop(
                             sessionID: session.id,
                             projectPath: session.projectPath,
-                            draft: draft,
-                            stopExistingActive: stopExistingActive
-                        )
+                            draft: request.draft,
+                            stopExistingActive: request.stopExistingActive
+                        ) != nil else {
+                            store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "The loop could not be started."))
+                            return
+                        }
                         isLoopLaunchSheetPresented = false
                     }
                 )
@@ -6631,13 +6683,27 @@ private struct PiAgentComposerPanel: View {
         }
         composerText = composerText.trimmingCharacters(in: .whitespaces)
 
-        if case .loopCreateNew = item.payload {
+        switch item.payload {
+        case .loopCreateNew:
+            loopLaunchDraft = LoopDraft()
+            loopLaunchDefinition = nil
             slashSelection = nil
             slashState = SlashSuggestionState()
             slashUniverse = .empty
             composerSuggestionsDismissed = true
             isLoopLaunchSheetPresented = true
             return
+        case .loopDefinition(let definition):
+            loopLaunchDraft = definition.makeDraft()
+            loopLaunchDefinition = definition
+            slashSelection = nil
+            slashState = SlashSuggestionState()
+            slashUniverse = .empty
+            composerSuggestionsDismissed = true
+            isLoopLaunchSheetPresented = true
+            return
+        default:
+            break
         }
 
         // For prompts, seed the editor with the body so the user can edit

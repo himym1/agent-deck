@@ -21,6 +21,7 @@ nonisolated struct SlashItem: Identifiable, Hashable, Sendable {
         case prompt(name: String, body: String)
         case command(slashName: String, commandID: String)
         case loopCreateNew
+        case loopDefinition(LoopDefinition)
     }
 }
 
@@ -70,7 +71,7 @@ extension SlashItem {
             return trimmed.isEmpty ? trimmedBody : "\(trimmedBody)\n\n\(trimmed)"
         case .prompt:
             return trimmed
-        case .loopCreateNew:
+        case .loopCreateNew, .loopDefinition:
             return trimmed
         }
     }
@@ -81,6 +82,10 @@ extension SlashItem {
         if let description, description.lowercased().contains(lowercasedQuery) { return true }
         if case .command(let slashName, _) = payload, slashName.lowercased().contains(lowercasedQuery) { return true }
         if case .loopCreateNew = payload, "loops".contains(lowercasedQuery) { return true }
+        if case .loopDefinition(let definition) = payload {
+            if definition.name.lowercased().contains(lowercasedQuery) { return true }
+            if definition.goalTemplate.lowercased().contains(lowercasedQuery) { return true }
+        }
         return false
     }
 }

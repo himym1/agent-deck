@@ -3,26 +3,58 @@ import SwiftUI
 struct LoopLaunchSheet: View {
     let session: PiAgentSessionRecord
     let activeRun: LoopRun?
+    let sourceDefinition: LoopDefinition?
     let onCancel: () -> Void
-    let onLaunch: (LoopDraft, Bool) -> Void
+    let onLaunch: (LoopLaunchRequest) -> Void
 
-    @State private var draft = LoopDraft()
+    @State private var draft: LoopDraft
     @State private var stopExistingActive = false
+    @State private var saveToLoopBank = false
+    @State private var saveName = ""
+    @State private var saveDescription = ""
+    @State private var saveForCurrentProjectOnly = false
+
+    init(
+        session: PiAgentSessionRecord,
+        activeRun: LoopRun?,
+        initialDraft: LoopDraft = LoopDraft(),
+        sourceDefinition: LoopDefinition? = nil,
+        onCancel: @escaping () -> Void,
+        onLaunch: @escaping (LoopLaunchRequest) -> Void
+    ) {
+        self.session = session
+        self.activeRun = activeRun
+        self.sourceDefinition = sourceDefinition
+        self.onCancel = onCancel
+        self.onLaunch = onLaunch
+        _draft = State(initialValue: initialDraft)
+        _saveName = State(initialValue: sourceDefinition?.name ?? "")
+        _saveDescription = State(initialValue: sourceDefinition?.description ?? "")
+    }
 
     private var trimmedGoal: String {
         draft.goal.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var canLaunch: Bool {
-        !trimmedGoal.isEmpty && (activeRun == nil || stopExistingActive)
+        let saveIsValid = !saveToLoopBank || !saveName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return !trimmedGoal.isEmpty && saveIsValid && (activeRun == nil || stopExistingActive)
+    }
+
+    private var canSaveToLoopBank: Bool {
+        sourceDefinition == nil
+    }
+
+    private var title: String {
+        sourceDefinition?.name ?? "Create Loop"
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Create Loop")
+                Text(title)
                     .font(.title2.bold())
-                Text(session.title)
+                Text(sourceDefinition == nil ? "Unsaved loop · \(session.title)" : "Saved loop · \(session.title)")
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .lineLimit(1)
@@ -69,14 +101,31 @@ struct LoopLaunchSheet: View {
                 Stepper(value: $draft.maxIterations, in: 1...20) {
                     Text("Max iterations: \(draft.maxIterations)")
                 }
+
+                if canSaveToLoopBank {
+                    Section("Loop Bank") {
+                        Toggle("Save to Loop Bank before launch", isOn: $saveToLoopBank)
+                        if saveToLoopBank {
+                            TextField("Name", text: $saveName)
+                            TextField("Description", text: $saveDescription, axis: .vertical)
+                                .lineLimit(2...4)
+                            Toggle("Available only in this project", isOn: $saveForCurrentProjectOnly)
+                                .disabled(session.projectPath.isEmpty)
+                        }
+                    }
+                }
             }
             .formStyle(.grouped)
 
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
-                Button("Launch") {
-                    onLaunch(draft, stopExistingActive)
+                Button(saveToLoopBank ? "Save & Launch" : "Launch") {
+                    onLaunch(LoopLaunchRequest(
+                        draft: draft,
+                        stopExistingActive: stopExistingActive,
+                        saveRequest: makeSaveRequest()
+                    ))
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(!canLaunch)
@@ -84,5 +133,27 @@ struct LoopLaunchSheet: View {
         }
         .padding(22)
         .frame(width: 460)
+        .onChange(of: saveToLoopBank) { _, enabled in
+            guard enabled, saveName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            saveName = defaultSaveName()
+        }
+    }
+
+    private func makeSaveRequest() -> LoopSaveRequest? {
+        guard saveToLoopBank else { return nil }
+        let currentProjectPaths = (saveForCurrentProjectOnly && !session.projectPath.isEmpty) ? [session.projectPath] : []
+        return LoopSaveRequest(
+            name: saveName,
+            description: saveDescription,
+            availability: currentProjectPaths.isEmpty ? .allProjects : .projectPaths,
+            projectPaths: currentProjectPaths
+        )
+    }
+
+    private func defaultSaveName() -> String {
+        let firstLine = trimmedGoal.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
+        let trimmed = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "Untitled Loop" }
+        return String(trimmed.prefix(64))
     }
 }

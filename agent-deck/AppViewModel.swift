@@ -190,6 +190,9 @@ final class AppViewModel: NSObject {
     var githubIsRefreshingEverything = false
     var githubLastError: String?
     var githubLastStatusCheckAt: Date?
+    var loopDefinitions: [LoopDefinition] = []
+    @ObservationIgnored private var loopDefinitionStore = LoopDefinitionStore()
+
     var appSettings: AppSettings = AppSettings() {
         didSet {
             rebuildAutomationModelCaches()
@@ -354,6 +357,7 @@ final class AppViewModel: NSObject {
         super.init()
 
         appSettings = appSettingsController.settings
+        reloadLoopDefinitions()
         ThemeManager.shared.apply(appSettingsController.resolvedActiveTheme)
         ThemeManager.shared.setMarkdownHighlightingEnabled(appSettingsController.settings.piAgentMarkdownHighlightingEnabled)
         #if DEBUG
@@ -8554,11 +8558,37 @@ final class AppViewModel: NSObject {
             .filter { seenName.insert($0.name).inserted }
     }
 
-    /// Materializes the full universe of Skills, Prompts, and Commands the
-    /// composer's `/` browser can show. Pure in-memory: walks already-cached
-    /// scan snapshots + the command catalog. Build once when the panel opens
-    /// and hold the result in `@State` — never call inside a SwiftUI `body`,
-    /// since command library discovery touches the filesystem.
+    func reloadLoopDefinitions() {
+        loopDefinitions = loopDefinitionStore.loadUserDefinitions()
+    }
+
+    @discardableResult
+    func saveLoopDefinitionFromDraft(_ draft: LoopDraft, request: LoopSaveRequest) throws -> LoopDefinition {
+        let projectPaths = request.availability == .projectPaths ? request.projectPaths : []
+        let definition = LoopDefinition(
+            name: request.name,
+            description: request.description,
+            goalTemplate: draft.goal,
+            structure: draft.structure,
+            writeTarget: draft.writeTarget,
+            maxIterations: draft.maxIterations,
+            source: .user,
+            availability: request.availability,
+            projectPaths: projectPaths
+        )
+        let saved = try loopDefinitionStore.saveUserDefinition(definition)
+        reloadLoopDefinitions()
+        return saved
+    }
+
+    func configureLoopDefinitionStoreForTesting(directoryURL: URL) {
+        loopDefinitionStore = LoopDefinitionStore(directoryURL: directoryURL)
+        reloadLoopDefinitions()
+    }
+
+    /// Materializes the full universe of Skills, Prompts, Commands, and Loops the
+    /// composer's `/` browser can show. Build once when the panel opens and hold
+    /// the result in `@State` — never call inside a SwiftUI `body`.
     func slashUniverse(forProjectPath projectPath: String?) -> SlashUniverse {
         let scopedPath = projectPath ?? selectedProjectPath
 
@@ -8633,17 +8663,30 @@ final class AppViewModel: NSObject {
                 )
             }
 
-        let loops = [
-            SlashItem(
-                id: "loop:create-new",
-                kind: .loop,
-                displayName: "Create New Loop…",
-                description: "Configure and launch an unsaved loop for this transcript.",
-                scopeLabel: "Unsaved",
-                isActive: true,
-                payload: .loopCreateNew
-            )
-        ]
+        let createLoop = SlashItem(
+            id: "loop:create-new",
+            kind: .loop,
+            displayName: "Create New Loop…",
+            description: "Configure and launch an unsaved loop for this transcript.",
+            scopeLabel: "Unsaved",
+            isActive: true,
+            payload: .loopCreateNew
+        )
+        let savedLoops = loopDefinitions
+            .filter { $0.isAvailable(in: scopedPath) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .map { definition in
+                SlashItem(
+                    id: "loop:\(definition.id)",
+                    kind: .loop,
+                    displayName: definition.name,
+                    description: definition.description.isEmpty ? nil : definition.description,
+                    scopeLabel: definition.source.displayName,
+                    isActive: true,
+                    payload: .loopDefinition(definition)
+                )
+            }
+        let loops = [createLoop] + savedLoops
 
         return SlashUniverse(skills: skills, prompts: prompts, commands: commands, loops: loops)
     }

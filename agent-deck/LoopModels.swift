@@ -82,6 +82,105 @@ nonisolated struct LoopDraft: Codable, Equatable, Sendable {
     }
 }
 
+nonisolated enum LoopDefinitionSource: String, Codable, CaseIterable, Identifiable, Sendable {
+    case user
+    case builtin
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .user: return "User"
+        case .builtin: return "Built-in"
+        }
+    }
+}
+
+nonisolated enum LoopDefinitionAvailability: String, Codable, CaseIterable, Identifiable, Sendable {
+    case allProjects
+    case projectPaths
+
+    var id: String { rawValue }
+}
+
+nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, Sendable {
+    var id: String
+    var name: String
+    var description: String
+    var goalTemplate: String
+    var structure: LoopStructureKind
+    var writeTarget: LoopWriteTarget
+    var maxIterations: Int
+    var source: LoopDefinitionSource
+    var availability: LoopDefinitionAvailability
+    var projectPaths: [String]
+    var filePath: String?
+    var createdAt: Date?
+    var updatedAt: Date?
+
+    init(
+        id: String = UUID().uuidString,
+        name: String,
+        description: String = "",
+        goalTemplate: String = "",
+        structure: LoopStructureKind = .singleAgent,
+        writeTarget: LoopWriteTarget = .artifactMarkdown,
+        maxIterations: Int = LoopDraft.defaultMaxIterations,
+        source: LoopDefinitionSource = .user,
+        availability: LoopDefinitionAvailability = .allProjects,
+        projectPaths: [String] = [],
+        filePath: String? = nil,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.goalTemplate = goalTemplate
+        self.structure = structure
+        self.writeTarget = writeTarget
+        self.maxIterations = max(1, maxIterations)
+        self.source = source
+        self.availability = availability
+        self.projectPaths = projectPaths
+        self.filePath = filePath
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    func isAvailable(in projectPath: String?) -> Bool {
+        switch availability {
+        case .allProjects:
+            return true
+        case .projectPaths:
+            guard let projectPath else { return false }
+            return projectPaths.contains(projectPath)
+        }
+    }
+
+    func makeDraft() -> LoopDraft {
+        LoopDraft(
+            goal: goalTemplate,
+            structure: structure,
+            writeTarget: writeTarget,
+            maxIterations: maxIterations
+        )
+    }
+}
+
+nonisolated struct LoopSaveRequest: Equatable, Sendable {
+    var name: String
+    var description: String
+    var availability: LoopDefinitionAvailability
+    var projectPaths: [String]
+}
+
+nonisolated struct LoopLaunchRequest: Equatable, Sendable {
+    var draft: LoopDraft
+    var stopExistingActive: Bool
+    var saveRequest: LoopSaveRequest?
+}
+
 nonisolated struct LoopArtifact: Identifiable, Codable, Equatable, Sendable {
     var id: UUID
     var filename: String
