@@ -4869,6 +4869,18 @@ struct PiAgentScreen: View {
                 isUserHugged: true
             ))
         case .status(let entry):
+            if let loopRun = LoopRunTranscriptCodec.decode(from: entry) {
+                let payload = NativeLoopRunPayload.make(
+                    run: loopRun,
+                    onStop: loopRun.isActive ? { [store] in _ = store.stopLoopRun(loopRun.id, sessionID: loopRun.sessionID) } : nil,
+                    onRevealArtifacts: loopRun.artifactDirectoryPath.map { path in
+                        { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+                    }
+                )
+                return .native(.of(PiAgentNativeLoopRunCardView.self) { view, width in
+                    view.configure(payload: payload, width: width)
+                })
+            }
             if let memoryEvent = entry.agentMemoryEvent {
                 let payload = NativeMemoryCardPayload.make(event: memoryEvent)
                 return .native(.of(PiAgentNativeMemoryCardView.self) { view, width in

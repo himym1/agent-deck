@@ -1054,3 +1054,173 @@ private extension NSLayoutConstraint {
         return self
     }
 }
+
+// MARK: - Loop run card
+
+struct NativeLoopRunPayload {
+    var title: String
+    var statusText: String
+    var detailText: String
+    var isActive: Bool
+    var canRevealArtifacts: Bool
+    var onStop: (() -> Void)?
+    var onRevealArtifacts: (() -> Void)?
+
+    static func make(run: LoopRun, onStop: (() -> Void)?, onRevealArtifacts: (() -> Void)?) -> NativeLoopRunPayload {
+        var details: [String] = [
+            "Structure: \(run.structure.displayName)",
+            "Write target: \(run.writeTarget.displayName)",
+            "Goal: \(run.goal)",
+            "Iterations: \(run.currentIteration)/\(run.maxIterations)"
+        ]
+        if !run.validationCommand.isEmpty { details.append("Validation: \(run.validationCommand)") }
+        if let stopReason = run.stopReason { details.append("Stop reason: \(stopReason.displayName)") }
+        if let timeline = run.iterations.last?.timeline, !timeline.isEmpty {
+            details.append("Timeline: \(timeline.map(\.roleName).joined(separator: " → "))")
+        }
+        if let validation = run.iterations.last?.validationResult {
+            details.append("Validation exit code: \(validation.exitCode.map(String.init) ?? "unavailable")")
+        }
+        if let directoryPath = run.artifactDirectoryPath { details.append("Artifacts: \(directoryPath)") }
+        return NativeLoopRunPayload(
+            title: run.status == .completed ? "Loop completed" : "Loop: \(run.structure.displayName)",
+            statusText: "Status: \(run.status.displayName)",
+            detailText: details.joined(separator: "\n"),
+            isActive: run.isActive,
+            canRevealArtifacts: run.artifactDirectoryPath != nil,
+            onStop: onStop,
+            onRevealArtifacts: onRevealArtifacts
+        )
+    }
+}
+
+final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
+    private let card = NSView()
+    private let iconView = NSImageView()
+    private let titleField = NSTextField(labelWithString: "")
+    private let statusField = NSTextField(labelWithString: "")
+    private let detailField = NSTextField(labelWithString: "")
+    private var cardWidthC: NSLayoutConstraint!
+    private let detailsButton = NSButton(title: "Open Details", target: nil, action: nil)
+    private let stopButton = NSButton(title: "Stop", target: nil, action: nil)
+    private let revealButton = NSButton(title: "Reveal Artifacts", target: nil, action: nil)
+    private var payload: NativeLoopRunPayload?
+    var onIntrinsicHeightChange: (() -> Void)?
+
+    required init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        card.translatesAutoresizingMaskIntoConstraints = false
+        card.wantsLayer = true
+        card.layer?.cornerRadius = AppTheme.Chat.bubbleCornerRadius
+        card.layer?.cornerCurve = .continuous
+        card.layer?.borderWidth = 1
+        card.layer?.borderColor = AppTheme.ns(AppTheme.contentStroke).cgColor
+        card.layer?.backgroundColor = AppTheme.ns(AppTheme.roleStatus).withAlphaComponent(0.10).cgColor
+        addSubview(card)
+
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.image = NSImage(systemSymbolName: "infinity", accessibilityDescription: nil)
+        iconView.contentTintColor = AppTheme.ns(AppTheme.brandAccent)
+
+        titleField.translatesAutoresizingMaskIntoConstraints = false
+        titleField.font = NativeTranscriptFont.header
+        titleField.textColor = .labelColor
+        titleField.lineBreakMode = .byTruncatingTail
+        statusField.translatesAutoresizingMaskIntoConstraints = false
+        statusField.font = NativeTranscriptFont.caption(.semibold)
+        statusField.textColor = AppTheme.ns(AppTheme.mutedText)
+        detailField.translatesAutoresizingMaskIntoConstraints = false
+        detailField.font = NativeTranscriptFont.caption()
+        detailField.textColor = AppTheme.ns(AppTheme.mutedText)
+        detailField.maximumNumberOfLines = 0
+        detailField.isHidden = true
+
+        for button in [detailsButton, stopButton, revealButton] {
+            button.bezelStyle = .rounded
+            button.controlSize = .small
+            button.translatesAutoresizingMaskIntoConstraints = false
+        }
+        detailsButton.target = self
+        detailsButton.action = #selector(openDetails)
+        stopButton.target = self
+        stopButton.action = #selector(stopTapped)
+        revealButton.target = self
+        revealButton.action = #selector(revealTapped)
+
+        let header = NSStackView(views: [iconView, titleField])
+        header.translatesAutoresizingMaskIntoConstraints = false
+        header.orientation = .horizontal
+        header.alignment = .centerY
+        header.spacing = 8
+
+        let buttons = NSStackView(views: [detailsButton, stopButton, revealButton])
+        buttons.translatesAutoresizingMaskIntoConstraints = false
+        buttons.orientation = .horizontal
+        buttons.spacing = 8
+
+        card.addSubview(header)
+        card.addSubview(statusField)
+        card.addSubview(detailField)
+        card.addSubview(buttons)
+
+        cardWidthC = card.widthAnchor.constraint(equalToConstant: 320)
+        NSLayoutConstraint.activate([
+            card.leadingAnchor.constraint(equalTo: leadingAnchor),
+            card.topAnchor.constraint(equalTo: topAnchor),
+            cardWidthC,
+            card.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            card.bottomAnchor.constraint(equalTo: bottomAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 16),
+            iconView.heightAnchor.constraint(equalToConstant: 16),
+            header.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: AppTheme.Chat.bubbleHPadding),
+            header.trailingAnchor.constraint(lessThanOrEqualTo: card.trailingAnchor, constant: -AppTheme.Chat.bubbleHPadding),
+            header.topAnchor.constraint(equalTo: card.topAnchor, constant: AppTheme.Chat.bubbleVPadding),
+            statusField.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            statusField.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -AppTheme.Chat.bubbleHPadding),
+            statusField.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6),
+            detailField.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            detailField.trailingAnchor.constraint(equalTo: statusField.trailingAnchor),
+            detailField.topAnchor.constraint(equalTo: statusField.bottomAnchor, constant: 8),
+            buttons.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            buttons.topAnchor.constraint(equalTo: statusField.bottomAnchor, constant: 10),
+            buttons.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -AppTheme.Chat.bubbleVPadding)
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var isFlipped: Bool { true }
+
+    func configure(payload: NativeLoopRunPayload, width rowWidth: CGFloat) {
+        self.payload = payload
+        cardWidthC.constant = Self.cardWidth(for: rowWidth)
+        titleField.stringValue = payload.title
+        statusField.stringValue = payload.statusText
+        detailField.stringValue = payload.detailText
+        detailField.isHidden = true
+        detailsButton.title = "Open Details"
+        stopButton.isHidden = !payload.isActive
+        stopButton.isEnabled = payload.isActive && payload.onStop != nil
+        revealButton.isEnabled = payload.canRevealArtifacts && payload.onRevealArtifacts != nil
+    }
+
+    func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat {
+        AppTheme.Chat.bubbleVPadding * 2 + 18 + 6 + 16 + 10 + 26
+    }
+
+    private static func cardWidth(for rowWidth: CGFloat) -> CGFloat {
+        min(max(rowWidth * 0.78, min(rowWidth, 240)), rowWidth)
+    }
+
+    @objc private func openDetails() {
+        guard let payload else { return }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentSize = NSSize(width: 420, height: 300)
+        popover.contentViewController = PiAgentNativeTextPopoverController(title: payload.title, text: payload.detailText)
+        popover.show(relativeTo: detailsButton.bounds, of: detailsButton, preferredEdge: .maxY)
+    }
+
+    @objc private func stopTapped() { payload?.onStop?() }
+    @objc private func revealTapped() { payload?.onRevealArtifacts?() }
+}
