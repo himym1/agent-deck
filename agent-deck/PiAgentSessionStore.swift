@@ -1015,6 +1015,86 @@ final class PiAgentSessionStore {
     }
 
     @discardableResult
+    func launchMakerCheckerLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool = false, executeRole: @escaping (UUID, String, String, LoopWriteTarget, URL?, String?) async -> PiSubagentRunRecord?) async -> LoopRun? {
+        guard draft.structure == .makerChecker else { return nil }
+        guard !draft.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        if let active = activeLoopRun(for: session.id) {
+            guard stopExistingActive else { return nil }
+            stopLoopRun(active.id, sessionID: session.id)
+        }
+
+        var run = LoopRun(sessionID: session.id, projectPath: session.projectPath, draft: draft)
+        let artifactDirectory = loopArtifactDirectoryURL(sessionID: session.id, runID: run.id)
+        run.artifactDirectoryPath = artifactDirectory.path
+        upsertLoopRun(run)
+        do { try FileManager.default.createDirectory(at: artifactDirectory, withIntermediateDirectories: true) } catch {
+            run.status = .failed; run.endedAt = Date(); run.stopReason = .toolFailed; upsertLoopRun(run); return nil
+        }
+        let executionContext: LoopExecutionContext
+        do {
+            executionContext = try prepareLoopExecutionContext(writeTarget: run.writeTarget, projectPath: session.projectPath, artifactDirectory: artifactDirectory)
+        } catch let error as LoopExecutionPreparationError {
+            run.status = .failed; run.endedAt = Date(); run.stopReason = error.stopReason
+            run.iterations.append(LoopIteration(index: 0, summary: error.localizedDescription))
+            upsertLoopRun(run); return run
+        } catch {
+            run.status = .failed; run.endedAt = Date(); run.stopReason = .toolFailed
+            run.iterations.append(LoopIteration(index: 0, summary: error.localizedDescription))
+            upsertLoopRun(run); return run
+        }
+
+        let maxLoopIterations = min(run.maxIterations, run.makerChecker.maxReviewRounds)
+        var priorReview = ""
+        for iterationIndex in 1...maxLoopIterations {
+            if let stoppedRun = stoppedLoopRun(run) { return stoppedRun }
+            let iterationStartedAt = Date()
+            run.currentIteration = iterationIndex
+            upsertLoopRun(run)
+
+            let makerTask = makerCheckerTask(run: run, iterationIndex: iterationIndex, role: "Maker", priorReview: priorReview)
+            let makerOutput = run.writeTarget == .artifactMarkdown ? artifactDirectory.appendingPathComponent("maker-\(iterationIndex)-output.md").path : nil
+            guard let makerRun = await executeRole(run.id, run.makerChecker.makerName, makerTask, run.writeTarget, executionContext.workingDirectory, makerOutput) else {
+                run.status = .failed; run.endedAt = Date(); run.stopReason = .agentFailed; upsertLoopRun(run); return run
+            }
+            if let stoppedRun = stoppedLoopRun(run) { return stoppedRun }
+            if makerRun.status != .completed {
+                let ended = Date()
+                run.iterations.append(LoopIteration(index: iterationIndex, startedAt: iterationStartedAt, endedAt: ended, summary: "Maker failed with \(makerRun.status.rawValue).", timeline: [LoopTimelineEvent(step: .makerAct, roleName: run.makerChecker.makerName, note: "Maker child run: \(makerRun.id.uuidString)", timestamp: iterationStartedAt)]))
+                run.status = makerRun.status == .stopped ? .stopped : .failed; run.endedAt = ended; run.stopReason = makerRun.status == .stopped ? .userStopped : .agentFailed; upsertLoopRun(run); return run
+            }
+
+            let makerSummary = makerRun.summary?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "Maker completed."
+            let checkerTask = checkerTask(run: run, iterationIndex: iterationIndex, makerSummary: makerSummary)
+            let checkerOutput = artifactDirectory.appendingPathComponent("checker-\(iterationIndex)-output.md").path
+            guard let checkerRun = await executeRole(run.id, run.makerChecker.checkerName, checkerTask, .artifactMarkdown, executionContext.workingDirectory, checkerOutput) else {
+                run.status = .failed; run.endedAt = Date(); run.stopReason = .agentFailed; upsertLoopRun(run); return run
+            }
+            if let stoppedRun = stoppedLoopRun(run) { return stoppedRun }
+            let checkerText = checkerRun.summary?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let checkerResult = checkerResult(from: checkerText, fallbackRubric: run.makerChecker.checkerRubric)
+            let validationResult = run.validationCommand.isEmpty ? nil : runValidationCommand(run.validationCommand, workingDirectory: executionContext.workingDirectory)
+            let ended = Date()
+            let timeline = [
+                LoopTimelineEvent(step: .makerAct, roleName: run.makerChecker.makerName, note: "Maker child run: \(makerRun.id.uuidString)", timestamp: iterationStartedAt),
+                LoopTimelineEvent(step: .checkerReview, roleName: run.makerChecker.checkerName, note: "Checker child run: \(checkerRun.id.uuidString) returned \(checkerResult.displayName).", timestamp: ended)
+            ]
+            run.iterations.append(LoopIteration(index: iterationIndex, startedAt: iterationStartedAt, endedAt: ended, summary: "Checker returned \(checkerResult.displayName).", validationResult: validationResult, checkerResult: checkerResult, timeline: timeline))
+            priorReview = checkerText
+            switch checkerResult {
+            case .approve:
+                run.status = .completed; run.endedAt = ended; run.stopReason = .success; upsertLoopRun(run); return run
+            case .reject:
+                upsertLoopRun(run); continue
+            case .askHuman:
+                run.status = .stopped; run.endedAt = ended; run.stopReason = .humanInputRequired; upsertLoopRun(run); return run
+            case .fail:
+                run.status = .failed; run.endedAt = ended; run.stopReason = .agentFailed; upsertLoopRun(run); return run
+            }
+        }
+        run.status = .failed; run.endedAt = Date(); run.stopReason = .maxIterationsReached; upsertLoopRun(run); return run
+    }
+
+    @discardableResult
     func launchSmokeLoop(sessionID: UUID, projectPath: String?, draft: LoopDraft, stopExistingActive: Bool = false) -> LoopRun? {
         guard !draft.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         if let active = activeLoopRun(for: sessionID) {
@@ -1425,6 +1505,40 @@ final class PiAgentSessionStore {
         } catch {
             return nil
         }
+    }
+
+    private func makerCheckerTask(run: LoopRun, iterationIndex: Int, role: String, priorReview: String) -> String {
+        var lines = [
+            "You are the \(role) in an Agent Deck Maker + Checker loop.",
+            "Loop goal: \(run.goal)",
+            "Iteration: \(iterationIndex) of \(run.maxIterations)",
+            "Write target: \(run.writeTarget.displayName)"
+        ]
+        if !priorReview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.append("Previous checker review to address:\n\(priorReview)")
+        }
+        lines.append("Do the maker work. End with a concise summary for the checker.")
+        return lines.joined(separator: "\n\n")
+    }
+
+    private func checkerTask(run: LoopRun, iterationIndex: Int, makerSummary: String) -> String {
+        [
+            "You are the report-only Checker in an Agent Deck Maker + Checker loop.",
+            "Loop goal: \(run.goal)",
+            "Iteration: \(iterationIndex) of \(run.maxIterations)",
+            "Checker rubric: \(run.makerChecker.checkerRubric)",
+            "Maker summary:\n\(makerSummary)",
+            "Review without editing project files. Start your final response with exactly one decision line: APPROVE, REJECT, ASK_HUMAN, or FAIL. Then explain why."
+        ].joined(separator: "\n\n")
+    }
+
+    private func checkerResult(from text: String, fallbackRubric: String) -> LoopCheckerResult {
+        let normalized = text.lowercased().replacingOccurrences(of: "-", with: "_")
+        if normalized.contains("ask_human") || normalized.contains("ask human") { return .askHuman }
+        if normalized.contains("fail") { return .fail }
+        if normalized.contains("reject") { return .reject }
+        if normalized.contains("approve") { return .approve }
+        return deterministicCheckerResult(rubric: fallbackRubric, validationResult: nil, iterationIndex: 1)
     }
 
     private func deterministicCheckerResult(rubric: String, validationResult: LoopValidationResult?, iterationIndex: Int) -> LoopCheckerResult {

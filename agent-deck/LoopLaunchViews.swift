@@ -286,11 +286,11 @@ struct LoopLaunchSheet: View {
             VStack(alignment: .leading, spacing: 14) {
                 switch draft.structure {
                 case .makerChecker:
-                    fieldGroup("Maker name") {
-                        AppTextField(text: $draft.makerChecker.makerName, placeholder: "Maker name")
+                    fieldGroup("Maker agent") {
+                        LoopAgentNameMenu(selection: $draft.makerChecker.makerName, availableAgents: availableAgents, fallbackLabel: "Maker")
                     }
-                    fieldGroup("Checker name") {
-                        AppTextField(text: $draft.makerChecker.checkerName, placeholder: "Checker name")
+                    fieldGroup("Checker agent") {
+                        LoopAgentNameMenu(selection: $draft.makerChecker.checkerName, availableAgents: availableAgents, fallbackLabel: "Checker")
                     }
                     fieldGroup {
                         HStack(spacing: 6) {
@@ -497,6 +497,40 @@ struct LoopLaunchSheet: View {
         value.components(separatedBy: "|")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+}
+
+struct LoopAgentNameMenu: View {
+    @Binding var selection: String
+    let availableAgents: [EffectiveAgentRecord]
+    let fallbackLabel: String
+
+    private var names: [String] {
+        var seen = Set<String>()
+        return ([selection] + availableAgents.map(\.name))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .filter { seen.insert($0).inserted }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker(fallbackLabel, selection: $selection) {
+                ForEach(names, id: \.self) { Text($0).tag($0) }
+            }
+            .labelsHidden()
+            .appMenuPicker()
+            if !availableAgents.map(\.name).contains(selection) {
+                Label("Saved role not available in this project", systemImage: "exclamationmark.triangle")
+                    .font(AppTheme.Font.caption2)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .onAppear {
+            if selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                selection = availableAgents.first?.name ?? fallbackLabel
+            }
+        }
     }
 }
 

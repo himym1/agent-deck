@@ -297,15 +297,11 @@ struct LoopBankScreen: View {
         case .makerChecker:
             AppCard(title: "Maker + Checker") {
                 VStack(alignment: .leading, spacing: 0) {
-                    detailRow("Maker name") {
-                        TextField("Maker name", text: $editorDraft.makerName)
-                            .multilineTextAlignment(.trailing)
-                            .textFieldStyle(.plain)
+                    detailRow("Maker agent") {
+                        LoopAgentNameMenu(selection: $editorDraft.makerName, availableAgents: availableLoopAgents, fallbackLabel: "Maker")
                     }
-                    detailRow("Checker name") {
-                        TextField("Checker name", text: $editorDraft.checkerName)
-                            .multilineTextAlignment(.trailing)
-                            .textFieldStyle(.plain)
+                    detailRow("Checker agent") {
+                        LoopAgentNameMenu(selection: $editorDraft.checkerName, availableAgents: availableLoopAgents, fallbackLabel: "Checker")
                     }
                     detailRow("Checker rubric") {
                         TextField("Checker rubric", text: $editorDraft.checkerRubric, axis: .vertical)
