@@ -70,7 +70,7 @@ Discovery / Triage
 Human Approval
 ```
 
-Only implemented structures should be enabled. Future structures can be omitted rather than shown disabled. As of the current implementation, the launch UI can configure the structures listed above, but execution maturity differs: Maker + Checker, Agent Pipeline, Parallel Agents, and Discovery / Triage launch real child/subagent work; Single Agent uses the deterministic/local smoke path; Human Approval creates a checkpoint artifact and stops with `humanInputRequired` rather than resuming after approval.
+Only implemented structures should be enabled. Future structures can be omitted rather than shown disabled. As of the current implementation, Single Agent, Maker + Checker, Agent Pipeline, Parallel Agents, and Discovery / Triage launch real child/subagent work. Human Approval is modeled and has a deterministic checkpoint path in the store, but it is not wired as a real launch flow/resumable approval workflow yet.
 
 ### 3. Template
 
@@ -116,7 +116,7 @@ Options vary by template:
 
 - validation command,
 - checker approval,
-- human approval,
+- human-input checkpoint stop (`humanInputRequired`) for the current Human Approval path,
 - artifact produced,
 - manual stop only.
 

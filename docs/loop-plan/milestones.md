@@ -26,7 +26,7 @@ Exit criteria:
 
 Goal: launch one unsaved loop from the composer and complete it with a stop reason.
 
-Recommended first loop: minimal Single Agent that produces an artifact/Markdown output, using the Artifact Smoke Fixture while the runner is still under construction.
+Recommended first loop: minimal Single Agent that produces an artifact/Markdown output. During early construction this used the Artifact Smoke Fixture; current implementation launches a real child/subagent for Single Agent loops while keeping the fixture for deterministic tests.
 
 User path:
 
@@ -196,9 +196,9 @@ Exit criteria:
 - Users can manage loops without entering the composer.
 - Availability/assignment is visible with icon and text.
 
-## Milestone 8: Additional structures and templates
+## Milestone 8: Additional structures, checkpoints, and templates
 
-Goal: extend the proven foundation.
+Goal: extend the proven foundation. Human Approval is currently a terminal checkpoint/stop path, not a continuing approval workflow.
 
 Current implementation status:
 
@@ -207,7 +207,7 @@ Current implementation status:
 3. Discovery/Triage — implemented with a selectable triage agent and Markdown artifact output.
 4. Parallel Agents — implemented through the native parallel child-agent graph, including worktree-aware expected outcomes.
 5. Human Approval checkpoints — implemented as a stop/checkpoint card path, not as a continuing approval/resume workflow.
-6. Single Agent — still uses the deterministic/local smoke path; replacing it with real child-agent execution remains a follow-up.
+6. Single Agent — implemented with selectable agent execution through a real child/subagent run; deterministic smoke execution remains available for local fixtures/tests.
 
 Exit criteria:
 
