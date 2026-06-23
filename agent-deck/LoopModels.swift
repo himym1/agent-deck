@@ -121,9 +121,8 @@ nonisolated struct LoopMakerCheckerConfig: Codable, Equatable, Hashable, Sendabl
 nonisolated struct LoopPipelineConfig: Codable, Equatable, Hashable, Sendable {
     var stageNames: [String]
 
-    init(stageNames: [String] = ["Explorer", "Implementer", "Verifier"]) {
-        let trimmed = stageNames.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        self.stageNames = trimmed.isEmpty ? ["Explorer", "Implementer", "Verifier"] : trimmed
+    init(stageNames: [String] = []) {
+        self.stageNames = stageNames.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
     }
 }
 

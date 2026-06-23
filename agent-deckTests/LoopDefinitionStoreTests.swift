@@ -177,6 +177,7 @@ final class LoopDefinitionStoreTests: XCTestCase {
         XCTAssertEqual(draft.makerChecker.makerName, "")
         XCTAssertEqual(draft.makerChecker.checkerName, "")
         XCTAssertEqual(draft.discoveryTriage.agentName, "")
+        XCTAssertEqual(draft.pipeline.stageNames, [])
 
         let directory = PiTestSupport.temporaryStateFile().deletingLastPathComponent().appendingPathComponent("loops", isDirectory: true)
         let store = LoopDefinitionStore(directoryURL: directory)

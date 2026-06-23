@@ -1,6 +1,6 @@
 import SwiftUI
 
-private struct LoopDefinitionEditorDraft: Equatable {
+struct LoopDefinitionEditorDraft: Equatable {
     var id: String?
     var filePath: String?
     var name: String
@@ -115,7 +115,7 @@ struct LoopBankScreen: View {
     @State private var isCreatingNewLoop = false
 
     private var availableLoopAgents: [EffectiveAgentRecord] {
-        viewModel.snapshot.effectiveAgents
+        viewModel.allDisplayAgents
             .filter { $0.resolved.disabled != true }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
@@ -154,6 +154,11 @@ struct LoopBankScreen: View {
         .onChange(of: viewModel.newLoopRequestID) { _, _ in
             createNewLoop()
         }
+        .onChange(of: editorDraft) { _, draft in
+            if isCreatingNewLoop {
+                viewModel.pendingNewLoopEditorDraft = draft
+            }
+        }
         .alert("Loop Bank", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
@@ -181,7 +186,7 @@ struct LoopBankScreen: View {
                     activeRun: viewModel.piAgentSessionStore.activeLoopRun(for: session.id),
                     initialDraft: definition.makeDraft(),
                     sourceDefinition: definition,
-                    availableAgents: viewModel.startupSnapshot(forProjectPath: session.projectPath).effectiveAgents,
+                    availableAgents: viewModel.allDisplayAgents,
                     onCancel: {
                         isLaunchSheetPresented = false
                         launchDefinition = nil
@@ -513,7 +518,10 @@ struct LoopBankScreen: View {
                 && !editorDraft.checkerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .discoveryTriage:
             return !editorDraft.triageAgentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case .agentPipeline, .parallelAgents, .humanApproval:
+        case .agentPipeline:
+            return !editorDraft.pipelineStageNames.isEmpty
+                && editorDraft.pipelineStageNames.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        case .parallelAgents, .humanApproval:
             return true
         }
     }
@@ -680,7 +688,7 @@ struct LoopBankScreen: View {
     private func createNewLoop() {
         isCreatingNewLoop = true
         viewModel.selectedLoopDefinitionID = nil
-        editorDraft = LoopDefinitionEditorDraft(currentProjectPath: viewModel.selectedProjectPath)
+        editorDraft = viewModel.pendingNewLoopEditorDraft ?? LoopDefinitionEditorDraft(currentProjectPath: viewModel.selectedProjectPath)
     }
 
     private func resetEditor(to definition: LoopDefinition?) {
@@ -691,6 +699,8 @@ struct LoopBankScreen: View {
         guard !editorDraft.isBuiltin else { return }
         do {
             let saved = try viewModel.saveLoopDefinition(editorDraft.makeDefinition())
+            isCreatingNewLoop = false
+            viewModel.pendingNewLoopEditorDraft = nil
             resetEditor(to: saved)
         } catch {
             errorMessage = error.localizedDescription

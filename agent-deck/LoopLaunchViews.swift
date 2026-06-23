@@ -56,7 +56,10 @@ struct LoopLaunchSheet: View {
                 && !draft.makerChecker.checkerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .discoveryTriage:
             return !draft.discoveryTriage.agentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case .agentPipeline, .parallelAgents, .humanApproval:
+        case .agentPipeline:
+            return !draft.pipeline.stageNames.isEmpty
+                && draft.pipeline.stageNames.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        case .parallelAgents, .humanApproval:
             return true
         }
     }
@@ -599,7 +602,7 @@ struct LoopPipelineStagePicker: View {
                 .disabled(pickerNames.isEmpty)
 
                 if availableAgents.isEmpty {
-                    Text("No agents available for this project yet.")
+                    Text("No agents available yet.")
                         .font(AppTheme.Font.caption)
                         .foregroundStyle(AppTheme.mutedText)
                 }
@@ -619,6 +622,7 @@ struct LoopPipelineStagePicker: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Picker("Stage \(index + 1)", selection: stageBinding(index)) {
+                    Text("Select Agent…").tag("")
                     ForEach(pickerNames, id: \.self) { name in
                         Text(name).tag(name)
                     }
@@ -626,8 +630,8 @@ struct LoopPipelineStagePicker: View {
                 .labelsHidden()
                 .appMenuPicker()
 
-                if let stageName = stageName(at: index), !agentNames.contains(stageName) {
-                    Label("Saved stage not available in this project", systemImage: "exclamationmark.triangle")
+                if let stageName = stageName(at: index), !stageName.isEmpty, !agentNames.contains(stageName) {
+                    Label("Saved stage not available", systemImage: "exclamationmark.triangle")
                         .font(AppTheme.Font.caption2)
                         .foregroundStyle(.orange)
                 }
@@ -691,7 +695,7 @@ struct LoopPipelineStagePicker: View {
     }
 
     private func addStage() {
-        stages.append(firstUnusedAgentName() ?? pickerNames.first ?? "Agent")
+        stages.append(firstUnusedAgentName() ?? "")
         ensureValidStages()
     }
 
@@ -708,10 +712,8 @@ struct LoopPipelineStagePicker: View {
     }
 
     private func ensureValidStages() {
-        let cleaned = stages.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        if cleaned.isEmpty {
-            stages = [firstUnusedAgentName() ?? "Agent"]
-        } else if cleaned != stages {
+        let cleaned = stages.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if cleaned != stages {
             stages = cleaned
         }
     }

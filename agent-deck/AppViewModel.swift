@@ -195,6 +195,7 @@ final class AppViewModel: NSObject {
     var loopDefinitions: [LoopDefinition] = []
     var selectedLoopDefinitionID: LoopDefinition.ID?
     var newLoopRequestID = UUID()
+    var pendingNewLoopEditorDraft: LoopDefinitionEditorDraft?
     @ObservationIgnored private var loopDefinitionStore = LoopDefinitionStore()
 
     var appSettings: AppSettings = AppSettings() {
@@ -3364,7 +3365,7 @@ final class AppViewModel: NSObject {
     @discardableResult
     private func launchSingleAgentLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
         let snapshot = startupSnapshot(forProjectPath: session.projectPath)
-        let agentsByName = Dictionary(uniqueKeysWithValues: snapshot.effectiveAgents.map { ($0.name, $0) })
+        let agentsByName = Dictionary(uniqueKeysWithValues: allDisplayAgents.map { ($0.name, $0) })
         return await piAgentSessionStore.launchSingleAgentLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, agentName, task, writeTarget, workingDirectory, requestedOutputPath in
             guard let self else { return nil }
             guard let agent = agentsByName[agentName], agent.resolved.disabled != true else {
@@ -3404,7 +3405,7 @@ final class AppViewModel: NSObject {
     @discardableResult
     private func launchDiscoveryTriageLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
         let snapshot = startupSnapshot(forProjectPath: session.projectPath)
-        let agentsByName = Dictionary(uniqueKeysWithValues: snapshot.effectiveAgents.map { ($0.name, $0) })
+        let agentsByName = Dictionary(uniqueKeysWithValues: allDisplayAgents.map { ($0.name, $0) })
         return await piAgentSessionStore.launchDiscoveryTriageLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, agentName, task, writeTarget, workingDirectory, requestedOutputPath in
             guard let self else { return nil }
             guard let agent = agentsByName[agentName], agent.resolved.disabled != true else {
@@ -3425,7 +3426,7 @@ final class AppViewModel: NSObject {
     @discardableResult
     private func launchMakerCheckerLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
         let snapshot = startupSnapshot(forProjectPath: session.projectPath)
-        let agentsByName = Dictionary(uniqueKeysWithValues: snapshot.effectiveAgents.map { ($0.name, $0) })
+        let agentsByName = Dictionary(uniqueKeysWithValues: allDisplayAgents.map { ($0.name, $0) })
         return await piAgentSessionStore.launchMakerCheckerLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, roleName, task, writeTarget, workingDirectory, requestedOutputPath in
             guard let self else { return nil }
             guard let agent = agentsByName[roleName], agent.resolved.disabled != true else {
@@ -3446,7 +3447,7 @@ final class AppViewModel: NSObject {
     @discardableResult
     private func launchAgentPipelineLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
         let snapshot = startupSnapshot(forProjectPath: session.projectPath)
-        let agentsByName = Dictionary(uniqueKeysWithValues: snapshot.effectiveAgents.map { ($0.name, $0) })
+        let agentsByName = Dictionary(uniqueKeysWithValues: allDisplayAgents.map { ($0.name, $0) })
         return await piAgentSessionStore.launchAgentPipelineLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, stageName, task, writeTarget, workingDirectory, requestedOutputPath in
             guard let self else { return nil }
             guard let agent = agentsByName[stageName], agent.resolved.disabled != true else {
