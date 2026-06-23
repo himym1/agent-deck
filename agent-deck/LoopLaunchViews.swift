@@ -15,6 +15,7 @@ struct LoopLaunchSheet: View {
     @State private var saveDescription = ""
     @State private var saveForCurrentProjectOnly = false
     @State private var isInfoPresented = false
+    @State private var confirmsCurrentCheckoutWrite = false
 
     init(
         session: PiAgentSessionRecord,
@@ -42,7 +43,8 @@ struct LoopLaunchSheet: View {
 
     private var canLaunch: Bool {
         let saveIsValid = !saveToLoopBank || !saveName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return !trimmedGoal.isEmpty && saveIsValid && (activeRun == nil || stopExistingActive)
+        let writeTargetIsConfirmed = draft.writeTarget != .currentCheckout || confirmsCurrentCheckoutWrite
+        return !trimmedGoal.isEmpty && saveIsValid && writeTargetIsConfirmed && (activeRun == nil || stopExistingActive)
     }
 
     private var canSaveToLoopBank: Bool {
@@ -192,6 +194,11 @@ struct LoopLaunchSheet: View {
         .onChange(of: saveToLoopBank) { _, enabled in
             guard enabled, saveName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             saveName = defaultSaveName()
+        }
+        .onChange(of: draft.writeTarget) { _, target in
+            if target != .currentCheckout {
+                confirmsCurrentCheckoutWrite = false
+            }
         }
     }
 
@@ -455,9 +462,16 @@ struct LoopLaunchSheet: View {
                 .font(AppTheme.Font.caption)
                 .foregroundStyle(AppTheme.mutedText)
         case .currentCheckout:
-            Text("Explicit/direct coding target. The loop writes in the current checkout and runs validation in this project path: \(session.projectPath.isEmpty ? "Unavailable" : session.projectPath)")
-                .font(AppTheme.Font.caption)
-                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Direct write target: this loop may edit files in the current checkout.", systemImage: "exclamationmark.triangle.fill")
+                    .font(AppTheme.Font.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+                Text("Validation runs in: \(session.projectPath.isEmpty ? "Unavailable" : session.projectPath)")
+                    .font(AppTheme.Font.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                Toggle("I understand this loop may modify the current checkout", isOn: $confirmsCurrentCheckoutWrite)
+                    .appSwitch()
+            }
         }
     }
 
