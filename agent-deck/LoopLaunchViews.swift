@@ -90,7 +90,14 @@ struct LoopLaunchSheet: View {
 
                                     LoopInlineInfoButton(
                                         title: "Structure",
-                                        message: "Single Agent: repeats one agent against the goal.\nMaker/Checker: maker produces work, checker reviews it, and retries can happen.\nAgent Pipeline: runs named stages in order, like Explorer → Implementer → Verifier.\nParallel Agents: tracks independent branches or hypotheses in the same run.\nDiscovery Triage: collects findings and classifies them by severity / next action.\nHuman Approval: pauses at a checkpoint for explicit approval before continuing."
+                                        rows: [
+                                            .init("Single Agent", "Repeats one agent against the goal."),
+                                            .init("Maker/Checker", "Maker produces work, checker reviews it, and retries can happen."),
+                                            .init("Agent Pipeline", "Runs named stages in order, like Explorer → Implementer → Verifier."),
+                                            .init("Parallel Agents", "Tracks independent branches or hypotheses in the same run."),
+                                            .init("Discovery Triage", "Collects findings and classifies them by severity / next action."),
+                                            .init("Human Approval", "Pauses at a checkpoint for explicit approval before continuing.")
+                                        ]
                                     )
                                 }
                             }
@@ -107,7 +114,11 @@ struct LoopLaunchSheet: View {
 
                                     LoopInlineInfoButton(
                                         title: "Write Target",
-                                        message: "Artifact / Markdown output: safest mode; writes only loop artifacts and never modifies project files.\nNew worktree: creates an isolated git worktree for code changes and validation, leaving the current checkout untouched.\nCurrent checkout: writes directly into this project checkout; use only when you want the loop to edit files in place."
+                                        rows: [
+                                            .init("Artifact / Markdown output", "Safest mode; writes only loop artifacts and never modifies project files."),
+                                            .init("New worktree", "Creates an isolated git worktree for code changes and validation, leaving the current checkout untouched."),
+                                            .init("Current checkout", "Writes directly into this project checkout; use only when you want the loop to edit files in place.")
+                                        ]
                                     )
                                 }
                             }
@@ -475,9 +486,33 @@ struct LoopLaunchSheet: View {
 }
 
 private struct LoopInlineInfoButton: View {
+    struct Row: Identifiable {
+        let id = UUID()
+        let title: String
+        let description: String
+
+        init(_ title: String, _ description: String) {
+            self.title = title
+            self.description = description
+        }
+    }
+
     let title: String
-    let message: String
+    let message: String?
+    let rows: [Row]
     @State private var isPresented = false
+
+    init(title: String, message: String) {
+        self.title = title
+        self.message = message
+        self.rows = []
+    }
+
+    init(title: String, rows: [Row]) {
+        self.title = title
+        self.message = nil
+        self.rows = rows
+    }
 
     var body: some View {
         Button {
@@ -491,17 +526,42 @@ private struct LoopInlineInfoButton: View {
         .buttonStyle(.plain)
         .help(title)
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .fontWidth(.expanded)
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-                    .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 10) {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(AppTheme.brandAccent)
+                    Text(title)
+                        .font(.headline)
+                        .fontWidth(.expanded)
+                }
+
+                if let message {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(rows) { row in
+                            infoRow(row.title, row.description)
+                        }
+                    }
+                }
             }
-            .padding(12)
-            .frame(width: 300, alignment: .leading)
+            .padding(16)
+            .frame(width: rows.isEmpty ? 320 : 430, alignment: .leading)
+        }
+    }
+
+    private func infoRow(_ title: String, _ description: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .fontWidth(.expanded)
+            Text(description)
+                .font(.caption)
+                .foregroundStyle(AppTheme.mutedText)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
