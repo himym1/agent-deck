@@ -722,7 +722,7 @@ struct LoopPipelineStagePicker: View {
     }
 }
 
-private struct LoopInlineInfoButton: View {
+struct LoopInlineInfoButton: View {
     struct Row: Identifiable {
         let id = UUID()
         let title: String
@@ -761,6 +761,7 @@ private struct LoopInlineInfoButton: View {
                 .frame(width: 18, height: 18)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Explain \(title)")
         .help(title)
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 14) {
@@ -803,7 +804,7 @@ private struct LoopInlineInfoButton: View {
     }
 }
 
-private struct LoopLaunchInfoPopover: View {
+struct LoopLaunchInfoPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {

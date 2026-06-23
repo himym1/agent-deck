@@ -269,13 +269,13 @@ struct LoopBankScreen: View {
 
     private var definitionFields: some View {
         VStack(alignment: .leading, spacing: 0) {
-            detailRow("Name") {
+            detailRow("Name", info: "Use a short action-oriented name. This is what appears in the Loop Bank and launch menus.") {
                 TextField("Name", text: $editorDraft.name)
                     .multilineTextAlignment(.trailing)
                     .textFieldStyle(.plain)
             }
-            detailEditor("Description", text: $editorDraft.description, minHeight: 64)
-            detailRow("Structure") {
+            detailEditor("Description", text: $editorDraft.description, minHeight: 64, info: "Optional summary for the Loop Bank list. Use it to explain when someone should choose this loop.")
+            detailRow("Structure", infoRows: loopStructureInfoRows) {
                 Picker("Structure", selection: $editorDraft.structure) {
                     ForEach(LoopStructureKind.allCases) { kind in
                         Text(kind.displayName).tag(kind)
@@ -283,7 +283,7 @@ struct LoopBankScreen: View {
                 }
                 .labelsHidden()
             }
-            detailRow("Write target") {
+            detailRow("Write target", infoRows: loopWriteTargetInfoRows) {
                 Picker("Write target", selection: $editorDraft.writeTarget) {
                     ForEach(LoopWriteTarget.allCases) { target in
                         Text(target.displayName).tag(target)
@@ -291,11 +291,11 @@ struct LoopBankScreen: View {
                 }
                 .labelsHidden()
             }
-            detailRow("Max iterations") {
+            detailRow("Max iterations", info: "A hard safety limit. The loop stops after this many passes even if the goal still needs follow-up.") {
                 LoopNumericStepper(value: $editorDraft.maxIterations, range: 1...20)
             }
-            detailEditor("Goal template", text: $editorDraft.goalTemplate, minHeight: 120)
-            detailRow("Validation command") {
+            detailEditor("Goal template", text: $editorDraft.goalTemplate, minHeight: 120, info: "The reusable instruction the loop runs against. Be explicit about the desired outcome, constraints, and what counts as done.")
+            detailRow("Validation command", info: "Optional shell command for checking the result. It runs from the project directory when available and is attached to the loop result.") {
                 TextField("Validation command", text: $editorDraft.validationCommand)
                     .multilineTextAlignment(.trailing)
                     .textFieldStyle(.plain)
@@ -306,7 +306,7 @@ struct LoopBankScreen: View {
     private var availabilitySection: some View {
         AppCard(title: "Availability") {
             VStack(alignment: .leading, spacing: 0) {
-                detailRow("Assignment") {
+                detailRow("Assignment", infoRows: loopAvailabilityInfoRows) {
                     HStack(spacing: 8) {
                         Button("All Projects/default") { setAllProjectsAvailability() }
                             .buttonStyle(.bordered)
@@ -321,7 +321,7 @@ struct LoopBankScreen: View {
                 detailRow("Current setting") {
                     Text(availabilityLabel(for: editorDraft))
                 }
-                detailEditor("Advanced project paths", text: $editorDraft.projectPathsText, minHeight: 72, monospaced: true)
+                detailEditor("Advanced project paths", text: $editorDraft.projectPathsText, minHeight: 72, monospaced: true, info: "Use this only when a loop should be assigned to specific absolute project paths. One path per line.")
                     .disabled(editorDraft.availability == .allProjects)
                 Text("One absolute path per line. Editing the list uses project-specific assignment; an empty list keeps the loop unassigned in the catalog.")
                     .font(AppTheme.Font.caption)
@@ -453,14 +453,14 @@ struct LoopBankScreen: View {
         case .makerChecker:
             AppCard(title: "Maker + Checker") {
                 VStack(alignment: .leading, spacing: 0) {
-                    detailRow("Maker agent") {
+                    detailRow("Maker agent", info: "The agent that produces the work for each review round.") {
                         LoopAgentNameMenu(selection: $editorDraft.makerName, availableAgents: availableLoopAgents, fallbackLabel: "Maker")
                     }
-                    detailRow("Checker agent") {
+                    detailRow("Checker agent", info: "The agent that reviews the maker output and decides whether another round is needed.") {
                         LoopAgentNameMenu(selection: $editorDraft.checkerName, availableAgents: availableLoopAgents, fallbackLabel: "Checker")
                     }
-                    detailEditor("Checker rubric", text: $editorDraft.checkerRubric, minHeight: 84)
-                    detailRow("Max review rounds") {
+                    detailEditor("Checker rubric", text: $editorDraft.checkerRubric, minHeight: 84, info: "Instructions for the checker. Keep the approval criteria concrete so the loop knows when to stop retrying.")
+                    detailRow("Max review rounds", info: "Limits maker/checker retries inside an iteration before the loop stops asking for another review pass.") {
                         LoopNumericStepper(value: $editorDraft.maxReviewRounds, range: 1...20)
                     }
                 }
@@ -476,7 +476,7 @@ struct LoopBankScreen: View {
             }
         case .parallelAgents:
             AppCard(title: "Parallel Agents") {
-                detailRow("Branches") {
+                detailRow("Branches", info: "Named parallel tracks, separated by vertical bars. Use them for independent hypotheses, approaches, or workstreams.") {
                     TextField("Branches, separated by |", text: $editorDraft.parallelBranchesText)
                         .multilineTextAlignment(.trailing)
                         .textFieldStyle(.plain)
@@ -484,18 +484,18 @@ struct LoopBankScreen: View {
             }
         case .discoveryTriage:
             AppCard(title: "Discovery / Triage") {
-                detailRow("Triage agent") {
+                detailRow("Triage agent", info: "The agent that gathers findings and applies the classification prompt.") {
                     LoopAgentNameMenu(selection: $editorDraft.triageAgentName, availableAgents: availableLoopAgents, fallbackLabel: "Explorer")
                 }
-                detailEditor("Classification prompt", text: $editorDraft.classificationPrompt, minHeight: 84)
+                detailEditor("Classification prompt", text: $editorDraft.classificationPrompt, minHeight: 84, info: "Tell the triage agent how to sort findings, for example by severity, confidence, owner, or next action.")
             }
         case .humanApproval:
             AppCard(title: "Human Approval") {
-                detailEditor("Checkpoint prompt", text: $editorDraft.checkpointPrompt, minHeight: 84)
+                detailEditor("Checkpoint prompt", text: $editorDraft.checkpointPrompt, minHeight: 84, info: "The question or review instruction shown before the loop continues. Use this for risky or preference-dependent steps.")
             }
         case .singleAgent:
             AppCard(title: "Single Agent") {
-                detailRow("Agent") {
+                detailRow("Agent", info: "The agent that will run each iteration. Choose the role best matched to the goal, such as explorer, coder, or reviewer.") {
                     LoopAgentNameMenu(selection: $editorDraft.makerName, availableAgents: availableLoopAgents, fallbackLabel: "Agent")
                 }
             }
@@ -516,13 +516,42 @@ struct LoopBankScreen: View {
         }
     }
 
-    private func detailRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    private var loopStructureInfoRows: [LoopInlineInfoButton.Row] {
+        [
+            .init("Single Agent", "Repeats one selected agent against the goal."),
+            .init("Maker + Checker", "A maker produces work, a checker reviews it, and review rounds can retry."),
+            .init("Agent Pipeline", "Records ordered stages such as Explorer → Implementer → Verifier."),
+            .init("Parallel Agents", "Names independent branches or hypotheses in the same loop run."),
+            .init("Discovery / Triage", "Collects findings and classifies them by severity or next action."),
+            .init("Human Approval", "Pauses at a checkpoint for explicit approval before continuing.")
+        ]
+    }
+
+    private var loopWriteTargetInfoRows: [LoopInlineInfoButton.Row] {
+        [
+            .init("Artifact / Markdown output", "Safest mode. The loop writes artifacts and does not modify project files."),
+            .init("New worktree", "Creates an isolated git worktree for code changes and validation."),
+            .init("Current checkout", "Writes directly into the current project checkout. Use only when in-place edits are intended.")
+        ]
+    }
+
+    private var loopAvailabilityInfoRows: [LoopInlineInfoButton.Row] {
+        [
+            .init("All Projects/default", "Available as a default saved loop everywhere."),
+            .init("Current Project only", "Assigns the loop to the selected project path."),
+            .init("Unassigned/catalog", "Keeps the loop saved but out of project launch menus until assigned.")
+        ]
+    }
+
+    private func detailRow<Content: View>(
+        _ title: String,
+        info: String? = nil,
+        infoRows: [LoopInlineInfoButton.Row] = [],
+        @ViewBuilder content: () -> Content
+    ) -> some View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: AppTheme.contentSpacing) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .fontWidth(.expanded)
-                    .foregroundStyle(AppTheme.mutedText)
+                detailLabel(title, info: info, infoRows: infoRows)
                 Spacer(minLength: AppTheme.contentSpacing)
                 content()
                     .foregroundStyle(AppTheme.mutedText)
@@ -533,12 +562,9 @@ struct LoopBankScreen: View {
         }
     }
 
-    private func detailEditor(_ title: String, text: Binding<String>, minHeight: CGFloat, monospaced: Bool = false) -> some View {
+    private func detailEditor(_ title: String, text: Binding<String>, minHeight: CGFloat, monospaced: Bool = false, info: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .fontWidth(.expanded)
-                .foregroundStyle(AppTheme.mutedText)
+            detailLabel(title, info: info)
             TextEditor(text: text)
                 .font(monospaced ? .body.monospaced() : AppTheme.Font.body)
                 .scrollContentBackground(.hidden)
@@ -551,6 +577,20 @@ struct LoopBankScreen: View {
                 }
         }
         .padding(.vertical, 11)
+    }
+
+    private func detailLabel(_ title: String, info: String? = nil, infoRows: [LoopInlineInfoButton.Row] = []) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .fontWidth(.expanded)
+                .foregroundStyle(AppTheme.mutedText)
+            if let info {
+                LoopInlineInfoButton(title: title, message: info)
+            } else if !infoRows.isEmpty {
+                LoopInlineInfoButton(title: title, rows: infoRows)
+            }
+        }
     }
 
     private var detailSubtitle: String {
