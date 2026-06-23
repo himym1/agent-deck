@@ -44,7 +44,21 @@ struct LoopLaunchSheet: View {
     private var canLaunch: Bool {
         let saveIsValid = !saveToLoopBank || !saveName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let writeTargetIsConfirmed = draft.writeTarget != .currentCheckout || confirmsCurrentCheckoutWrite
-        return !trimmedGoal.isEmpty && saveIsValid && writeTargetIsConfirmed && (activeRun == nil || stopExistingActive)
+        return !trimmedGoal.isEmpty && requiredAgentsAreSelected && saveIsValid && writeTargetIsConfirmed && (activeRun == nil || stopExistingActive)
+    }
+
+    private var requiredAgentsAreSelected: Bool {
+        switch draft.structure {
+        case .singleAgent:
+            return !draft.makerChecker.makerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .makerChecker:
+            return !draft.makerChecker.makerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !draft.makerChecker.checkerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .discoveryTriage:
+            return !draft.discoveryTriage.agentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .agentPipeline, .parallelAgents, .humanApproval:
+            return true
+        }
     }
 
     private var canSaveToLoopBank: Bool {
@@ -531,19 +545,15 @@ struct LoopAgentNameMenu: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Picker(fallbackLabel, selection: $selection) {
+                Text("Select \(fallbackLabel)…").tag("")
                 ForEach(names, id: \.self) { Text($0).tag($0) }
             }
             .labelsHidden()
             .appMenuPicker()
-            if !availableAgents.map(\.name).contains(selection) {
+            if !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !availableAgents.map(\.name).contains(selection) {
                 Label("Saved role not available in this project", systemImage: "exclamationmark.triangle")
                     .font(AppTheme.Font.caption2)
                     .foregroundStyle(.orange)
-            }
-        }
-        .onAppear {
-            if selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                selection = availableAgents.first?.name ?? fallbackLabel
             }
         }
     }

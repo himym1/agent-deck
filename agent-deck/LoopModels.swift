@@ -110,9 +110,9 @@ nonisolated struct LoopMakerCheckerConfig: Codable, Equatable, Hashable, Sendabl
 
     static let defaultMaxReviewRounds = 3
 
-    init(makerName: String = "Maker", checkerName: String = "Checker", checkerRubric: String = "approve", maxReviewRounds: Int = Self.defaultMaxReviewRounds) {
-        self.makerName = makerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Maker" : makerName
-        self.checkerName = checkerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Checker" : checkerName
+    init(makerName: String = "", checkerName: String = "", checkerRubric: String = "approve", maxReviewRounds: Int = Self.defaultMaxReviewRounds) {
+        self.makerName = makerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.checkerName = checkerName.trimmingCharacters(in: .whitespacesAndNewlines)
         self.checkerRubric = checkerRubric
         self.maxReviewRounds = max(1, maxReviewRounds)
     }
@@ -140,8 +140,8 @@ nonisolated struct LoopDiscoveryTriageConfig: Codable, Equatable, Hashable, Send
     var agentName: String
     var classificationPrompt: String
 
-    init(agentName: String = "Explorer", classificationPrompt: String = "Classify findings by severity and summarize recommended next action.") {
-        self.agentName = agentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Explorer" : agentName
+    init(agentName: String = "", classificationPrompt: String = "Classify findings by severity and summarize recommended next action.") {
+        self.agentName = agentName.trimmingCharacters(in: .whitespacesAndNewlines)
         self.classificationPrompt = classificationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Classify findings by severity and summarize recommended next action." : classificationPrompt
     }
 

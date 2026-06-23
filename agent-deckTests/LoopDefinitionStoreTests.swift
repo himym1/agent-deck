@@ -172,6 +172,36 @@ final class LoopDefinitionStoreTests: XCTestCase {
         XCTAssertFalse(unassigned.isAvailable(in: "/tmp/project-a"))
     }
 
+    func testNewLoopAgentDefaultsRemainBlankUntilUserSelectsAgent() throws {
+        let draft = LoopDraft()
+        XCTAssertEqual(draft.makerChecker.makerName, "")
+        XCTAssertEqual(draft.makerChecker.checkerName, "")
+        XCTAssertEqual(draft.discoveryTriage.agentName, "")
+
+        let directory = PiTestSupport.temporaryStateFile().deletingLastPathComponent().appendingPathComponent("loops", isDirectory: true)
+        let store = LoopDefinitionStore(directoryURL: directory)
+        let url = directory.appendingPathComponent("blank-agent.loop.md")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try """
+        ---
+        name: Blank Agent
+        description:
+        source: user
+        structure: singleAgent
+        writeTarget: artifactMarkdown
+        maxIterations: 3
+        availability: allProjects
+        ---
+
+        Goal
+        """.write(to: url, atomically: true, encoding: .utf8)
+
+        let loaded = try XCTUnwrap(store.loadUserDefinitions().first)
+        XCTAssertEqual(loaded.makerChecker.makerName, "")
+        XCTAssertEqual(loaded.makerChecker.checkerName, "")
+        XCTAssertEqual(loaded.discoveryTriage.agentName, "")
+    }
+
     func testSavedLoopConvertsToFreshLaunchDraft() {
         let definition = LoopDefinition(
             name: "Reusable",

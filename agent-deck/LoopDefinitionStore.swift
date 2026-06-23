@@ -131,14 +131,14 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
         let maxIterations = Int(fm["maxIterations"]?.nonEmpty ?? "") ?? LoopDraft.defaultMaxIterations
         let validationCommand = fm["validationCommand"]?.nonEmpty ?? ""
         let makerChecker = LoopMakerCheckerConfig(
-            makerName: fm["makerName"]?.nonEmpty ?? "Maker",
-            checkerName: fm["checkerName"]?.nonEmpty ?? "Checker",
+            makerName: fm["makerName"]?.nonEmpty ?? "",
+            checkerName: fm["checkerName"]?.nonEmpty ?? "",
             checkerRubric: fm["checkerRubric"]?.nonEmpty ?? "approve",
             maxReviewRounds: Int(fm["maxReviewRounds"]?.nonEmpty ?? "") ?? LoopMakerCheckerConfig.defaultMaxReviewRounds
         )
         let pipeline = LoopPipelineConfig(stageNames: splitList(fm["pipelineStages"]))
         let parallel = LoopParallelConfig(branchNames: splitList(fm["parallelBranches"]))
-        let discoveryTriage = LoopDiscoveryTriageConfig(agentName: fm["triageAgent"]?.nonEmpty ?? "Explorer", classificationPrompt: fm["classificationPrompt"]?.nonEmpty ?? "Classify findings by severity and summarize recommended next action.")
+        let discoveryTriage = LoopDiscoveryTriageConfig(agentName: fm["triageAgent"]?.nonEmpty ?? "", classificationPrompt: fm["classificationPrompt"]?.nonEmpty ?? "Classify findings by severity and summarize recommended next action.")
         let humanApproval = LoopHumanApprovalConfig(checkpointPrompt: fm["checkpointPrompt"]?.nonEmpty ?? "Review the proposal before continuing.")
         let availability = LoopDefinitionAvailability(rawValue: fm["availability"]?.nonEmpty ?? "") ?? .allProjects
         let projectPaths = decodeProjectPaths(json: fm["projectPathsJSON"]) ?? splitProjectPaths(fm["projectPaths"])

@@ -404,7 +404,7 @@ struct LoopBankScreen: View {
                     .disabled(editorDraft.isNew && editorDraft.trimmedName.isEmpty && editorDraft.goalTemplate.isEmpty)
                 Button("Save") { save() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(editorDraft.trimmedName.isEmpty || editorDraft.isBuiltin)
+                    .disabled(editorDraft.trimmedName.isEmpty || editorDraft.isBuiltin || !requiredAgentsAreSelected)
             }
         }
     }
@@ -461,6 +461,20 @@ struct LoopBankScreen: View {
                     LoopAgentNameMenu(selection: $editorDraft.makerName, availableAgents: availableLoopAgents, fallbackLabel: "Agent")
                 }
             }
+        }
+    }
+
+    private var requiredAgentsAreSelected: Bool {
+        switch editorDraft.structure {
+        case .singleAgent:
+            return !editorDraft.makerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .makerChecker:
+            return !editorDraft.makerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !editorDraft.checkerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .discoveryTriage:
+            return !editorDraft.triageAgentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .agentPipeline, .parallelAgents, .humanApproval:
+            return true
         }
     }
 
