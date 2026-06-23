@@ -460,21 +460,30 @@ struct LoopLaunchSheet: View {
     private var writeTargetExplanation: some View {
         switch draft.writeTarget {
         case .artifactMarkdown:
-            Text("Writes only to the loop artifact directory. Project files are not modified.")
-                .font(AppTheme.Font.caption)
-                .foregroundStyle(AppTheme.mutedText)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Writes only to the loop artifact directory. Project files are not modified.")
+                Text("Resolved path: Agent Deck app support / loop-artifacts / \(session.id.uuidString) / <run-id>")
+                    .textSelection(.enabled)
+            }
+            .font(AppTheme.Font.caption)
+            .foregroundStyle(AppTheme.mutedText)
         case .newWorktree:
-            Text("Explicit coding target. Agent Deck creates a per-run git worktree and runs validation there; the current checkout remains untouched.")
-                .font(AppTheme.Font.caption)
-                .foregroundStyle(AppTheme.mutedText)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Explicit coding target. Agent Deck creates a per-run git worktree and runs validation there; the current checkout remains untouched.")
+                Text("Resolved path: Agent Deck app support / loop-artifacts / \(session.id.uuidString) / <run-id> / worktree")
+                    .textSelection(.enabled)
+            }
+            .font(AppTheme.Font.caption)
+            .foregroundStyle(AppTheme.mutedText)
         case .currentCheckout:
             VStack(alignment: .leading, spacing: 8) {
                 Label("Direct write target: this loop may edit files in the current checkout.", systemImage: "exclamationmark.triangle.fill")
                     .font(AppTheme.Font.caption.weight(.semibold))
                     .foregroundStyle(.orange)
-                Text("Validation runs in: \(session.projectPath.isEmpty ? "Unavailable" : session.projectPath)")
+                Text("Resolved path: \(session.projectPath.isEmpty ? "Unavailable" : session.projectPath)")
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
+                    .textSelection(.enabled)
                 Toggle("I understand this loop may modify the current checkout", isOn: $confirmsCurrentCheckoutWrite)
                     .appSwitch()
             }
