@@ -629,17 +629,12 @@ struct PiAgentUIRequestSheet: View {
                 .frame(width: 22, alignment: .center)
 
             VStack(alignment: .leading, spacing: 5) {
-                Text(request.title)
+                Text("Ask User")
                     .font(AppTheme.Font.headline)
                     .fontWidth(.expanded)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let message = request.message, !message.isEmpty, message != request.title {
-                    Text(message)
-                        .font(AppTheme.Font.subheadline)
-                        .foregroundStyle(AppTheme.mutedText)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Text("Pi is waiting for your response")
+                    .font(AppTheme.Font.caption)
+                    .foregroundStyle(AppTheme.mutedText)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -651,11 +646,16 @@ struct PiAgentUIRequestSheet: View {
     @ViewBuilder
     private var bodyContent: some View {
         if isComposingFreeform {
-            freeformEditor
-                .padding(22)
+            VStack(alignment: .leading, spacing: 16) {
+                promptBlock
+                freeformEditor
+                    .layoutPriority(1)
+            }
+            .padding(22)
         } else {
             ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 16) {
+                    promptBlock
                     switch request.method {
                     case .select:
                         selectOptions
@@ -672,6 +672,22 @@ struct PiAgentUIRequestSheet: View {
             }
             .scrollIndicators(.hidden)
         }
+    }
+
+    private var promptBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(request.title)
+                .font(AppTheme.Font.title.weight(.semibold))
+                .fontWidth(.expanded)
+                .fixedSize(horizontal: false, vertical: true)
+            if let message = request.message, !message.isEmpty, message != request.title {
+                Text(message)
+                    .font(AppTheme.Font.subheadline)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var confirmBody: some View {
