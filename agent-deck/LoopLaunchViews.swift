@@ -13,6 +13,7 @@ struct LoopLaunchSheet: View {
     @State private var saveName = ""
     @State private var saveDescription = ""
     @State private var saveForCurrentProjectOnly = false
+    @State private var isInfoPresented = false
 
     init(
         session: PiAgentSessionRecord,
@@ -169,6 +170,19 @@ struct LoopLaunchSheet: View {
             }
 
             Spacer(minLength: 0)
+
+            Button {
+                isInfoPresented.toggle()
+            } label: {
+                Label("Info", systemImage: "info.circle")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(AppTheme.mutedText)
+            .help("Explain loops")
+            .popover(isPresented: $isInfoPresented, arrowEdge: .bottom) {
+                LoopLaunchInfoPopover()
+            }
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 18)
@@ -362,5 +376,40 @@ struct LoopLaunchSheet: View {
         value.components(separatedBy: "|")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+}
+
+private struct LoopLaunchInfoPopover: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Image(systemName: "infinity")
+                    .foregroundStyle(AppTheme.brandAccent)
+                Text("Loops")
+                    .font(.headline)
+                    .fontWidth(.expanded)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                infoRow("What runs", "A loop repeatedly asks Pi to work toward the goal, records each iteration, and stops when it reaches the max iterations or needs attention.")
+                infoRow("Structure", "Choose a single agent, maker/checker review, a pipeline, parallel branches, discovery triage, or a human approval checkpoint.")
+                infoRow("Write target", "Artifact writes keep project files untouched. Worktree writes isolate code changes. Current checkout writes directly to this project.")
+                infoRow("Validation", "An optional command runs from the project directory when available and is included in the loop result.")
+            }
+        }
+        .padding(16)
+        .frame(width: 420, alignment: .leading)
+    }
+
+    private func infoRow(_ title: String, _ description: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .fontWidth(.expanded)
+            Text(description)
+                .font(.caption)
+                .foregroundStyle(AppTheme.mutedText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
