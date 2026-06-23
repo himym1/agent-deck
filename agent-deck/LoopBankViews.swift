@@ -209,6 +209,8 @@ struct LoopBankScreen: View {
             availabilitySection
                 .disabled(editorDraft.isBuiltin)
 
+            lastRunSection
+
             loopActionsCard
         }
     }
@@ -272,6 +274,53 @@ struct LoopBankScreen: View {
                     .padding(.top, 8)
             }
         }
+    }
+
+    private var lastRunSection: some View {
+        AppCard(title: "Last Run") {
+            if let definition = viewModel.selectedLoopDefinition, let run = lastRun(for: definition) {
+                VStack(alignment: .leading, spacing: 8) {
+                    detailRow("Status") { Text(run.status.displayName) }
+                    if let stopReason = run.stopReason {
+                        detailRow("Stop reason") { Text(stopReason.displayName) }
+                    }
+                    detailRow("Iterations") { Text("\(run.currentIteration)/\(run.maxIterations)") }
+                    detailRow("Write target") { Text(run.writeTarget.displayName) }
+                    if let projectPath = run.projectPath, !projectPath.isEmpty {
+                        detailRow("Project") { Text(URL(fileURLWithPath: projectPath).lastPathComponent.nonEmpty ?? projectPath) }
+                    }
+                    detailRow("Ended") { Text((run.endedAt ?? run.startedAt).formatted(date: .abbreviated, time: .shortened)) }
+                }
+            } else {
+                Text("No exact matching loop runs yet.")
+                    .font(AppTheme.Font.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+            }
+        }
+    }
+
+    private func lastRun(for definition: LoopDefinition) -> LoopRun? {
+        let goal = definition.goalTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !goal.isEmpty else { return nil }
+        let runs = viewModel.piAgentSessionStore.sessions
+            .flatMap { viewModel.piAgentSessionStore.loopRuns(for: $0.id) }
+            .filter { run in
+                run.goal == goal &&
+                run.structure == definition.structure &&
+                run.writeTarget == definition.writeTarget &&
+                run.maxIterations == definition.maxIterations &&
+                run.validationCommand == definition.validationCommand.trimmingCharacters(in: .whitespacesAndNewlines) &&
+                run.makerChecker == definition.makerChecker &&
+                run.pipeline == definition.pipeline &&
+                run.parallel == definition.parallel &&
+                run.discoveryTriage == definition.discoveryTriage &&
+                run.humanApproval == definition.humanApproval
+            }
+        if let selectedProjectPath = viewModel.selectedProjectPath?.trimmingCharacters(in: .whitespacesAndNewlines), !selectedProjectPath.isEmpty,
+           let projectRun = runs.filter({ $0.projectPath == selectedProjectPath }).max(by: { $0.startedAt < $1.startedAt }) {
+            return projectRun
+        }
+        return runs.max { $0.startedAt < $1.startedAt }
     }
 
     private var loopActionsCard: some View {
