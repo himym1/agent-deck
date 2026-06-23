@@ -323,6 +323,21 @@ struct LoopBankScreen: View {
                         detailRow("Stop reason") { Text(stopReason.displayName) }
                     }
                     detailRow("Iterations") { Text("\(run.currentIteration)/\(run.maxIterations)") }
+                    if let latest = run.iterations.last {
+                        detailRow("Latest summary") { Text(latest.summary.nonEmpty ?? "Iteration \(latest.index)") }
+                        if let checkerResult = latest.checkerResult {
+                            detailRow("Checker result") { Text(checkerResult.displayName) }
+                        }
+                        if let validation = latest.validationResult {
+                            detailRow("Validation") { Text(validation.didPass ? "Passed" : "Failed") }
+                        }
+                        if !latest.artifacts.isEmpty {
+                            detailRow("Artifacts") { Text("\(latest.artifacts.count)") }
+                        }
+                        if !latest.changedFiles.isEmpty {
+                            detailRow("Changed files") { Text("\(latest.changedFiles.count)") }
+                        }
+                    }
                     detailRow("Write target") { Text(run.writeTarget.displayName) }
                     if let projectPath = run.projectPath, !projectPath.isEmpty {
                         detailRow("Project") { Text(URL(fileURLWithPath: projectPath).lastPathComponent.nonEmpty ?? projectPath) }
