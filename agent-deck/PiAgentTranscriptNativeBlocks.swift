@@ -1057,6 +1057,75 @@ private extension NSLayoutConstraint {
 
 // MARK: - Loop run card
 
+private func loopTimelineStepDisplayName(_ step: LoopTimelineStepKind) -> String {
+    switch step {
+    case .makerAct: return "Maker"
+    case .checkerReview: return "Checker"
+    case .pipelineStage: return "Pipeline stage"
+    case .parallelBranch: return "Parallel branch"
+    case .discoveryTriage: return "Discovery / triage"
+    case .humanApprovalCheckpoint: return "Human approval"
+    }
+}
+
+private func loopRunDetailsText(for run: LoopRun) -> String {
+    var sections: [String] = []
+    var overview: [String] = [
+        "Status: \(run.status.displayName)",
+        "Structure: \(run.structure.displayName)",
+        "Write target: \(run.writeTarget.displayName)",
+        "Goal: \(run.goal)",
+        "Iterations: \(run.currentIteration)/\(run.maxIterations)"
+    ]
+    if let stopReason = run.stopReason { overview.append("Stop reason: \(stopReason.displayName)") }
+    if !run.validationCommand.isEmpty { overview.append("Validation command: \(run.validationCommand)") }
+    if let directoryPath = run.artifactDirectoryPath { overview.append("Artifact directory: \(directoryPath)") }
+    sections.append((["Overview"] + overview.map { "• \($0)" }).joined(separator: "\n"))
+
+    if run.iterations.isEmpty {
+        sections.append("Iterations\n• No iterations recorded yet.")
+    } else {
+        for iteration in run.iterations {
+            var lines: [String] = ["Iteration \(iteration.index)"]
+            lines.append("• Started: \(iteration.startedAt.formatted(date: .abbreviated, time: .standard))")
+            if let ended = iteration.endedAt { lines.append("• Ended: \(ended.formatted(date: .abbreviated, time: .standard))") }
+            if !iteration.summary.isEmpty { lines.append("• Summary: \(iteration.summary)") }
+            if !iteration.changedFiles.isEmpty {
+                lines.append("• Changed files:")
+                lines.append(contentsOf: iteration.changedFiles.map { "  - \($0)" })
+            }
+            if !iteration.artifacts.isEmpty {
+                lines.append("• Artifacts:")
+                lines.append(contentsOf: iteration.artifacts.map { artifact in
+                    let pathSuffix = artifact.filePath.map { " — \($0)" } ?? ""
+                    return "  - \(artifact.filename)\(pathSuffix)"
+                })
+            }
+            if !iteration.timeline.isEmpty {
+                lines.append("• Timeline:")
+                lines.append(contentsOf: iteration.timeline.map { event in
+                    var text = "  - \(loopTimelineStepDisplayName(event.step)): \(event.roleName)"
+                    if !event.note.isEmpty { text += " — \(event.note)" }
+                    return text
+                })
+            }
+            if let validation = iteration.validationResult {
+                lines.append("• Validation:")
+                lines.append("  - Exit code: \(validation.exitCode.map(String.init) ?? "unavailable")")
+                lines.append("  - Duration: \(String(format: "%.2fs", validation.duration))")
+                if !validation.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    lines.append("  - Stdout:\n\(validation.stdout)")
+                }
+                if !validation.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    lines.append("  - Stderr:\n\(validation.stderr)")
+                }
+            }
+            sections.append(lines.joined(separator: "\n"))
+        }
+    }
+    return sections.joined(separator: "\n\n")
+}
+
 struct NativeLoopRunPayload {
     var title: String
     var statusText: String
@@ -1073,25 +1142,11 @@ struct NativeLoopRunPayload {
     var onRevealWorktree: (() -> Void)?
 
     static func make(run: LoopRun, onStop: (() -> Void)?, onRetry: (() -> Void)?, onSave: (() -> Void)?, onRevealArtifacts: (() -> Void)?, onRevealWorktree: (() -> Void)?) -> NativeLoopRunPayload {
-        var details: [String] = [
-            "Structure: \(run.structure.displayName)",
-            "Write target: \(run.writeTarget.displayName)",
-            "Goal: \(run.goal)",
-            "Iterations: \(run.currentIteration)/\(run.maxIterations)"
-        ]
-        if !run.validationCommand.isEmpty { details.append("Validation: \(run.validationCommand)") }
-        if let stopReason = run.stopReason { details.append("Stop reason: \(stopReason.displayName)") }
-        if let timeline = run.iterations.last?.timeline, !timeline.isEmpty {
-            details.append("Timeline: \(timeline.map(\.roleName).joined(separator: " → "))")
-        }
-        if let validation = run.iterations.last?.validationResult {
-            details.append("Validation exit code: \(validation.exitCode.map(String.init) ?? "unavailable")")
-        }
-        if let directoryPath = run.artifactDirectoryPath { details.append("Artifacts: \(directoryPath)") }
+        let details = loopRunDetailsText(for: run)
         return NativeLoopRunPayload(
             title: run.status == .completed ? "Loop completed" : "Loop: \(run.structure.displayName)",
             statusText: "Status: \(run.status.displayName)",
-            detailText: details.joined(separator: "\n"),
+            detailText: details,
             isActive: run.isActive,
             canRevealArtifacts: run.artifactDirectoryPath != nil,
             canRevealWorktree: run.writeTarget == .newWorktree && run.artifactDirectoryPath != nil,
@@ -1243,7 +1298,7 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
         guard let payload else { return }
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 420, height: 300)
+        popover.contentSize = NSSize(width: 560, height: 520)
         popover.contentViewController = PiAgentNativeTextPopoverController(title: payload.title, text: payload.detailText)
         popover.show(relativeTo: detailsButton.bounds, of: detailsButton, preferredEdge: .maxY)
     }
