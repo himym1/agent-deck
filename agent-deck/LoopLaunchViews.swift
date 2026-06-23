@@ -4,6 +4,7 @@ struct LoopLaunchSheet: View {
     let session: PiAgentSessionRecord
     let activeRun: LoopRun?
     let sourceDefinition: LoopDefinition?
+    let availableAgents: [EffectiveAgentRecord]
     let onCancel: () -> Void
     let onLaunch: (LoopLaunchRequest) -> Void
 
@@ -20,12 +21,14 @@ struct LoopLaunchSheet: View {
         activeRun: LoopRun?,
         initialDraft: LoopDraft = LoopDraft(),
         sourceDefinition: LoopDefinition? = nil,
+        availableAgents: [EffectiveAgentRecord] = [],
         onCancel: @escaping () -> Void,
         onLaunch: @escaping (LoopLaunchRequest) -> Void
     ) {
         self.session = session
         self.activeRun = activeRun
         self.sourceDefinition = sourceDefinition
+        self.availableAgents = availableAgents.filter { $0.resolved.disabled != true }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         self.onCancel = onCancel
         self.onLaunch = onLaunch
         _draft = State(initialValue: initialDraft)
@@ -46,10 +49,10 @@ struct LoopLaunchSheet: View {
         sourceDefinition == nil
     }
 
-    private var pipelineStagesBinding: Binding<String> {
+    private var pipelineStagesBinding: Binding<[String]> {
         Binding(
-            get: { draft.pipeline.stageNames.joined(separator: " | ") },
-            set: { draft.pipeline = LoopPipelineConfig(stageNames: splitList($0)) }
+            get: { draft.pipeline.stageNames },
+            set: { draft.pipeline = LoopPipelineConfig(stageNames: $0) }
         )
     }
 
@@ -321,12 +324,12 @@ struct LoopLaunchSheet: View {
                                 .foregroundStyle(AppTheme.mutedText)
                             LoopInlineInfoButton(
                                 title: "Pipeline stages",
-                                message: "Stage names are split with | and run in order. Use this when work should progress through named phases such as Explorer | Implementer | Verifier."
+                                message: "Choose the agents/roles that run in sequence. The loop records the handoff order now; runner work will attach actual child agent runs to these stages."
                             )
                         }
                     } content: {
-                        AppTextField(text: pipelineStagesBinding, placeholder: "Stages, separated by |")
-                        Text("Runs stages in this fixed order and records the timeline.")
+                        LoopPipelineStagePicker(stages: pipelineStagesBinding, availableAgents: availableAgents)
+                        Text("Runs selected agents in this fixed order and records the timeline.")
                             .font(AppTheme.Font.caption)
                             .foregroundStyle(AppTheme.mutedText)
                     }
@@ -480,6 +483,177 @@ struct LoopLaunchSheet: View {
         value.components(separatedBy: "|")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+}
+
+struct LoopPipelineStagePicker: View {
+    @Binding var stages: [String]
+    let availableAgents: [EffectiveAgentRecord]
+
+    private var agentNames: [String] {
+        availableAgents.map(\.name)
+    }
+
+    private var pickerNames: [String] {
+        var seen = Set<String>()
+        return (stages + agentNames)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .filter { seen.insert($0).inserted }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(stages.indices, id: \.self) { index in
+                VStack(alignment: .leading, spacing: 8) {
+                    stageRow(index)
+                    if index < stages.count - 1 {
+                        HStack(spacing: 8) {
+                            Rectangle()
+                                .fill(AppTheme.contentStroke)
+                                .frame(width: 1, height: 12)
+                                .padding(.leading, 15)
+                            Image(systemName: "arrow.down")
+                                .font(AppTheme.Font.caption.weight(.semibold))
+                                .foregroundStyle(AppTheme.mutedText)
+                            Text("then")
+                                .font(AppTheme.Font.caption2.weight(.semibold))
+                                .foregroundStyle(AppTheme.mutedText)
+                        }
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    addStage()
+                } label: {
+                    Label("Add stage", systemImage: "plus")
+                }
+                .appSecondaryButton()
+                .disabled(pickerNames.isEmpty)
+
+                if availableAgents.isEmpty {
+                    Text("No agents available for this project yet.")
+                        .font(AppTheme.Font.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                }
+            }
+        }
+        .onAppear(perform: ensureValidStages)
+        .onChange(of: availableAgents.map(\.name)) { _, _ in ensureValidStages() }
+    }
+
+    private func stageRow(_ index: Int) -> some View {
+        HStack(spacing: 10) {
+            Text("\(index + 1)")
+                .font(AppTheme.Font.caption.weight(.bold))
+                .foregroundStyle(AppTheme.brandAccent)
+                .frame(width: 26, height: 26)
+                .background(AppTheme.brandAccent.opacity(0.12), in: Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Picker("Stage \(index + 1)", selection: stageBinding(index)) {
+                    ForEach(pickerNames, id: \.self) { name in
+                        Text(name).tag(name)
+                    }
+                }
+                .labelsHidden()
+                .appMenuPicker()
+
+                if let stageName = stageName(at: index), !agentNames.contains(stageName) {
+                    Label("Saved stage not available in this project", systemImage: "exclamationmark.triangle")
+                        .font(AppTheme.Font.caption2)
+                        .foregroundStyle(.orange)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button {
+                moveStage(from: index, by: -1)
+            } label: {
+                Label("Move earlier", systemImage: "arrow.up")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(AppTheme.mutedText)
+            .disabled(index == 0)
+            .help("Move earlier")
+
+            Button {
+                moveStage(from: index, by: 1)
+            } label: {
+                Label("Move later", systemImage: "arrow.down")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(AppTheme.mutedText)
+            .disabled(index >= stages.count - 1)
+            .help("Move later")
+
+            Button {
+                removeStage(at: index)
+            } label: {
+                Label("Remove stage", systemImage: "minus.circle")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(AppTheme.mutedText.opacity(stages.count > 1 ? 1 : 0.45))
+            .disabled(stages.count <= 1)
+            .help("Remove stage")
+        }
+        .padding(10)
+        .background(AppTheme.textContentFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(AppTheme.contentStroke, lineWidth: 1)
+        }
+    }
+
+    private func stageName(at index: Int) -> String? {
+        stages.indices.contains(index) ? stages[index] : nil
+    }
+
+    private func stageBinding(_ index: Int) -> Binding<String> {
+        Binding(
+            get: { stages.indices.contains(index) ? stages[index] : "" },
+            set: { newValue in
+                guard stages.indices.contains(index) else { return }
+                stages[index] = newValue
+                ensureValidStages()
+            }
+        )
+    }
+
+    private func addStage() {
+        stages.append(firstUnusedAgentName() ?? pickerNames.first ?? "Agent")
+        ensureValidStages()
+    }
+
+    private func removeStage(at index: Int) {
+        guard stages.count > 1, stages.indices.contains(index) else { return }
+        stages.remove(at: index)
+        ensureValidStages()
+    }
+
+    private func moveStage(from index: Int, by delta: Int) {
+        let target = index + delta
+        guard stages.indices.contains(index), stages.indices.contains(target) else { return }
+        stages.swapAt(index, target)
+    }
+
+    private func ensureValidStages() {
+        let cleaned = stages.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        if cleaned.isEmpty {
+            stages = [firstUnusedAgentName() ?? "Agent"]
+        } else if cleaned != stages {
+            stages = cleaned
+        }
+    }
+
+    private func firstUnusedAgentName() -> String? {
+        let used = Set(stages)
+        return agentNames.first { !used.contains($0) } ?? agentNames.first
     }
 }
 

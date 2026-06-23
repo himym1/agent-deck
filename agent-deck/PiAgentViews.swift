@@ -3835,6 +3835,7 @@ struct PiAgentScreen: View {
                     activeRun: store.activeLoopRun(for: session.id),
                     initialDraft: loopLaunchDraft,
                     sourceDefinition: loopLaunchDefinition,
+                    availableAgents: viewModel.startupSnapshot(forProjectPath: session.projectPath).effectiveAgents,
                     onCancel: { isLoopLaunchSheetPresented = false },
                     onLaunch: { request in
                         if store.activeLoopRun(for: session.id) != nil && !request.stopExistingActive {
@@ -6471,6 +6472,7 @@ private struct PiAgentComposerPanel: View {
                     activeRun: store.activeLoopRun(for: session.id),
                     initialDraft: loopLaunchDraft,
                     sourceDefinition: loopLaunchDefinition,
+                    availableAgents: viewModel.startupSnapshot(forProjectPath: session.projectPath).effectiveAgents,
                     onCancel: { isLoopLaunchSheetPresented = false },
                     onLaunch: { request in
                         if store.activeLoopRun(for: session.id) != nil && !request.stopExistingActive {

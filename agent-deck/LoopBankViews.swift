@@ -14,7 +14,7 @@ private struct LoopDefinitionEditorDraft: Equatable {
     var checkerName: String
     var checkerRubric: String
     var maxReviewRounds: Int
-    var pipelineStagesText: String
+    var pipelineStageNames: [String]
     var parallelBranchesText: String
     var classificationPrompt: String
     var checkpointPrompt: String
@@ -39,7 +39,7 @@ private struct LoopDefinitionEditorDraft: Equatable {
         checkerName = makerChecker.checkerName
         checkerRubric = makerChecker.checkerRubric
         maxReviewRounds = makerChecker.maxReviewRounds
-        pipelineStagesText = (definition?.pipeline.stageNames ?? LoopPipelineConfig().stageNames).joined(separator: " | ")
+        pipelineStageNames = definition?.pipeline.stageNames ?? LoopPipelineConfig().stageNames
         parallelBranchesText = (definition?.parallel.branchNames ?? LoopParallelConfig().branchNames).joined(separator: " | ")
         classificationPrompt = definition?.discoveryTriage.classificationPrompt ?? LoopDiscoveryTriageConfig().classificationPrompt
         checkpointPrompt = definition?.humanApproval.checkpointPrompt ?? LoopHumanApprovalConfig().checkpointPrompt
@@ -82,7 +82,7 @@ private struct LoopDefinitionEditorDraft: Equatable {
                 checkerRubric: checkerRubric,
                 maxReviewRounds: maxReviewRounds
             ),
-            pipeline: LoopPipelineConfig(stageNames: splitList(pipelineStagesText)),
+            pipeline: LoopPipelineConfig(stageNames: pipelineStageNames),
             parallel: LoopParallelConfig(branchNames: splitList(parallelBranchesText)),
             discoveryTriage: LoopDiscoveryTriageConfig(classificationPrompt: classificationPrompt),
             humanApproval: LoopHumanApprovalConfig(checkpointPrompt: checkpointPrompt),
@@ -108,6 +108,12 @@ struct LoopBankScreen: View {
     @State private var editorDraft = LoopDefinitionEditorDraft()
     @State private var errorMessage: String?
     @State private var pendingDelete: LoopDefinition?
+
+    private var availableLoopAgents: [EffectiveAgentRecord] {
+        viewModel.snapshot.effectiveAgents
+            .filter { $0.resolved.disabled != true }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
 
     var body: some View {
         SplitView {
@@ -314,10 +320,11 @@ struct LoopBankScreen: View {
             }
         case .agentPipeline:
             AppCard(title: "Agent Pipeline") {
-                detailRow("Stages") {
-                    TextField("Stages, separated by |", text: $editorDraft.pipelineStagesText)
-                        .multilineTextAlignment(.trailing)
-                        .textFieldStyle(.plain)
+                VStack(alignment: .leading, spacing: 10) {
+                    LoopPipelineStagePicker(stages: $editorDraft.pipelineStageNames, availableAgents: availableLoopAgents)
+                    Text("Stages are saved as an ordered agent list. The current runner records this order; child agent execution is the next runner slice.")
+                        .font(AppTheme.Font.caption)
+                        .foregroundStyle(AppTheme.mutedText)
                 }
             }
         case .parallelAgents:
