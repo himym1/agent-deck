@@ -109,6 +109,7 @@ final class PiAgentSessionStore {
     private var persistedSubagentTranscriptRunIDs: Set<UUID> = []
     private var loadedTranscriptSessionOrder: [UUID] = []
     private var loadedSubagentTranscriptOrder: [UUID] = []
+    private var loopRecoverySessionIDs: Set<UUID> = []
     private var transcriptLoadTasksBySessionID: [UUID: Task<Void, Never>] = [:]
     private var subagentTranscriptLoadTasksByRunID: [UUID: Task<Void, Never>] = [:]
 
@@ -1950,11 +1951,24 @@ final class PiAgentSessionStore {
     }
 
     func hydrateLoopRunsFromTranscript(sessionID: UUID) {
-        let runs = (transcriptsBySessionID[sessionID] ?? []).compactMap(LoopRunTranscriptCodec.decode(from:))
+        let decodedRuns = (transcriptsBySessionID[sessionID] ?? []).compactMap(LoopRunTranscriptCodec.decode(from:))
+        let shouldRecoverInterruptedRuns = loopRecoverySessionIDs.remove(sessionID) != nil
+        let now = Date()
+        let runs = decodedRuns.map { run -> LoopRun in
+            guard shouldRecoverInterruptedRuns, run.isActive else { return run }
+            var interrupted = run
+            interrupted.status = .interrupted
+            interrupted.endedAt = now
+            interrupted.stopReason = .appInterrupted
+            return interrupted
+        }
         if runs.isEmpty {
             loopRunsBySessionID.removeValue(forKey: sessionID)
         } else {
             loopRunsBySessionID[sessionID] = runs
+            for run in runs where decodedRuns.first(where: { $0.id == run.id })?.isActive == true {
+                upsert(LoopRunTranscriptCodec.transcriptEntry(for: run))
+            }
         }
     }
 
@@ -2292,6 +2306,7 @@ final class PiAgentSessionStore {
                 selectedSessionID = sessions.first?.id
             }
             persistedTranscriptSessionIDs = Set(transcriptsBySessionID.keys)
+            loopRecoverySessionIDs = persistedTranscriptSessionIDs
             persistedSubagentTranscriptRunIDs = Set(subagentTranscriptsByRunID.keys)
             writeLoadedTranscriptFilesAndManifest()
             if lazyTranscriptLoadingEnabled {
@@ -2313,6 +2328,7 @@ final class PiAgentSessionStore {
         sortSessions()
         transcriptsBySessionID = [:]
         persistedTranscriptSessionIDs = Set(manifest.parentSessionIDs)
+        loopRecoverySessionIDs = persistedTranscriptSessionIDs
         transcriptRevisionsBySessionID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, 0) })
 
         subagentRunsBySessionID = Dictionary(uniqueKeysWithValues: (persisted.subagentRuns ?? []).map { persistedRuns in

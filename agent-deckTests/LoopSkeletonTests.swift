@@ -178,6 +178,49 @@ final class LoopSkeletonTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(hydratedArtifact.filePath)))
     }
 
+    func testNormalHydrationPreservesActiveLoopRun() throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(), repository: nil)
+        let activeRun = LoopRun(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(goal: "Active loop", validationCommand: "/usr/bin/true")
+        )
+        store.append(LoopRunTranscriptCodec.transcriptEntry(for: activeRun))
+
+        store.hydrateLoopRunsFromTranscript(sessionID: session.id)
+
+        let hydrated = try XCTUnwrap(store.loopRuns(for: session.id).first)
+        XCTAssertEqual(hydrated.id, activeRun.id)
+        XCTAssertEqual(hydrated.status, .running)
+        XCTAssertNil(hydrated.stopReason)
+    }
+
+    func testReloadingPersistedActiveLoopRunMarksInterrupted() async throws {
+        let fileURL = PiTestSupport.temporaryStateFile()
+        let firstStore = PiAgentSessionStore(fileURL: fileURL)
+        firstStore.configureTranscriptMemory(lazyLoadingEnabled: false, cacheLimit: 10)
+        let session = firstStore.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(), repository: nil)
+        let activeRun = LoopRun(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(goal: "Interrupted loop", validationCommand: "/usr/bin/true")
+        )
+        firstStore.append(LoopRunTranscriptCodec.transcriptEntry(for: activeRun))
+        firstStore.flushForTesting()
+
+        let reloadedStore = PiAgentSessionStore(fileURL: fileURL)
+        await reloadedStore.waitForLoadForTesting()
+        reloadedStore.configureTranscriptMemory(lazyLoadingEnabled: false, cacheLimit: 10)
+
+        let hydrated = try XCTUnwrap(reloadedStore.loopRuns(for: session.id).first)
+        XCTAssertEqual(hydrated.id, activeRun.id)
+        XCTAssertEqual(hydrated.status, .interrupted)
+        XCTAssertEqual(hydrated.stopReason, .appInterrupted)
+        XCTAssertNotNil(hydrated.endedAt)
+        XCTAssertEqual(LoopRunTranscriptCodec.decode(from: reloadedStore.transcript(for: session.id)[0])?.status, .interrupted)
+    }
+
     func testLegacyLoopRunJSONWithoutValidationCommandStillDecodes() throws {
         let sessionID = UUID()
         let run = LoopRun(
