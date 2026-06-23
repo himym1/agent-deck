@@ -79,23 +79,37 @@ struct LoopLaunchSheet: View {
                     AppCard(title: "Loop") {
                         VStack(alignment: .leading, spacing: 14) {
                             pickerRow("Structure") {
-                                Picker("Structure", selection: $draft.structure) {
-                                    ForEach(LoopStructureKind.allCases) { kind in
-                                        Text(kind.displayName).tag(kind)
+                                HStack(spacing: 8) {
+                                    Picker("Structure", selection: $draft.structure) {
+                                        ForEach(LoopStructureKind.allCases) { kind in
+                                            Text(kind.displayName).tag(kind)
+                                        }
                                     }
+                                    .labelsHidden()
+                                    .appMenuPicker()
+
+                                    LoopInlineInfoButton(
+                                        title: "Structure",
+                                        message: "Controls the loop shape: one repeated agent, maker/checker review, fixed pipeline stages, parallel branches, discovery triage, or a human checkpoint."
+                                    )
                                 }
-                                .labelsHidden()
-                                .appMenuPicker()
                             }
 
                             pickerRow("Write Target") {
-                                Picker("Write Target", selection: $draft.writeTarget) {
-                                    ForEach(LoopWriteTarget.allCases) { target in
-                                        Text(target.displayName).tag(target)
+                                HStack(spacing: 8) {
+                                    Picker("Write Target", selection: $draft.writeTarget) {
+                                        ForEach(LoopWriteTarget.allCases) { target in
+                                            Text(target.displayName).tag(target)
+                                        }
                                     }
+                                    .labelsHidden()
+                                    .appMenuPicker()
+
+                                    LoopInlineInfoButton(
+                                        title: "Write Target",
+                                        message: "Choose where loop output may go. Artifact is safest and never edits project files; New worktree isolates code changes; Current checkout edits this project directly."
+                                    )
                                 }
-                                .labelsHidden()
-                                .appMenuPicker()
                             }
 
                             writeTargetExplanation
@@ -113,9 +127,16 @@ struct LoopLaunchSheet: View {
                                     }
                             }
 
-                            Stepper(value: $draft.maxIterations, in: 1...20) {
-                                Text("Max iterations: \(draft.maxIterations)")
-                                    .font(AppTheme.Font.body)
+                            HStack(spacing: 8) {
+                                Stepper(value: $draft.maxIterations, in: 1...20) {
+                                    Text("Max iterations: \(draft.maxIterations)")
+                                        .font(AppTheme.Font.body)
+                                }
+
+                                LoopInlineInfoButton(
+                                    title: "Max iterations",
+                                    message: "A hard safety limit for repeated work. The loop stops once it reaches this count even if the goal still needs follow-up."
+                                )
                             }
                         }
                     }
@@ -123,7 +144,17 @@ struct LoopLaunchSheet: View {
                     structureFields
 
                     AppCard(title: "Validation") {
-                        fieldGroup("Validation command") {
+                        fieldGroup {
+                            HStack(spacing: 6) {
+                                Text("Validation command")
+                                    .font(AppTheme.Font.caption.weight(.semibold))
+                                    .foregroundStyle(AppTheme.mutedText)
+                                LoopInlineInfoButton(
+                                    title: "Validation command",
+                                    message: "Optional shell command for checking the result. It runs from the project directory when available and its output is attached to the loop result."
+                                )
+                            }
+                        } content: {
                             AppTextField(text: $draft.validationCommand, placeholder: "Example: swift test")
                                 .frame(maxWidth: .infinity)
                             Text("Runs through your shell in the project directory when available. Leave empty to stop with Validation unavailable.")
@@ -241,7 +272,17 @@ struct LoopLaunchSheet: View {
                     fieldGroup("Checker name") {
                         AppTextField(text: $draft.makerChecker.checkerName, placeholder: "Checker name")
                     }
-                    fieldGroup("Checker rubric") {
+                    fieldGroup {
+                        HStack(spacing: 6) {
+                            Text("Checker rubric")
+                                .font(AppTheme.Font.caption.weight(.semibold))
+                                .foregroundStyle(AppTheme.mutedText)
+                            LoopInlineInfoButton(
+                                title: "Checker rubric",
+                                message: "Tells the checker how to decide whether the maker's result is acceptable, should be retried, needs a human, or should fail the loop."
+                            )
+                        }
+                    } content: {
                         AppTextField(
                             text: $draft.makerChecker.checkerRubric,
                             placeholder: "approve, reject once, ask human, or fail",
@@ -253,31 +294,77 @@ struct LoopLaunchSheet: View {
                             .foregroundStyle(AppTheme.mutedText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    Stepper(value: $draft.makerChecker.maxReviewRounds, in: 1...20) {
-                        Text("Max review rounds: \(draft.makerChecker.maxReviewRounds)")
-                            .font(AppTheme.Font.body)
+                    HStack(spacing: 8) {
+                        Stepper(value: $draft.makerChecker.maxReviewRounds, in: 1...20) {
+                            Text("Max review rounds: \(draft.makerChecker.maxReviewRounds)")
+                                .font(AppTheme.Font.body)
+                        }
+                        LoopInlineInfoButton(
+                            title: "Max review rounds",
+                            message: "Caps maker/checker retry cycles so a rejected result cannot loop indefinitely."
+                        )
                     }
                 case .agentPipeline:
-                    fieldGroup("Stages") {
+                    fieldGroup {
+                        HStack(spacing: 6) {
+                            Text("Stages")
+                                .font(AppTheme.Font.caption.weight(.semibold))
+                                .foregroundStyle(AppTheme.mutedText)
+                            LoopInlineInfoButton(
+                                title: "Pipeline stages",
+                                message: "Stage names are split with | and run in order. Use this when work should progress through named phases such as Explorer | Implementer | Verifier."
+                            )
+                        }
+                    } content: {
                         AppTextField(text: pipelineStagesBinding, placeholder: "Stages, separated by |")
                         Text("Runs stages in this fixed order and records the timeline.")
                             .font(AppTheme.Font.caption)
                             .foregroundStyle(AppTheme.mutedText)
                     }
                 case .parallelAgents:
-                    fieldGroup("Branches") {
+                    fieldGroup {
+                        HStack(spacing: 6) {
+                            Text("Branches")
+                                .font(AppTheme.Font.caption.weight(.semibold))
+                                .foregroundStyle(AppTheme.mutedText)
+                            LoopInlineInfoButton(
+                                title: "Parallel branches",
+                                message: "Branch names are split with | and represent independent attempts or hypotheses tracked in one loop run."
+                            )
+                        }
+                    } content: {
                         AppTextField(text: parallelBranchesBinding, placeholder: "Branches, separated by |")
                         Text("Records branch timeline. Choose New worktree for isolated coding-preview writes.")
                             .font(AppTheme.Font.caption)
                             .foregroundStyle(AppTheme.mutedText)
                     }
                 case .discoveryTriage:
-                    fieldGroup("Classification prompt") {
+                    fieldGroup {
+                        HStack(spacing: 6) {
+                            Text("Classification prompt")
+                                .font(AppTheme.Font.caption.weight(.semibold))
+                                .foregroundStyle(AppTheme.mutedText)
+                            LoopInlineInfoButton(
+                                title: "Classification prompt",
+                                message: "Instruction used by discovery triage to sort findings by severity and recommend the next action."
+                            )
+                        }
+                    } content: {
                         AppTextField(text: $draft.discoveryTriage.classificationPrompt, placeholder: "Classification prompt", axis: .vertical)
                             .lineLimit(2...4)
                     }
                 case .humanApproval:
-                    fieldGroup("Checkpoint prompt") {
+                    fieldGroup {
+                        HStack(spacing: 6) {
+                            Text("Checkpoint prompt")
+                                .font(AppTheme.Font.caption.weight(.semibold))
+                                .foregroundStyle(AppTheme.mutedText)
+                            LoopInlineInfoButton(
+                                title: "Checkpoint prompt",
+                                message: "The message shown when the loop pauses for human approval before continuing."
+                            )
+                        }
+                    } content: {
                         AppTextField(text: $draft.humanApproval.checkpointPrompt, placeholder: "Checkpoint prompt", axis: .vertical)
                             .lineLimit(2...4)
                         Text("The deterministic preview runner stops with Human input required at this checkpoint.")
@@ -326,10 +413,18 @@ struct LoopLaunchSheet: View {
     }
 
     private func fieldGroup<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        fieldGroup {
             Text(label)
                 .font(AppTheme.Font.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
+        } content: {
+            content()
+        }
+    }
+
+    private func fieldGroup<Label: View, Content: View>(@ViewBuilder label: () -> Label, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            label()
             content()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -376,6 +471,38 @@ struct LoopLaunchSheet: View {
         value.components(separatedBy: "|")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+}
+
+private struct LoopInlineInfoButton: View {
+    let title: String
+    let message: String
+    @State private var isPresented = false
+
+    var body: some View {
+        Button {
+            isPresented.toggle()
+        } label: {
+            Image(systemName: "info.circle")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AppTheme.mutedText)
+                .frame(width: 18, height: 18)
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .fontWidth(.expanded)
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
+            .frame(width: 300, alignment: .leading)
+        }
     }
 }
 
