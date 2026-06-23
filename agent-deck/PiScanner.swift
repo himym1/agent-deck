@@ -31,9 +31,6 @@ nonisolated struct PiScanner: @unchecked Sendable {
         let projectEnv = projectRoot?.appendingPathComponent(".pi/.env")
         let projectSkills = projectRoot?.appendingPathComponent(".pi/skills", isDirectory: true)
         let projectPrompts = projectRoot?.appendingPathComponent(".pi/prompts", isDirectory: true)
-        let globalChains = homeDirectory().appendingPathComponent(".pi/agent/chains", isDirectory: true)
-        let libraryChains = homeDirectory().appendingPathComponent(".pi/agent/agent-library/chains", isDirectory: true)
-        let projectChains = projectRoot?.appendingPathComponent(".pi/chains", isDirectory: true)
 
         let builtinAgents = scanAgents(at: bundledAgentsDirectory(), scope: .builtin)
         let bundledSkills = scanSkills(at: bundledSkillsDirectory(), scope: .builtin)
@@ -104,8 +101,6 @@ nonisolated struct PiScanner: @unchecked Sendable {
             malformedWarnings: malformedResourceWarnings(
                 agentDirectories: [bundledAgentsDirectory(), legacyGlobalAgentDirectory, globalAgentDirectory, legacyProjectAgentDirectory, projectAgentDirectory, agentLibraryDirectory].compactMap { $0 },
                 skillDirectories: [globalSkills, extraGlobalSkills, projectSkills].compactMap { $0 } + packageSkillScan.skillDirectories
-            ) + retiredChainWarnings(
-                directories: [legacyGlobalAgentDirectory, globalAgentDirectory, legacyProjectAgentDirectory, projectAgentDirectory, agentLibraryDirectory, globalChains, libraryChains, projectChains].compactMap { $0 }
             ) + packageSkillScan.warnings + promptScan.warnings
         )
 
@@ -160,7 +155,6 @@ nonisolated struct PiScanner: @unchecked Sendable {
         return urls
             .filter { url in
                 url.pathExtension == "md" &&
-                !url.lastPathComponent.hasSuffix(".chain.md") &&
                 url.lastPathComponent != "SKILL.md" &&
                 !url.pathComponents.contains("skills")
             }
@@ -863,30 +857,12 @@ nonisolated struct PiScanner: @unchecked Sendable {
         return warnings.sorted { $0.message.localizedCaseInsensitiveCompare($1.message) == .orderedAscending }
     }
 
-    private func retiredChainWarnings(directories: [URL]) -> [DiagnosticWarning] {
-        var warnings: [DiagnosticWarning] = []
-        var seenPaths = Set<String>()
-
-        for directory in directories {
-            for url in markdownFiles(in: directory) where url.lastPathComponent.hasSuffix(".chain.md") {
-                let path = url.standardizedFileURL.path
-                guard seenPaths.insert(path).inserted else { continue }
-                warnings.append(.init(
-                    id: "retired-chain:\(path)",
-                    message: "Chains are retired/unreleased in Agent Deck and .chain.md files are not loaded: \(path)."
-                ))
-            }
-        }
-
-        return warnings
-    }
-
     private func malformedResourceWarnings(agentDirectories: [URL], skillDirectories: [URL]) -> [DiagnosticWarning] {
         var warnings: [DiagnosticWarning] = []
 
         for directory in agentDirectories {
             guard let urls = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { continue }
-            for url in urls where url.pathExtension == "md" && !url.lastPathComponent.hasSuffix(".chain.md") {
+            for url in urls where url.pathExtension == "md" {
                 guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
                 let document = parseMarkdownDocument(text)
                 if !text.hasPrefix("---") {

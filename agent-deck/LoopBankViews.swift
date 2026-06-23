@@ -605,21 +605,11 @@ struct LoopBankScreen: View {
         Task { @MainActor in
             isLaunchSheetPresented = false
             launchDefinition = nil
-            let launched: LoopRun?
-            switch request.draft.structure {
-            case .singleAgent:
-                launched = await viewModel.launchSingleAgentLoop(session: session, draft: request.draft, stopExistingActive: request.stopExistingActive)
-            case .agentPipeline:
-                launched = await viewModel.launchAgentPipelineLoop(session: session, draft: request.draft, stopExistingActive: request.stopExistingActive)
-            case .makerChecker:
-                launched = await viewModel.launchMakerCheckerLoop(session: session, draft: request.draft, stopExistingActive: request.stopExistingActive)
-            case .discoveryTriage:
-                launched = await viewModel.launchDiscoveryTriageLoop(session: session, draft: request.draft, stopExistingActive: request.stopExistingActive)
-            case .parallelAgents:
-                launched = await viewModel.launchParallelAgentsLoop(session: session, draft: request.draft, stopExistingActive: request.stopExistingActive)
-            case .humanApproval:
-                launched = store.launchSmokeLoop(sessionID: session.id, projectPath: session.projectPath, draft: request.draft, stopExistingActive: request.stopExistingActive)
-            }
+            let launched = await viewModel.launchLoop(
+                session: session,
+                draft: request.draft,
+                stopExistingActive: request.stopExistingActive
+            )
             guard launched != nil else {
                 store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "\"\(definition.name)\" could not be started."))
                 return

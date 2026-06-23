@@ -157,17 +157,17 @@ final class PiAgentUIRequestSheetLayoutTests: XCTestCase {
         makeRequest(
             id: id,
             method: .select,
-            title: "For Milestone 0, how should existing `.chain.md` files be handled while retiring Chains? My recommendation is a one-release diagnostic warning: it is cautious, avoids silent surprises if someone has local unreleased files, and does not over-invest in migration.",
-            message: "I read docs/loop-plan and inventoried current chain references. Chains appear only as unreleased/stale documentation plus PiScanner exclusions that prevent `.chain.md` files from being parsed as prompts/agents. There is no current `ChainPersistence.swift` or user-facing chain UI in the source tree. The loop plan leaves `.chain.md` handling open.",
+            title: "For the Loop Bank polish slice, which saved-loop management improvement should come first? My recommendation is centralizing launch routing: it reduces regression risk before adding more UI polish.",
+            message: "I audited the loop plan against the current implementation. Core loop paths are implemented; remaining work is mostly consolidation, tests, and deeper management UX.",
             options: [
-                "Diagnostic warning (recommended)",
-                "Ignore silently",
-                "Migration support"
+                "Centralize launch routing (recommended)",
+                "Improve assignment controls",
+                "Improve last-run summaries"
             ],
             optionDescriptions: [
-                "Diagnostic warning (recommended)": "Keep ignoring `.chain.md` as active resources, but surface a scan warning explaining Chains are retired/unreleased and not loaded.",
-                "Ignore silently": "Continue excluding `.chain.md` from resources without any user-visible warning.",
-                "Migration support": "Add conversion from `.chain.md` to loop definitions; larger and likely premature unless real user data exists."
+                "Centralize launch routing (recommended)": "Move duplicated launch dispatch into one shared AppViewModel path before adding more launch entry points.",
+                "Improve assignment controls": "Replace raw project-path editing with clearer assign/unassign affordances.",
+                "Improve last-run summaries": "Show richer saved-loop run status and navigation from Loop Bank."
             ],
             prefill: prefill,
             allowsFreeform: true,

@@ -3863,52 +3863,11 @@ struct PiAgentScreen: View {
                         }
                         Task { @MainActor in
                             isLoopLaunchSheetPresented = false
-                            let launched: LoopRun?
-                            if request.draft.structure == .agentPipeline {
-                                launched = await viewModel.launchAgentPipelineLoop(
-                                    session: session,
-                                    draft: request.draft,
-                                    stopExistingActive: request.stopExistingActive
-                                )
-                            } else if request.draft.structure == .singleAgent {
-                                launched = await viewModel.launchSingleAgentLoop(
-                                    session: session,
-                                    draft: request.draft,
-                                    stopExistingActive: request.stopExistingActive
-                                )
-                            } else if request.draft.structure == .makerChecker {
-                                launched = await viewModel.launchMakerCheckerLoop(
-                                    session: session,
-                                    draft: request.draft,
-                                    stopExistingActive: request.stopExistingActive
-                                )
-                            } else if request.draft.structure == .discoveryTriage {
-                                launched = await viewModel.launchDiscoveryTriageLoop(
-                                    session: session,
-                                    draft: request.draft,
-                                    stopExistingActive: request.stopExistingActive
-                                )
-                            } else if request.draft.structure == .parallelAgents {
-                                launched = await viewModel.launchParallelAgentsLoop(
-                                    session: session,
-                                    draft: request.draft,
-                                    stopExistingActive: request.stopExistingActive
-                                )
-                            } else if request.draft.structure == .humanApproval {
-                                launched = store.launchSmokeLoop(
-                                    sessionID: session.id,
-                                    projectPath: session.projectPath,
-                                    draft: request.draft,
-                                    stopExistingActive: request.stopExistingActive
-                                )
-                            } else {
-                                launched = store.launchSmokeLoop(
-                                    sessionID: session.id,
-                                    projectPath: session.projectPath,
-                                    draft: request.draft,
-                                    stopExistingActive: request.stopExistingActive
-                                )
-                            }
+                            let launched = await viewModel.launchLoop(
+                                session: session,
+                                draft: request.draft,
+                                stopExistingActive: request.stopExistingActive
+                            )
                             guard launched != nil else {
                                 store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "The loop could not be started."))
                                 return
@@ -6585,52 +6544,11 @@ private struct PiAgentComposerPanel: View {
                         }
                         Task { @MainActor in
                             isLoopLaunchSheetPresented = false
-                            let launched: LoopRun?
-                            if request.draft.structure == .agentPipeline {
-                                launched = await viewModel.launchAgentPipelineLoop(
-                                    session: session,
-                                    draft: request.draft,
-                                    stopExistingActive: request.stopExistingActive
-                                )
-                            } else if request.draft.structure == .singleAgent {
-                                launched = await viewModel.launchSingleAgentLoop(
-                                    session: session,
-                                    draft: request.draft,
-                                    stopExistingActive: request.stopExistingActive
-                                )
-                            } else if request.draft.structure == .makerChecker {
-                                launched = await viewModel.launchMakerCheckerLoop(
-                                    session: session,
-                                    draft: request.draft,
-                                    stopExistingActive: request.stopExistingActive
-                                )
-                            } else if request.draft.structure == .discoveryTriage {
-                                launched = await viewModel.launchDiscoveryTriageLoop(
-                                    session: session,
-                                    draft: request.draft,
-                                    stopExistingActive: request.stopExistingActive
-                                )
-                            } else if request.draft.structure == .parallelAgents {
-                                launched = await viewModel.launchParallelAgentsLoop(
-                                    session: session,
-                                    draft: request.draft,
-                                    stopExistingActive: request.stopExistingActive
-                                )
-                            } else if request.draft.structure == .humanApproval {
-                                launched = store.launchSmokeLoop(
-                                    sessionID: session.id,
-                                    projectPath: session.projectPath,
-                                    draft: request.draft,
-                                    stopExistingActive: request.stopExistingActive
-                                )
-                            } else {
-                                launched = store.launchSmokeLoop(
-                                    sessionID: session.id,
-                                    projectPath: session.projectPath,
-                                    draft: request.draft,
-                                    stopExistingActive: request.stopExistingActive
-                                )
-                            }
+                            let launched = await viewModel.launchLoop(
+                                session: session,
+                                draft: request.draft,
+                                stopExistingActive: request.stopExistingActive
+                            )
                             guard launched != nil else {
                                 store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "The loop could not be started."))
                                 return

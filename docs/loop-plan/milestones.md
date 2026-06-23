@@ -6,22 +6,6 @@ Build vertical slices. Each milestone should produce a working user path that ca
 
 Avoid building all models, all UI, and all runner behavior before anything works. The goal is to prove the full path early, then deepen it.
 
-## Milestone 0: Chains retirement inventory
-
-Goal: confirm and remove the unreleased user-facing Chains product surface.
-
-Deliverables:
-
-- Inventory all `chain`, `Chain`, and `.chain.md` references.
-- Decide whether any internal sequence status code must remain.
-- Remove or update stale docs.
-- Add a deprecation warning or ignore path for old `.chain.md` files if needed.
-
-Exit criteria:
-
-- Product docs no longer present Chains as a supported resource.
-- Remaining chain references are either removed, internal-only, or explicitly historical.
-
 ## Milestone 1: Unsaved loop skeleton
 
 Goal: launch one unsaved loop from the composer and complete it with a stop reason.

@@ -30,7 +30,7 @@ Validated on May 7, 2026 with Xcode 26.4.1 selected at `/Applications/Xcode.app/
 | `PiTestSupport.swift` | Temporary projects, fake Pi executable, RPC harness, shared factories. |
 | `PiRPCBridgeFixtures.swift` | Canonical bridge event fixtures for parent and child bridge tests. |
 | `PiAgentSessionStoreTests.swift` | Session persistence, selection recovery, session plans, supervisor request state. |
-| `PiAgentBridgeSmokeTests.swift` | Parent bridge extension injection, native catalog prompt injection, parent bridge routing for managed subagent/chain/parallel, supervisor list/answer, plan set/update, malformed bridge traffic, regular editor UI. |
+| `PiAgentBridgeSmokeTests.swift` | Parent bridge extension injection, native catalog prompt injection, parent bridge routing for managed subagent/parallel, supervisor list/answer, plan set/update, malformed bridge traffic, regular editor UI. |
 | `PiNativeBridgeExtensionSourceTests.swift` | Generated TypeScript bridge extension source for parent and child Pi tools. |
 | `PiSubagentRuntimeSmokeTests.swift` | Launch planner, pre-event run metadata, artifact files, read-first sanitization, fork-context sanitization, child launch isolation flags, expected-outcome prompts, child supervisor progress/decision/interview flow. |
 | `PiSubagentWorktreeServiceTests.swift` | Worktree patch capture safety, changed-file parsing, parent dirty-state guard, unsafe path guard, non-isolated run guard. |
@@ -44,7 +44,6 @@ Validated on May 7, 2026 with Xcode 26.4.1 selected at `/Applications/Xcode.app/
 | Session plan set/update from app store APIs | Unit | Covered |
 | Session plan set/update from parent bridge | Harnessed smoke | Covered |
 | Parent `managed_subagent` bridge routing | Harnessed smoke | Covered |
-| Parent `managed_chain` bridge routing | Harnessed smoke | Covered |
 | Parent `managed_parallel` bridge routing | Harnessed smoke | Covered |
 | Parent `list_supervisor_requests` bridge routing | Harnessed smoke | Covered |
 | Parent `answer_supervisor_request` bridge routing | Harnessed smoke | Covered |
@@ -65,7 +64,6 @@ Validated on May 7, 2026 with Xcode 26.4.1 selected at `/Applications/Xcode.app/
 | Worktree patch apply parent dirty guard | Unit with fake git | Covered |
 | Worktree patch unsafe path and non-isolated guards | Unit with fake git | Covered |
 | Worktree patch successful apply/discard against a real isolated repository | Real integration | Add next |
-| Chain graph execution order and previous-output handoff | Harnessed smoke | Add next |
 | Parallel graph concurrency and failure aggregation | Harnessed smoke | Add next |
 | Extension isolation for child runs | Unit/smoke | Covered |
 | App settings affecting runtime defaults | Unit | Add next |

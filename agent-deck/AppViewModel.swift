@@ -3343,7 +3343,25 @@ final class AppViewModel: NSObject {
     }
 
     @discardableResult
-    func launchSingleAgentLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+    func launchLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+        switch draft.structure {
+        case .singleAgent:
+            return await launchSingleAgentLoop(session: session, draft: draft, stopExistingActive: stopExistingActive)
+        case .agentPipeline:
+            return await launchAgentPipelineLoop(session: session, draft: draft, stopExistingActive: stopExistingActive)
+        case .makerChecker:
+            return await launchMakerCheckerLoop(session: session, draft: draft, stopExistingActive: stopExistingActive)
+        case .discoveryTriage:
+            return await launchDiscoveryTriageLoop(session: session, draft: draft, stopExistingActive: stopExistingActive)
+        case .parallelAgents:
+            return await launchParallelAgentsLoop(session: session, draft: draft, stopExistingActive: stopExistingActive)
+        case .humanApproval:
+            return piAgentSessionStore.launchSmokeLoop(sessionID: session.id, projectPath: session.projectPath, draft: draft, stopExistingActive: stopExistingActive)
+        }
+    }
+
+    @discardableResult
+    private func launchSingleAgentLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
         let snapshot = startupSnapshot(forProjectPath: session.projectPath)
         let agentsByName = Dictionary(uniqueKeysWithValues: snapshot.effectiveAgents.map { ($0.name, $0) })
         return await piAgentSessionStore.launchSingleAgentLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, agentName, task, writeTarget, workingDirectory, requestedOutputPath in
@@ -3364,7 +3382,7 @@ final class AppViewModel: NSObject {
     }
 
     @discardableResult
-    func launchParallelAgentsLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+    private func launchParallelAgentsLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
         await piAgentSessionStore.launchParallelAgentsLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, tasks, concurrency, useWorktreeIsolation in
             guard let self else { return nil }
             return await withCheckedContinuation { continuation in
@@ -3383,7 +3401,7 @@ final class AppViewModel: NSObject {
     }
 
     @discardableResult
-    func launchDiscoveryTriageLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+    private func launchDiscoveryTriageLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
         let snapshot = startupSnapshot(forProjectPath: session.projectPath)
         let agentsByName = Dictionary(uniqueKeysWithValues: snapshot.effectiveAgents.map { ($0.name, $0) })
         return await piAgentSessionStore.launchDiscoveryTriageLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, agentName, task, writeTarget, workingDirectory, requestedOutputPath in
@@ -3404,7 +3422,7 @@ final class AppViewModel: NSObject {
     }
 
     @discardableResult
-    func launchMakerCheckerLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+    private func launchMakerCheckerLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
         let snapshot = startupSnapshot(forProjectPath: session.projectPath)
         let agentsByName = Dictionary(uniqueKeysWithValues: snapshot.effectiveAgents.map { ($0.name, $0) })
         return await piAgentSessionStore.launchMakerCheckerLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, roleName, task, writeTarget, workingDirectory, requestedOutputPath in
@@ -3425,7 +3443,7 @@ final class AppViewModel: NSObject {
     }
 
     @discardableResult
-    func launchAgentPipelineLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+    private func launchAgentPipelineLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
         let snapshot = startupSnapshot(forProjectPath: session.projectPath)
         let agentsByName = Dictionary(uniqueKeysWithValues: snapshot.effectiveAgents.map { ($0.name, $0) })
         return await piAgentSessionStore.launchAgentPipelineLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, stageName, task, writeTarget, workingDirectory, requestedOutputPath in
@@ -8866,20 +8884,7 @@ final class AppViewModel: NSObject {
         guard let session = piAgentSessionStore.sessions.first(where: { $0.id == run.sessionID }) else { return }
         let draft = loopDraft(from: run)
         Task { @MainActor in
-            switch draft.structure {
-            case .singleAgent:
-                _ = await launchSingleAgentLoop(session: session, draft: draft, stopExistingActive: false)
-            case .agentPipeline:
-                _ = await launchAgentPipelineLoop(session: session, draft: draft, stopExistingActive: false)
-            case .makerChecker:
-                _ = await launchMakerCheckerLoop(session: session, draft: draft, stopExistingActive: false)
-            case .discoveryTriage:
-                _ = await launchDiscoveryTriageLoop(session: session, draft: draft, stopExistingActive: false)
-            case .parallelAgents:
-                _ = await launchParallelAgentsLoop(session: session, draft: draft, stopExistingActive: false)
-            case .humanApproval:
-                _ = piAgentSessionStore.launchSmokeLoop(sessionID: session.id, projectPath: session.projectPath, draft: draft, stopExistingActive: false)
-            }
+            _ = await launchLoop(session: session, draft: draft, stopExistingActive: false)
         }
     }
 

@@ -84,7 +84,7 @@ Parent sessions stay orchestration-first. They delegate scoped work — explorat
 - **Summary cards** in the transcript with per-agent status, tokens, and duration.
 - **Supervisor request cards** render native macOS decision UIs when a child needs human guidance.
 - **Worktree isolation** for write-capable subagents — multiple writers won't clobber each other.
-- **Parallel and chained graphs** via `managed_subagent`, `managed_parallel`, and `managed_chain`.
+- **Parallel agent graphs** via `managed_subagent` and `managed_parallel`.
 
 ## Agents, skills, prompts, and commands
 

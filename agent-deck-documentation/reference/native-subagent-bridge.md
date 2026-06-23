@@ -7,7 +7,6 @@ Agent Deck injects generated bridge extensions into Pi RPC sessions when native 
 Parent Pi Agent sessions can request app-managed work through tools such as:
 
 - `managed_subagent` — run one native subagent, or continue one with `continueSubagentID`
-- `managed_chain` — run a native chain graph
 - `managed_parallel` — run parallel native tasks
 - `list_supervisor_requests` — inspect blocking child requests
 - `answer_supervisor_request` — answer a blocking child request
