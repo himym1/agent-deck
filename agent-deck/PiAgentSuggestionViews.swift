@@ -622,7 +622,7 @@ struct PiAgentUIRequestSheet: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             Image(systemName: "questionmark.bubble.fill")
                 .font(AppTheme.Font.headline)
                 .foregroundStyle(AppTheme.brandAccent)
@@ -743,7 +743,7 @@ struct PiAgentUIRequestSheet: View {
             }
             draft = ""
         } label: {
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
                 Image(systemName: selectionIcon(for: option, allowsMultiple: allowsMultiple))
                     .foregroundStyle(selectedOptions.contains(option) ? AppTheme.brandAccent : AppTheme.mutedText)
                     .frame(width: 18)
