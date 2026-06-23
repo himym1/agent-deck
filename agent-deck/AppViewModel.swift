@@ -3343,6 +3343,27 @@ final class AppViewModel: NSObject {
     }
 
     @discardableResult
+    func launchSingleAgentLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+        let snapshot = startupSnapshot(forProjectPath: session.projectPath)
+        let agentsByName = Dictionary(uniqueKeysWithValues: snapshot.effectiveAgents.map { ($0.name, $0) })
+        return await piAgentSessionStore.launchSingleAgentLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, agentName, task, writeTarget, workingDirectory, requestedOutputPath in
+            guard let self else { return nil }
+            guard let agent = agentsByName[agentName], agent.resolved.disabled != true else {
+                self.piAgentSessionStore.append(.init(sessionID: session.id, role: .error, title: "Loop Agent Unavailable", text: "Single-agent role \"\(agentName)\" is not available in this project."))
+                return nil
+            }
+            var executionSession = session
+            if writeTarget == .newWorktree, let workingDirectory { executionSession.worktreePath = workingDirectory.path }
+            let expectedOutcome: PiSubagentExpectedOutcome = switch writeTarget {
+            case .artifactMarkdown: .reportOnly
+            case .newWorktree: .editFilesInWorktree
+            case .currentCheckout: .directProjectWrites
+            }
+            return await self.runNativeSubagentAndWait(parentSession: executionSession, agent: agent, snapshot: snapshot, task: task, useWorktreeIsolation: false, expectedOutcome: expectedOutcome, requestedOutputPath: requestedOutputPath, loopID: loopID)
+        }
+    }
+
+    @discardableResult
     func launchParallelAgentsLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
         await piAgentSessionStore.launchParallelAgentsLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, tasks, concurrency, useWorktreeIsolation in
             guard let self else { return nil }
@@ -8845,9 +8866,18 @@ final class AppViewModel: NSObject {
         guard let session = piAgentSessionStore.sessions.first(where: { $0.id == run.sessionID }) else { return }
         let draft = loopDraft(from: run)
         Task { @MainActor in
-            if draft.structure == .agentPipeline {
+            switch draft.structure {
+            case .singleAgent:
+                _ = await launchSingleAgentLoop(session: session, draft: draft, stopExistingActive: false)
+            case .agentPipeline:
                 _ = await launchAgentPipelineLoop(session: session, draft: draft, stopExistingActive: false)
-            } else {
+            case .makerChecker:
+                _ = await launchMakerCheckerLoop(session: session, draft: draft, stopExistingActive: false)
+            case .discoveryTriage:
+                _ = await launchDiscoveryTriageLoop(session: session, draft: draft, stopExistingActive: false)
+            case .parallelAgents:
+                _ = await launchParallelAgentsLoop(session: session, draft: draft, stopExistingActive: false)
+            case .humanApproval:
                 _ = piAgentSessionStore.launchSmokeLoop(sessionID: session.id, projectPath: session.projectPath, draft: draft, stopExistingActive: false)
             }
         }

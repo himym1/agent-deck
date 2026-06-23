@@ -3870,6 +3870,12 @@ struct PiAgentScreen: View {
                                     draft: request.draft,
                                     stopExistingActive: request.stopExistingActive
                                 )
+                            } else if request.draft.structure == .singleAgent {
+                                launched = await viewModel.launchSingleAgentLoop(
+                                    session: session,
+                                    draft: request.draft,
+                                    stopExistingActive: request.stopExistingActive
+                                )
                             } else if request.draft.structure == .makerChecker {
                                 launched = await viewModel.launchMakerCheckerLoop(
                                     session: session,
@@ -6575,6 +6581,12 @@ private struct PiAgentComposerPanel: View {
                             let launched: LoopRun?
                             if request.draft.structure == .agentPipeline {
                                 launched = await viewModel.launchAgentPipelineLoop(
+                                    session: session,
+                                    draft: request.draft,
+                                    stopExistingActive: request.stopExistingActive
+                                )
+                            } else if request.draft.structure == .singleAgent {
+                                launched = await viewModel.launchSingleAgentLoop(
                                     session: session,
                                     draft: request.draft,
                                     stopExistingActive: request.stopExistingActive

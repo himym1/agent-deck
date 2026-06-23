@@ -558,7 +558,7 @@ enum LoopRunTranscriptCodec {
         case .humanApproval:
             lines.append("Checkpoint: \(run.humanApproval.checkpointPrompt)")
         case .singleAgent:
-            break
+            lines.append("Agent: \(run.makerChecker.makerName)")
         }
         if let timeline = run.iterations.last?.timeline, !timeline.isEmpty {
             lines.append("Timeline: \(timeline.map { $0.roleName }.joined(separator: " → "))")

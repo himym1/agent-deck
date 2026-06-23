@@ -394,7 +394,10 @@ struct LoopLaunchSheet: View {
                             .foregroundStyle(AppTheme.mutedText)
                     }
                 case .singleAgent:
-                    Text("Runs one agent loop against the selected write target.")
+                    fieldGroup("Agent") {
+                        LoopAgentNameMenu(selection: $draft.makerChecker.makerName, availableAgents: availableAgents, fallbackLabel: "Agent")
+                    }
+                    Text("Runs the selected agent against the selected write target.")
                         .font(AppTheme.Font.caption)
                         .foregroundStyle(AppTheme.mutedText)
                 }

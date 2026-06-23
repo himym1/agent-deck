@@ -857,6 +857,60 @@ final class PiAgentSessionStore {
     var onStopLoopRun: ((UUID, UUID) -> Void)?
 
     @discardableResult
+    func launchSingleAgentLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool = false, executeAgent: @escaping (UUID, String, String, LoopWriteTarget, URL?, String?) async -> PiSubagentRunRecord?) async -> LoopRun? {
+        guard draft.structure == .singleAgent else { return nil }
+        guard !draft.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        if let active = activeLoopRun(for: session.id) {
+            guard stopExistingActive else { return nil }
+            stopLoopRun(active.id, sessionID: session.id)
+        }
+        var run = LoopRun(sessionID: session.id, projectPath: session.projectPath, draft: draft)
+        let artifactDirectory = loopArtifactDirectoryURL(sessionID: session.id, runID: run.id)
+        run.artifactDirectoryPath = artifactDirectory.path
+        upsertLoopRun(run)
+        do { try FileManager.default.createDirectory(at: artifactDirectory, withIntermediateDirectories: true) } catch {
+            run.status = .failed; run.endedAt = Date(); run.stopReason = .toolFailed; upsertLoopRun(run); return nil
+        }
+        let executionContext: LoopExecutionContext
+        do { executionContext = try prepareLoopExecutionContext(writeTarget: run.writeTarget, projectPath: session.projectPath, artifactDirectory: artifactDirectory) } catch let error as LoopExecutionPreparationError {
+            run.status = .failed; run.endedAt = Date(); run.stopReason = error.stopReason; run.iterations.append(LoopIteration(index: 0, summary: error.localizedDescription)); upsertLoopRun(run); return run
+        } catch { run.status = .failed; run.endedAt = Date(); run.stopReason = .toolFailed; run.iterations.append(LoopIteration(index: 0, summary: error.localizedDescription)); upsertLoopRun(run); return run }
+
+        let agentName = run.makerChecker.makerName
+        for iterationIndex in 1...run.maxIterations {
+            if let stoppedRun = stoppedLoopRun(run) { return stoppedRun }
+            let started = Date()
+            run.currentIteration = iterationIndex
+            upsertLoopRun(run)
+            let outputPath = run.writeTarget == .artifactMarkdown ? artifactDirectory.appendingPathComponent(iterationIndex == 1 ? "single-agent-output.md" : "single-agent-output-\(iterationIndex).md").path : nil
+            let task = singleAgentTask(run: run, iterationIndex: iterationIndex)
+            guard let childRun = await executeAgent(run.id, agentName, task, run.writeTarget, executionContext.workingDirectory, outputPath) else {
+                run.status = .failed; run.endedAt = Date(); run.stopReason = .agentFailed; upsertLoopRun(run); return run
+            }
+            if let stoppedRun = stoppedLoopRun(run) { return stoppedRun }
+            let summary = childRun.summary?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? childRun.error?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? childRun.status.rawValue
+            let timeline = [LoopTimelineEvent(step: .makerAct, roleName: agentName, note: "Child run: \(childRun.id.uuidString)", timestamp: started)]
+            if childRun.status != .completed {
+                let ended = Date()
+                run.iterations.append(LoopIteration(index: iterationIndex, startedAt: started, endedAt: ended, summary: "Single agent stopped with \(childRun.status.rawValue): \(summary)", timeline: timeline))
+                run.status = childRun.status == .stopped ? .stopped : .failed
+                run.endedAt = ended
+                run.stopReason = childRun.status == .stopped ? .userStopped : .agentFailed
+                upsertLoopRun(run)
+                return run
+            }
+            let validationResult = run.validationCommand.isEmpty ? nil : runValidationCommand(run.validationCommand, workingDirectory: executionContext.workingDirectory)
+            let artifact = makeMarkdownArtifact(filename: iterationIndex == 1 ? "single-agent-summary.md" : "single-agent-summary-\(iterationIndex).md", markdown: singleAgentArtifactMarkdown(run: run, iterationIndex: iterationIndex, childRunID: childRun.id, summary: summary), artifactDirectory: artifactDirectory)
+            let ended = Date()
+            run.iterations.append(LoopIteration(index: iterationIndex, startedAt: started, endedAt: ended, summary: "Single agent completed iteration \(iterationIndex).", artifacts: [artifact].compactMap { $0 }, validationResult: validationResult, timeline: timeline))
+            if run.validationCommand.isEmpty { run.status = .failed; run.endedAt = ended; run.stopReason = .validationUnavailable; upsertLoopRun(run); return run }
+            if validationResult?.didPass == true { run.status = .completed; run.endedAt = ended; run.stopReason = .success; upsertLoopRun(run); return run }
+            upsertLoopRun(run)
+        }
+        run.status = .failed; run.endedAt = Date(); run.stopReason = .validationFailedAfterFinalIteration; upsertLoopRun(run); return run
+    }
+
+    @discardableResult
     func launchAgentPipelineLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool = false, executeStage: @escaping (UUID, String, String, LoopWriteTarget, URL?, String?) async -> PiSubagentRunRecord?) async -> LoopRun? {
         guard draft.structure == .agentPipeline else { return nil }
         guard !draft.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
@@ -1599,6 +1653,31 @@ final class PiAgentSessionStore {
         } catch {
             return nil
         }
+    }
+
+    private func singleAgentTask(run: LoopRun, iterationIndex: Int) -> String {
+        [
+            "You are running a Single Agent loop in Agent Deck.",
+            "Loop goal: \(run.goal)",
+            "Iteration: \(iterationIndex) of \(run.maxIterations)",
+            "Write target: \(run.writeTarget.displayName)",
+            "Complete the requested work within the selected write target. End with a concise summary of changes, evidence, risks, and next steps."
+        ].joined(separator: "\n\n")
+    }
+
+    private func singleAgentArtifactMarkdown(run: LoopRun, iterationIndex: Int, childRunID: UUID, summary: String) -> String {
+        """
+        # Single Agent Summary
+
+        Goal: \(run.goal)
+
+        Iteration: \(iterationIndex)
+        Agent: \(run.makerChecker.makerName)
+        Child run: \(childRunID.uuidString)
+
+        Summary:
+        \(summary)
+        """
     }
 
     private func parallelBranchTask(run: LoopRun, iterationIndex: Int, branchName: String) -> String {

@@ -355,7 +355,11 @@ struct LoopBankScreen: View {
                 }
             }
         case .singleAgent:
-            EmptyView()
+            AppCard(title: "Single Agent") {
+                detailRow("Agent") {
+                    LoopAgentNameMenu(selection: $editorDraft.makerName, availableAgents: availableLoopAgents, fallbackLabel: "Agent")
+                }
+            }
         }
     }
 

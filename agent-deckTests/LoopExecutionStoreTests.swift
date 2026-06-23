@@ -3,6 +3,61 @@ import XCTest
 
 @MainActor
 final class LoopExecutionStoreTests: XCTestCase {
+    func testSingleAgentLoopCompletesOnValidationSuccess() async throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = try makeSession(store: store)
+        var observedAgent = ""
+        var observedWriteTarget: LoopWriteTarget?
+        var observedOutputPath: String?
+        let draft = LoopDraft(
+            goal: "Produce report",
+            structure: .singleAgent,
+            writeTarget: .artifactMarkdown,
+            validationCommand: "/usr/bin/true",
+            makerChecker: LoopMakerCheckerConfig(makerName: "Explorer")
+        )
+
+        let maybeRun = await store.launchSingleAgentLoop(session: session, draft: draft) { _, agentName, task, writeTarget, _, outputPath in
+            observedAgent = agentName
+            observedWriteTarget = writeTarget
+            observedOutputPath = outputPath
+            return Self.fakeRun(parentSessionID: session.id, agentName: agentName, task: task, status: .completed, summary: "done")
+        }
+        let run = try XCTUnwrap(maybeRun)
+
+        XCTAssertEqual(run.status, .completed)
+        XCTAssertEqual(run.stopReason, .success)
+        XCTAssertEqual(run.currentIteration, 1)
+        XCTAssertEqual(run.iterations.count, 1)
+        XCTAssertEqual(run.iterations[0].timeline.map(\.step), [.makerAct])
+        XCTAssertEqual(run.iterations[0].timeline.map(\.roleName), ["Explorer"])
+        XCTAssertEqual(run.iterations[0].artifacts.first?.filename, "single-agent-summary.md")
+        XCTAssertEqual(observedAgent, "Explorer")
+        XCTAssertEqual(observedWriteTarget, .artifactMarkdown)
+        XCTAssertNotNil(observedOutputPath)
+    }
+
+    func testSingleAgentLoopMapsChildFailureAndStop() async throws {
+        let failedStore = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let failedSession = try makeSession(store: failedStore)
+        let draft = LoopDraft(goal: "Run", structure: .singleAgent, validationCommand: "/usr/bin/true", makerChecker: LoopMakerCheckerConfig(makerName: "Explorer"))
+        let maybeFailed = await failedStore.launchSingleAgentLoop(session: failedSession, draft: draft) { _, agentName, task, _, _, _ in
+            Self.fakeRun(parentSessionID: failedSession.id, agentName: agentName, task: task, status: .failed, summary: "bad")
+        }
+        let failed = try XCTUnwrap(maybeFailed)
+        XCTAssertEqual(failed.status, .failed)
+        XCTAssertEqual(failed.stopReason, .agentFailed)
+
+        let stoppedStore = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let stoppedSession = try makeSession(store: stoppedStore)
+        let maybeStopped = await stoppedStore.launchSingleAgentLoop(session: stoppedSession, draft: draft) { _, agentName, task, _, _, _ in
+            Self.fakeRun(parentSessionID: stoppedSession.id, agentName: agentName, task: task, status: .stopped, summary: "stopped")
+        }
+        let stopped = try XCTUnwrap(maybeStopped)
+        XCTAssertEqual(stopped.status, .stopped)
+        XCTAssertEqual(stopped.stopReason, .userStopped)
+    }
+
     func testAgentPipelineLoopCompletesOnValidationSuccess() async throws {
         let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
         let session = try makeSession(store: store)

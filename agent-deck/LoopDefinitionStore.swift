@@ -179,8 +179,10 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
         if !definition.validationCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             lines.append("validationCommand: \(oneLine(definition.validationCommand))")
         }
-        if definition.structure == .makerChecker {
+        if definition.structure == .singleAgent || definition.structure == .makerChecker {
             lines.append("makerName: \(oneLine(definition.makerChecker.makerName))")
+        }
+        if definition.structure == .makerChecker {
             lines.append("checkerName: \(oneLine(definition.makerChecker.checkerName))")
             lines.append("checkerRubric: \(oneLine(definition.makerChecker.checkerRubric))")
             lines.append("maxReviewRounds: \(definition.makerChecker.maxReviewRounds)")
