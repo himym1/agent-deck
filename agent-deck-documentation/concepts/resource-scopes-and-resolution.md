@@ -14,6 +14,8 @@ Agent Deck's UI is built around scope and resolution: where a resource lives, wh
 | Package | Resource contributed by an installed Pi package |
 | Library | Agent Deck storage, not automatically active |
 
+Package resources are resolved from `settings.json -> packages` through Pi-managed npm/git package stores first, then project/common Node package locations. Manifest entries for package skills, prompts, and extensions may point at direct files/directories or simple glob patterns such as `./cs-*`.
+
 ## Catalog vs assignment
 
 Library resources are reusable storage. Global/project files are catalog sources. For agents, skills, and prompts, Agent Deck stores default/project assignments separately from the files themselves; assigning them does not create symlinks or move files.

@@ -99,6 +99,7 @@ struct agent_deckApp: App {
                 .environment(viewModel)
                 .environmentObject(appDelegate.updater)
                 .preferredColorScheme(.dark)
+                .environment(\.locale, viewModel.appSettings.appLanguage.locale)
                 // `AppTheme`'s themed tokens are computed `static var`s, so a
                 // theme switch is invisible to SwiftUI's dependency graph.
                 // Re-keying on the theme revision forces a uniform repaint.
@@ -112,6 +113,7 @@ struct agent_deckApp: App {
                 .environment(viewModel)
                 .environmentObject(appDelegate.updater)
                 .preferredColorScheme(.dark)
+                .environment(\.locale, viewModel.appSettings.appLanguage.locale)
                 // The theme re-key lives INSIDE SettingsSceneContent (around the
                 // themed content only) rather than here, so a theme switch repaints
                 // without discarding the view's `selectedTab` @State — otherwise
@@ -124,6 +126,7 @@ struct agent_deckApp: App {
         Window("About \(AppBrand.displayName)", id: AboutWindow.id) {
             AboutView()
                 .preferredColorScheme(.dark)
+                .environment(\.locale, viewModel.appSettings.appLanguage.locale)
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)

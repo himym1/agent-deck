@@ -121,7 +121,10 @@ struct EnvironmentScreen: View {
                                 .font(.body.monospaced().weight(.semibold))
                                 .textSelection(.enabled)
                             if !row.overriddenRecords.isEmpty {
-                                AppLabelTag(text: "Overrides \(row.overriddenRecords.count)", color: .red)
+                                AppLabelTag(
+                                    text: AppLocalization.format("Overrides %lld", default: "Overrides %lld", Int64(row.overriddenRecords.count)),
+                                    color: .red
+                                )
                             }
                         }
                         Text(row.winningSource.path)

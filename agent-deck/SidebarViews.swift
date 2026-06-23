@@ -9,14 +9,14 @@ struct SidebarNavigationRow: View {
     var body: some View {
         Label {
             HStack(spacing: 6) {
-                Text(item.rawValue)
+                Text(item.localizedTitle)
                     .font(.callout.weight(.medium))
                 if showsWarning {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.yellow)
-                        .help("This section has warnings that need attention.")
-                        .accessibilityLabel("Section warning")
+                        .help(AppLocalization.string("sidebar.warning.help", default: "This section has warnings that need attention."))
+                        .accessibilityLabel(AppLocalization.string("sidebar.warning.label", default: "Section warning"))
                 }
             }
             .fontWidth(.expanded)
@@ -138,7 +138,7 @@ struct ProjectPickerPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SearchFieldWithProgress(
-                placeholder: "Search enabled projects",
+                placeholder: AppLocalization.string("project.search.enabled", default: "Search enabled projects"),
                 text: $filterText,
                 isLoading: isSearchDebouncing,
                 font: .subheadline
@@ -147,8 +147,8 @@ struct ProjectPickerPopover: View {
             ScrollView {
                 LazyVStack(spacing: 2) {
                     ProjectSidebarRow(
-                        title: "All Projects",
-                        subtitle: "Show sessions across every project",
+                        title: AppLocalization.string("project.all", default: "All Projects"),
+                        subtitle: AppLocalization.string("project.all.subtitle", default: "Show sessions across every project"),
                         symbolName: "square.grid.2x2",
                         imageURL: nil,
                         isSelected: selectedProjectPath == nil,

@@ -553,8 +553,7 @@ struct PiAgentContextEstimateBuilder {
         transcript: [PiAgentTranscriptEntry],
         fallbackModels: [AvailableModel] = []
     ) -> PiAgentContextBreakdownEstimate {
-        _ = fallbackModels
-        guard let contextWindow = positive(session.contextWindow) else {
+        guard let contextWindow = effectiveContextWindow(session: session, fallbackModels: fallbackModels) else {
             return PiAgentContextBreakdownEstimate(
                 rows: [],
                 note: "Estimated rows need RPC context totals before \(AppBrand.displayName) can derive a useful breakdown."
@@ -728,6 +727,42 @@ struct PiAgentContextEstimateBuilder {
 
         rows.sort { $0.tokens > $1.tokens }
         return .init(rows: rows, totalTokens: totalTokens)
+    }
+
+    static func effectiveContextWindow(session: PiAgentSessionRecord, fallbackModels: [AvailableModel]) -> Int? {
+        let metadataWindow = selectedModelContextWindow(session: session, fallbackModels: fallbackModels)
+        if hasExplicitModelOverride(session), let metadataWindow {
+            return positive(metadataWindow)
+        }
+        return positive(session.contextWindow) ?? positive(metadataWindow)
+    }
+
+    static func effectiveContextPercent(session: PiAgentSessionRecord, fallbackModels: [AvailableModel]) -> Double? {
+        guard let tokens = session.contextTokens,
+              let contextWindow = effectiveContextWindow(session: session, fallbackModels: fallbackModels) else {
+            return session.contextPercent
+        }
+        return percent(tokens, of: contextWindow)
+    }
+
+    private static func hasExplicitModelOverride(_ session: PiAgentSessionRecord) -> Bool {
+        nonEmpty(session.modelOverrideProvider) != nil || nonEmpty(session.modelOverrideID) != nil
+    }
+
+    private static func selectedModelContextWindow(session: PiAgentSessionRecord, fallbackModels: [AvailableModel]) -> Int? {
+        guard let provider = nonEmpty(session.modelOverrideProvider) ?? nonEmpty(session.modelProvider),
+              let modelID = nonEmpty(session.modelOverrideID) ?? nonEmpty(session.model) else {
+            return nil
+        }
+        let baseModelID = modelID.split(separator: ":", maxSplits: 1).first.map(String.init) ?? modelID
+        let identifier = "\(provider)/\(baseModelID)"
+        return fallbackModels.first { $0.identifier == identifier }
+            .flatMap { parseTokenCount($0.contextWindow) }
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     static func parseTokenCount(_ value: String) -> Int? {

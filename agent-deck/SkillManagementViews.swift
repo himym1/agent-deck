@@ -1718,11 +1718,13 @@ private struct AgentAssignmentToggleRow: View {
     private var agentSubtitle: String {
         let whenToUse = agent.resolved.whenToUse?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let whenToUse, !whenToUse.isEmpty {
-            return whenToUse
+            return AppLocalization.agentDescription(name: agent.name, default: whenToUse)
         }
 
         let description = agent.resolved.description.trimmingCharacters(in: .whitespacesAndNewlines)
-        return description.isEmpty ? "No routing guidance set." : description
+        return description.isEmpty
+            ? AppLocalization.string("No routing guidance set.", default: "No routing guidance set.")
+            : AppLocalization.agentDescription(name: agent.name, default: description)
     }
 }
 
@@ -1878,7 +1880,7 @@ private struct SkillListRowView: View {
                     }
                     .font(.caption2)
                     .foregroundStyle(AppTheme.mutedText)
-                    .help("Synced from GitHub · \(repositoryDisplayName)")
+                    .help(AppLocalization.format("Synced from GitHub · %@", default: "Synced from GitHub · %@", repositoryDisplayName))
                 }
             }
 

@@ -23,8 +23,8 @@ enum AppIconChoice: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .classic: return "Default"
-        case .alternate: return "Alternate"
+        case .classic: return AppLocalization.string("Default", default: "Default")
+        case .alternate: return AppLocalization.string("Alternate", default: "Alternate")
         }
     }
 

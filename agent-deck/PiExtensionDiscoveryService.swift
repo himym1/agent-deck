@@ -165,12 +165,14 @@ nonisolated struct PiExtensionDiscoveryService: @unchecked Sendable {
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: location.path, isDirectory: &isDirectory) else { return [] }
         if !isDirectory.boolValue {
-            return location.pathExtension == "ts" ? [location] : []
+            return isSupportedExtensionFile(location) ? [location] : []
         }
 
-        let index = location.appendingPathComponent("index.ts")
-        if fileManager.fileExists(atPath: index.path) {
-            return [index]
+        for indexName in ["index.ts", "index.js"] {
+            let index = location.appendingPathComponent(indexName)
+            if fileManager.fileExists(atPath: index.path) {
+                return [index]
+            }
         }
 
         guard let children = try? fileManager.contentsOfDirectory(at: location, includingPropertiesForKeys: nil) else { return [] }
@@ -178,10 +180,13 @@ nonisolated struct PiExtensionDiscoveryService: @unchecked Sendable {
             var childIsDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: child.path, isDirectory: &childIsDirectory) else { return [] }
             if childIsDirectory.boolValue {
-                let childIndex = child.appendingPathComponent("index.ts")
-                return fileManager.fileExists(atPath: childIndex.path) ? [childIndex] : []
+                for indexName in ["index.ts", "index.js"] {
+                    let childIndex = child.appendingPathComponent(indexName)
+                    if fileManager.fileExists(atPath: childIndex.path) { return [childIndex] }
+                }
+                return []
             }
-            return child.pathExtension == "ts" ? [child] : []
+            return isSupportedExtensionFile(child) ? [child] : []
         }
     }
 
@@ -228,9 +233,13 @@ nonisolated struct PiExtensionDiscoveryService: @unchecked Sendable {
 
         let locations = declared.isEmpty
             ? [packageDirectory.appendingPathComponent("extensions", isDirectory: true)]
-            : declared.map { resolveRelativePath($0, baseDirectory: packageDirectory) }
+            : PiPackageManifestLocationResolver.resolve(declared, packageDirectory: packageDirectory, fileManager: fileManager)
         var seen: Set<String> = []
         return locations.filter { seen.insert($0.standardizedFileURL.path).inserted }
+    }
+
+    private func isSupportedExtensionFile(_ url: URL) -> Bool {
+        url.pathExtension == "ts" || url.pathExtension == "js"
     }
 
     private func resolvePackageDirectory(for packageReference: String, projectRoot: URL?) -> URL? {
@@ -320,7 +329,7 @@ nonisolated struct PiExtensionDiscoveryService: @unchecked Sendable {
 
     private func displayName(for path: String) -> String {
         let url = URL(fileURLWithPath: path)
-        if url.lastPathComponent == "index.ts" {
+        if url.lastPathComponent == "index.ts" || url.lastPathComponent == "index.js" {
             return url.deletingLastPathComponent().lastPathComponent
         }
         return url.deletingPathExtension().lastPathComponent

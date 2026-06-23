@@ -47,6 +47,10 @@ final class AppSettingsController {
     /// to tune it, and Refresh bypasses the cache anyway.
     var gitHubBoardCacheLifetime: TimeInterval { 15 * 60 }
 
+    var appLanguage: AppLanguage {
+        settings.appLanguage
+    }
+
     var piAgentNotificationDelayMinutes: Int {
         max(settings.piAgentNotificationDelayMinutes, 1)
     }
@@ -134,7 +138,8 @@ final class AppSettingsController {
             "/Applications/Ghostty.app",
             "/Applications/kitty.app",
             "/Applications/Alacritty.app",
-            "/Applications/WezTerm.app"
+            "/Applications/WezTerm.app",
+            "/Applications/cmux.app"
         ]
 
         var seen = Set(options.map(\.id))
@@ -229,6 +234,14 @@ final class AppSettingsController {
 
     var skillDescriptionModelIdentifier: String? {
         settings.skillDescriptionModelIdentifier
+    }
+
+    @discardableResult
+    func setAppLanguage(_ language: AppLanguage) -> Bool {
+        guard settings.appLanguage != language else { return false }
+        settings.appLanguage = language
+        persist()
+        return true
     }
 
     @discardableResult

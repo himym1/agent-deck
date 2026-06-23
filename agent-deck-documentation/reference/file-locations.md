@@ -45,7 +45,7 @@ This page lists the important paths Agent Deck scans or writes.
 | Legacy global | recursive `~/.agents/skills/**/SKILL.md`; root `.md` files are ignored |
 | Project active | `PROJECT/.pi/skills/<skill>/SKILL.md` or root `.md` |
 | Legacy project | recursive `PROJECT/.agents/skills/**/SKILL.md` from cwd/ancestors; root `.md` files are ignored |
-| Package/settings | package manifest/conventional paths and `settings.json -> skills` |
+| Package/settings | package `pi.skills` entries, including direct `SKILL.md` roots and simple globs like `./cs-*`, or conventional package `skills/` folders; plus `settings.json -> skills` |
 
 ## Prompt templates
 
@@ -54,15 +54,15 @@ This page lists the important paths Agent Deck scans or writes.
 | Global catalog | `~/.pi/agent/prompts/*.md` |
 | Library/catalog | `~/.pi/agent/prompt-library/*.md` |
 | Project catalog | `PROJECT/.pi/prompts/*.md` |
-| Package/settings catalog | package prompt folders and `settings.json -> prompts` |
+| Package/settings catalog | package `pi.prompts` entries, including simple globs, or conventional package prompt folders; plus `settings.json -> prompts` |
 | Assignment state | Agent Deck app settings/project preferences; parent launch uses explicit `--prompt-template` arguments |
 
 ## Extensions and packages
 
 | Purpose | Path / setting |
 |---|---|
-| Global auto extensions | `~/.pi/agent/extensions/*.ts`, `~/.pi/agent/extensions/*/index.ts` |
-| Project auto extensions | `PROJECT/.pi/extensions/*.ts`, `PROJECT/.pi/extensions/*/index.ts` |
+| Global auto extensions | `~/.pi/agent/extensions/*.ts`, `~/.pi/agent/extensions/*.js`, `~/.pi/agent/extensions/*/index.ts`, `~/.pi/agent/extensions/*/index.js` |
+| Project auto extensions | `PROJECT/.pi/extensions/*.ts`, `PROJECT/.pi/extensions/*.js`, `PROJECT/.pi/extensions/*/index.ts`, `PROJECT/.pi/extensions/*/index.js` |
 | Settings extensions | `settings.json -> extensions` |
-| Packages | `settings.json -> packages` |
+| Packages | `settings.json -> packages`; package directories resolve from Pi-managed npm/git package stores, project package stores, and common Node global locations |
 | Native bridge extensions | `~/Library/Application Support/Agent Deck/Native Subagent Extensions/managed-subagent-bridge.ts` and `contact-supervisor-bridge.ts` |

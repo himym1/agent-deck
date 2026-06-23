@@ -19,11 +19,11 @@ struct AppPopoverHeader<Accessory: View>: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
+                Text(AppLocalization.string(title, default: title))
                     .font(AppTheme.Popover.titleFont)
                     .foregroundStyle(Color.primary)
                 if let subtitle, !subtitle.isEmpty {
-                    Text(subtitle)
+                    Text(AppLocalization.string(subtitle, default: subtitle))
                         .font(AppTheme.Popover.subtitleFont)
                         .foregroundStyle(AppTheme.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -97,7 +97,7 @@ struct AppPopoverTextRow: View {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 6) {
-                        Text(title)
+                        Text(AppLocalization.string(title, default: title))
                             .font(AppTheme.Popover.itemTitleFont)
                             .foregroundStyle(Color.primary)
                             .lineLimit(1)
@@ -107,7 +107,7 @@ struct AppPopoverTextRow: View {
                         }
                     }
                     if let subtitle, !subtitle.isEmpty {
-                        Text(subtitle)
+                        Text(AppLocalization.string(subtitle, default: subtitle))
                             .font(AppTheme.Popover.itemSubtitleFont)
                             .foregroundStyle(AppTheme.mutedText)
                             .lineLimit(1)
@@ -148,7 +148,7 @@ struct AppPopoverProjectRow: View {
                             .font(AppTheme.Popover.itemTitleFont)
                             .foregroundStyle(Color.primary)
                             .lineLimit(1)
-                        if isCurrent { AppPopoverBadge(text: "Current") }
+                        if isCurrent { AppPopoverBadge(text: AppLocalization.string("popover.current", default: "Current")) }
                     }
                     Text(path)
                         .font(AppTheme.Popover.itemSubtitleFont)
@@ -206,7 +206,7 @@ struct AppPopoverSelectionMark: View {
         Image(systemName: "checkmark.circle.fill")
             .font(AppTheme.Font.caption.weight(.semibold))
             .foregroundStyle(AppTheme.brandAccent)
-            .accessibilityLabel("Selected")
+            .accessibilityLabel(AppLocalization.string("popover.selected", default: "Selected"))
     }
 }
 

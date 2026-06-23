@@ -20,7 +20,7 @@ struct SettingsSceneContent: View {
             SettingsTabStrip(
                 tabs: visibleTabs,
                 selection: $selectedTab,
-                label: { $0.rawValue },
+                label: { $0.title },
                 systemImage: { $0.systemImage }
             )
             Divider()
@@ -83,6 +83,18 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case shortcuts = "Shortcuts"
 
     var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general: return AppLocalization.string("settings.tab.general", default: rawValue)
+        case .appearance: return AppLocalization.string("settings.tab.appearance", default: rawValue)
+        case .agent: return AppLocalization.string("settings.tab.agent", default: rawValue)
+        case .automations: return AppLocalization.string("settings.tab.automations", default: rawValue)
+        case .performance: return AppLocalization.string("settings.tab.performance", default: rawValue)
+        case .commands: return AppLocalization.string("settings.tab.commands", default: rawValue)
+        case .shortcuts: return AppLocalization.string("settings.tab.shortcuts", default: rawValue)
+        }
+    }
 
     var systemImage: String {
         switch self {
@@ -251,7 +263,7 @@ private struct SettingsRow<Content: View>: View {
 
     var body: some View {
         HStack(alignment: alignment, spacing: 16) {
-            Text(title)
+            Text(AppLocalization.string(title, default: title))
                 .fontWeight(.semibold)
                 .frame(width: SettingsLayout.labelWidth, alignment: .trailing)
 
@@ -273,7 +285,7 @@ private struct SettingsNote: View {
     let text: String
 
     var body: some View {
-        Text(text)
+        Text(AppLocalization.string(text, default: text))
             .font(.footnote)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -287,7 +299,7 @@ private struct SettingsGroupHeader: View {
     let title: String
 
     var body: some View {
-        Text(title.uppercased())
+        Text(AppLocalization.string(title, default: title).uppercased())
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -303,7 +315,7 @@ private struct SettingsTextFieldRow: View {
 
     var body: some View {
         SettingsRow(title: title, note: note) {
-            AppTextField(text: $text, placeholder: placeholder, font: .body.monospaced())
+            AppTextField(text: $text, placeholder: AppLocalization.string(placeholder, default: placeholder), font: .body.monospaced())
                 .frame(width: SettingsLayout.controlWidth)
         }
     }
@@ -329,7 +341,7 @@ private struct SettingsPickerRow<SelectionValue: Hashable, Content: View>: View 
 
     var body: some View {
         SettingsRow(title: title, note: note) {
-            Picker(title, selection: $selection) {
+            Picker(AppLocalization.string(title, default: title), selection: $selection) {
                 content
             }
             .appMenuPicker()
@@ -350,7 +362,7 @@ private struct SettingsStepperRow: View {
     var body: some View {
         SettingsRow(title: title, note: note) {
             Stepper(value: $value, in: range) {
-                Text(valueText)
+                Text(AppLocalization.string(valueText, default: valueText))
                     .monospacedDigit()
                     .frame(minWidth: 96, alignment: .leading)
             }
@@ -389,7 +401,7 @@ private struct SettingsToggleRow: View {
 
     var body: some View {
         SettingsRow(title: title, note: note) {
-            Toggle(label, isOn: $isOn)
+            Toggle(AppLocalization.string(label, default: label), isOn: $isOn)
                 .appCheckbox()
         }
     }
@@ -403,15 +415,27 @@ private struct GeneralSettingsTab: View {
     var body: some View {
         SettingsForm {
             SettingsSection {
+                SettingsPickerRow(
+                    title: AppLocalization.string("settings.language.title", default: "Language:"),
+                    selection: appLanguageBinding,
+                    note: AppLocalization.string("settings.language.note", default: "Controls Agent Deck UI language. Professional model, provider, command, and file names stay in English.")
+                ) {
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.displayName).tag(language)
+                    }
+                }
+            }
+
+            SettingsSection {
                 ProjectsRootListRow(viewModel: viewModel)
 
                 SettingsButtonRow {
-                    Button("Add Folder...") { viewModel.chooseProjectsRootDirectory() }
+                    Button(AppLocalization.string("Add Folder...", default: "Add Folder...")) { viewModel.chooseProjectsRootDirectory() }
                         .appSecondaryButton()
-                    Button("Use Suggested") { viewModel.useSuggestedProjectsRootDirectory() }
+                    Button(AppLocalization.string("Use Suggested", default: "Use Suggested")) { viewModel.useSuggestedProjectsRootDirectory() }
                         .appSecondaryButton()
                         .disabled(viewModel.suggestedProjectsRootPath == nil)
-                    Button("Reset to Default") { viewModel.resetProjectsRootPathsToDefault() }
+                    Button(AppLocalization.string("Reset to Default", default: "Reset to Default")) { viewModel.resetProjectsRootPathsToDefault() }
                         .appSecondaryButton()
                 }
             }
@@ -421,7 +445,7 @@ private struct GeneralSettingsTab: View {
                     title: "Skill repositories:",
                     value: SkillRepositorySyncService.repositoriesDirectoryURL().path
                 ) {
-                    Button("Reveal in Finder") {
+                    Button(AppLocalization.string("Reveal in Finder", default: "Reveal in Finder")) {
                         let url = SkillRepositorySyncService.repositoriesDirectoryURL()
                         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
                         revealInFinder(url.path)
@@ -430,6 +454,13 @@ private struct GeneralSettingsTab: View {
                 }
             }
         }
+    }
+
+    private var appLanguageBinding: Binding<AppLanguage> {
+        Binding(
+            get: { viewModel.appSettings.appLanguage },
+            set: { viewModel.setAppLanguage($0) }
+        )
     }
 }
 
@@ -454,7 +485,7 @@ private struct ProjectsRootListRow: View {
         ) {
             VStack(alignment: .leading, spacing: 6) {
                 if paths.isEmpty {
-                    Text("No projects folders configured yet. Click Add Folder… below.")
+                    Text(AppLocalization.string("No projects folders configured yet. Click Add Folder… below.", default: "No projects folders configured yet. Click Add Folder… below."))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .padding(.vertical, 4)
@@ -470,7 +501,11 @@ private struct ProjectsRootListRow: View {
 
     private var noteText: String {
         let suggested = ProjectDiscovery.defaultRootDirectoryURL().path
-        return "Each folder is the parent of your project repositories, not a single repo. Suggested: \(suggested)"
+        return AppLocalization.format(
+            "settings.projectsFolders.note",
+            default: "Each folder is the parent of your project repositories, not a single repo. Suggested: %@",
+            suggested
+        )
     }
 
     private func projectRootRow(path: String) -> some View {
@@ -490,14 +525,14 @@ private struct ProjectsRootListRow: View {
                 Image(systemName: "arrow.up.right.square")
             }
             .buttonStyle(.borderless)
-            .help("Reveal in Finder")
+            .help(AppLocalization.string("Reveal in Finder", default: "Reveal in Finder"))
             Button {
                 viewModel.removeProjectsRootPath(path)
             } label: {
                 Image(systemName: "minus.circle")
             }
             .buttonStyle(.borderless)
-            .help("Remove this folder")
+            .help(AppLocalization.string("Remove this folder", default: "Remove this folder"))
         }
         .padding(.vertical, 4)
         .padding(.horizontal, 8)
@@ -593,24 +628,24 @@ private struct AppearanceSettingsTab: View {
                 .padding(.vertical, 4)
 
             HStack(spacing: 8) {
-                Button("New Theme", action: createTheme)
+                Button(AppLocalization.string("New Theme", default: "New Theme"), action: createTheme)
                     .appSecondaryButton()
-                Button("Duplicate", action: duplicateSelectedTheme)
+                Button(AppLocalization.string("Duplicate", default: "Duplicate"), action: duplicateSelectedTheme)
                     .appSecondaryButton()
                 if isEditingCustomTheme {
-                    Button("Delete", role: .destructive) { isConfirmingDelete = true }
+                    Button(AppLocalization.string("Delete", default: "Delete"), role: .destructive) { isConfirmingDelete = true }
                         .appSecondaryButton()
                 }
                 Spacer(minLength: 0)
             }
         }
-        .alert("Delete “\(selectedTheme.name)”?", isPresented: $isConfirmingDelete) {
-            Button("Cancel", role: .cancel) {}
-            Button("Delete", role: .destructive) {
+        .alert(AppLocalization.format("Delete %@?", default: "Delete %@?", selectedTheme.name), isPresented: $isConfirmingDelete) {
+            Button(AppLocalization.string("Cancel", default: "Cancel"), role: .cancel) {}
+            Button(AppLocalization.string("Delete", default: "Delete"), role: .destructive) {
                 viewModel.deleteCustomTheme(id: selectedTheme.id)
             }
         } message: {
-            Text("This custom theme will be removed. Built-in presets are not affected.")
+            Text(AppLocalization.string("This custom theme will be removed. Built-in presets are not affected.", default: "This custom theme will be removed. Built-in presets are not affected."))
         }
     }
 
@@ -662,7 +697,7 @@ private struct AppearanceSettingsTab: View {
     private var editorSection: some View {
         SettingsSection {
             SettingsRow(title: "Theme name:") {
-                AppTextField(text: nameBinding, placeholder: "Theme name")
+                AppTextField(text: nameBinding, placeholder: AppLocalization.string("Theme name", default: "Theme name"))
                     .frame(width: 220)
             }
             colorRow("Background", \.background, note: "The window and app canvas.")
@@ -699,7 +734,11 @@ private struct AppearanceSettingsTab: View {
         _ keyPath: WritableKeyPath<Theme, ThemeColor>,
         note: String? = nil
     ) -> some View {
-        SettingsRow(title: "\(title):", alignment: .top, note: note) {
+        SettingsRow(
+            title: AppLocalization.format("%@:", default: "%@:", AppLocalization.string(title, default: title)),
+            alignment: .top,
+            note: note
+        ) {
             ColorPicker("", selection: colorBinding(keyPath), supportsOpacity: false)
                 .labelsHidden()
                 .frame(width: SettingsLayout.controlWidth, alignment: .leading)
@@ -715,7 +754,7 @@ private struct AppearanceSettingsTab: View {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .stroke(AppTheme.hairlineStroke, lineWidth: 1)
                 )
-            Text(label)
+            Text(AppLocalization.string(label, default: label))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -723,7 +762,13 @@ private struct AppearanceSettingsTab: View {
 
     private var presetNoteSection: some View {
         SettingsSection {
-            SettingsNote(text: "“\(selectedTheme.name)” is a built-in preset and can't be edited. Use Duplicate to make an editable copy.")
+            SettingsNote(
+                text: AppLocalization.format(
+                    "“%@” is a built-in preset and can't be edited. Use Duplicate to make an editable copy.",
+                    default: "“%@” is a built-in preset and can't be edited. Use Duplicate to make an editable copy.",
+                    selectedTheme.name
+                )
+            )
         }
     }
 
@@ -740,7 +785,7 @@ private struct AppearanceSettingsTab: View {
                 previewBubble(previewTheme.error, systemIcon: "exclamationmark.triangle.fill", role: "Error", text: "Could not read the file.")
 
                 HStack(spacing: 12) {
-                    Text("Primary Action")
+                    Text(AppLocalization.string("Primary Action", default: "Primary Action"))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12)
@@ -756,9 +801,9 @@ private struct AppearanceSettingsTab: View {
                         )
 
                     HStack(spacing: 10) {
-                        Text("+ added line")
+                        Text(AppLocalization.string("+ added line", default: "+ added line"))
                             .foregroundStyle(previewTheme.diffAdded.color)
-                        Text("- removed line")
+                        Text(AppLocalization.string("- removed line", default: "- removed line"))
                             .foregroundStyle(previewTheme.error.color)
                     }
                     .font(.caption.monospaced())
@@ -794,10 +839,10 @@ private struct AppearanceSettingsTab: View {
             }
             .frame(width: 16)
             VStack(alignment: .leading, spacing: 2) {
-                Text(role)
+                Text(AppLocalization.string(role, default: role))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(color.color)
-                Text(text)
+                Text(AppLocalization.string(text, default: text))
                     .font(.caption)
                     .foregroundStyle(.primary)
             }
@@ -903,7 +948,7 @@ private struct AppearanceSettingsTab: View {
                             .stroke(isSelected ? AppTheme.brandAccent : AppTheme.hairlineStroke,
                                     lineWidth: isSelected ? 2 : 1)
                     )
-                Text(choice.displayName)
+                Text(AppLocalization.string(choice.displayName, default: choice.displayName))
                     .font(.caption2)
                     .foregroundStyle(isSelected ? AppTheme.brandAccent : .secondary)
                     .fontWeight(isSelected ? .semibold : .regular)
@@ -911,7 +956,7 @@ private struct AppearanceSettingsTab: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(choice.displayName)
+        .help(AppLocalization.string(choice.displayName, default: choice.displayName))
     }
 }
 
@@ -927,7 +972,7 @@ private struct AgentSettingsTab: View {
                     title: "Notification delay:",
                     value: piAgentNotificationDelayBinding,
                     range: 1...60,
-                    valueText: "\(viewModel.piAgentNotificationDelayMinutes) minutes",
+                    valueText: AppLocalization.format("settings.minutes.format", default: "%lld minutes", viewModel.piAgentNotificationDelayMinutes),
                     note: "Before notifying about unread sessions."
                 )
             }
@@ -944,7 +989,7 @@ private struct AgentSettingsTab: View {
                     title: "Delegation policy:",
                 ) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Picker("Delegation policy", selection: subagentDelegationPolicyBinding) {
+                        Picker(AppLocalization.string("Delegation policy", default: "Delegation policy"), selection: subagentDelegationPolicyBinding) {
                             ForEach(NativeSubagentDelegationPolicy.allCases) { policy in
                                 Text(policy.displayName).tag(policy)
                             }
@@ -972,11 +1017,11 @@ private struct AgentSettingsTab: View {
 
                 SettingsRow(title: "") {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("“As LLMs receive more tokens, the relationships between tokens scale quadratically… every LLM has a smart zone and a dumb zone.”")
+                        Text(AppLocalization.string("settings.contextZones.quote", default: "“As LLMs receive more tokens, the relationships between tokens scale quadratically… every LLM has a smart zone and a dumb zone.”"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
-                        Link("Read the AIHero article", destination: URL(string: "https://www.aihero.dev/why-the-anthropic-ralph-plugin-sucks")!)
+                        Link(AppLocalization.string("Read the AIHero article", default: "Read the AIHero article"), destination: URL(string: "https://www.aihero.dev/why-the-anthropic-ralph-plugin-sucks")!)
                             .font(.caption.weight(.semibold))
                             .appBrandTint()
                     }
@@ -991,14 +1036,18 @@ private struct AgentSettingsTab: View {
                 }
 
                 SettingsValueButtonRow(title: "Application:", value: selectedTerminalPathText) {
-                    Button("Choose Other...") { viewModel.choosePiAgentTerminalApplication() }
+                    Button(AppLocalization.string("Choose Other...", default: "Choose Other...")) { viewModel.choosePiAgentTerminalApplication() }
                         .appSecondaryButton()
-                    Button("Use macOS Default") { viewModel.resetPiAgentTerminalApplicationToDefault() }
+                    Button(AppLocalization.string("Use macOS Default", default: "Use macOS Default")) { viewModel.resetPiAgentTerminalApplicationToDefault() }
                         .appSecondaryButton()
                 }
 
                 SettingsRow(title: "") {
-                    Text("Supported terminals: \(SupportedTerminal.displayList). Others (such as Warp) can't be driven to open a new window and run a command.")
+                    Text(AppLocalization.format(
+                        "settings.terminal.supportedTerminals",
+                        default: "Supported terminals: %@. Others (such as Warp) can't be driven to open a new window and run a command.",
+                        SupportedTerminal.displayList
+                    ))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1076,7 +1125,7 @@ private struct AutomationsSettingsTab: View {
                     selection: titleGenerationModelBinding,
                     note: "Uses your Pi default model unless you pick a cheaper, faster one here."
                 ) {
-                    Text("Default model").tag("")
+                    Text(AppLocalization.string("Default model", default: "Default model")).tag("")
                     ForEach(viewModel.automationAvailableModels, id: \.identifier) { model in
                         Text(model.displayName).tag(model.identifier)
                     }
@@ -1104,7 +1153,7 @@ private struct AutomationsSettingsTab: View {
                     selection: commitMessageModelBinding,
                     note: "Uses your Pi default model unless you pick a cheaper, faster one here. Apple Foundation Model runs locally; other models use a hidden no-thinking Pi helper session."
                 ) {
-                    Text("Default model").tag("")
+                    Text(AppLocalization.string("Default model", default: "Default model")).tag("")
                     ForEach(viewModel.automationAvailableModels, id: \.identifier) { model in
                         Text(model.displayName).tag(model.identifier)
                     }
@@ -1113,10 +1162,10 @@ private struct AutomationsSettingsTab: View {
 
                 if viewModel.automationAvailableModels.isEmpty {
                     HStack(spacing: 8) {
-                        Label("No enabled models available", systemImage: "exclamationmark.triangle")
+                        Label(AppLocalization.string("No enabled models available", default: "No enabled models available"), systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.orange)
                         Spacer()
-                        Button("Refresh Models") {
+                        Button(AppLocalization.string("Refresh Models", default: "Refresh Models")) {
                             viewModel.refreshModels()
                         }
                         .appSecondaryButton()
@@ -1156,7 +1205,7 @@ private struct AutomationsSettingsTab: View {
                     selection: agentAvatarPromptModelBinding,
                     note: agentAvatarPromptModelNote
                 ) {
-                    Text("Default model").tag("")
+                    Text(AppLocalization.string("Default model", default: "Default model")).tag("")
                     ForEach(viewModel.automationAvailableModels, id: \.identifier) { model in
                         Text(model.displayName).tag(model.identifier)
                     }
@@ -1170,7 +1219,7 @@ private struct AutomationsSettingsTab: View {
                     selection: skillDescriptionModelBinding,
                     note: skillDescriptionModelNote
                 ) {
-                    Text("Default (Foundation Models if available)").tag("")
+                    Text(AppLocalization.string("Default (Foundation Models if available)", default: "Default (Foundation Models if available)")).tag("")
                     ForEach(viewModel.automationAvailableModels, id: \.identifier) { model in
                         Text(model.displayName).tag(model.identifier)
                     }
@@ -1298,7 +1347,7 @@ private struct PerformanceSettingsTab: View {
                     title: "Parking delay:",
                     value: piAgentIdleParkingTimeoutBinding,
                     range: 1...120,
-                    valueText: "\(viewModel.piAgentIdleParkingTimeoutMinutes) minutes",
+                    valueText: AppLocalization.format("settings.minutes.format", default: "%lld minutes", viewModel.piAgentIdleParkingTimeoutMinutes),
                     note: "How long an idle parent chat process can stay warm."
                 )
                 .disabled(!viewModel.isPiAgentIdleParkingEnabled)
@@ -1330,21 +1379,27 @@ private struct CommandsSettingsTab: View {
         SettingsForm {
             SettingsSection {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Injected Slash Commands")
+                    Text(AppLocalization.string("Injected Slash Commands", default: "Injected Slash Commands"))
                         .font(.headline)
-                    SettingsNote(text: "Only Agent Deck bundled commands are shown here. Enabled commands are loaded into parent Pi RPC sessions with explicit --extension arguments while ambient Pi extension discovery remains disabled. Future imported commands should live in \(PiInjectedCommandCatalog.commandLibraryPath).")
+                    SettingsNote(
+                        text: AppLocalization.format(
+                            "Only Agent Deck bundled commands are shown here. Enabled commands are loaded into parent Pi RPC sessions with explicit --extension arguments while ambient Pi extension discovery remains disabled. Future imported commands should live in %@.",
+                            default: "Only Agent Deck bundled commands are shown here. Enabled commands are loaded into parent Pi RPC sessions with explicit --extension arguments while ambient Pi extension discovery remains disabled. Future imported commands should live in %@.",
+                            PiInjectedCommandCatalog.commandLibraryPath
+                        )
+                    )
                 }
 
                 HStack {
                     Button {
                         viewModel.importCommandFile()
                     } label: {
-                        Label("Import Command…", systemImage: "square.and.arrow.down")
+                        Label(AppLocalization.string("Import Command…", default: "Import Command…"), systemImage: "square.and.arrow.down")
                     }
                     Button {
                         revealCommandLibraryInFinder()
                     } label: {
-                        Label("Reveal Library", systemImage: "folder")
+                        Label(AppLocalization.string("Reveal Library", default: "Reveal Library"), systemImage: "folder")
                     }
                 }
                 .appSecondaryButton()
@@ -1367,7 +1422,7 @@ private struct CommandsSettingsTab: View {
                 )
             }
 
-            SettingsNote(text: "Changes apply to newly started or resumed RPC sessions. Restart an active Pi session to change which injected commands it has loaded.")
+            SettingsNote(text: AppLocalization.string("Changes apply to newly started or resumed RPC sessions. Restart an active Pi session to change which injected commands it has loaded.", default: "Changes apply to newly started or resumed RPC sessions. Restart an active Pi session to change which injected commands it has loaded."))
                 .padding(.horizontal, 14)
         }
     }
@@ -1391,9 +1446,9 @@ private struct CommandGroupSection: View {
     var body: some View {
         SettingsSection {
             VStack(alignment: .leading, spacing: 3) {
-                Text(title)
+                Text(AppLocalization.string(title, default: title))
                     .font(.headline)
-                Text(subtitle)
+                Text(AppLocalization.string(subtitle, default: subtitle))
                     .font(.caption.italic())
                     .foregroundStyle(.secondary)
             }
@@ -1421,12 +1476,12 @@ private struct CommandSettingsRow: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     SlashCommandKeyCap(command.slashName)
-                    Text(command.title)
+                    Text(AppLocalization.string(command.title, default: command.title))
                         .font(.headline)
                     sourcePill
                 }
 
-                Text(command.description)
+                Text(AppLocalization.string(command.description, default: command.description))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1454,7 +1509,7 @@ private struct CommandSettingsRow: View {
     }
 
     private var sourcePill: some View {
-        Label(command.source == .builtIn ? "Bundled" : "Imported", systemImage: command.source == .builtIn ? "shippingbox" : "square.and.arrow.down")
+        Label(AppLocalization.string(command.source == .builtIn ? "Bundled" : "Imported", default: command.source == .builtIn ? "Bundled" : "Imported"), systemImage: command.source == .builtIn ? "shippingbox" : "square.and.arrow.down")
             .font(.caption2.weight(.semibold))
             .foregroundStyle(command.source == .builtIn ? AppTheme.brandAccent : .blue)
             .labelStyle(.titleAndIcon)
@@ -1498,7 +1553,7 @@ private struct ShortcutsSettingsTab: View {
         SettingsForm {
             ForEach(sections) { section in
                 SettingsSection {
-                    SettingsGroupHeader(title: section.title)
+                    SettingsGroupHeader(title: AppLocalization.string(section.title, default: section.title))
 
                     VStack(spacing: 0) {
                         ForEach(section.items) { item in
@@ -1522,10 +1577,10 @@ private struct ShortcutRow: View {
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.title)
+                Text(AppLocalization.string(item.title, default: item.title))
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.primary)
-                Text(item.description)
+                Text(AppLocalization.string(item.description, default: item.description))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1537,7 +1592,14 @@ private struct ShortcutRow: View {
         }
         .padding(.vertical, 9)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(item.title), \(accessibilityShortcutText)")
+        .accessibilityLabel(
+            AppLocalization.format(
+                "%@, %@",
+                default: "%@, %@",
+                AppLocalization.string(item.title, default: item.title),
+                accessibilityShortcutText
+            )
+        )
     }
 
     private var accessibilityShortcutText: String {
@@ -1602,7 +1664,7 @@ private extension AgentDeckShortcutItem {
         case "delete": return "⌫"
         case "escape": return "Esc"
         case "return": return "↩"
-        case " ": return "Space"
+        case " ": return AppLocalization.string("shortcut.key.space", default: "Space")
         default: return key.uppercased()
         }
     }

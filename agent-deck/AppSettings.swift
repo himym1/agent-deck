@@ -1,5 +1,36 @@
 import Foundation
 
+enum AppLanguage: String, Codable, CaseIterable, Hashable, Identifiable {
+    case system
+    case english
+    case simplifiedChinese
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .system: return AppLocalization.string("language.system", default: "System")
+        case .english: return AppLocalization.string("language.english", default: "English")
+        case .simplifiedChinese: return AppLocalization.string("language.simplifiedChinese", default: "简体中文")
+        }
+    }
+
+    var localeIdentifier: String? {
+        switch self {
+        case .system: return nil
+        case .english: return "en"
+        case .simplifiedChinese: return "zh-Hans"
+        }
+    }
+
+    var locale: Locale {
+        guard let localeIdentifier else { return .current }
+        return Locale(identifier: localeIdentifier)
+    }
+
+    var bundleLocalization: String? { localeIdentifier }
+}
+
 struct PiAgentTranscriptVisibilitySettings: Codable, Hashable {
     var showShortcutsStrip: Bool = true
     var showThinking: Bool = true
@@ -45,20 +76,20 @@ enum NativeSubagentDelegationPolicy: String, Codable, CaseIterable, Hashable, Id
 
     var displayName: String {
         switch self {
-        case .light: return "Light"
-        case .balanced: return "Balanced"
-        case .strict: return "Strict"
+        case .light: return AppLocalization.string("delegation.light", default: "Light")
+        case .balanced: return AppLocalization.string("delegation.balanced", default: "Balanced")
+        case .strict: return AppLocalization.string("delegation.strict", default: "Strict")
         }
     }
 
     var settingsDescription: String {
         switch self {
         case .light:
-            return "Use Deck agents when they clearly improve the result; the parent may handle straightforward work directly."
+            return AppLocalization.string("delegation.light.description", default: "Use Deck agents when they clearly improve the result; the parent may handle straightforward work directly.")
         case .balanced:
-            return "Delegate substantive specialist work by default, but let the parent handle trivial low-risk tasks."
+            return AppLocalization.string("delegation.balanced.description", default: "Delegate substantive specialist work by default, but let the parent handle trivial low-risk tasks.")
         case .strict:
-            return "Delegate any substantive work when a matching Deck agent exists; the parent focuses on orchestration and synthesis."
+            return AppLocalization.string("delegation.strict.description", default: "Delegate any substantive work when a matching Deck agent exists; the parent focuses on orchestration and synthesis.")
         }
     }
 
@@ -95,18 +126,18 @@ enum PiAgentExtensionLoadingMode: String, Codable, CaseIterable, Hashable, Ident
     var displayName: String {
         switch self {
         case .agentDeckManaged:
-            return "Agent Deck managed"
+            return AppLocalization.string("extensions.mode.agentDeckManaged", default: "Agent Deck managed")
         case .useMyExtensions:
-            return "Use my extensions"
+            return AppLocalization.string("extensions.mode.useMyExtensions", default: "Use my extensions")
         }
     }
 
     var settingsDescription: String {
         switch self {
         case .agentDeckManaged:
-            return "Only Agent Deck's built-in bridges load. Your own Pi extensions stay off."
+            return AppLocalization.string("extensions.mode.agentDeckManaged.description", default: "Only Agent Deck's built-in bridges load. Your own Pi extensions stay off.")
         case .useMyExtensions:
-            return "Load your Pi extensions alongside Agent Deck's bridges. Deselect any you don't want below."
+            return AppLocalization.string("extensions.mode.useMyExtensions.description", default: "Load your Pi extensions alongside Agent Deck's bridges. Deselect any you don't want below.")
         }
     }
 
@@ -147,6 +178,7 @@ enum PiAgentExtensionLoadingMode: String, Codable, CaseIterable, Hashable, Ident
 }
 
 struct AppSettings: Codable, Hashable {
+    var appLanguage: AppLanguage = .system
     var piAgentNotificationDelayMinutes: Int = 3
     var piAgentIdleParkingEnabled: Bool = true
     var piAgentIdleParkingTimeoutMinutes: Int = 10
@@ -207,6 +239,7 @@ struct AppSettings: Codable, Hashable {
     var selectedAppIconName: String?
 
     enum CodingKeys: String, CodingKey {
+        case appLanguage
         case piAgentNotificationDelayMinutes
         case piAgentIdleParkingEnabled
         case piAgentIdleParkingTimeoutMinutes
@@ -260,6 +293,7 @@ struct AppSettings: Codable, Hashable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        appLanguage = (try? container.decodeIfPresent(AppLanguage.self, forKey: .appLanguage)) ?? .system
         piAgentNotificationDelayMinutes = try container.decodeIfPresent(Int.self, forKey: .piAgentNotificationDelayMinutes) ?? 3
         let decodedIdleParkingTimeout = try container.decodeIfPresent(Int.self, forKey: .piAgentIdleParkingTimeoutMinutes) ?? 10
         piAgentIdleParkingEnabled = try container.decodeIfPresent(Bool.self, forKey: .piAgentIdleParkingEnabled) ?? (decodedIdleParkingTimeout > 0)
@@ -322,12 +356,12 @@ struct TerminalApplicationOption: Identifiable, Hashable {
     var id: String { path ?? Self.defaultID }
 }
 
-/// Terminal applications Agent Deck can reliably open a fresh window in and have it
-/// run a prepared script. Terminal and iTerm are driven through AppleScript; Ghostty,
-/// kitty, Alacritty and WezTerm expose a command-line flag that runs a given command
-/// in a new window. Terminals without any such mechanism — notably Warp and Hyper —
-/// are intentionally unsupported: there is no dependable way to make them run our
-/// Pi session/update script.
+/// Terminal applications Agent Deck can reliably open a fresh window/workspace in
+/// and have it run a prepared script. Terminal and iTerm are driven through
+/// AppleScript; Ghostty, kitty, Alacritty, WezTerm, and cmux expose a
+/// command-line flag that runs a given command. Terminals without any such
+/// mechanism — notably Warp and Hyper — are intentionally unsupported: there is
+/// no dependable way to make them run our Pi session/update script.
 enum SupportedTerminal: CaseIterable {
     case appleTerminal
     case iTerm
@@ -335,6 +369,7 @@ enum SupportedTerminal: CaseIterable {
     case kitty
     case alacritty
     case wezTerm
+    case cmux
 
     /// Lowercased `.app` bundle file name, used to recognise a chosen application.
     var bundleName: String {
@@ -345,12 +380,14 @@ enum SupportedTerminal: CaseIterable {
         case .kitty: return "kitty.app"
         case .alacritty: return "alacritty.app"
         case .wezTerm: return "wezterm.app"
+        case .cmux: return "cmux.app"
         }
     }
 
-    /// For the CLI-driven terminals, the executable inside `Contents/MacOS` and the
-    /// argument(s) that must precede the `/bin/zsh <script>` invocation. `nil` for the
-    /// AppleScript-driven terminals (Terminal, iTerm).
+    /// For CLI-driven terminals that accept `/bin/zsh <script>` directly, the
+    /// executable inside `Contents/MacOS` and argument(s) that must precede the
+    /// invocation. `nil` for AppleScript-driven terminals and cmux, which uses a
+    /// custom `new-workspace --command` launcher.
     var commandLineLauncher: (executable: String, leadingArguments: [String])? {
         switch self {
         case .appleTerminal, .iTerm: return nil
@@ -358,11 +395,12 @@ enum SupportedTerminal: CaseIterable {
         case .kitty: return ("kitty", [])
         case .alacritty: return ("alacritty", ["-e"])
         case .wezTerm: return ("wezterm", ["start", "--"])
+        case .cmux: return nil
         }
     }
 
     /// Human-readable list of every supported terminal, for help text and warnings.
-    static let displayList = "Terminal, iTerm, Ghostty, kitty, Alacritty, and WezTerm"
+    static let displayList = "Terminal, iTerm, Ghostty, kitty, Alacritty, WezTerm, and cmux"
 
     /// Resolves the terminal identified by an application bundle path, if it is one
     /// Agent Deck supports.

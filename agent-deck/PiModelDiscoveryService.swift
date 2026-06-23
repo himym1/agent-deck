@@ -1,6 +1,8 @@
 import Foundation
 
 struct PiModelDiscoveryService: Sendable {
+    private static let defaultSupportedThinkingLevels = ["off", "minimal", "low", "medium", "high"]
+
     private let commandRunner: CommandRunning
     private let piResolver: PiExecutableResolver
 
@@ -30,7 +32,9 @@ struct PiModelDiscoveryService: Sendable {
     }
 
     private func loadModelThinkingLevels(fromPiListOutput text: String, piPath: String) async -> [String: [String]] {
-        let knownModels = Self.availableModelIdentifiers(fromPiListOutput: text).map { ["provider": $0.provider, "model": $0.model] }
+        let knownModels: [[String: Any]] = Self.availableModelDescriptors(fromPiListOutput: text).map {
+            ["provider": $0.provider, "model": $0.model, "supportsThinking": $0.supportsThinking]
+        }
         guard !knownModels.isEmpty,
               let inputData = try? JSONSerialization.data(withJSONObject: knownModels),
               let inputText = String(data: inputData, encoding: .utf8)
@@ -42,21 +46,23 @@ struct PiModelDiscoveryService: Sendable {
         // volta, fnm, local installs, and anything else where the binary is a symlink
         // into a node_modules tree. Falls back to known Homebrew paths.
         let script = #"""
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 
 const candidates = [];
 
-const piPath = process.env.AGENT_DECK_PI_PATH;
-if (piPath && existsSync(piPath)) {
+function expandHome(path) {
+  return path.replace(/^\$HOME\b|^~(?=\/)/, homedir()).replace(/^\$\{HOME\}/, homedir());
+}
+
+function addModelCandidatesFromCliPath(cliPath) {
   try {
-    const realPath = realpathSync(piPath);
-    let dir = dirname(realPath);
+    let dir = dirname(realpathSync(expandHome(cliPath)));
     for (let i = 0; i < 10; i++) {
       const earendil = resolve(dir, 'node_modules/@earendil-works/pi-ai/dist/models.js');
       const mario    = resolve(dir, 'node_modules/@mariozechner/pi-ai/dist/models.js');
-      if (existsSync(earendil)) { candidates.push(earendil); break; }
-      if (existsSync(mario))    { candidates.push(mario);    break; }
+      candidates.push(earendil, mario);
       const parent = dirname(dir);
       if (parent === dir) break;
       dir = parent;
@@ -64,7 +70,19 @@ if (piPath && existsSync(piPath)) {
   } catch {}
 }
 
+const piPath = process.env.AGENT_DECK_PI_PATH;
+if (piPath && existsSync(piPath)) {
+  addModelCandidatesFromCliPath(piPath);
+  try {
+    const wrapper = readFileSync(piPath, 'utf8');
+    const cliMatch = wrapper.match(/PI_CLI=["']?([^"'\n]+)/);
+    if (cliMatch?.[1]) addModelCandidatesFromCliPath(cliMatch[1]);
+  } catch {}
+}
+
 candidates.push(
+  resolve(homedir(), '.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/models.js'),
+  resolve(homedir(), '.npm-global/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@mariozechner/pi-ai/dist/models.js'),
   '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/models.js',
   '/opt/homebrew/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@mariozechner/pi-ai/dist/models.js',
   '/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/models.js',
@@ -76,16 +94,48 @@ if (!modulePath) throw new Error('Could not locate pi-ai models.js');
 
 const models = await import(modulePath);
 const input = JSON.parse(process.env.AGENT_DECK_MODEL_INPUT ?? '[]');
+const defaultThinkingLevels = ['off', 'minimal', 'low', 'medium', 'high'];
+
+function loadCustomModelConfig() {
+  const configPath = resolve(homedir(), '.pi/agent/models.json');
+  if (!existsSync(configPath)) return {};
+  try {
+    return JSON.parse(readFileSync(configPath, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+const customModelConfig = loadCustomModelConfig();
+const customProviders = customModelConfig.providers ?? customModelConfig;
+
+function customModelFor(provider, modelId) {
+  const providerConfig = customProviders?.[provider];
+  const providerModels = Array.isArray(providerConfig?.models) ? providerConfig.models : [];
+  return providerModels.find((model) => model?.id === modelId);
+}
+
+function supportedThinkingLevelsFor(model, supportsThinking) {
+  if (!supportsThinking || model?.reasoning === false) return ['off'];
+  if (model?.reasoning === true && typeof models.getSupportedThinkingLevels === 'function') {
+    try {
+      return models.getSupportedThinkingLevels(model);
+    } catch {}
+  }
+  return defaultThinkingLevels;
+}
+
 const result = {};
 for (const item of input) {
-  const model = models.getModel(item.provider, item.model);
-  if (!model || !model.reasoning) {
-    result[`${item.provider}/${item.model}`] = ['off'];
-    continue;
+  const identifier = `${item.provider}/${item.model}`;
+  const supportsThinking = item.supportsThinking === true;
+  let model = customModelFor(item.provider, item.model);
+  if (!model) {
+    try {
+      model = models.getModel(item.provider, item.model);
+    } catch {}
   }
-  if (typeof models.getSupportedThinkingLevels === 'function') {
-    result[`${item.provider}/${item.model}`] = models.getSupportedThinkingLevels(model);
-  }
+  result[identifier] = supportedThinkingLevelsFor(model, supportsThinking);
 }
 process.stdout.write(JSON.stringify(result));
 """#
@@ -111,10 +161,14 @@ process.stdout.write(JSON.stringify(result));
     }
 
     static func availableModelIdentifiers(fromPiListOutput text: String) -> [(provider: String, model: String)] {
+        availableModelDescriptors(fromPiListOutput: text).map { (provider: $0.provider, model: $0.model) }
+    }
+
+    private static func availableModelDescriptors(fromPiListOutput text: String) -> [(provider: String, model: String, supportsThinking: Bool)] {
         text.split(whereSeparator: \.isNewline).dropFirst().compactMap { line in
             let parts = line.split(whereSeparator: \.isWhitespace).map(String.init)
-            guard parts.count >= 2 else { return nil }
-            return (provider: parts[0], model: parts[1])
+            guard parts.count >= 5 else { return nil }
+            return (provider: parts[0], model: parts[1], supportsThinking: parts[4].lowercased() == "yes")
         }
     }
 
@@ -134,7 +188,7 @@ process.stdout.write(JSON.stringify(result));
                     maxOutput: parts[3],
                     supportsThinking: supportsThinking,
                     supportsImages: parts[5].lowercased() == "yes",
-                    supportedThinkingLevels: exactThinkingLevels[identifier] ?? (supportsThinking ? [] : ["off"])
+                    supportedThinkingLevels: exactThinkingLevels[identifier] ?? (supportsThinking ? Self.defaultSupportedThinkingLevels : ["off"])
                 )
             }
     }

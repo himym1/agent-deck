@@ -2817,7 +2817,7 @@ final class AppViewModel: NSObject {
         do {
             try script.write(to: scriptURL, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
-            openTerminalScript(scriptURL, for: session.id)
+            openTerminalScript(scriptURL, for: session.id, workingDirectory: workingDirectory, title: "Pi Agent · \(session.title)")
             piAgentSessionStore.append(.init(sessionID: session.id, role: .status, title: "Opened in Terminal", text: "Opened in Terminal."))
         } catch {
             piAgentSessionStore.updateSession(session.id) { record in
@@ -2851,7 +2851,7 @@ final class AppViewModel: NSObject {
         """
     }
 
-    private func openTerminalScript(_ scriptURL: URL, for sessionID: UUID) {
+    private func openTerminalScript(_ scriptURL: URL, for sessionID: UUID, workingDirectory: String? = nil, title: String? = nil) {
         let trimmedPath = appSettings.piAgentTerminalApplicationPath?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // No explicit choice → macOS Terminal.
@@ -2885,6 +2885,8 @@ final class AppViewModel: NSObject {
         case .ghostty, .kitty, .alacritty, .wezTerm:
             if launchTerminalCLI(terminal, appPath: selectedTerminalPath, scriptURL: scriptURL, sessionID: sessionID) { return }
             openCommandFile(scriptURL, withApplicationAt: URL(fileURLWithPath: selectedTerminalPath), sessionID: sessionID)
+        case .cmux:
+            if launchCMux(appPath: selectedTerminalPath, scriptURL: scriptURL, workingDirectory: workingDirectory, title: title, sessionID: sessionID) { return }
         }
     }
 
@@ -2909,6 +2911,41 @@ final class AppViewModel: NSObject {
             let name = URL(fileURLWithPath: appPath).deletingPathExtension().lastPathComponent
             piAgentSessionStore.updateSession(sessionID) { record in
                 record.lastError = "Could not launch \(name): \(error.localizedDescription)"
+            }
+            return false
+        }
+    }
+
+    /// Launches cmux in a new workspace running the prepared script. cmux uses
+    /// `--command` text rather than executing `/bin/zsh <script>` as argv.
+    @discardableResult
+    private func launchCMux(appPath: String, scriptURL: URL, workingDirectory: String?, title: String?, sessionID: UUID) -> Bool {
+        let executableURL = URL(fileURLWithPath: appPath)
+            .appendingPathComponent("Contents/Resources/bin/cmux")
+        guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
+            piAgentSessionStore.updateSession(sessionID) { record in
+                record.lastError = "Could not find cmux CLI inside the selected app."
+            }
+            return false
+        }
+
+        let workspaceTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "Pi Agent"
+        let cwd = workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? FileManager.default.homeDirectoryForCurrentUser.path
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = [
+            "new-workspace",
+            "--name", workspaceTitle,
+            "--cwd", cwd,
+            "--command", "/bin/zsh \(shellQuoted(scriptURL.path))",
+            "--focus", "true"
+        ]
+        do {
+            try process.run()
+            return true
+        } catch {
+            piAgentSessionStore.updateSession(sessionID) { record in
+                record.lastError = "Could not launch cmux: \(error.localizedDescription)"
             }
             return false
         }
@@ -5096,6 +5133,11 @@ final class AppViewModel: NSObject {
 
     func deleteAgentMemory(_ id: String) {
         agentMemoryStore.deleteMemory(id: id)
+    }
+
+    func setAppLanguage(_ language: AppLanguage) {
+        guard appSettingsController.setAppLanguage(language) else { return }
+        syncAppSettings()
     }
 
     func setShowContextSmartZoneHint(_ isEnabled: Bool) {

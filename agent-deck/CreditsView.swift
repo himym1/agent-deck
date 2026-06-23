@@ -227,7 +227,7 @@ struct AboutView: View {
         .background(AppTheme.contentFill)
         .clipShape(Circle())
         .overlay(Circle().strokeBorder(AppTheme.hairlineStroke, lineWidth: 1))
-        .accessibilityLabel("\(author.login) on GitHub")
+        .accessibilityLabel(AppLocalization.format("%@ on GitHub", default: "%@ on GitHub", author.login))
     }
 
     private func sectionView(_ section: AppCredits.Section) -> some View {

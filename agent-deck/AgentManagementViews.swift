@@ -501,7 +501,7 @@ private struct AgentListRow: View {
                     }
                 }
 
-                Text(agent.resolved.description.isEmpty ? "No description" : agent.resolved.description)
+                Text(AppLocalization.agentDescription(name: agent.name, default: agent.resolved.description))
                     .font(.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .lineLimit(2)
@@ -771,7 +771,14 @@ private struct AgentLibraryPane: View {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return viewModel.filteredAgents }
         return viewModel.filteredAgents.filter { agent in
-            [agent.name, agent.resolved.description, agent.resolutionKind.rawValue, agent.sourcePath ?? "", agent.resolved.systemPrompt]
+            [
+                agent.name,
+                agent.resolved.description,
+                AppLocalization.agentDescription(name: agent.name, default: agent.resolved.description),
+                agent.resolutionKind.rawValue,
+                agent.sourcePath ?? "",
+                agent.resolved.systemPrompt
+            ]
                 .contains { $0.lowercased().contains(query) }
         }
     }
@@ -1044,7 +1051,7 @@ private struct AgentDetailView: View {
     var body: some View {
         AppPage(
             agent.name,
-            subtitle: agent.resolved.description.isEmpty ? nil : agent.resolved.description,
+            subtitle: agent.resolved.description.isEmpty ? nil : AppLocalization.agentDescription(name: agent.name, default: agent.resolved.description),
             constrainsContentToViewport: true
         ) {
             summaryTab
@@ -1107,7 +1114,7 @@ private struct AgentDetailView: View {
             VStack(alignment: .leading, spacing: 5) {
                 agentNameEditableView
                 if !agent.resolved.description.isEmpty {
-                    Text(agent.resolved.description)
+                    Text(AppLocalization.agentDescription(name: agent.name, default: agent.resolved.description))
                         .font(.caption)
                         .foregroundStyle(AppTheme.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1307,7 +1314,7 @@ private struct AgentDetailView: View {
                 .labelStyle(.titleAndIcon)
         }
         .appSmallSecondaryButton()
-        .help("Edit \(tab.rawValue.lowercased())")
+        .help(AppLocalization.format("Edit %@", default: "Edit %@", AppLocalization.string(tab.rawValue, default: tab.rawValue).lowercased()))
     }
 
     private var summaryTab: some View {

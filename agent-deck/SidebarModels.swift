@@ -21,6 +21,10 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var localizedTitle: String {
+        AppLocalization.string("sidebar.item.\(String(describing: self))", default: rawValue)
+    }
+
     var systemImage: String {
         switch self {
         case .projects: return "folder"
@@ -54,6 +58,10 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     case runtime = "Runtime"
 
     var id: String { rawValue }
+
+    var localizedTitle: String {
+        AppLocalization.string("sidebar.section.\(String(describing: self))", default: rawValue)
+    }
 
     var items: [SidebarItem] {
         unsortedItems.sorted { $0.rawValue.localizedStandardCompare($1.rawValue) == .orderedAscending }

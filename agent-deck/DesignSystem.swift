@@ -523,7 +523,7 @@ struct AppLoadingView: View {
     var body: some View {
         VStack(spacing: 10) {
             AppSpinner()
-            Text(title)
+            Text(AppLocalization.string(title, default: title))
                 .font(.caption)
                 .foregroundStyle(AppTheme.mutedText)
         }
@@ -573,7 +573,7 @@ struct AppInitialLoadOverlay: View {
                 .opacity(entered ? 1 : 0)
 
             VStack(spacing: 14) {
-                Text(message)
+                Text(AppLocalization.string(message, default: message))
                     .font(AppTheme.Font.callout.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
                 AppIndeterminateBar()
@@ -700,9 +700,9 @@ struct AppTextField: View {
     @ViewBuilder
     private var field: some View {
         if let prompt {
-            TextField(placeholder, text: $text, prompt: prompt, axis: axis)
+            TextField("", text: $text, prompt: prompt, axis: axis)
         } else {
-            TextField(placeholder, text: $text, axis: axis)
+            TextField("", text: $text, prompt: Text(AppLocalization.string(placeholder, default: placeholder)), axis: axis)
         }
     }
 }
@@ -1186,12 +1186,12 @@ struct AppCard<Content: View, Trailing: View>: View {
                     if showsHeader {
                         HStack(alignment: .center) {
                             if let title {
-                                Text(title)
+                                Text(AppLocalization.string(title, default: title))
                                     .font(.headline)
                                     .fontWidth(.expanded)
                             }
                             if let info {
-                                AppHelpButton(title: title ?? "Details", text: info)
+                                AppHelpButton(title: title ?? AppLocalization.string("Details", default: "Details"), text: info)
                             }
                             Spacer()
                             trailing
@@ -1229,18 +1229,18 @@ struct AppSheetHeader<Trailing: View>: View {
                     .background(AppTheme.brandAccent.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
+                    Text(AppLocalization.string(title, default: title))
                         .font(.headline)
                         .fontWidth(.expanded)
                     if let subtitle {
-                        Text(subtitle)
+                        Text(AppLocalization.string(subtitle, default: subtitle))
                             .font(.caption.monospaced())
                             .foregroundStyle(AppTheme.mutedText)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
                     if let metadata {
-                        Text(metadata)
+                        Text(AppLocalization.string(metadata, default: metadata))
                             .font(.caption2)
                             .foregroundStyle(AppTheme.mutedText)
                     }
@@ -1266,7 +1266,7 @@ struct AppMetricTile: View {
             Text("\(value)")
                 .font(.system(size: 30, weight: .bold))
                 .fontWidth(.expanded)
-            Text(title)
+            Text(AppLocalization.string(title, default: title))
                 .foregroundStyle(AppTheme.mutedText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1301,7 +1301,7 @@ struct AppLabelTag: View {
     let color: Color
 
     var body: some View {
-        Text(text)
+        Text(AppLocalization.string(text, default: text))
             .font(.caption.weight(.semibold))
             .fontWidth(.expanded)
             .padding(.horizontal, 8)
@@ -1327,7 +1327,7 @@ struct AppListSectionHeader: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 6) {
-            Text(title)
+            Text(AppLocalization.string(title, default: title))
                 .font(.headline)
                 .fontWidth(.expanded)
                 .foregroundStyle(tint.map { AnyShapeStyle($0.gradient) } ?? AnyShapeStyle(.primary))
@@ -1360,7 +1360,10 @@ struct AppHelpButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(title.map { "About \($0)" } ?? "Help")
+        .accessibilityLabel(
+            title.map { AppLocalization.format("About %@", default: "About %@", AppLocalization.string($0, default: $0)) }
+                ?? AppLocalization.string("Help", default: "Help")
+        )
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             popoverContent
         }
@@ -1370,12 +1373,12 @@ struct AppHelpButton: View {
     private var popoverContent: some View {
         if let title {
             VStack(alignment: .leading, spacing: 10) {
-                Label(title, systemImage: "questionmark.circle")
+                Label(AppLocalization.string(title, default: title), systemImage: "questionmark.circle")
                     .font(.headline)
                     .fontWidth(.expanded)
                     .foregroundStyle(.primary)
 
-                Text(text)
+                Text(AppLocalization.string(text, default: text))
                     .font(.callout)
                     .foregroundStyle(AppTheme.mutedText)
                     .lineLimit(nil)
@@ -1386,7 +1389,7 @@ struct AppHelpButton: View {
             .padding(16)
             .frame(width: 360, alignment: .leading)
         } else {
-            Text(text)
+            Text(AppLocalization.string(text, default: text))
                 .font(.callout)
                 .foregroundStyle(AppTheme.mutedText)
                 .multilineTextAlignment(.leading)
@@ -1409,7 +1412,7 @@ func appListSection<Content: View>(_ title: String, info: String? = nil, tint: C
 }
 
 func nativeEmptyRow(_ text: String) -> some View {
-    Text(text)
+    Text(AppLocalization.string(text, default: text))
         .font(.callout)
         .foregroundStyle(AppTheme.mutedText)
         .padding(.vertical, 4)
@@ -1439,9 +1442,9 @@ struct AppEmptyState: View {
 
     var body: some View {
         ContentUnavailableView(
-            title,
+            AppLocalization.string(title, default: title),
             systemImage: systemImage,
-            description: description.map(Text.init)
+            description: description.map { Text(AppLocalization.string($0, default: $0)) }
         )
         .frame(maxWidth: .infinity, maxHeight: layout == .fill ? .infinity : nil)
         .padding(.vertical, layout == .compact ? 12 : 0)
@@ -1455,7 +1458,7 @@ struct AppKeyValueList: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(rows, id: \.0) { row in
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(row.0)
+                    Text(AppLocalization.string(row.0, default: row.0))
                         .font(.caption.weight(.semibold))
                         .fontWidth(.expanded)
                         .foregroundStyle(AppTheme.mutedText)

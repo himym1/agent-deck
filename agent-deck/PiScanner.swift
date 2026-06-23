@@ -8,10 +8,16 @@ nonisolated struct PiScanner: @unchecked Sendable {
     private let fileManager = FileManager.default
     private let externalSkillPaths: Set<String>
     private let externalPromptPaths: Set<String>
+    private let homeDirectoryURL: URL
 
-    init(externalSkillPaths: Set<String> = [], externalPromptPaths: Set<String> = []) {
+    init(
+        externalSkillPaths: Set<String> = [],
+        externalPromptPaths: Set<String> = [],
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) {
         self.externalSkillPaths = externalSkillPaths
         self.externalPromptPaths = externalPromptPaths
+        self.homeDirectoryURL = homeDirectory
     }
 
     func scan(projectRoot: URL?) -> ScanSnapshot {
@@ -30,6 +36,7 @@ nonisolated struct PiScanner: @unchecked Sendable {
         let projectSettings = projectRoot?.appendingPathComponent(".pi/settings.json")
         let projectEnv = projectRoot?.appendingPathComponent(".pi/.env")
         let projectSkills = projectRoot?.appendingPathComponent(".pi/skills", isDirectory: true)
+        let legacyProjectSkills = projectRoot?.appendingPathComponent(".agents/skills", isDirectory: true)
         let projectPrompts = projectRoot?.appendingPathComponent(".pi/prompts", isDirectory: true)
 
         let builtinAgents = scanAgents(at: bundledAgentsDirectory(), scope: .builtin)
@@ -55,8 +62,9 @@ nonisolated struct PiScanner: @unchecked Sendable {
         let skills = deduplicatedByCanonicalPath(
             bundledSkills +
             scanSkills(at: globalSkills, scope: .global) +
-            scanSkills(at: extraGlobalSkills, scope: .global, allowRootMarkdown: false) +
+            scanSkills(at: extraGlobalSkills, scope: .global, allowRootMarkdown: false, recursive: true) +
             scanSkills(at: projectSkills, scope: .project) +
+            scanSkills(at: legacyProjectSkills, scope: .legacyProject, allowRootMarkdown: false, recursive: true) +
             packageSkillScan.skills
         )
         let librarySkills = deduplicatedByCanonicalPath(scanExternalSkills(paths: externalSkillPaths))
@@ -100,7 +108,7 @@ nonisolated struct PiScanner: @unchecked Sendable {
             envKeys: envKeys,
             malformedWarnings: malformedResourceWarnings(
                 agentDirectories: [bundledAgentsDirectory(), legacyGlobalAgentDirectory, globalAgentDirectory, legacyProjectAgentDirectory, projectAgentDirectory, agentLibraryDirectory].compactMap { $0 },
-                skillDirectories: [globalSkills, extraGlobalSkills, projectSkills].compactMap { $0 } + packageSkillScan.skillDirectories
+                skillDirectories: [globalSkills, extraGlobalSkills, projectSkills, legacyProjectSkills].compactMap { $0 } + packageSkillScan.skillDirectories
             ) + packageSkillScan.warnings + promptScan.warnings
         )
 
@@ -123,7 +131,7 @@ nonisolated struct PiScanner: @unchecked Sendable {
     }
 
     private func homeDirectory() -> URL {
-        fileManager.homeDirectoryForCurrentUser
+        homeDirectoryURL
     }
 
     private func bundledAgentsDirectory() -> URL? {
@@ -236,35 +244,76 @@ nonisolated struct PiScanner: @unchecked Sendable {
         return result
     }
 
-    private func scanSkills(at directory: URL?, scope: ResourceScopeKind, allowRootMarkdown: Bool = true) -> [SkillRecord] {
-        guard let directory, let urls = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else {
+    private func scanSkills(
+        at directory: URL?,
+        scope: ResourceScopeKind,
+        allowRootMarkdown: Bool = true,
+        recursive: Bool = false,
+        includeDirectoryItself: Bool = false
+    ) -> [SkillRecord] {
+        guard let directory, fileManager.fileExists(atPath: directory.path) else {
             return []
         }
 
-        return urls.compactMap { url in
+        var records: [SkillRecord] = []
+        if includeDirectoryItself,
+           let rootSkill = scanStandaloneSkillFile(at: directory.appendingPathComponent("SKILL.md"), scope: scope) {
+            records.append(rootSkill)
+        }
+
+        guard let urls = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else {
+            return records
+        }
+
+        records += urls.compactMap { url -> SkillRecord? in
             var isDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return nil }
 
             if isDirectory.boolValue {
-                let skillFile = url.appendingPathComponent("SKILL.md")
-                guard let text = try? String(contentsOf: skillFile, encoding: .utf8) else { return nil }
-                let document = parseMarkdownDocument(text)
-                let name = document.frontmatter["name"]?.nonEmpty ?? url.lastPathComponent
-                let description = document.frontmatter["description"]?.nonEmpty
-                return SkillRecord(
-                    id: "\(scope.rawValue):\(name):\(skillFile.path)",
-                    name: name,
-                    description: description,
-                    source: ScopeID(kind: scope, path: skillFile.path),
-                    filePath: skillFile.path,
-                    body: text
-                )
+                return scanStandaloneSkillFile(at: url.appendingPathComponent("SKILL.md"), scope: scope)
             }
 
             guard allowRootMarkdown, url.pathExtension == "md", url.lastPathComponent != "SKILL.md" else { return nil }
             return scanStandaloneSkillFile(at: url, scope: scope)
         }
-        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+        if recursive {
+            for url in urls where isDirectory(url) && !shouldSkipRecursiveSkillDirectory(url) {
+                records += scanNestedSkillRoots(under: url, scope: scope)
+            }
+        }
+
+        return records.sorted { lhs, rhs in
+            let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+            if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+            return lhs.filePath < rhs.filePath
+        }
+    }
+
+    private func scanNestedSkillRoots(under directory: URL, scope: ResourceScopeKind) -> [SkillRecord] {
+        if let rootSkill = scanStandaloneSkillFile(at: directory.appendingPathComponent("SKILL.md"), scope: scope) {
+            return [rootSkill]
+        }
+
+        guard let children = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else {
+            return []
+        }
+
+        var records: [SkillRecord] = []
+        for child in children where isDirectory(child) && !shouldSkipRecursiveSkillDirectory(child) {
+            records += scanNestedSkillRoots(under: child, scope: scope)
+        }
+        return records
+    }
+
+    private func shouldSkipRecursiveSkillDirectory(_ url: URL) -> Bool {
+        let skipped = [".git", ".build", "DerivedData", "node_modules"]
+        return skipped.contains(url.lastPathComponent)
+    }
+
+    private func isDirectory(_ url: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        return fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
     private func scanExternalSkills(paths: Set<String>) -> [SkillRecord] {
@@ -316,7 +365,7 @@ nonisolated struct PiScanner: @unchecked Sendable {
     ) -> (skills: [SkillRecord], skillDirectories: [URL], warnings: [DiagnosticWarning]) {
         var skills: [SkillRecord] = []
         var skillDirectories: [URL] = []
-        var warnings: [DiagnosticWarning] = []
+        let warnings: [DiagnosticWarning] = []
         var seenSkillPaths = Set<String>()
         var seenDirectories = Set<String>()
 
@@ -325,7 +374,6 @@ nonisolated struct PiScanner: @unchecked Sendable {
             guard let packageDirectory = resolvePackageDirectory(for: packageRef, projectRoot: projectRoot) else {
                 continue
             }
-            let packageName = SlashCommandCatalog.normalizePackageReference(packageRef)
             let packageSkillLocations = resolvePackageSkillLocations(packageDirectory: packageDirectory)
             if packageSkillLocations.isEmpty {
                 continue
@@ -334,7 +382,6 @@ nonisolated struct PiScanner: @unchecked Sendable {
             for url in packageSkillLocations {
                 var isDirectory: ObjCBool = false
                 guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
-                    warnings.append(.init(id: "missing-package-skills:\(packageName):\(url.path)", message: "Package \(packageName) declares skills at \(url.path), but that path was not found."))
                     continue
                 }
 
@@ -344,7 +391,15 @@ nonisolated struct PiScanner: @unchecked Sendable {
                         skillDirectories.append(url)
                     }
 
-                    for skill in scanSkills(at: url, scope: .package) {
+                    if let rootSkill = scanStandaloneSkillFile(at: url.appendingPathComponent("SKILL.md"), scope: .package) {
+                        let skillPath = URL(fileURLWithPath: rootSkill.filePath).standardizedFileURL.path
+                        if seenSkillPaths.insert(skillPath).inserted {
+                            skills.append(rootSkill)
+                        }
+                        continue
+                    }
+
+                    for skill in scanSkills(at: url, scope: .package, recursive: true, includeDirectoryItself: false) {
                         let skillPath = URL(fileURLWithPath: skill.filePath).standardizedFileURL.path
                         if seenSkillPaths.insert(skillPath).inserted {
                             skills.append(skill)
@@ -431,7 +486,7 @@ nonisolated struct PiScanner: @unchecked Sendable {
             guard let packageDirectory = resolvePackageDirectory(for: packageRef, projectRoot: projectRoot) else {
                 continue
             }
-            let packageName = SlashCommandCatalog.normalizePackageReference(packageRef)
+            let packageName = packageDisplayName(packageRef)
             let packagePrompts = resolvePackagePromptLocations(packageDirectory: packageDirectory)
             if packagePrompts.isEmpty {
                 continue
@@ -439,7 +494,6 @@ nonisolated struct PiScanner: @unchecked Sendable {
             for url in packagePrompts {
                 var isDirectory: ObjCBool = false
                 guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
-                    warnings.append(.init(id: "missing-package-prompts:\(packageName):\(url.path)", message: "Package \(packageName) declares prompt templates at \(url.path), but that path was not found."))
                     continue
                 }
                 if isDirectory.boolValue {
@@ -506,63 +560,29 @@ nonisolated struct PiScanner: @unchecked Sendable {
     }
 
     private func resolvePackagePromptLocations(packageDirectory: URL) -> [URL] {
-        var results: [URL] = []
-        let packageJSON = packageDirectory.appendingPathComponent("package.json")
-        var hasDeclaredPrompts = false
-
-        if let data = try? Data(contentsOf: packageJSON),
-           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let pi = root["pi"] as? [String: Any] {
-            let declaredPrompts: [String]
-            if let value = pi["prompts"] as? String {
-                declaredPrompts = [value]
-            } else {
-                declaredPrompts = (pi["prompts"] as? [Any])?.compactMap { $0 as? String } ?? []
-            }
-
-            hasDeclaredPrompts = !declaredPrompts.isEmpty
-            for promptPath in declaredPrompts {
-                results.append(resolveRelativePath(promptPath, baseDirectory: packageDirectory))
-            }
-        }
-
-        if !hasDeclaredPrompts {
-            let conventionalDirectory = packageDirectory.appendingPathComponent("prompts", isDirectory: true)
-            if fileManager.fileExists(atPath: conventionalDirectory.path) {
-                results.append(conventionalDirectory)
-            }
-        }
-
-        var seen: Set<String> = []
-        return results.filter { seen.insert($0.standardizedFileURL.path).inserted }
+        resolvePackageResourceLocations(packageDirectory: packageDirectory, manifestKey: "prompts", conventionalDirectoryName: "prompts")
     }
 
     private func resolvePackageSkillLocations(packageDirectory: URL) -> [URL] {
-        var results: [URL] = []
+        resolvePackageResourceLocations(packageDirectory: packageDirectory, manifestKey: "skills", conventionalDirectoryName: "skills")
+    }
+
+    private func resolvePackageResourceLocations(packageDirectory: URL, manifestKey: String, conventionalDirectoryName: String) -> [URL] {
         let packageJSON = packageDirectory.appendingPathComponent("package.json")
-        var hasDeclaredSkills = false
+        var declared: [String] = []
 
         if let data = try? Data(contentsOf: packageJSON),
            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let pi = root["pi"] as? [String: Any] {
-            let declaredSkills: [String]
-            if let value = pi["skills"] as? String {
-                declaredSkills = [value]
-            } else {
-                declaredSkills = (pi["skills"] as? [Any])?.compactMap { $0 as? String } ?? []
-            }
-
-            hasDeclaredSkills = !declaredSkills.isEmpty
-            for skillPath in declaredSkills {
-                results.append(resolveRelativePath(skillPath, baseDirectory: packageDirectory))
-            }
+            declared = stringList(from: pi[manifestKey])
         }
 
-        if !hasDeclaredSkills {
-            let conventionalDirectory = packageDirectory.appendingPathComponent("skills", isDirectory: true)
-            if fileManager.fileExists(atPath: conventionalDirectory.path) {
-                results.append(conventionalDirectory)
-            }
+        let results: [URL]
+        if declared.isEmpty {
+            let conventionalDirectory = packageDirectory.appendingPathComponent(conventionalDirectoryName, isDirectory: true)
+            results = fileManager.fileExists(atPath: conventionalDirectory.path) ? [conventionalDirectory] : []
+        } else {
+            results = PiPackageManifestLocationResolver.resolve(declared, packageDirectory: packageDirectory, fileManager: fileManager)
         }
 
         var seen: Set<String> = []
@@ -570,15 +590,22 @@ nonisolated struct PiScanner: @unchecked Sendable {
     }
 
     private func resolvePackageDirectory(for packageReference: String, projectRoot: URL?) -> URL? {
-        if packageReference.hasPrefix("/") {
-            return URL(fileURLWithPath: packageReference, isDirectory: true)
+        let expanded = NSString(string: packageReference).expandingTildeInPath
+        if expanded.hasPrefix("/") {
+            let url = URL(fileURLWithPath: expanded, isDirectory: true)
+            return fileManager.fileExists(atPath: url.path) ? url : nil
         }
-        if packageReference.hasPrefix(".") {
-            return projectRoot?.appendingPathComponent(packageReference, isDirectory: true)
+        if expanded.hasPrefix(".") {
+            guard let projectRoot else { return nil }
+            let url = projectRoot.appendingPathComponent(expanded, isDirectory: true)
+            return fileManager.fileExists(atPath: url.path) ? url : nil
         }
 
-        let packageName = SlashCommandCatalog.normalizePackageReference(packageReference)
+        let packageName = npmPackageName(packageReference) ?? packageDisplayName(packageReference)
         let candidates = [
+            homeDirectory().appendingPathComponent(".pi/agent/npm/node_modules/\(packageName)", isDirectory: true),
+            projectRoot?.appendingPathComponent(".pi/npm/node_modules/\(packageName)", isDirectory: true),
+            gitPackageDirectory(packageReference: packageReference, projectRoot: projectRoot),
             URL(fileURLWithPath: "/opt/homebrew/lib/node_modules/\(packageName)", isDirectory: true),
             URL(fileURLWithPath: "/usr/local/lib/node_modules/\(packageName)", isDirectory: true),
             homeDirectory().appendingPathComponent(".npm-global/lib/node_modules/\(packageName)", isDirectory: true),
@@ -587,6 +614,56 @@ nonisolated struct PiScanner: @unchecked Sendable {
         ].compactMap { $0 }
 
         return candidates.first(where: { fileManager.fileExists(atPath: $0.path) })
+    }
+
+    private func gitPackageDirectory(packageReference: String, projectRoot: URL?) -> URL? {
+        let raw: String
+        if packageReference.hasPrefix("git:") {
+            raw = String(packageReference.dropFirst(4))
+        } else if packageReference.hasPrefix("https://") || packageReference.hasPrefix("http://") || packageReference.hasPrefix("ssh://") {
+            raw = packageReference
+        } else {
+            return nil
+        }
+
+        let withoutScheme = raw
+            .replacingOccurrences(of: "https://", with: "")
+            .replacingOccurrences(of: "http://", with: "")
+            .replacingOccurrences(of: "ssh://git@", with: "")
+            .replacingOccurrences(of: "git@", with: "")
+            .replacingOccurrences(of: ":", with: "/")
+        let withoutRef = withoutScheme.split(separator: "@").first.map(String.init) ?? withoutScheme
+        let trimmed = withoutRef.hasSuffix(".git") ? String(withoutRef.dropLast(4)) : withoutRef
+        let global = homeDirectory().appendingPathComponent(".pi/agent/git/\(trimmed)", isDirectory: true)
+        if fileManager.fileExists(atPath: global.path) { return global }
+        if let projectRoot {
+            let project = projectRoot.appendingPathComponent(".pi/git/\(trimmed)", isDirectory: true)
+            if fileManager.fileExists(atPath: project.path) { return project }
+        }
+        return nil
+    }
+
+    private func npmPackageName(_ reference: String) -> String? {
+        guard reference.hasPrefix("npm:") else { return nil }
+        var name = String(reference.dropFirst(4))
+        if name.hasPrefix("@") {
+            let parts = name.split(separator: "/", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { return name }
+            if let at = parts[1].lastIndex(of: "@") {
+                name = parts[0] + "/" + String(parts[1][..<at])
+            }
+            return name
+        }
+        if let at = name.lastIndex(of: "@") {
+            name = String(name[..<at])
+        }
+        return name
+    }
+
+    private func packageDisplayName(_ reference: String) -> String {
+        if let npm = npmPackageName(reference) { return npm }
+        if reference.hasPrefix("git:") { return String(reference.dropFirst(4)) }
+        return SlashCommandCatalog.normalizePackageReference(reference)
     }
 
     private func resolveRelativePath(_ path: String, baseDirectory: URL) -> URL {
@@ -660,11 +737,19 @@ nonisolated struct PiScanner: @unchecked Sendable {
         return SettingsSummary(path: file.path, packages: packages, prompts: prompts, disableBuiltins: disableBuiltins, agentOverrides: overrides)
     }
 
+    private func stringList(from value: Any?) -> [String] {
+        if let value = value as? String { return value.isEmpty ? [] : [value] }
+        if let values = value as? [Any] {
+            return values.compactMap { ($0 as? String)?.nonEmpty }
+        }
+        return []
+    }
+
     private func packageSources(from value: Any?) -> [String] {
         guard let packages = value as? [Any] else { return [] }
         return packages.compactMap { package in
-            if let source = package as? String { return source }
-            return (package as? [String: Any])?["source"] as? String
+            if let source = package as? String { return source.nonEmpty }
+            return ((package as? [String: Any])?["source"] as? String)?.nonEmpty
         }
     }
 

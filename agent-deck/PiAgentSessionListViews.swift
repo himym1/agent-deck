@@ -297,7 +297,8 @@ private struct PiAgentChatAgentRow: View {
     }
 
     private var agentDescription: String {
-        agent.resolved.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw = agent.resolved.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw.isEmpty ? "" : AppLocalization.agentDescription(name: agent.name, default: raw)
     }
 
     @ViewBuilder
@@ -519,8 +520,8 @@ struct PiAgentSessionRow: View, Equatable {
         Image(systemName: "bell.fill")
             .font(AppTheme.Font.caption.weight(.semibold))
             .foregroundStyle(AppTheme.brandAccent)
-            .help("Pi Agent finished and needs review")
-            .accessibilityLabel("Needs review")
+            .help(AppLocalization.string("Pi Agent finished and needs review", default: "Pi Agent finished and needs review"))
+            .accessibilityLabel(AppLocalization.string("Needs review", default: "Needs review"))
     }
 
     private var deleteButton: some View {
@@ -529,8 +530,8 @@ struct PiAgentSessionRow: View, Equatable {
                 .font(AppTheme.Font.caption.weight(.semibold))
         }
         .appSmallSecondaryButton()
-        .help("Delete session")
-        .accessibilityLabel("Delete session")
+        .help(AppLocalization.string("Delete session", default: "Delete session"))
+        .accessibilityLabel(AppLocalization.string("Delete session", default: "Delete session"))
     }
 
     private var activeBackgroundGradient: LinearGradient {
@@ -548,7 +549,7 @@ struct PiAgentSessionRow: View, Equatable {
     @ViewBuilder
     private var titleView: some View {
         if isRenaming {
-            TextField("Session name", text: $draftTitle)
+            TextField(AppLocalization.string("Session name", default: "Session name"), text: $draftTitle)
                 .textFieldStyle(.plain)
                 .font(AppTheme.Font.footnote.weight(.medium))
                 .fontWidth(.expanded)
@@ -592,7 +593,7 @@ struct PiAgentSessionRow: View, Equatable {
             .contentShape(Rectangle())
             .onHover { isTitleHovered = $0 }
             .onTapGesture(perform: onBeginRename)
-            .help("Rename session")
+            .help(AppLocalization.string("Rename session", default: "Rename session"))
         }
     }
 
@@ -615,8 +616,12 @@ struct PiAgentSessionRow: View, Equatable {
     }
 
     private var sessionTitle: String {
-        if session.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return session.issueNumber.map { "#\($0)" } ?? "Project agent"
+        let trimmedTitle = session.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedTitle.isEmpty {
+            return session.issueNumber.map { "#\($0)" } ?? AppLocalization.string("session.title.projectAgent", default: "Project agent")
+        }
+        if trimmedTitle == "General Chat Session" {
+            return AppLocalization.string("session.title.generalChat", default: "General Chat Session")
         }
         return session.title
     }
@@ -662,7 +667,14 @@ private struct SessionGitActivityStrip: View {
             icon(for: kind)
                 .font(AppTheme.Font.caption2.weight(.semibold))
                 .foregroundStyle(isSelected ? AppTheme.brandAccent : AppTheme.mutedText)
-                .help("Last \(verb) at \(date.formatted(date: .omitted, time: .shortened))")
+                .help(
+                    AppLocalization.format(
+                        "Last %@ at %@",
+                        default: "Last %@ at %@",
+                        AppLocalization.string(verb, default: verb),
+                        date.formatted(date: .omitted, time: .shortened)
+                    )
+                )
         }
     }
 

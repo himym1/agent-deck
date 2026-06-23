@@ -282,7 +282,7 @@ struct ProjectServerPopover: View {
         }
         .buttonStyle(.plain)
         .onHover { isURLHovering = $0 }
-        .help("Open \(url.absoluteString) in the browser")
+        .help(AppLocalization.format("Open %@ in the browser", default: "Open %@ in the browser", url.absoluteString))
     }
 
     private func statusMessage(_ message: String) -> some View {

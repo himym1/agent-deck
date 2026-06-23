@@ -221,13 +221,25 @@ struct PiAgentOpenTerminalToolbarButton: View {
         .symbolRenderingMode(.monochrome)
         .foregroundStyle(.primary)
         .tint(.primary)
-        .help("Opens a terminal continuation from this session file. Terminal messages do not sync back into \(AppBrand.displayName) yet.")
+        .help(
+            AppLocalization.format(
+                "Opens a terminal continuation from this session file. Terminal messages do not sync back into %@ yet.",
+                default: "Opens a terminal continuation from this session file. Terminal messages do not sync back into %@ yet.",
+                AppBrand.displayName
+            )
+        )
         .disabled(!canOpen)
         .alert("Resume in Terminal?", isPresented: $isParallelContinuationWarningPresented) {
             Button("Resume in Terminal") { viewModel.openSelectedPiAgentSessionInTerminal() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This opens a parallel terminal continuation from the session file. Messages sent in Terminal do not sync back into \(AppBrand.displayName) yet.")
+            Text(
+                AppLocalization.format(
+                    "This opens a parallel terminal continuation from the session file. Messages sent in Terminal do not sync back into %@ yet.",
+                    default: "This opens a parallel terminal continuation from the session file. Messages sent in Terminal do not sync back into %@ yet.",
+                    AppBrand.displayName
+                )
+            )
         }
         .task(id: store.selectedSession?.id) { refreshCanOpen() }
         .onChange(of: store.selectedSession?.piSessionFile) { refreshCanOpen() }

@@ -940,7 +940,7 @@ struct ProjectsScreen: View {
                     .frame(width: 20, height: 20)
             }
             .buttonStyle(.plain)
-            .help("Hide from \(AppBrand.displayName)")
+            .help(AppLocalization.format("Hide from %@", default: "Hide from %@", AppBrand.displayName))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -1637,7 +1637,7 @@ private struct ProjectAgentsRecapSheet: View {
                                     .background(color.opacity(0.12), in: Capsule(style: .continuous))
                             }
                             if !agent.resolved.description.isEmpty {
-                                Text(agent.resolved.description)
+                                Text(AppLocalization.agentDescription(name: agent.name, default: agent.resolved.description))
                                     .font(.caption)
                                     .foregroundStyle(AppTheme.mutedText)
                                     .lineLimit(2)

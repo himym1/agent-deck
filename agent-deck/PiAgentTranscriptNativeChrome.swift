@@ -29,14 +29,16 @@ final class PiAgentNativeShortcutsStripView: NSView, PiAgentNativeRowContent {
     var onIntrinsicHeightChange: (() -> Void)?
 
     private let stack = NSStackView()
-    private static let hints: [(keys: [String], label: String)] = [
-        (["↩"], "send / steer"),
-        (["⇧", "↩"], "newline"),
-        (["esc"], "stop running turn"),
-        (["esc ×2"], "clear input"),
-        (["/"], "commands"),
-        (["@"], "file suggestions")
-    ]
+    private static var hints: [(keys: [String], label: String)] {
+        [
+            (["↩"], AppLocalization.string("shortcut.sendSteer", default: "send / steer")),
+            (["⇧", "↩"], AppLocalization.string("shortcut.newline", default: "newline")),
+            (["esc"], AppLocalization.string("shortcut.stopRunningTurn", default: "stop running turn")),
+            (["esc ×2"], AppLocalization.string("shortcut.clearInput", default: "clear input")),
+            (["/"], AppLocalization.string("shortcut.commands", default: "commands")),
+            (["@"], AppLocalization.string("shortcut.fileSuggestions", default: "file suggestions"))
+        ]
+    }
 
     required init() {
         super.init(frame: .zero)

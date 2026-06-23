@@ -19,8 +19,8 @@ Agent Deck can discover skills from multiple sources, including:
 | Bundled skills | Skills shipped with Agent Deck, such as `agent-authoring`, `prompt-authoring`, and `skill-authoring`. |
 | User skills | `~/.pi/agent/skills/<name>/SKILL.md`, `~/.pi/agent/skills/<name>.md`. |
 | Project skills | `PROJECT/.pi/skills/<name>/SKILL.md`, `PROJECT/.pi/skills/<name>.md`. |
-| Compatibility skills | `.agents/skills/<name>/SKILL.md` locations. |
-| Package skills | Package-declared `pi.skills` or conventional package `skills/` folders. |
+| Compatibility skills | Recursive `.agents/skills/**/SKILL.md` locations, excluding broad dependency/build folders. |
+| Package skills | Package-declared `pi.skills`, including direct skill roots and simple globs such as `./cs-*`, or conventional package `skills/` folders. |
 | Imported/catalog skills | Any existing imported skill folders Agent Deck scans. |
 
 A catalog skill keeps its original path. Agent Deck does not need to move, copy, or link a skill before using it. Runtime injection is controlled by assignment, not by the folder where the skill lives.

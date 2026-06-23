@@ -283,9 +283,6 @@ struct PiAgentComposerBox: View {
             }
         }
         .shadow(color: .black.opacity(0.05), radius: 14, x: 0, y: 7)
-        .onPasteCommand(of: [.png, .jpeg, .tiff, .gif, .webP, .fileURL]) { _ in
-            addImages(PiAgentComposerImageLoader.imagesFromPasteboard())
-        }
         .onDrop(of: [.fileURL, .png, .jpeg, .tiff, .gif, .webP, .image], isTargeted: $isDropTargeted) { providers in
             // Defer NSItemProvider loading off the drop callback so AppKit can
             // finish the drag-IPC teardown (kDragIPCLeaveApplication) before
@@ -1003,13 +1000,23 @@ enum PiAgentComposerImageLoader {
     nonisolated static func imagesFromPasteboard(_ pasteboard: NSPasteboard = .general) -> [PiAgentImageAttachment] {
         var attachments: [PiAgentImageAttachment] = []
         let urls = fileURLs(from: pasteboard)
-        attachments.append(contentsOf: urls.compactMap(imageAttachment(fromFileURL:)))
+        if !urls.isEmpty {
+            return deduplicateImages(urls.compactMap(imageAttachment(fromFileURL:)))
+        }
         if let data = pasteboard.data(forType: .png), let attachment = imageAttachment(data: data, name: "pasted-image.png", mimeType: "image/png", fileReference: "pasted-image.png") {
             attachments.append(attachment)
         } else if let data = pasteboard.data(forType: .tiff), let pngData = pngData(fromImageData: data), let attachment = imageAttachment(data: pngData, name: "pasted-image.png", mimeType: "image/png", fileReference: "pasted-image.png") {
             attachments.append(attachment)
         }
-        return attachments
+        return deduplicateImages(attachments)
+    }
+
+    nonisolated private static func deduplicateImages(_ attachments: [PiAgentImageAttachment]) -> [PiAgentImageAttachment] {
+        var seen = Set<String>()
+        return attachments.filter { attachment in
+            let key = [attachment.mimeType, attachment.data].joined(separator: "\u{1F}")
+            return seen.insert(key).inserted
+        }
     }
 
     nonisolated static func loadImages(from providers: [NSItemProvider], completion: @escaping ([PiAgentImageAttachment]) -> Void) {
@@ -1119,7 +1126,9 @@ enum PiAgentComposerImageLoader {
             }
         }
         var seen = Set<String>()
-        return urls.filter { seen.insert($0.path).inserted }
+        return urls
+            .map { $0.standardizedFileURL }
+            .filter { seen.insert($0.path).inserted }
     }
 
     nonisolated static func imageAttachment(fromFileURL url: URL) -> PiAgentImageAttachment? {
@@ -1416,7 +1425,7 @@ struct PiAgentContextUsageMeter: View {
             .appGlassCapsule()
             .fixedSize(horizontal: true, vertical: false)
             .help("Pi is compacting this conversation. Input is disabled until compaction finishes.")
-        } else if let percent = session.contextPercent, let tokens = session.contextTokens, let window = session.contextWindow {
+        } else if let percent = displayContextPercent, let tokens = session.contextTokens, let window = displayContextWindow {
             GlassEffectContainer(spacing: 6) {
                 HStack(spacing: 6) {
                     HStack(spacing: 7) {
@@ -1490,6 +1499,14 @@ struct PiAgentContextUsageMeter: View {
         if value >= 1_000 { return "\(value / 1_000)k" }
         return "\(value)"
     }
+
+    private var displayContextWindow: Int? {
+        PiAgentContextEstimateBuilder.effectiveContextWindow(session: session, fallbackModels: fallbackModels)
+    }
+
+    private var displayContextPercent: Double? {
+        PiAgentContextEstimateBuilder.effectiveContextPercent(session: session, fallbackModels: fallbackModels)
+    }
 }
 
 private struct PiAgentSmartZoneContextBar: View {
@@ -1555,8 +1572,20 @@ struct PiAgentContextBreakdownPopover: View {
     let fallbackModels: [AvailableModel]
     let showsSmartZoneHint: Bool
 
+    private var displayContextWindow: Int? {
+        PiAgentContextEstimateBuilder.effectiveContextWindow(session: session, fallbackModels: fallbackModels)
+    }
+
+    private var displayContextPercent: Double? {
+        PiAgentContextEstimateBuilder.effectiveContextPercent(session: session, fallbackModels: fallbackModels)
+    }
+
+    private var isUsingFreshRpcWindow: Bool {
+        displayContextWindow == session.contextWindow
+    }
+
     private var usedPercent: Double {
-        min(max(session.contextPercent ?? 0, 0), 100)
+        min(max(displayContextPercent ?? 0, 0), 100)
     }
 
     private var estimate: PiAgentContextBreakdownEstimate {
@@ -1572,7 +1601,7 @@ struct PiAgentContextBreakdownPopover: View {
     }
 
     private var visibleRows: [PiAgentContextVisualRow] {
-        if session.contextBreakdown.isEmpty == false {
+        if session.contextBreakdown.isEmpty == false, isUsingFreshRpcWindow {
             return session.contextBreakdown.map {
                 PiAgentContextVisualRow(
                     key: $0.key,
@@ -1600,7 +1629,7 @@ struct PiAgentContextBreakdownPopover: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 12) {
-                if let tokens = session.contextTokens, let window = session.contextWindow {
+                if let tokens = session.contextTokens, let window = displayContextWindow {
                     HStack(spacing: 4) {
                         Image(systemName: "tugriksign.circle")
                             .font(AppTheme.Font.caption.weight(.semibold))
@@ -1617,7 +1646,7 @@ struct PiAgentContextBreakdownPopover: View {
                 PiAgentContextDotGrid(rows: visibleRows)
 
             VStack(alignment: .leading, spacing: 8) {
-                if session.contextBreakdown.isEmpty == false {
+                if session.contextBreakdown.isEmpty == false, isUsingFreshRpcWindow {
                     Text("Exact from Pi RPC")
                         .font(AppTheme.Font.caption.weight(.bold))
                         .foregroundStyle(AppTheme.mutedText)
@@ -2216,7 +2245,13 @@ struct PiAgentRuntimeFooter: View {
                 .foregroundStyle(AppTheme.brandAccent)
         }
         .buttonStyle(.plain)
-        .help("Toggle \(text.split(separator: ":").first.map(String.init) ?? text)")
+        .help(
+            AppLocalization.format(
+                "Toggle %@",
+                default: "Toggle %@",
+                AppLocalization.string(text.split(separator: ":").first.map(String.init) ?? text, default: text.split(separator: ":").first.map(String.init) ?? text)
+            )
+        )
     }
 
     private func compact(_ value: Int) -> String {
@@ -2312,6 +2347,11 @@ struct PiAgentModelPicker: View {
     let onSelect: (PiAgentModelSelection?) -> Void
 
     @State private var isPresented = false
+    @State private var searchText = ""
+
+    private static let pickerWidth: CGFloat = AppTheme.Popover.wideWidth
+    private static let listMinHeight: CGFloat = 260
+    private static let listMaxHeight: CGFloat = 420
 
     var body: some View {
         Button {
@@ -2340,7 +2380,7 @@ struct PiAgentModelPicker: View {
         // when AppKit happened to flip it).
         .popover(isPresented: $isPresented, arrowEdge: .top) {
             VStack(alignment: .leading, spacing: 0) {
-                AppPopoverHeader(title: "Model") {
+                AppPopoverHeader(title: AppLocalization.string("model.title", default: "Model")) {
                     Button {
                         onRefresh()
                     } label: {
@@ -2353,45 +2393,63 @@ struct PiAgentModelPicker: View {
 
                 Divider()
 
-                ScrollView(showsIndicators: false) {
-                    LazyVStack(alignment: .leading, spacing: 16) {
-                        ForEach(groupedModelOptions, id: \.provider) { group in
-                            // Provider sections use the resources-popover header
-                            // treatment: label over a hairline, clear air between
-                            // groups so the list doesn't read as one long run.
-                            VStack(alignment: .leading, spacing: 6) {
-                                ProviderLabel(provider: group.provider, logoSize: 14, spacing: 5)
-                                    .font(AppTheme.Font.caption.weight(.bold))
-                                    .fontWidth(.expanded)
-                                    .foregroundStyle(.primary)
-                                    .padding(.horizontal, AppTheme.Popover.rowHInset)
+                AppTextField(
+                    text: $searchText,
+                    placeholder: AppLocalization.string("model.search.placeholder", default: "Search models or providers"),
+                    font: AppTheme.Font.caption,
+                    horizontalPadding: AppTheme.Popover.rowHInset,
+                    verticalPadding: 6
+                )
+                .padding(.horizontal, AppTheme.Popover.headerHInset)
+                .padding(.vertical, 8)
 
-                                // Inset to the row content width so it reads as
-                                // part of the section, not an edge-to-edge rule.
-                                Divider()
-                                    .padding(.horizontal, AppTheme.Popover.rowHInset)
+                if groupedModelOptions.isEmpty {
+                    Text(AppLocalization.string("model.search.empty", default: "No matching models"))
+                        .font(AppTheme.Popover.emptyBodyFont)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+                        .padding(.horizontal, AppTheme.Popover.headerHInset)
+                } else {
+                    ScrollView(showsIndicators: true) {
+                        LazyVStack(alignment: .leading, spacing: 16) {
+                            ForEach(groupedModelOptions, id: \.provider) { group in
+                                // Provider sections use the resources-popover header
+                                // treatment: label over a hairline, clear air between
+                                // groups so the list doesn't read as one long run.
+                                VStack(alignment: .leading, spacing: 6) {
+                                    ProviderLabel(provider: group.provider, logoSize: 14, spacing: 5)
+                                        .font(AppTheme.Font.caption.weight(.bold))
+                                        .fontWidth(.expanded)
+                                        .foregroundStyle(.primary)
+                                        .padding(.horizontal, AppTheme.Popover.rowHInset)
 
-                                VStack(spacing: 2) {
-                                    ForEach(group.models) { model in
-                                        PiAgentModelOptionRow(
-                                            model: model,
-                                            isSelected: model.provider == resolvedProvider && model.id == resolvedModelID,
-                                            subtitle: modelMetadataSubtitle(model)
-                                        ) {
-                                            onSelect(.init(provider: model.provider, modelID: model.id))
-                                            isPresented = false
+                                    // Inset to the row content width so it reads as
+                                    // part of the section, not an edge-to-edge rule.
+                                    Divider()
+                                        .padding(.horizontal, AppTheme.Popover.rowHInset)
+
+                                    VStack(spacing: 2) {
+                                        ForEach(group.models) { model in
+                                            PiAgentModelOptionRow(
+                                                model: model,
+                                                isSelected: model.provider == resolvedProvider && model.id == resolvedModelID,
+                                                subtitle: modelMetadataSubtitle(model)
+                                            ) {
+                                                onSelect(.init(provider: model.provider, modelID: model.id))
+                                                isPresented = false
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
+                        .padding(.horizontal, AppTheme.Popover.listInset)
+                        .padding(.vertical, AppTheme.Popover.listInset)
                     }
-                    .padding(.horizontal, AppTheme.Popover.listInset)
-                    .padding(.vertical, AppTheme.Popover.listInset)
+                    .frame(minHeight: Self.listMinHeight, maxHeight: Self.listMaxHeight)
                 }
-                .frame(maxHeight: AppTheme.Popover.listMaxHeight)
             }
-            .frame(width: AppTheme.Popover.standardWidth)
+            .frame(width: Self.pickerWidth)
             .foregroundStyle(.primary)
         }
         .help(isRunning ? "Change this Pi session's model" : "Choose a model for this session before launch")
@@ -2423,7 +2481,7 @@ struct PiAgentModelPicker: View {
     }
 
     private var groupedModelOptions: [(provider: String, models: [PiAgentModelOption])] {
-        Dictionary(grouping: modelOptions, by: \.provider)
+        Dictionary(grouping: filteredModelOptions, by: \.provider)
             .map { provider, models in
                 (
                     provider: provider,
@@ -2431,6 +2489,15 @@ struct PiAgentModelPicker: View {
                 )
             }
             .sorted { $0.provider.localizedCaseInsensitiveCompare($1.provider) == .orderedAscending }
+    }
+
+    private var filteredModelOptions: [PiAgentModelOption] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return modelOptions }
+        return modelOptions.filter { model in
+            [model.provider, model.id, "\(model.provider)/\(model.id)"]
+                .contains { $0.lowercased().contains(query) }
+        }
     }
 
     private func modelMetadataSubtitle(_ model: PiAgentModelOption) -> String {
@@ -2480,7 +2547,7 @@ struct PiAgentThinkingPicker: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "brain.head.profile")
-                Text("Thinking: \(displayLevel.capitalized)")
+                Text(AppLocalization.thinkingStatus(level: displayLevel))
                     .lineLimit(1)
                     .truncationMode(.head)
                 Image(systemName: "chevron.down")
@@ -2497,12 +2564,12 @@ struct PiAgentThinkingPicker: View {
         .buttonStyle(.plain)
         // .top so it opens above the composer like the model picker does.
         .popover(isPresented: $isPresented, arrowEdge: .top) {
-            AppPopoverContainer(width: AppTheme.Popover.compactWidth, title: "Thinking") {
+            AppPopoverContainer(width: AppTheme.Popover.compactWidth, title: AppLocalization.string("thinking.title", default: "Thinking")) {
                 if isLoadingLevels {
                     HStack(spacing: 10) {
                         AppSpinner()
                             .controlSize(.small)
-                        Text("Loading")
+                        Text(AppLocalization.string("thinking.loading", default: "Loading"))
                             .font(AppTheme.Popover.emptyBodyFont)
                             .foregroundStyle(AppTheme.mutedText)
                         Spacer(minLength: 0)
@@ -2552,7 +2619,9 @@ struct PiAgentThinkingPicker: View {
         if isLoadingLevels {
             return resolvedLevel.isEmpty ? "loading" : resolvedLevel
         }
-        return levels.contains(resolvedLevel) ? resolvedLevel : "\(resolvedLevel) unavailable"
+        return levels.contains(resolvedLevel)
+            ? resolvedLevel
+            : AppLocalization.format("thinking.level.unavailable.format", default: "%@ unavailable", AppLocalization.thinkingLevel(resolvedLevel))
     }
 }
 
@@ -2594,13 +2663,13 @@ private struct PiAgentModelOptionRow: View {
                 HStack(spacing: 6) {
                     if model.supportsThinking != false {
                         Image(systemName: "brain.head.profile")
-                            .help("Supports thinking")
-                            .accessibilityLabel("Supports thinking")
+                            .help(AppLocalization.string("model.supports.thinking", default: "Supports thinking"))
+                            .accessibilityLabel(AppLocalization.string("model.supports.thinking", default: "Supports thinking"))
                     }
                     if model.supportsImages == true {
                         Image(systemName: "photo")
-                            .help("Supports image input")
-                            .accessibilityLabel("Supports image input")
+                            .help(AppLocalization.string("model.supports.images", default: "Supports image input"))
+                            .accessibilityLabel(AppLocalization.string("model.supports.images", default: "Supports image input"))
                     }
                 }
                 .imageScale(.small)
@@ -2641,7 +2710,7 @@ private struct PiAgentThinkingLevelRow: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 HStack(spacing: 6) {
-                    Text(level.capitalized)
+                    Text(AppLocalization.thinkingLevel(level))
                         .font(AppTheme.Popover.itemTitleFont)
                         .foregroundStyle(Color.primary)
                         .lineLimit(1)

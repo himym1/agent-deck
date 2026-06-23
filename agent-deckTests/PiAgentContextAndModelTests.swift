@@ -79,9 +79,41 @@ final class PiAgentContextEstimateBuilderTests: XCTestCase {
     }
 
     @MainActor
+    func testContextWindowUsesSelectedModelOverrideMetadata() {
+        let session = makeSession(
+            model: "small-model",
+            modelProvider: "provider",
+            modelOverrideID: "large-model",
+            modelOverrideProvider: "provider",
+            contextTokens: 1_000,
+            contextWindow: 2_000,
+            contextPercent: 50
+        )
+        let models = [
+            AvailableModel(
+                provider: "provider",
+                model: "large-model",
+                contextWindow: "10K",
+                maxOutput: "1K",
+                supportsThinking: true,
+                supportsImages: false,
+                supportedThinkingLevels: ["off", "high"]
+            )
+        ]
+
+        XCTAssertEqual(PiAgentContextEstimateBuilder.effectiveContextWindow(session: session, fallbackModels: models), 10_000)
+        XCTAssertEqual(PiAgentContextEstimateBuilder.effectiveContextPercent(session: session, fallbackModels: models), 10)
+
+        let estimate = PiAgentContextEstimateBuilder.build(session: session, transcript: [], fallbackModels: models)
+        XCTAssertEqual(estimate.rows.first(where: { $0.key == "estimatedFreeSpace" })?.tokens, 9_000)
+    }
+
+    @MainActor
     private func makeSession(
         model: String? = nil,
         modelProvider: String? = nil,
+        modelOverrideID: String? = nil,
+        modelOverrideProvider: String? = nil,
         inputTokens: Int? = nil,
         outputTokens: Int? = nil,
         cacheReadTokens: Int? = nil,
@@ -103,8 +135,8 @@ final class PiAgentContextEstimateBuilderTests: XCTestCase {
             piSessionId: nil,
             model: model,
             modelProvider: modelProvider,
-            modelOverrideID: nil,
-            modelOverrideProvider: nil,
+            modelOverrideID: modelOverrideID,
+            modelOverrideProvider: modelOverrideProvider,
             thinkingLevel: nil,
             launchCommand: nil,
             branchName: nil,
@@ -153,6 +185,23 @@ anthropic claude-sonnet-4.5 200k 64k no no
 
         XCTAssertEqual(models.map(\.identifier), ["openai/gpt-5.2", "anthropic/claude-sonnet-4.5"])
         XCTAssertEqual(models.first?.supportedThinkingLevels, ["off", "low", "medium", "high"])
+        XCTAssertEqual(models.last?.supportedThinkingLevels, ["off"])
+    }
+
+    @MainActor
+    func testThinkingModelsFallbackToDefaultLevelsWhenExactLookupIsMissing() {
+        let output = """
+provider model context output thinking images
+custom-provider custom-model 256k 32k yes yes
+plain-provider plain-model 256k 32k no no
+"""
+
+        let models = PiModelDiscoveryService.parseAvailableModels(
+            from: output,
+            exactThinkingLevels: [:]
+        )
+
+        XCTAssertEqual(models.first?.supportedThinkingLevels, ["off", "minimal", "low", "medium", "high"])
         XCTAssertEqual(models.last?.supportedThinkingLevels, ["off"])
     }
 

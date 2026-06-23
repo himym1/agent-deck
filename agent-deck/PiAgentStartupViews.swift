@@ -43,12 +43,12 @@ private extension Array where Element == PiStartupResourceItem {
 struct PiAgentShortcutsStrip: View {
     var body: some View {
         HStack(spacing: 14) {
-            hintChip(["↩"], "send / steer")
-            hintChip(["⇧", "↩"], "newline")
-            hintChip(["esc"], "stop running turn")
-            hintChip(["esc ×2"], "clear input")
-            hintChip(["/"], "commands")
-            hintChip(["@"], "file suggestions")
+            hintChip(["↩"], AppLocalization.string("shortcut.sendSteer", default: "send / steer"))
+            hintChip(["⇧", "↩"], AppLocalization.string("shortcut.newline", default: "newline"))
+            hintChip(["esc"], AppLocalization.string("shortcut.stopRunningTurn", default: "stop running turn"))
+            hintChip(["esc ×2"], AppLocalization.string("shortcut.clearInput", default: "clear input"))
+            hintChip(["/"], AppLocalization.string("shortcut.commands", default: "commands"))
+            hintChip(["@"], AppLocalization.string("shortcut.fileSuggestions", default: "file suggestions"))
             Spacer(minLength: 0)
         }
         .padding(.vertical, 2)
@@ -165,7 +165,20 @@ struct PiAgentStartupResourcesPopover: View {
         }
         .padding(.vertical, 7)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .help("\(item.name): \(item.successCount) ok\(item.errorCount > 0 ? ", \(item.errorCount) failed" : "")")
+        .help(resourceHelpText(for: item))
+    }
+
+    private func resourceHelpText(for item: PiAgentToolCallRecapItem) -> String {
+        guard item.errorCount > 0 else {
+            return AppLocalization.format("%@: %lld ok", default: "%@: %lld ok", item.name, Int64(item.successCount))
+        }
+        return AppLocalization.format(
+            "%@: %lld ok, %lld failed",
+            default: "%@: %lld ok, %lld failed",
+            item.name,
+            Int64(item.successCount),
+            Int64(item.errorCount)
+        )
     }
 
     private var isEmpty: Bool {
@@ -236,7 +249,8 @@ struct PiAgentStartupResourcesPopover: View {
             return [.init(title: "No Deck agents selected for this session", detail: "This session runs without Deck agent delegation.", kind: .none)]
         }
         return enabled.map { agent in
-            let description = agent.resolved.description.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawDescription = agent.resolved.description.trimmingCharacters(in: .whitespacesAndNewlines)
+            let description = rawDescription.isEmpty ? "" : AppLocalization.agentDescription(name: agent.name, default: rawDescription)
             let modelSuffix = agent.resolved.model.map { " · \($0)" } ?? ""
             let source = agent.resolutionKind.rawValue
             let detail = [description, source + modelSuffix]
@@ -391,6 +405,7 @@ struct PiAgentSessionSubagentPickerCard: View {
 
     @State private var isExpanded = false
     @State private var isAddSheetPresented = false
+    @State private var agentSearchText = ""
 
     static let accent = Color.teal
 
@@ -567,16 +582,49 @@ struct PiAgentSessionSubagentPickerCard: View {
     }
 
     private func agentList(_ data: Resolved) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(data.rows, id: \.name) { agent in
-                agentRow(agent, checked: data.selection.contains(agent.name), selection: data.selection)
+        VStack(alignment: .leading, spacing: 8) {
+            AppTextField(
+                text: $agentSearchText,
+                placeholder: AppLocalization.string("agents.search.placeholder", default: "Search Deck agents"),
+                font: .caption
+            )
+
+            ScrollView(showsIndicators: false) {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(filteredRows(data), id: \.name) { agent in
+                        agentRow(agent, checked: data.selection.contains(agent.name), selection: data.selection)
+                    }
+                    if filteredRows(data).isEmpty {
+                        Text(AppLocalization.string("agents.search.empty", default: "No matching Deck agents"))
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.mutedText)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    }
+                }
             }
+            .frame(maxHeight: 420)
+
             PiAgentPickerAddRow(
                 isEnabled: !data.addable.isEmpty,
                 showsReset: data.hasExplicitSelection,
                 onAdd: { isAddSheetPresented = true },
                 onReset: { viewModel.setAgentSelection(nil, for: session.id) }
             )
+        }
+    }
+
+    private func filteredRows(_ data: Resolved) -> [EffectiveAgentRecord] {
+        let query = agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return data.rows }
+        return data.rows.filter { agent in
+            [
+                agent.name,
+                agent.resolved.description,
+                description(for: agent) ?? "",
+                agent.resolutionKind.rawValue,
+                agent.sourcePath ?? ""
+            ]
+                .contains { $0.lowercased().contains(query) }
         }
     }
 
@@ -634,7 +682,8 @@ struct PiAgentSessionSubagentPickerCard: View {
     private func description(for agent: EffectiveAgentRecord) -> String? {
         let raw = (agent.resolved.whenToUse ?? agent.resolved.description)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return raw.isEmpty ? nil : raw
+        guard !raw.isEmpty else { return nil }
+        return AppLocalization.agentDescription(name: agent.name, default: raw)
     }
 
     private func apply(_ selection: Set<String>, name: String, include: Bool) {
@@ -748,8 +797,8 @@ private struct PiAgentSubagentPickerRow: View {
             .padding(.horizontal, 1)
         }
         .appSmallSecondaryButton()
-        .help("Make this a 1:1 chat with \(agent.name)")
-        .accessibilityLabel("Start a 1:1 chat with \(agent.name)")
+        .help(AppLocalization.format("Make this a 1:1 chat with %@", default: "Make this a 1:1 chat with %@", agent.name))
+        .accessibilityLabel(AppLocalization.format("Start a 1:1 chat with %@", default: "Start a 1:1 chat with %@", agent.name))
         .disabled(agent.resolved.disabled == true)
     }
 }

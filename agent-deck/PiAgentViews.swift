@@ -3717,7 +3717,7 @@ struct PiAgentScreen: View {
         let fork = questionForkModel(question)
         return .bubble(NativeBubblePayload(
             role: .user,
-            headerTitle: "You",
+            headerTitle: AppLocalization.string("transcript.role.you", default: "You"),
             iconSymbol: "person.crop.circle",
             markdownSource: text,
             bodyPrefix: nil,
@@ -3766,7 +3766,7 @@ struct PiAgentScreen: View {
             if hasChips {
                 var payload = NativeQuestionPayload.make(
                     entry: entry, skills: skills, commandSlashNames: commandSlashNames, fork: nil)
-                payload.headerTitle = "Steering"
+                payload.headerTitle = AppLocalization.string("transcript.role.steering", default: "Steering")
                 payload.headerIcon = "arrowshape.turn.up.forward.circle"
                 return .native(.of(PiAgentNativeQuestionView.self) { view, width in
                     view.configure(payload: payload, width: width)
@@ -3867,7 +3867,7 @@ struct PiAgentScreen: View {
             let text = entry.text
             return NativeBubblePayload(
                 role: .assistant,
-                headerTitle: "Coding Agent",
+                headerTitle: AppLocalization.string("transcript.role.codingAgent", default: "Coding Agent"),
                 iconSymbol: nil,
                 markdownSource: text,
                 bodyPrefix: nil,
@@ -3879,7 +3879,7 @@ struct PiAgentScreen: View {
             let display = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
             return NativeBubblePayload(
                 role: .thinking,
-                headerTitle: entry.title,
+                headerTitle: Self.localizedTranscriptTitle(entry.title),
                 iconSymbol: "brain.head.profile",
                 markdownSource: display.isEmpty ? "Pi has not emitted reasoning text yet." : display,
                 bodyPrefix: nil,
@@ -3889,6 +3889,15 @@ struct PiAgentScreen: View {
             )
         default:
             return nil
+        }
+    }
+
+    private static func localizedTranscriptTitle(_ title: String) -> String {
+        switch title {
+        case "Thinking":
+            return AppLocalization.string("Thinking", default: "Thinking")
+        default:
+            return title
         }
     }
 

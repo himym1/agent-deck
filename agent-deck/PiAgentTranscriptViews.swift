@@ -2945,7 +2945,7 @@ struct PiAgentUserMessageContent: View {
             .font(AppTheme.Font.caption2)
         }
         .appSmallSecondaryButton()
-        .help("Preview \(name)")
+        .help(AppLocalization.format("Preview %@", default: "Preview %@", name))
         .popover(isPresented: Binding(
             get: { preview == attachment },
             set: { isPresented in

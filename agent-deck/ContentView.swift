@@ -816,14 +816,14 @@ struct ContentView: View {
 
     private var toolbarSearchPrompt: String {
         switch viewModel.selectedSidebarItem {
-        case .projects: return "Search projects"
-        case .agents: return "Search agents"
-        case .issues: return "Search issues"
-        case .memory: return "Search memories"
-        case .skills: return "Search skills"
-        case .prompts: return "Search prompts"
-        case .agent: return "Search sessions"
-        default: return "Search"
+        case .projects: return AppLocalization.string("Search projects", default: "Search projects")
+        case .agents: return AppLocalization.string("Search agents", default: "Search agents")
+        case .issues: return AppLocalization.string("Search issues", default: "Search issues")
+        case .memory: return AppLocalization.string("Search memories", default: "Search memories")
+        case .skills: return AppLocalization.string("Search skills", default: "Search skills")
+        case .prompts: return AppLocalization.string("Search prompts", default: "Search prompts")
+        case .agent: return AppLocalization.string("Search sessions", default: "Search sessions")
+        default: return AppLocalization.string("Search", default: "Search")
         }
     }
 
@@ -1004,7 +1004,7 @@ struct ContentView: View {
             sections: SidebarSection.allCases.map { section in
                 AppListSection(
                     id: section.id,
-                    title: section.rawValue,
+                    title: section.localizedTitle,
                     items: section.items
                 )
             },
@@ -1610,8 +1610,10 @@ struct ContentView: View {
 
     private var currentAgentModelQuickEditorContext: AgentModelQuickEditorContext {
         AgentModelQuickEditorContext(
-            title: "Agent Models",
-            subtitle: viewModel.selectedDiscoveredProject.map { "Quick edits for agents visible in \($0.name)." } ?? "Quick edits for agents visible in the current global view.",
+            title: AppLocalization.string("Agent Models", default: "Agent Models"),
+            subtitle: viewModel.selectedDiscoveredProject.map {
+                AppLocalization.format("agentModels.quickEdit.projectSubtitle", default: "Quick edits for agents visible in %@.", $0.name)
+            } ?? AppLocalization.string("Quick edits for agents visible in the current global view.", default: "Quick edits for agents visible in the current global view."),
             sections: currentAgentModelQuickEditorSections,
             preferredOverrideScope: viewModel.selectedProjectPath == nil ? .global : .project
         )
@@ -1715,7 +1717,9 @@ struct ContentView: View {
         case .models:
             ModelsScreen(viewModel: viewModel)
         case .subagents:
-            SubagentsScreen(viewModel: viewModel)
+            SubagentsScreen(viewModel: viewModel) {
+                viewModel.selectedSidebarItem = .agent
+            }
         case .environment:
             EnvironmentScreen(
                 snapshot: viewModel.snapshot,
@@ -1747,15 +1751,19 @@ struct ContentView: View {
     private var toolbarTitle: String {
         switch viewModel.selectedSidebarItem {
         case .agent:
-            return viewModel.piAgentSessionStore.selectedSession?.displayTitle ?? "Coding Agent"
+            return viewModel.piAgentSessionStore.selectedSession?.displayTitle ?? AppLocalization.string("sidebar.item.agent", default: "Pi Agent")
         case .memory:
             // Mirrors the toolbar toggle so the state reads at a glance.
-            return viewModel.appSettings.agentMemoryEnabled ? "Memory: On" : "Memory: Off"
+            return viewModel.appSettings.agentMemoryEnabled
+                ? AppLocalization.string("memory.status.on", default: "Memory: On")
+                : AppLocalization.string("memory.status.off", default: "Memory: Off")
         case .agents:
             // Same at-a-glance state as Memory, driven by the same toolbar toggle.
-            return viewModel.appSettings.nativeSubagentsEnabledForNewSessions ? "Agents: On" : "Agents: Off"
+            return viewModel.appSettings.nativeSubagentsEnabledForNewSessions
+                ? AppLocalization.string("agents.status.on", default: "Agents: On")
+                : AppLocalization.string("agents.status.off", default: "Agents: Off")
         default:
-            return viewModel.selectedSidebarItem.rawValue
+            return viewModel.selectedSidebarItem.localizedTitle
         }
     }
 

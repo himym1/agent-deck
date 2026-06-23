@@ -499,7 +499,7 @@ struct PiNativeSubagentRunCard: View {
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
                                 .appGlassCapsule()
-                                .help("Expected outcome: \(outcome.displayName)")
+                                .help(AppLocalization.format("Expected outcome: %@", default: "Expected outcome: %@", AppLocalization.string(outcome.displayName, default: outcome.displayName)))
                         }
                     }
                     PiSubagentStatusText(status: child.status, color: color(for: child.status))
@@ -1025,6 +1025,7 @@ struct PiNativeSubagentTranscriptSheet: View {
 
 struct PiNativeSubagentRunSheet: View {
     struct AgentInfo: Hashable {
+        let name: String
         let description: String
         let model: String?
         let thinking: String?
@@ -1034,7 +1035,8 @@ struct PiNativeSubagentRunSheet: View {
         let defaultExpectedOutcome: PiSubagentExpectedOutcome?
 
         init(agent: EffectiveAgentRecord) {
-            description = agent.resolved.description
+            name = agent.name
+            description = AppLocalization.agentDescription(name: agent.name, default: agent.resolved.description)
             model = agent.resolved.model
             thinking = agent.resolved.thinking
             tools = agent.resolved.tools ?? []
@@ -1092,7 +1094,7 @@ struct PiNativeSubagentRunSheet: View {
 
             if let selectedInfo {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(selectedInfo.description.isEmpty ? "No description" : selectedInfo.description)
+                    Text(selectedInfo.description)
                         .font(AppTheme.Font.subheadline)
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 6) {
                         subagentInfoLine("Model", selectedInfo.model ?? "Default")

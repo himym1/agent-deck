@@ -18,7 +18,7 @@ struct PiAgentReleaseToolbarButton: View {
         .symbolRenderingMode(.monochrome)
         .foregroundStyle(.primary)
         .tint(.primary)
-        .help("Tag and push a new \(AppBrand.displayName) release")
+        .help(AppLocalization.format("Tag and push a new %@ release", default: "Tag and push a new %@ release", AppBrand.displayName))
         .sheet(isPresented: $isPresented) {
             AgentDeckReleaseSheet(viewModel: viewModel)
         }
