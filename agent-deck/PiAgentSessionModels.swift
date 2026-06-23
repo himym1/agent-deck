@@ -333,6 +333,10 @@ struct PiSubagentChildRecord: Identifiable, Codable, Hashable {
     var summary: String?
     var error: String?
     var dependencies: [UUID]?
+    /// Snapshot of Agent Deck memory IDs injected into this child run at launch.
+    var injectedMemoryIDs: [String]?
+    /// Index-aligned titles for `injectedMemoryIDs`, captured when injected.
+    var injectedMemoryTitles: [String]?
     var completedAt: Date?
     var createdAt: Date
     var updatedAt: Date
@@ -376,6 +380,10 @@ struct PiSubagentRunRecord: Identifiable, Codable, Hashable {
     /// code reads `children` directly without re-sorting.
     var children: [PiSubagentChildRecord]?
     var graphEdges: [PiSubagentGraphEdgeRecord]?
+    /// Snapshot of Agent Deck memory IDs injected into this run at launch.
+    var injectedMemoryIDs: [String]?
+    /// Index-aligned titles for `injectedMemoryIDs`, captured when injected.
+    var injectedMemoryTitles: [String]?
     var createdAt: Date
     var updatedAt: Date
     var completedAt: Date?
@@ -419,6 +427,8 @@ extension PiSubagentRunRecord {
             child: nil,
             children: nil,
             graphEdges: nil,
+            injectedMemoryIDs: nil,
+            injectedMemoryTitles: nil,
             createdAt: now,
             updatedAt: now,
             completedAt: now,

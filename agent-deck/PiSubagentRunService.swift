@@ -8,6 +8,14 @@ final class ClientTerminationHolder {
     weak var client: PiRPCClient?
 }
 
+struct PiSubagentMemoryLaunchContext {
+    var arguments: [String]
+    var memoryIDs: [String]?
+    var memoryTitles: [String]?
+
+    static let empty = PiSubagentMemoryLaunchContext(arguments: [], memoryIDs: nil, memoryTitles: nil)
+}
+
 @MainActor
 final class PiSubagentRunService {
     private let store: PiAgentSessionStore
@@ -26,7 +34,7 @@ final class PiSubagentRunService {
     /// model that never reports stats can't stall the run.
     private var pendingStatsTasksByRunID: [UUID: Task<Void, Never>] = [:]
     private let fileManager = FileManager.default
-    var childMemoryArgumentsProvider: ((PiAgentSessionRecord, EffectiveAgentRecord, String) async throws -> [String])?
+    var childMemoryArgumentsProvider: ((PiAgentSessionRecord, EffectiveAgentRecord, String) async throws -> PiSubagentMemoryLaunchContext)?
     var onMemoryWrite: ((UUID, UUID, String?, AgentMemoryWriteBridgeRequest) async -> String)?
     var onMemoryMarkStale: ((UUID, UUID, String?, AgentMemoryStaleBridgeRequest) async -> String)?
     var onMemorySearch: ((UUID, UUID, String?, AgentMemorySearchBridgeRequest) async -> String)?
@@ -144,9 +152,8 @@ final class PiSubagentRunService {
         extraArguments.append(contentsOf: skillArguments)
         extraArguments.append("--no-prompt-templates")
         extraArguments.append("--no-themes")
-        if let childMemoryArgumentsProvider {
-            extraArguments.append(contentsOf: try await childMemoryArgumentsProvider(parentSession, agent, trimmedTask))
-        }
+        let memoryLaunchContext = try await childMemoryArgumentsProvider?(parentSession, agent, trimmedTask) ?? .empty
+        extraArguments.append(contentsOf: memoryLaunchContext.arguments)
 
         let modelSelection = PiSubagentLaunchPlanner.modelSelection(for: agent, parentSession: parentSession)
         let modelArgument = modelSelection.modelArgument
@@ -217,12 +224,16 @@ final class PiSubagentRunService {
                 summary: nil,
                 error: nil,
                 dependencies: nil,
+                injectedMemoryIDs: memoryLaunchContext.memoryIDs,
+                injectedMemoryTitles: memoryLaunchContext.memoryTitles,
                 completedAt: nil,
                 createdAt: now,
                 updatedAt: now
             ),
             children: nil,
             graphEdges: nil,
+            injectedMemoryIDs: memoryLaunchContext.memoryIDs,
+            injectedMemoryTitles: memoryLaunchContext.memoryTitles,
             createdAt: now,
             updatedAt: now,
             completedAt: nil,
@@ -276,10 +287,14 @@ final class PiSubagentRunService {
                 summary: nil,
                 error: nil,
                 dependencies: nil,
+                injectedMemoryIDs: memoryLaunchContext.memoryIDs,
+                injectedMemoryTitles: memoryLaunchContext.memoryTitles,
                 completedAt: nil,
                 createdAt: now,
                 updatedAt: now
             )
+            run.injectedMemoryIDs = memoryLaunchContext.memoryIDs
+            run.injectedMemoryTitles = memoryLaunchContext.memoryTitles
         }
         store.upsertSubagentRun(run)
         upsertSubagentStatusCard(run: run, parentSessionID: parentSession.id, isContinuation: isContinuation)

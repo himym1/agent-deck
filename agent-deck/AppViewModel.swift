@@ -458,7 +458,7 @@ final class AppViewModel: NSObject {
             await self?.handleParentMemorySearch(sessionID: sessionID, request: request) ?? "\(AppBrand.displayName) memory is not available."
         }
         nativeSubagentRunner.childMemoryArgumentsProvider = { [weak self] parentSession, agent, task in
-            await self?.childMemoryArguments(for: parentSession, agent: agent, task: task) ?? []
+            await self?.childMemoryLaunchContext(for: parentSession, agent: agent, task: task) ?? .empty
         }
         nativeSubagentRunner.childMCPArgumentsProvider = { [weak self] parentSession, agent in
             await self?.childMCPArguments(for: parentSession, agent: agent) ?? []
@@ -3500,7 +3500,7 @@ final class AppViewModel: NSObject {
                 expectedOutcome: expectedOutcome, requestedOutputPath: nil, allowOverwrite: false,
                 currentTool: nil, inputTokens: nil, outputTokens: nil, totalTokens: nil, toolCount: nil, durationMs: nil,
                 artifactDirectory: nil, sessionFile: nil, outputPath: nil, worktreePath: nil, launchCommand: nil, executionRunID: nil,
-                summary: nil, error: nil, dependencies: nil, completedAt: nil, createdAt: now, updatedAt: now
+                summary: nil, error: nil, dependencies: nil, injectedMemoryIDs: nil, injectedMemoryTitles: nil, completedAt: nil, createdAt: now, updatedAt: now
             )
         }
         let limit = max(1, min(concurrency, tasks.count))
@@ -3600,7 +3600,7 @@ final class AppViewModel: NSObject {
             worktreePath: nil, parentRepoPath: parentSession.worktreePath ?? parentSession.projectPath, baseCommit: nil,
             isWorktreeIsolated: false, worktreeStatus: PiSubagentWorktreeStatus.none, worktreePatchPath: nil,
             childSessionID: nil, childPiSessionFile: nil, launchCommand: nil, summary: nil, error: nil,
-            child: nil, children: children, graphEdges: edges, createdAt: Date(), updatedAt: Date(), completedAt: nil, durationMs: nil
+            child: nil, children: children, graphEdges: edges, injectedMemoryIDs: nil, injectedMemoryTitles: nil, createdAt: Date(), updatedAt: Date(), completedAt: nil, durationMs: nil
         )
     }
 
@@ -3642,6 +3642,8 @@ final class AppViewModel: NSObject {
             child.error = childResult.error
             child.completedAt = childResult.completedAt
             child.durationMs = childResult.durationMs
+            child.injectedMemoryIDs = childResult.injectedMemoryIDs ?? childResult.child?.injectedMemoryIDs
+            child.injectedMemoryTitles = childResult.injectedMemoryTitles ?? childResult.child?.injectedMemoryTitles
         }
     }
 
@@ -6087,8 +6089,8 @@ final class AppViewModel: NSObject {
         return [guidance, retrieval.prompt]
     }
 
-    private func childMemoryArguments(for parentSession: PiAgentSessionRecord, agent: EffectiveAgentRecord, task: String) async -> [String] {
-        guard appSettings.agentMemoryEnabled, appSettings.agentMemorySubagentsEnabled else { return [] }
+    private func childMemoryLaunchContext(for parentSession: PiAgentSessionRecord, agent: EffectiveAgentRecord, task: String) async -> PiSubagentMemoryLaunchContext {
+        guard appSettings.agentMemoryEnabled, appSettings.agentMemorySubagentsEnabled else { return .empty }
         let query = [agent.name, agent.resolved.description, task].joined(separator: "\n")
         var prompts = [agentMemoryGuidancePrompt(projectPath: parentSession.projectPath, isSubagent: true)]
         guard let retrieval = await agentMemoryStore.retrieve(
@@ -6096,11 +6098,17 @@ final class AppViewModel: NSObject {
             query: query,
             maxItems: 4,
             maxCharacters: min(appSettings.agentMemoryInjectionCharacterBudget, 3_500)
-        ) else { return prompts.flatMap { ["--append-system-prompt", $0] } }
+        ) else {
+            return PiSubagentMemoryLaunchContext(arguments: prompts.flatMap { ["--append-system-prompt", $0] }, memoryIDs: nil, memoryTitles: nil)
+        }
         agentMemoryStore.markUsed(retrieval.records.map(\.id))
         appendMemoryEvent(.recalled, records: retrieval.records, summary: "Loaded \(retrieval.records.count) scoped memor\(retrieval.records.count == 1 ? "y" : "ies") for Deck agent \(agent.name).", sessionID: parentSession.id)
         prompts.append(retrieval.prompt)
-        return prompts.flatMap { ["--append-system-prompt", $0] }
+        return PiSubagentMemoryLaunchContext(
+            arguments: prompts.flatMap { ["--append-system-prompt", $0] },
+            memoryIDs: retrieval.records.map(\.id),
+            memoryTitles: retrieval.records.map(\.title)
+        )
     }
 
     private func agentMemoryGuidancePrompt(projectPath: String?, isSubagent: Bool = false) -> String {
