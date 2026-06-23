@@ -1137,6 +1137,8 @@ struct NativeLoopRunPayload {
     var canRevealWorktree: Bool
     var canApplyWorktree: Bool
     var canDiscardWorktree: Bool
+    var canApproveHumanApproval: Bool
+    var canRejectHumanApproval: Bool
     var canRetry: Bool
     var canSave: Bool
     var onStop: (() -> Void)?
@@ -1146,8 +1148,10 @@ struct NativeLoopRunPayload {
     var onRevealWorktree: (() -> Void)?
     var onApplyWorktree: (() -> Void)?
     var onDiscardWorktree: (() -> Void)?
+    var onApproveHumanApproval: (() -> Void)?
+    var onRejectHumanApproval: (() -> Void)?
 
-    static func make(run: LoopRun, onStop: (() -> Void)?, onRetry: (() -> Void)?, onSave: (() -> Void)?, onRevealArtifacts: (() -> Void)?, onRevealWorktree: (() -> Void)?, onApplyWorktree: (() -> Void)? = nil, onDiscardWorktree: (() -> Void)? = nil) -> NativeLoopRunPayload {
+    static func make(run: LoopRun, onStop: (() -> Void)?, onRetry: (() -> Void)?, onSave: (() -> Void)?, onRevealArtifacts: (() -> Void)?, onRevealWorktree: (() -> Void)?, onApplyWorktree: (() -> Void)? = nil, onDiscardWorktree: (() -> Void)? = nil, onApproveHumanApproval: (() -> Void)? = nil, onRejectHumanApproval: (() -> Void)? = nil) -> NativeLoopRunPayload {
         let details = loopRunDetailsText(for: run)
         let worktreeURL = run.artifactDirectoryPath.map { URL(fileURLWithPath: $0).appendingPathComponent("worktree", isDirectory: true) }
         let hasWorktree = worktreeURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
@@ -1155,6 +1159,7 @@ struct NativeLoopRunPayload {
         let hasDiscardedMarker = run.artifactDirectoryPath.map { FileManager.default.fileExists(atPath: URL(fileURLWithPath: $0).appendingPathComponent("worktree.discarded").path) } ?? false
         let worktreeAlreadyHandled = run.worktreeState == .applied || run.worktreeState == .discarded || hasAppliedMarker || hasDiscardedMarker
         let canOperateOnWorktree = run.writeTarget == .newWorktree && !run.isActive && hasWorktree && !worktreeAlreadyHandled
+        let canResolveHumanApproval = run.structure == .humanApproval && run.status == .stopped && run.stopReason == .humanInputRequired
         return NativeLoopRunPayload(
             title: run.status == .completed ? "Loop completed" : "Loop: \(run.structure.displayName)",
             statusText: "Status: \(run.status.displayName)",
@@ -1164,6 +1169,8 @@ struct NativeLoopRunPayload {
             canRevealWorktree: run.writeTarget == .newWorktree && hasWorktree && !worktreeAlreadyHandled,
             canApplyWorktree: canOperateOnWorktree,
             canDiscardWorktree: canOperateOnWorktree,
+            canApproveHumanApproval: canResolveHumanApproval,
+            canRejectHumanApproval: canResolveHumanApproval,
             canRetry: !run.isActive && run.status == .failed,
             canSave: !run.isActive,
             onStop: onStop,
@@ -1172,7 +1179,9 @@ struct NativeLoopRunPayload {
             onRevealArtifacts: onRevealArtifacts,
             onRevealWorktree: onRevealWorktree,
             onApplyWorktree: onApplyWorktree,
-            onDiscardWorktree: onDiscardWorktree
+            onDiscardWorktree: onDiscardWorktree,
+            onApproveHumanApproval: onApproveHumanApproval,
+            onRejectHumanApproval: onRejectHumanApproval
         )
     }
 }
@@ -1192,6 +1201,8 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
     private let revealWorktreeButton = NSButton(title: "Reveal Worktree", target: nil, action: nil)
     private let applyWorktreeButton = NSButton(title: "Apply Worktree", target: nil, action: nil)
     private let discardWorktreeButton = NSButton(title: "Discard Worktree", target: nil, action: nil)
+    private let approveHumanApprovalButton = NSButton(title: "Approve", target: nil, action: nil)
+    private let rejectHumanApprovalButton = NSButton(title: "Reject", target: nil, action: nil)
     private let actionRows = NSStackView()
     private var payload: NativeLoopRunPayload?
     var onIntrinsicHeightChange: (() -> Void)?
@@ -1247,6 +1258,10 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
         applyWorktreeButton.action = #selector(applyWorktreeTapped)
         discardWorktreeButton.target = self
         discardWorktreeButton.action = #selector(discardWorktreeTapped)
+        approveHumanApprovalButton.target = self
+        approveHumanApprovalButton.action = #selector(approveHumanApprovalTapped)
+        rejectHumanApprovalButton.target = self
+        rejectHumanApprovalButton.action = #selector(rejectHumanApprovalTapped)
 
         let header = NSStackView(views: [iconView, titleField])
         header.translatesAutoresizingMaskIntoConstraints = false
@@ -1313,6 +1328,10 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
         applyWorktreeButton.isEnabled = payload.canApplyWorktree && payload.onApplyWorktree != nil
         discardWorktreeButton.isHidden = !payload.canDiscardWorktree
         discardWorktreeButton.isEnabled = payload.canDiscardWorktree && payload.onDiscardWorktree != nil
+        approveHumanApprovalButton.isHidden = !payload.canApproveHumanApproval
+        approveHumanApprovalButton.isEnabled = payload.canApproveHumanApproval && payload.onApproveHumanApproval != nil
+        rejectHumanApprovalButton.isHidden = !payload.canRejectHumanApproval
+        rejectHumanApprovalButton.isEnabled = payload.canRejectHumanApproval && payload.onRejectHumanApproval != nil
         rebuildActionRows(forCardWidth: cardWidthC.constant)
     }
 
@@ -1323,7 +1342,7 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
     }
 
     private var actionButtons: [NSButton] {
-        [detailsButton, stopButton, retryButton, saveButton, revealButton, revealWorktreeButton, applyWorktreeButton, discardWorktreeButton]
+        [detailsButton, stopButton, retryButton, saveButton, revealButton, revealWorktreeButton, applyWorktreeButton, discardWorktreeButton, approveHumanApprovalButton, rejectHumanApprovalButton]
     }
 
     private var visibleActionButtons: [NSButton] { actionButtons.filter { !$0.isHidden } }
@@ -1382,4 +1401,6 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
     @objc private func revealWorktreeTapped() { payload?.onRevealWorktree?() }
     @objc private func applyWorktreeTapped() { payload?.onApplyWorktree?() }
     @objc private func discardWorktreeTapped() { payload?.onDiscardWorktree?() }
+    @objc private func approveHumanApprovalTapped() { payload?.onApproveHumanApproval?() }
+    @objc private func rejectHumanApprovalTapped() { payload?.onRejectHumanApproval?() }
 }

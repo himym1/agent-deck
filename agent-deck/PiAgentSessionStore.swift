@@ -1943,6 +1943,30 @@ final class PiAgentSessionStore {
         return run
     }
 
+    @discardableResult
+    func resolveHumanApprovalLoopRun(_ runID: UUID, sessionID: UUID, approved: Bool) -> LoopRun? {
+        guard var runs = loopRunsBySessionID[sessionID], let index = runs.firstIndex(where: { $0.id == runID }) else { return nil }
+        var run = runs[index]
+        guard run.structure == .humanApproval, run.status == .stopped, run.stopReason == .humanInputRequired else { return run }
+        let now = Date()
+        let resolutionIteration = run.currentIteration + 1
+        run.status = approved ? .completed : .failed
+        run.endedAt = now
+        run.stopReason = approved ? .success : .humanRejected
+        run.currentIteration = resolutionIteration
+        run.iterations.append(LoopIteration(
+            index: resolutionIteration,
+            startedAt: now,
+            endedAt: now,
+            summary: approved ? "Human approved checkpoint." : "Human rejected checkpoint.",
+            timeline: [LoopTimelineEvent(step: .humanApprovalCheckpoint, roleName: "Human Approval", note: approved ? "Approved" : "Rejected", timestamp: now)]
+        ))
+        runs[index] = run
+        loopRunsBySessionID[sessionID] = runs
+        upsert(LoopRunTranscriptCodec.transcriptEntry(for: run))
+        return run
+    }
+
     func markLoopWorktreeState(runID: UUID, sessionID: UUID, state: LoopWorktreeState) {
         guard var runs = loopRunsBySessionID[sessionID], let index = runs.firstIndex(where: { $0.id == runID }) else { return }
         runs[index].worktreeState = state

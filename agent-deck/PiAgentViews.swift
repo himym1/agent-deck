@@ -4888,6 +4888,12 @@ struct PiAgentScreen: View {
                         alert.addButton(withTitle: "Cancel")
                         guard alert.runModal() == .alertFirstButtonReturn else { return }
                         viewModel.discardLoopWorktree(loopRun)
+                    } : nil,
+                    onApproveHumanApproval: loopRun.structure == .humanApproval && loopRun.stopReason == .humanInputRequired ? { [store] in
+                        _ = store.resolveHumanApprovalLoopRun(loopRun.id, sessionID: loopRun.sessionID, approved: true)
+                    } : nil,
+                    onRejectHumanApproval: loopRun.structure == .humanApproval && loopRun.stopReason == .humanInputRequired ? { [store] in
+                        _ = store.resolveHumanApprovalLoopRun(loopRun.id, sessionID: loopRun.sessionID, approved: false)
                     } : nil
                 )
                 return .native(.of(PiAgentNativeLoopRunCardView.self) { view, width in

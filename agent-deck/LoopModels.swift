@@ -78,6 +78,7 @@ nonisolated enum LoopStopReason: String, Codable, CaseIterable, Identifiable, Se
     case validationFailedAfterFinalIteration
     case unsafeWriteTarget
     case humanInputRequired
+    case humanRejected
     case agentFailed
     case toolFailed
     case appInterrupted
@@ -93,6 +94,7 @@ nonisolated enum LoopStopReason: String, Codable, CaseIterable, Identifiable, Se
         case .validationFailedAfterFinalIteration: return "Validation failed after final iteration"
         case .unsafeWriteTarget: return "Unsafe write target"
         case .humanInputRequired: return "Human input required"
+        case .humanRejected: return "Human rejected"
         case .agentFailed: return "Agent failed"
         case .toolFailed: return "Tool failed"
         case .appInterrupted: return "App interrupted"

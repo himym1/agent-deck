@@ -474,6 +474,50 @@ final class LoopSkeletonTests: XCTestCase {
         XCTAssertNil(store.activeLoopRun(for: session.id))
     }
 
+    func testAppViewModelLaunchLoopRoutesHumanApprovalCheckpoint() async throws {
+        let viewModel = AppViewModel()
+        let session = viewModel.piAgentSessionStore.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(), repository: nil)
+
+        let launched = await viewModel.launchLoop(
+            session: session,
+            draft: LoopDraft(goal: "Needs approval", structure: .humanApproval),
+            stopExistingActive: false
+        )
+        let run = try XCTUnwrap(launched)
+
+        XCTAssertEqual(run.structure, .humanApproval)
+        XCTAssertEqual(run.status, .stopped)
+        XCTAssertEqual(run.stopReason, .humanInputRequired)
+        XCTAssertEqual(run.iterations.first?.timeline.map(\.step), [.humanApprovalCheckpoint])
+    }
+
+    func testHumanApprovalCanBeApprovedOrRejectedFromCheckpoint() throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(), repository: nil)
+
+        let approvedCheckpoint = try XCTUnwrap(store.launchSmokeLoop(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(goal: "Approve me", structure: .humanApproval)
+        ))
+        let approved = try XCTUnwrap(store.resolveHumanApprovalLoopRun(approvedCheckpoint.id, sessionID: session.id, approved: true))
+        XCTAssertEqual(approved.status, .completed)
+        XCTAssertEqual(approved.stopReason, .success)
+        XCTAssertEqual(approved.currentIteration, 2)
+        XCTAssertEqual(approved.iterations.last?.summary, "Human approved checkpoint.")
+
+        let rejectedCheckpoint = try XCTUnwrap(store.launchSmokeLoop(
+            sessionID: session.id,
+            projectPath: session.projectPath,
+            draft: LoopDraft(goal: "Reject me", structure: .humanApproval)
+        ))
+        let rejected = try XCTUnwrap(store.resolveHumanApprovalLoopRun(rejectedCheckpoint.id, sessionID: session.id, approved: false))
+        XCTAssertEqual(rejected.status, .failed)
+        XCTAssertEqual(rejected.stopReason, .humanRejected)
+        XCTAssertEqual(rejected.currentIteration, 2)
+        XCTAssertEqual(rejected.iterations.last?.summary, "Human rejected checkpoint.")
+    }
+
     private func projectEntries(at url: URL) throws -> [String] {
         let root = url.standardizedFileURL
         let keys: [URLResourceKey] = [.isDirectoryKey]
