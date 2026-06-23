@@ -46,6 +46,7 @@
 				"bundled-prompts/refactor-for-clarity.md",
 				"bundled-prompts/review-my-changes.md",
 				"bundled-skills/agent-authoring/SKILL.md",
+				"bundled-skills/loop-authoring/SKILL.md",
 				"bundled-skills/prompt-authoring/SKILL.md",
 				"bundled-skills/skill-authoring/SKILL.md",
 			);
