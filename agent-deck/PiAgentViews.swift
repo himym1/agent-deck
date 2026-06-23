@@ -3894,6 +3894,13 @@ struct PiAgentScreen: View {
                                     draft: request.draft,
                                     stopExistingActive: request.stopExistingActive
                                 )
+                            } else if request.draft.structure == .humanApproval {
+                                launched = store.launchSmokeLoop(
+                                    sessionID: session.id,
+                                    projectPath: session.projectPath,
+                                    draft: request.draft,
+                                    stopExistingActive: request.stopExistingActive
+                                )
                             } else {
                                 launched = store.launchSmokeLoop(
                                     sessionID: session.id,
@@ -6606,6 +6613,13 @@ private struct PiAgentComposerPanel: View {
                             } else if request.draft.structure == .parallelAgents {
                                 launched = await viewModel.launchParallelAgentsLoop(
                                     session: session,
+                                    draft: request.draft,
+                                    stopExistingActive: request.stopExistingActive
+                                )
+                            } else if request.draft.structure == .humanApproval {
+                                launched = store.launchSmokeLoop(
+                                    sessionID: session.id,
+                                    projectPath: session.projectPath,
                                     draft: request.draft,
                                     stopExistingActive: request.stopExistingActive
                                 )
