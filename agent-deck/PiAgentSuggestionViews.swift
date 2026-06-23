@@ -399,16 +399,18 @@ struct PiAgentSlashSuggestions: View {
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(highlighted ? AppTheme.brandAccent : AppTheme.mutedText)
                     .frame(width: 16)
-                Text(item.displayName)
-                    .font(AppTheme.Font.callout.monospaced())
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let description = item.description {
-                    Text(description)
-                        .font(AppTheme.Font.caption)
-                        .foregroundStyle(AppTheme.mutedText)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(item.displayName)
+                        .font(AppTheme.Font.callout.monospaced())
                         .lineLimit(1)
-                        .truncationMode(.tail)
+                        .truncationMode(.middle)
+                    if let description = item.description {
+                        Text(description)
+                            .font(AppTheme.Font.caption)
+                            .foregroundStyle(AppTheme.mutedText)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
                 }
                 Spacer(minLength: 6)
                 if let scope = item.scopeLabel {
