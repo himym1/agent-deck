@@ -1015,6 +1015,50 @@ final class PiAgentSessionStore {
     }
 
     @discardableResult
+    func launchParallelAgentsLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool = false, executeParallel: @escaping (UUID, [(String, String)], Int, Bool) async -> PiSubagentRunRecord?) async -> LoopRun? {
+        guard draft.structure == .parallelAgents else { return nil }
+        guard !draft.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        if let active = activeLoopRun(for: session.id) {
+            guard stopExistingActive else { return nil }
+            stopLoopRun(active.id, sessionID: session.id)
+        }
+        var run = LoopRun(sessionID: session.id, projectPath: session.projectPath, draft: draft)
+        let artifactDirectory = loopArtifactDirectoryURL(sessionID: session.id, runID: run.id)
+        run.artifactDirectoryPath = artifactDirectory.path
+        upsertLoopRun(run)
+        do { try FileManager.default.createDirectory(at: artifactDirectory, withIntermediateDirectories: true) } catch {
+            run.status = .failed; run.endedAt = Date(); run.stopReason = .toolFailed; upsertLoopRun(run); return nil
+        }
+        let executionContext: LoopExecutionContext
+        do { executionContext = try prepareLoopExecutionContext(writeTarget: run.writeTarget, projectPath: session.projectPath, artifactDirectory: artifactDirectory) } catch let error as LoopExecutionPreparationError {
+            run.status = .failed; run.endedAt = Date(); run.stopReason = error.stopReason; run.iterations.append(LoopIteration(index: 0, summary: error.localizedDescription)); upsertLoopRun(run); return run
+        } catch { run.status = .failed; run.endedAt = Date(); run.stopReason = .toolFailed; run.iterations.append(LoopIteration(index: 0, summary: error.localizedDescription)); upsertLoopRun(run); return run }
+
+        for iterationIndex in 1...run.maxIterations {
+            if let stoppedRun = stoppedLoopRun(run) { return stoppedRun }
+            let started = Date()
+            run.currentIteration = iterationIndex
+            upsertLoopRun(run)
+            let tasks = run.parallel.branchNames.map { ($0, parallelBranchTask(run: run, iterationIndex: iterationIndex, branchName: $0)) }
+            guard let graphRun = await executeParallel(run.id, tasks, max(1, min(tasks.count, tasks.count)), run.writeTarget == .newWorktree) else {
+                run.status = .failed; run.endedAt = Date(); run.stopReason = .agentFailed; upsertLoopRun(run); return run
+            }
+            if let stoppedRun = stoppedLoopRun(run) { return stoppedRun }
+            let summary = graphRun.summary?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? graphRun.status.rawValue
+            let artifact = makeMarkdownArtifact(filename: iterationIndex == 1 ? "parallel-summary.md" : "parallel-summary-\(iterationIndex).md", markdown: parallelAgentsArtifactMarkdown(run: run, iterationIndex: iterationIndex, graphRunID: graphRun.id, summary: summary), artifactDirectory: artifactDirectory)
+            let validationResult = run.validationCommand.isEmpty ? nil : runValidationCommand(run.validationCommand, workingDirectory: executionContext.workingDirectory)
+            let ended = Date()
+            let timeline = run.parallel.branchNames.enumerated().map { offset, branch in LoopTimelineEvent(step: .parallelBranch, roleName: branch, note: "Parallel graph run: \(graphRun.id.uuidString)", timestamp: started.addingTimeInterval(TimeInterval(offset))) }
+            run.iterations.append(LoopIteration(index: iterationIndex, startedAt: started, endedAt: ended, summary: graphRun.status == .completed ? "Parallel agents completed." : "Parallel agents stopped with \(graphRun.status.rawValue).", artifacts: [artifact].compactMap { $0 }, validationResult: validationResult, timeline: timeline))
+            if graphRun.status != .completed { run.status = graphRun.status == .stopped ? .stopped : .failed; run.endedAt = ended; run.stopReason = graphRun.status == .stopped ? .userStopped : .agentFailed; upsertLoopRun(run); return run }
+            if run.validationCommand.isEmpty { run.status = .failed; run.endedAt = ended; run.stopReason = .validationUnavailable; upsertLoopRun(run); return run }
+            if validationResult?.didPass == true { run.status = .completed; run.endedAt = ended; run.stopReason = .success; upsertLoopRun(run); return run }
+            upsertLoopRun(run)
+        }
+        run.status = .failed; run.endedAt = Date(); run.stopReason = .validationFailedAfterFinalIteration; upsertLoopRun(run); return run
+    }
+
+    @discardableResult
     func launchDiscoveryTriageLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool = false, executeTriage: @escaping (UUID, String, String, LoopWriteTarget, URL?, String?) async -> PiSubagentRunRecord?) async -> LoopRun? {
         guard draft.structure == .discoveryTriage else { return nil }
         guard !draft.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
@@ -1555,6 +1599,32 @@ final class PiAgentSessionStore {
         } catch {
             return nil
         }
+    }
+
+    private func parallelBranchTask(run: LoopRun, iterationIndex: Int, branchName: String) -> String {
+        [
+            "You are one branch in an Agent Deck Parallel Agents loop.",
+            "Loop goal: \(run.goal)",
+            "Branch agent: \(branchName)",
+            "Iteration: \(iterationIndex) of \(run.maxIterations)",
+            "Write target: \(run.writeTarget.displayName)",
+            "Work independently on this branch. End with a concise Markdown summary of findings, changes, risks, and recommended next action."
+        ].joined(separator: "\n\n")
+    }
+
+    private func parallelAgentsArtifactMarkdown(run: LoopRun, iterationIndex: Int, graphRunID: UUID, summary: String) -> String {
+        """
+        # Parallel Agents Summary
+
+        Goal: \(run.goal)
+
+        Iteration: \(iterationIndex)
+        Branches: \(run.parallel.branchNames.joined(separator: ", "))
+        Parallel graph run: \(graphRunID.uuidString)
+
+        Summary:
+        \(summary)
+        """
     }
 
     private func discoveryTriageTask(run: LoopRun, iterationIndex: Int) -> String {

@@ -25,18 +25,20 @@ private final class NativeParallelGraphScheduler {
     let tasks: [(agentName: String, task: String)]
     let concurrency: Int
     let useWorktreeIsolation: Bool
+    let forcedExpectedOutcome: PiSubagentExpectedOutcome?
     let completion: ((PiSubagentRunRecord) -> Void)?
     var nextIndex = 0
     var active = 0
     var completed = 0
     var failed = false
 
-    init(parentSession: PiAgentSessionRecord, graphRunID: UUID, tasks: [(agentName: String, task: String)], concurrency: Int, useWorktreeIsolation: Bool, completion: ((PiSubagentRunRecord) -> Void)?) {
+    init(parentSession: PiAgentSessionRecord, graphRunID: UUID, tasks: [(agentName: String, task: String)], concurrency: Int, useWorktreeIsolation: Bool, forcedExpectedOutcome: PiSubagentExpectedOutcome? = nil, completion: ((PiSubagentRunRecord) -> Void)?) {
         self.parentSession = parentSession
         self.graphRunID = graphRunID
         self.tasks = tasks
         self.concurrency = concurrency
         self.useWorktreeIsolation = useWorktreeIsolation
+        self.forcedExpectedOutcome = forcedExpectedOutcome
         self.completion = completion
     }
 }
@@ -375,7 +377,7 @@ final class AppViewModel: NSObject {
         piAgentSessionStore.newSessionSubagentsEnabled = appSettings.nativeSubagentsEnabledForNewSessions
         piAgentSessionStore.onStopLoopRun = { [weak self] runID, sessionID in
             guard let self, let childRunID = self.activePipelineChildRunByLoopID.removeValue(forKey: runID) else { return }
-            self.nativeSubagentRunner.stop(runID: childRunID, parentSessionID: sessionID, recordTranscript: true)
+            self.stopNativeSubagent(runID: childRunID, parentSessionID: sessionID)
         }
         piAgentSessionStore.onLoadApplied = { [weak self] in
             self?.pruneNeverStartedDraftSessions()
@@ -3341,6 +3343,25 @@ final class AppViewModel: NSObject {
     }
 
     @discardableResult
+    func launchParallelAgentsLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+        await piAgentSessionStore.launchParallelAgentsLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, tasks, concurrency, useWorktreeIsolation in
+            guard let self else { return nil }
+            return await withCheckedContinuation { continuation in
+                Task { @MainActor in
+                    let forcedOutcome: PiSubagentExpectedOutcome? = switch draft.writeTarget {
+                    case .artifactMarkdown: .reportOnly
+                    case .newWorktree: .editFilesInWorktree
+                    case .currentCheckout: .directProjectWrites
+                    }
+                    await self.runNativeParallel(parentSession: session, agentTasks: tasks, concurrency: concurrency, useWorktreeIsolation: useWorktreeIsolation, forcedExpectedOutcome: forcedOutcome, loopID: loopID) { run in
+                        continuation.resume(returning: run)
+                    }
+                }
+            }
+        }
+    }
+
+    @discardableResult
     func launchDiscoveryTriageLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
         let snapshot = startupSnapshot(forProjectPath: session.projectPath)
         let agentsByName = Dictionary(uniqueKeysWithValues: snapshot.effectiveAgents.map { ($0.name, $0) })
@@ -3464,7 +3485,7 @@ final class AppViewModel: NSObject {
         }
     }
 
-    private func runNativeParallel(parentSession: PiAgentSessionRecord, agentTasks: [(agentName: String, task: String)], concurrency: Int, useWorktreeIsolation: Bool, completion: ((PiSubagentRunRecord) -> Void)?) async {
+    private func runNativeParallel(parentSession: PiAgentSessionRecord, agentTasks: [(agentName: String, task: String)], concurrency: Int, useWorktreeIsolation: Bool, forcedExpectedOutcome: PiSubagentExpectedOutcome? = nil, loopID: UUID? = nil, completion: ((PiSubagentRunRecord) -> Void)?) async {
         let tasks = agentTasks.map { ($0.agentName.trimmingCharacters(in: .whitespacesAndNewlines), $0.task.trimmingCharacters(in: .whitespacesAndNewlines)) }.filter { !$0.0.isEmpty && !$0.1.isEmpty }
         guard !tasks.isEmpty else { return }
         let now = Date()
@@ -3472,7 +3493,7 @@ final class AppViewModel: NSObject {
         let artifactDirectory = nativeGraphArtifactDirectory(for: runID)
         let defaultOutcomeByAgent = nativeSubagentDefaultOutcomes(parentSession: parentSession, agentNames: tasks.map(\.0))
         let childRecords = tasks.enumerated().map { index, item in
-            let expectedOutcome = useWorktreeIsolation ? PiSubagentExpectedOutcome.editFilesInWorktree : (defaultOutcomeByAgent[item.0] ?? .reportOnly)
+            let expectedOutcome = forcedExpectedOutcome ?? (useWorktreeIsolation ? PiSubagentExpectedOutcome.editFilesInWorktree : (defaultOutcomeByAgent[item.0] ?? .reportOnly))
             return PiSubagentChildRecord(
                 id: UUID(), runID: runID, index: index, agentName: item.0, task: item.1,
                 status: .queued, model: nil,
@@ -3485,6 +3506,7 @@ final class AppViewModel: NSObject {
         let limit = max(1, min(concurrency, tasks.count))
         let run = nativeGraphRun(id: runID, parentSession: parentSession, mode: .parallel, title: "Parallel", task: "\(tasks.count) parallel Deck agent task(s)", artifactDirectory: artifactDirectory, children: childRecords, edges: [], concurrency: limit, worktreeIsolation: useWorktreeIsolation)
         piAgentSessionStore.upsertSubagentRun(run)
+        if let loopID { activePipelineChildRunByLoopID[loopID] = runID }
         piAgentSessionStore.append(.init(
             sessionID: parentSession.id,
             role: .status,
@@ -3492,7 +3514,12 @@ final class AppViewModel: NSObject {
             text: "Deck agent ID: \(run.id.uuidString)\n\nStarted \(tasks.count) task(s), concurrency \(limit).",
             rawJSON: nativeSubagentCardPayload(for: run)
         ))
-        let scheduler = NativeParallelGraphScheduler(parentSession: parentSession, graphRunID: runID, tasks: tasks.map { (agentName: $0.0, task: $0.1) }, concurrency: limit, useWorktreeIsolation: useWorktreeIsolation, completion: completion)
+        let scheduler = NativeParallelGraphScheduler(parentSession: parentSession, graphRunID: runID, tasks: tasks.map { (agentName: $0.0, task: $0.1) }, concurrency: limit, useWorktreeIsolation: useWorktreeIsolation, forcedExpectedOutcome: forcedExpectedOutcome) { [weak self] completed in
+            if let loopID, self?.activePipelineChildRunByLoopID[loopID] == completed.id {
+                self?.activePipelineChildRunByLoopID[loopID] = nil
+            }
+            completion?(completed)
+        }
         nativeParallelSchedulersByID[scheduler.id] = scheduler
         await pumpNativeParallelScheduler(scheduler)
     }
@@ -3511,7 +3538,7 @@ final class AppViewModel: NSObject {
             scheduler.nextIndex += 1
             scheduler.active += 1
             let item = scheduler.tasks[index]
-            let expectedOutcome = scheduler.useWorktreeIsolation ? PiSubagentExpectedOutcome.editFilesInWorktree : nativeSubagentDefaultOutcome(parentSession: scheduler.parentSession, agentName: item.agentName)
+            let expectedOutcome = scheduler.forcedExpectedOutcome ?? (scheduler.useWorktreeIsolation ? PiSubagentExpectedOutcome.editFilesInWorktree : nativeSubagentDefaultOutcome(parentSession: scheduler.parentSession, agentName: item.agentName))
             let allowDirectProjectWrites = expectedOutcome == .directProjectWrites
             updateNativeGraphChild(scheduler.graphRunID, parentSessionID: scheduler.parentSession.id, index: index) { $0.status = .running }
             let childRun = await runNativeSubagent(parentSession: scheduler.parentSession, agentName: item.agentName, task: item.task, useWorktreeIsolation: scheduler.useWorktreeIsolation, allowDirectProjectWrites: allowDirectProjectWrites, expectedOutcome: expectedOutcome) { [weak self, weak scheduler] childResult in
