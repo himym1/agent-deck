@@ -112,6 +112,7 @@ struct LoopBankScreen: View {
     @State private var pendingDelete: LoopDefinition?
     @State private var launchDefinition: LoopDefinition?
     @State private var isLaunchSheetPresented = false
+    @State private var isCreatingNewLoop = false
 
     private var availableLoopAgents: [EffectiveAgentRecord] {
         viewModel.snapshot.effectiveAgents
@@ -127,19 +128,28 @@ struct LoopBankScreen: View {
         }
         .onAppear {
             viewModel.reloadLoopDefinitions()
-            if viewModel.selectedLoopDefinitionID == nil {
-                viewModel.selectedLoopDefinitionID = viewModel.loopDefinitions.first?.id
+            if viewModel.selectedLoopDefinitionID == nil, let first = viewModel.loopDefinitions.first {
+                viewModel.selectedLoopDefinitionID = first.id
             }
-            resetEditor(to: viewModel.selectedLoopDefinition)
+            if viewModel.selectedLoopDefinition != nil || isCreatingNewLoop {
+                resetEditor(to: viewModel.selectedLoopDefinition)
+            }
         }
-        .onChange(of: viewModel.selectedLoopDefinitionID) { _, _ in
-            resetEditor(to: viewModel.selectedLoopDefinition)
+        .onChange(of: viewModel.selectedLoopDefinitionID) { _, newID in
+            if newID != nil {
+                isCreatingNewLoop = false
+                resetEditor(to: viewModel.selectedLoopDefinition)
+            } else if isCreatingNewLoop {
+                resetEditor(to: nil)
+            }
         }
         .onChange(of: viewModel.loopDefinitions) { _, definitions in
-            if viewModel.selectedLoopDefinitionID == nil {
-                viewModel.selectedLoopDefinitionID = definitions.first?.id
+            if viewModel.selectedLoopDefinitionID == nil, let first = definitions.first, !isCreatingNewLoop {
+                viewModel.selectedLoopDefinitionID = first.id
             }
-            resetEditor(to: viewModel.selectedLoopDefinition)
+            if viewModel.selectedLoopDefinition != nil || isCreatingNewLoop {
+                resetEditor(to: viewModel.selectedLoopDefinition)
+            }
         }
         .onChange(of: viewModel.newLoopRequestID) { _, _ in
             createNewLoop()
@@ -189,7 +199,10 @@ struct LoopBankScreen: View {
             sections: listSections,
             selection: .single(Binding(
                 get: { viewModel.selectedLoopDefinitionID },
-                set: { viewModel.selectedLoopDefinitionID = $0 }
+                set: {
+                    isCreatingNewLoop = false
+                    viewModel.selectedLoopDefinitionID = $0
+                }
             )),
             isDisabled: { _ in false },
             keyboardNavigation: true
@@ -198,7 +211,32 @@ struct LoopBankScreen: View {
         }
     }
 
+    @ViewBuilder
     private var loopDetailPane: some View {
+        if viewModel.selectedLoopDefinition == nil && !isCreatingNewLoop {
+            emptyLoopDetailPane
+        } else {
+            loopEditorPane
+        }
+    }
+
+    private var emptyLoopDetailPane: some View {
+        AppPage("Loops", subtitle: "No loop selected", constrainsContentToViewport: true) {
+            AppCard(title: "Loop Bank") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("No saved loops yet.")
+                        .font(.headline.weight(.semibold))
+                        .fontWidth(.expanded)
+                    Text("Use the + button in the toolbar to create a new saved loop.")
+                        .font(AppTheme.Font.body)
+                        .foregroundStyle(AppTheme.mutedText)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var loopEditorPane: some View {
         AppPage(editorDraft.isNew ? "New Loop" : editorDraft.name.nonEmpty ?? "Loop", subtitle: detailSubtitle, constrainsContentToViewport: true) {
             AppCard(title: "Definition", trailing: {
                 AppLabelTag(text: availabilityLabel(for: editorDraft), color: availabilityColor(for: editorDraft))
@@ -598,6 +636,7 @@ struct LoopBankScreen: View {
     }
 
     private func createNewLoop() {
+        isCreatingNewLoop = true
         viewModel.selectedLoopDefinitionID = nil
         editorDraft = LoopDefinitionEditorDraft(currentProjectPath: viewModel.selectedProjectPath)
     }
