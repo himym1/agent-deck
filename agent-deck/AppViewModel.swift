@@ -8667,6 +8667,53 @@ final class AppViewModel: NSObject {
     }
 
     @discardableResult
+    func saveLoopDefinitionFromRun(_ run: LoopRun) throws -> LoopDefinition {
+        try saveLoopDefinitionFromDraft(
+            loopDraft(from: run),
+            request: LoopSaveRequest(
+                name: defaultLoopSaveName(for: run),
+                description: "Saved from completed loop run.",
+                availability: run.projectPath?.isEmpty == false ? .projectPaths : .allProjects,
+                projectPaths: run.projectPath.map { [$0] } ?? []
+            )
+        )
+    }
+
+    func retryLoopRun(_ run: LoopRun) {
+        guard !run.isActive, run.status == .failed else { return }
+        guard let session = piAgentSessionStore.sessions.first(where: { $0.id == run.sessionID }) else { return }
+        let draft = loopDraft(from: run)
+        Task { @MainActor in
+            if draft.structure == .agentPipeline {
+                _ = await launchAgentPipelineLoop(session: session, draft: draft, stopExistingActive: false)
+            } else {
+                _ = piAgentSessionStore.launchSmokeLoop(sessionID: session.id, projectPath: session.projectPath, draft: draft, stopExistingActive: false)
+            }
+        }
+    }
+
+    private func loopDraft(from run: LoopRun) -> LoopDraft {
+        LoopDraft(
+            goal: run.goal,
+            structure: run.structure,
+            writeTarget: run.writeTarget,
+            maxIterations: run.maxIterations,
+            validationCommand: run.validationCommand,
+            makerChecker: run.makerChecker,
+            pipeline: run.pipeline,
+            parallel: run.parallel,
+            discoveryTriage: run.discoveryTriage,
+            humanApproval: run.humanApproval
+        )
+    }
+
+    private func defaultLoopSaveName(for run: LoopRun) -> String {
+        let firstLine = run.goal.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
+        let trimmed = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Saved Loop" : String(trimmed.prefix(64))
+    }
+
+    @discardableResult
     func saveLoopDefinitionFromDraft(_ draft: LoopDraft, request: LoopSaveRequest) throws -> LoopDefinition {
         let projectPaths = request.availability == .projectPaths ? request.projectPaths : []
         let definition = LoopDefinition(

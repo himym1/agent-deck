@@ -4873,8 +4873,20 @@ struct PiAgentScreen: View {
                 let payload = NativeLoopRunPayload.make(
                     run: loopRun,
                     onStop: loopRun.isActive ? { [store] in _ = store.stopLoopRun(loopRun.id, sessionID: loopRun.sessionID) } : nil,
+                    onRetry: { [viewModel] in viewModel.retryLoopRun(loopRun) },
+                    onSave: { [viewModel, store] in
+                        do {
+                            _ = try viewModel.saveLoopDefinitionFromRun(loopRun)
+                            store.append(.init(sessionID: loopRun.sessionID, role: .status, title: "Loop Saved", text: "Saved loop to Loop Bank."))
+                        } catch {
+                            store.append(.init(sessionID: loopRun.sessionID, role: .error, title: "Loop Save Failed", text: error.localizedDescription))
+                        }
+                    },
                     onRevealArtifacts: loopRun.artifactDirectoryPath.map { path in
                         { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+                    },
+                    onRevealWorktree: loopRun.artifactDirectoryPath.map { path in
+                        { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path).appendingPathComponent("worktree", isDirectory: true)]) }
                     }
                 )
                 return .native(.of(PiAgentNativeLoopRunCardView.self) { view, width in

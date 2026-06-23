@@ -1063,10 +1063,16 @@ struct NativeLoopRunPayload {
     var detailText: String
     var isActive: Bool
     var canRevealArtifacts: Bool
+    var canRevealWorktree: Bool
+    var canRetry: Bool
+    var canSave: Bool
     var onStop: (() -> Void)?
+    var onRetry: (() -> Void)?
+    var onSave: (() -> Void)?
     var onRevealArtifacts: (() -> Void)?
+    var onRevealWorktree: (() -> Void)?
 
-    static func make(run: LoopRun, onStop: (() -> Void)?, onRevealArtifacts: (() -> Void)?) -> NativeLoopRunPayload {
+    static func make(run: LoopRun, onStop: (() -> Void)?, onRetry: (() -> Void)?, onSave: (() -> Void)?, onRevealArtifacts: (() -> Void)?, onRevealWorktree: (() -> Void)?) -> NativeLoopRunPayload {
         var details: [String] = [
             "Structure: \(run.structure.displayName)",
             "Write target: \(run.writeTarget.displayName)",
@@ -1088,8 +1094,14 @@ struct NativeLoopRunPayload {
             detailText: details.joined(separator: "\n"),
             isActive: run.isActive,
             canRevealArtifacts: run.artifactDirectoryPath != nil,
+            canRevealWorktree: run.writeTarget == .newWorktree && run.artifactDirectoryPath != nil,
+            canRetry: !run.isActive && run.status == .failed,
+            canSave: !run.isActive,
             onStop: onStop,
-            onRevealArtifacts: onRevealArtifacts
+            onRetry: onRetry,
+            onSave: onSave,
+            onRevealArtifacts: onRevealArtifacts,
+            onRevealWorktree: onRevealWorktree
         )
     }
 }
@@ -1103,7 +1115,10 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
     private var cardWidthC: NSLayoutConstraint!
     private let detailsButton = NSButton(title: "Open Details", target: nil, action: nil)
     private let stopButton = NSButton(title: "Stop", target: nil, action: nil)
+    private let retryButton = NSButton(title: "Retry Failed Iteration", target: nil, action: nil)
+    private let saveButton = NSButton(title: "Save Loop", target: nil, action: nil)
     private let revealButton = NSButton(title: "Reveal Artifacts", target: nil, action: nil)
+    private let revealWorktreeButton = NSButton(title: "Reveal Worktree", target: nil, action: nil)
     private var payload: NativeLoopRunPayload?
     var onIntrinsicHeightChange: (() -> Void)?
 
@@ -1136,7 +1151,7 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
         detailField.maximumNumberOfLines = 0
         detailField.isHidden = true
 
-        for button in [detailsButton, stopButton, revealButton] {
+        for button in [detailsButton, stopButton, retryButton, saveButton, revealButton, revealWorktreeButton] {
             button.bezelStyle = .rounded
             button.controlSize = .small
             button.translatesAutoresizingMaskIntoConstraints = false
@@ -1145,8 +1160,14 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
         detailsButton.action = #selector(openDetails)
         stopButton.target = self
         stopButton.action = #selector(stopTapped)
+        retryButton.target = self
+        retryButton.action = #selector(retryTapped)
+        saveButton.target = self
+        saveButton.action = #selector(saveTapped)
         revealButton.target = self
         revealButton.action = #selector(revealTapped)
+        revealWorktreeButton.target = self
+        revealWorktreeButton.action = #selector(revealWorktreeTapped)
 
         let header = NSStackView(views: [iconView, titleField])
         header.translatesAutoresizingMaskIntoConstraints = false
@@ -1154,7 +1175,7 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
         header.alignment = .centerY
         header.spacing = 8
 
-        let buttons = NSStackView(views: [detailsButton, stopButton, revealButton])
+        let buttons = NSStackView(views: [detailsButton, stopButton, retryButton, saveButton, revealButton, revealWorktreeButton])
         buttons.translatesAutoresizingMaskIntoConstraints = false
         buttons.orientation = .horizontal
         buttons.spacing = 8
@@ -1201,7 +1222,13 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
         detailsButton.title = "Open Details"
         stopButton.isHidden = !payload.isActive
         stopButton.isEnabled = payload.isActive && payload.onStop != nil
+        retryButton.isHidden = !payload.canRetry
+        retryButton.isEnabled = payload.canRetry && payload.onRetry != nil
+        saveButton.isHidden = !payload.canSave
+        saveButton.isEnabled = payload.canSave && payload.onSave != nil
         revealButton.isEnabled = payload.canRevealArtifacts && payload.onRevealArtifacts != nil
+        revealWorktreeButton.isHidden = !payload.canRevealWorktree
+        revealWorktreeButton.isEnabled = payload.canRevealWorktree && payload.onRevealWorktree != nil
     }
 
     func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat {
@@ -1222,5 +1249,8 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
     }
 
     @objc private func stopTapped() { payload?.onStop?() }
+    @objc private func retryTapped() { payload?.onRetry?() }
+    @objc private func saveTapped() { payload?.onSave?() }
     @objc private func revealTapped() { payload?.onRevealArtifacts?() }
+    @objc private func revealWorktreeTapped() { payload?.onRevealWorktree?() }
 }
