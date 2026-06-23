@@ -1028,7 +1028,8 @@ struct ContentView: View {
             SidebarNavigationRow(
                 item: item,
                 isSelected: viewModel.selectedSidebarItem == item,
-                showsWarning: warnings[item] ?? false
+                showsWarning: warnings[item] ?? false,
+                showsNewFeatureBadge: item == .loops && !viewModel.appSettings.didOpenLoopsFromSidebar
             )
         }
         .bottomEdgeFade(height: 34)
@@ -1810,6 +1811,10 @@ struct ContentView: View {
     }
 
     private func handleSidebarSelectionChange(_ newValue: SidebarItem) {
+        if newValue == .loops {
+            viewModel.markLoopsOpenedFromSidebar()
+        }
+
         if newValue == .agent {
             viewModel.acknowledgeVisibleSelectedPiAgentSession()
         } else if viewModel.isCodingAgentPanelExpanded {

@@ -5709,6 +5709,11 @@ final class AppViewModel: NSObject {
         syncAppSettings()
     }
 
+    func markLoopsOpenedFromSidebar() {
+        guard appSettingsController.markLoopsOpenedFromSidebar() else { return }
+        syncAppSettings()
+    }
+
     // MARK: - Color themes
     //
     // Theme state is read by the UI straight off `appSettings` (the observable

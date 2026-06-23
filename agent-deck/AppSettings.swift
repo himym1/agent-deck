@@ -214,6 +214,7 @@ struct AppSettings: Codable, Hashable {
     var piAgentMarkdownHighlightingEnabled: Bool = true
     /// Asset-catalog name of the user-chosen Dock icon. `nil` = bundle default.
     var selectedAppIconName: String?
+    var didOpenLoopsFromSidebar: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case piAgentNotificationDelayMinutes
@@ -265,6 +266,7 @@ struct AppSettings: Codable, Hashable {
         case customThemes
         case piAgentMarkdownHighlightingEnabled
         case selectedAppIconName
+        case didOpenLoopsFromSidebar
     }
 
     init() {}
@@ -323,6 +325,7 @@ struct AppSettings: Codable, Hashable {
         customThemes = try container.decodeIfPresent([Theme].self, forKey: .customThemes) ?? []
         piAgentMarkdownHighlightingEnabled = try container.decodeIfPresent(Bool.self, forKey: .piAgentMarkdownHighlightingEnabled) ?? true
         selectedAppIconName = try container.decodeIfPresent(String.self, forKey: .selectedAppIconName)
+        didOpenLoopsFromSidebar = try container.decodeIfPresent(Bool.self, forKey: .didOpenLoopsFromSidebar) ?? false
     }
 }
 

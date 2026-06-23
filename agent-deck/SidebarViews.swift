@@ -5,12 +5,16 @@ struct SidebarNavigationRow: View {
     let item: SidebarItem
     var isSelected: Bool = false
     var showsWarning = false
+    var showsNewFeatureBadge = false
 
     var body: some View {
         Label {
             HStack(spacing: 6) {
                 Text(item.rawValue)
                     .font(.callout.weight(.medium))
+                if showsNewFeatureBadge {
+                    SidebarNewFeatureBadge(isSelected: isSelected)
+                }
                 if showsWarning {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.caption.weight(.semibold))
@@ -45,6 +49,29 @@ struct SidebarNavigationRow: View {
         isSelected
             ? AnyShapeStyle(AppTheme.brandAccent)
             : AnyShapeStyle(Color.secondary)
+    }
+}
+
+private struct SidebarNewFeatureBadge: View {
+    let isSelected: Bool
+
+    var body: some View {
+        Text("NEW")
+            .font(AppTheme.Font.caption2.weight(.bold))
+            .fontWidth(.condensed)
+            .foregroundStyle(isSelected ? .primary : AppTheme.brandAccent)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background {
+                Capsule(style: .continuous)
+                    .fill(AppTheme.brandAccent.opacity(isSelected ? 0.24 : 0.14))
+            }
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(AppTheme.brandAccent.opacity(isSelected ? 0.55 : 0.35), lineWidth: 0.75)
+            }
+            .help("New Loop functionality")
+            .accessibilityLabel("New functionality")
     }
 }
 
