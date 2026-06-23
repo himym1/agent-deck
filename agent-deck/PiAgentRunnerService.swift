@@ -314,16 +314,12 @@ final class PiAgentRunnerService {
         }
         let transcriptMessage = displayText.map { userMessage($0, images: images) } ?? message
         store.append(.init(sessionID: sessionID, role: .user, title: transcriptTitle(for: effectiveMode, isStreaming: isStreaming), text: transcriptText(transcriptMessage, images: images), rawJSON: transcriptAttachmentJSON(messageText: transcriptMessage, images: images, pasteAttachments: pasteAttachments, issueAttachment: issueAttachment)))
-        switch effectiveMode {
-        case .prompt:
-            // Harmless when Pi is idle, but prevents dropped messages if our local
-            // status lags behind Pi's authoritative streaming state.
-            client.prompt(message, images: images, streamingBehavior: "steer")
-        case .steer:
-            client.prompt(message, images: images, streamingBehavior: "steer")
-        case .followUp:
-            client.prompt(message, images: images, streamingBehavior: "followUp")
-        }
+        // Harmless when Pi is idle, but prevents dropped messages if our local
+        // status lags behind Pi's authoritative streaming state. Routed through
+        // `prompt` + streamingBehavior rather than the dedicated `steer` type so
+        // slash/skill/prompt-template commands still work during streaming.
+        let streamingBehavior = effectiveMode == .followUp ? "followUp" : "steer"
+        client.prompt(message, images: images, streamingBehavior: streamingBehavior)
         mark(sessionID, status: .running, error: nil)
     }
 
