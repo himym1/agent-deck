@@ -474,21 +474,13 @@ struct LoopLaunchSheet: View {
     private var writeTargetExplanation: some View {
         switch draft.writeTarget {
         case .artifactMarkdown:
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Writes only to the loop artifact directory. Project files are not modified.")
-                Text("Resolved path: Agent Deck app support / loop-artifacts / \(session.id.uuidString) / <run-id>")
-                    .textSelection(.enabled)
-            }
-            .font(AppTheme.Font.caption)
-            .foregroundStyle(AppTheme.mutedText)
+            Text("Writes only to the loop artifact directory. Project files are not modified.")
+                .font(AppTheme.Font.caption)
+                .foregroundStyle(AppTheme.mutedText)
         case .newWorktree:
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Explicit coding target. Agent Deck creates a per-run git worktree and runs validation there; the current checkout remains untouched.")
-                Text("Resolved path: Agent Deck app support / loop-artifacts / \(session.id.uuidString) / <run-id> / worktree")
-                    .textSelection(.enabled)
-            }
-            .font(AppTheme.Font.caption)
-            .foregroundStyle(AppTheme.mutedText)
+            Text("Explicit coding target. Agent Deck creates a per-run git worktree and runs validation there; the current checkout remains untouched.")
+                .font(AppTheme.Font.caption)
+                .foregroundStyle(AppTheme.mutedText)
         case .currentCheckout:
             VStack(alignment: .leading, spacing: 8) {
                 Label("Direct write target: this loop may edit files in the current checkout.", systemImage: "exclamationmark.triangle.fill")
