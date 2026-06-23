@@ -17,9 +17,6 @@ The Loops category should include:
 
 ```text
 Create New Loop…
-Docs + Codebase Sweep
-Ticket → Verified Fix
-Builder + Reviewer Verification
 <available all-project/default loops>
 <available project-assigned loops>
 ```
@@ -74,15 +71,7 @@ Only implemented structures should be enabled. Future structures can be omitted 
 
 ### 3. Template
 
-Template pre-fills defaults but does not override user edits unexpectedly.
-
-Current v1 public built-ins:
-
-- Docs + Codebase Sweep
-- Ticket → Verified Fix
-- Builder + Reviewer Verification
-
-Dev/test fixture loops should remain hidden from normal users unless a developer/debug mode intentionally exposes them.
+Template pre-fills defaults but does not override user edits unexpectedly. No built-in loop templates are currently bundled; dev/test fixture loops should remain hidden from normal users unless a developer/debug mode intentionally exposes them.
 
 ### 4. Goal
 
@@ -170,7 +159,7 @@ A loop run should appear as a durable transcript card in the owning parent Pi se
 Running state:
 
 ```text
-Loop: Ticket → Verified Fix
+Loop: My Saved Loop
 Status: Running
 Structure: Single Agent
 Iteration: 2 / 5

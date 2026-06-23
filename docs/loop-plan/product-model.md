@@ -11,7 +11,7 @@
 | Loop Run | One execution of a loop in one chat. |
 | Iteration | One pass through the loop's act/check/decide cycle. |
 | Structure | The agent organization pattern: single agent, maker/checker, pipeline, etc. |
-| Template | A pre-filled starting point such as Docs + Codebase Sweep or Ticket → Verified Fix. |
+| Template | A pre-filled starting point for a reusable loop configuration. |
 | Write Target | Where the loop may write: report artifacts, new worktree, or current checkout. |
 | Stop Reason | The durable reason a loop ended. |
 
@@ -148,42 +148,7 @@ This avoids the ambiguous state where an entire loop is labeled `Report Only` ev
 
 ## Built-in loops and test fixtures
 
-Built-in loops should be polished user-facing templates inspired by published loop patterns, but adapted to Agent Deck's product model and safety constraints. They should pre-fill drafts rather than define separate execution engines.
-
-Keep two sets separate:
-
-1. **User-facing built-in loops** — visible in `/loops` and Loop Bank as read-only templates users can duplicate/customize.
-2. **Dev/test fixture loops** — local deterministic fixtures used while building the runner; they should not be presented as polished product templates.
-
-### Current v1 built-in loops
-
-These are the product-refined built-in definitions currently present in Agent Deck. They are saved templates, not separate execution engines. Do not replace them with older planning names without checking git history and product intent.
-
-1. **Docs + Codebase Sweep**
-   - Structure: Discovery / Triage.
-   - Output target: Artifact / Markdown output.
-   - Purpose: inspect docs and repository state, classify findings as blockers/follow-ups/notes, and recommend the safest next action.
-   - Success: triage artifact is visible, validation/check commands run when configured, and the run ends with a durable stop reason.
-
-2. **Ticket → Verified Fix**
-   - Structure: Agent Pipeline.
-   - Output target: Artifact / Markdown output by default; users can explicitly choose New worktree or Current checkout at launch when they want coding writes.
-   - Purpose: move from ticket context through implementation and verification with ordered agent handoff.
-   - Success: ordered child-agent stages complete, validation evidence is preserved, and the final summary explains changes/risks.
-
-3. **Builder + Reviewer Verification**
-   - Structure: Maker + Checker.
-   - Output target: Artifact / Markdown output by default; users can explicitly choose New worktree or Current checkout at launch when they want coding writes.
-   - Purpose: have a builder make changes and a reviewer/checker verify them before success.
-   - Success: maker child run completes before checker child run, checker approval stops successfully, rejection triggers another maker iteration up to the configured review limit.
-
-### Later built-in loops
-
-- Review and Revise / Maker + Checker.
-- Refactor Safely.
-- Issue to PR.
-- CI Failure Triage.
-- Release Readiness.
+No built-in loops are currently bundled. User-facing loop definitions are created by users in Loop Bank.
 
 ### Dev/test fixture loops
 

@@ -10,12 +10,10 @@ Avoid waiting until all loop structures exist before testing. Every vertical sli
 
 Use separate public built-ins and dev/test fixtures:
 
-- Public built-ins prove the product experience: Docs + Codebase Sweep, Ticket → Verified Fix, and Builder + Reviewer Verification.
 - Dev/test fixtures prove runner mechanics deterministically: Artifact Smoke Fixture, Retry Failure Fixture, Validation Fixture, and Write Target Fixture.
 
 Release success should require at least:
 
-- Docs + Codebase Sweep built-in launches, completes, writes a visible triage artifact, saves to Loop Bank, and relaunches.
 - Artifact Smoke Fixture passes in automated or smoke validation.
 - Retry Failure Fixture proves failed attempts are preserved and retry creates a new attempt.
 - Validation Fixture proves pass/fail/continue/stop behavior.

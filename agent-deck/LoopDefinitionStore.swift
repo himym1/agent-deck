@@ -42,7 +42,7 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
     }
 
     func loadDefinitions() -> [LoopDefinition] {
-        (Self.builtinDefinitions + loadUserDefinitions())
+        loadUserDefinitions()
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
@@ -264,52 +264,6 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
     private static func parseDate(_ value: String?) -> Date? {
         guard let value = value?.nonEmpty else { return nil }
         return isoFormatter().date(from: value)
-    }
-
-    static var builtinDefinitions: [LoopDefinition] {
-        [
-            LoopDefinition(
-                id: "builtin:docs-codebase-sweep",
-                name: "Docs + Codebase Sweep",
-                description: "Survey documentation and code, classify findings, and recommend next actions.",
-                goalTemplate: "Sweep the relevant docs and code for the requested topic. Group findings by severity, cite evidence, and recommend the next action.",
-                structure: .discoveryTriage,
-                writeTarget: .artifactMarkdown,
-                validationCommand: "/usr/bin/true",
-                discoveryTriage: LoopDiscoveryTriageConfig(
-                    agentName: "Explorer",
-                    classificationPrompt: "Classify findings as blockers, follow-ups, or notes, then summarize the safest next action."
-                ),
-                source: .builtin
-            ),
-            LoopDefinition(
-                id: "builtin:ticket-to-verified-fix",
-                name: "Ticket → Verified Fix",
-                description: "Turn a ticket into a scoped plan, implementation notes, and verification summary.",
-                goalTemplate: "Start from the ticket or bug report. Clarify the failure, propose the smallest fix, describe the implementation, and verify the result with evidence.",
-                structure: .agentPipeline,
-                writeTarget: .artifactMarkdown,
-                validationCommand: "/usr/bin/true",
-                pipeline: LoopPipelineConfig(stageNames: ["Triage", "Build", "Verify"]),
-                source: .builtin
-            ),
-            LoopDefinition(
-                id: "builtin:builder-reviewer-verification",
-                name: "Builder + Reviewer Verification",
-                description: "Use a builder pass and an independent reviewer pass before accepting the result.",
-                goalTemplate: "Have the builder produce the requested artifact or implementation notes. Have the reviewer check correctness, risks, and verification evidence before approval.",
-                structure: .makerChecker,
-                writeTarget: .artifactMarkdown,
-                validationCommand: "/usr/bin/true",
-                makerChecker: LoopMakerCheckerConfig(
-                    makerName: "Builder",
-                    checkerName: "Reviewer",
-                    checkerRubric: "Approve only when the result is complete, evidence-backed, and safe to hand off. Otherwise reject with concrete fixes.",
-                    maxReviewRounds: 3
-                ),
-                source: .builtin
-            )
-        ]
     }
 
     private static func isoFormatter() -> ISO8601DateFormatter {

@@ -62,7 +62,6 @@ Deliverables:
 - All-project/default and project-assigned saved loops.
 - Save Loop flow from launch modal and completed loop card.
 - Relaunch saved loop through the same launch modal.
-- Docs + Codebase Sweep, Ticket → Verified Fix, and Builder + Reviewer Verification built-ins saved as read-only public templates.
 
 Exit criteria:
 
