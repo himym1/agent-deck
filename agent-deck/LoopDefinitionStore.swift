@@ -266,43 +266,33 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
     static var builtinDefinitions: [LoopDefinition] {
         [
             LoopDefinition(
-                id: "builtin:docs-codebase-sweep",
-                name: "Docs + Codebase Sweep",
-                description: "Survey documentation and code, classify findings, and recommend next actions.",
-                goalTemplate: "Sweep the relevant docs and code for the requested topic. Group findings by severity, cite evidence, and recommend the next action.",
-                structure: .discoveryTriage,
+                id: "builtin:research-markdown-artifact",
+                name: "Research / Markdown Artifact",
+                description: "Research, audit, or summarize into a durable Markdown artifact.",
+                goalTemplate: "Research the requested topic and produce a clear Markdown artifact. Cite repository evidence where relevant, separate findings from recommendations, and finish with a concise summary.",
+                structure: .singleAgent,
                 writeTarget: .artifactMarkdown,
                 validationCommand: "/usr/bin/true",
-                discoveryTriage: LoopDiscoveryTriageConfig(
-                    classificationPrompt: "Classify findings as blockers, follow-ups, or notes, then summarize the safest next action."
-                ),
                 source: .builtin
             ),
             LoopDefinition(
-                id: "builtin:ticket-to-verified-fix",
-                name: "Ticket → Verified Fix",
-                description: "Turn a ticket into a scoped plan, implementation notes, and verification summary.",
-                goalTemplate: "Start from the ticket or bug report. Clarify the failure, propose the smallest fix, describe the implementation, and verify the result with evidence.",
-                structure: .agentPipeline,
+                id: "builtin:docs-sweep",
+                name: "Docs Sweep",
+                description: "Compare documentation with repository state, report drift, and recommend safe follow-up.",
+                goalTemplate: "Sweep the relevant documentation against the current repository state. Report stale, missing, or misleading docs with file references, explain risk, and recommend the smallest safe next action.",
+                structure: .singleAgent,
                 writeTarget: .artifactMarkdown,
                 validationCommand: "/usr/bin/true",
-                pipeline: LoopPipelineConfig(stageNames: ["Triage", "Build", "Verify"]),
                 source: .builtin
             ),
             LoopDefinition(
-                id: "builtin:builder-reviewer-verification",
-                name: "Builder + Reviewer Verification",
-                description: "Use a builder pass and an independent reviewer pass before accepting the result.",
-                goalTemplate: "Have the builder produce the requested artifact or implementation notes. Have the reviewer check correctness, risks, and verification evidence before approval.",
-                structure: .makerChecker,
-                writeTarget: .artifactMarkdown,
+                id: "builtin:fix-failing-tests-ticket-review-ready",
+                name: "Fix Failing Tests / Ticket to Review-Ready Fix",
+                description: "Reproduce a failure or ticket, make the smallest credible fix, validate it, and summarize evidence and risks.",
+                goalTemplate: "Start from the failing test, CI failure, bug report, or ticket. Reproduce or explain the failure, make the smallest credible fix when a coding write target is selected, run validation, and summarize evidence, changed files, and remaining risks.",
+                structure: .singleAgent,
+                writeTarget: .newWorktree,
                 validationCommand: "/usr/bin/true",
-                makerChecker: LoopMakerCheckerConfig(
-                    makerName: "Builder",
-                    checkerName: "Reviewer",
-                    checkerRubric: "Approve only when the result is complete, evidence-backed, and safe to hand off. Otherwise reject with concrete fixes.",
-                    maxReviewRounds: 3
-                ),
                 source: .builtin
             )
         ]
