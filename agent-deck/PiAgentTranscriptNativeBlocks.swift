@@ -1190,6 +1190,7 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
     private let revealWorktreeButton = NSButton(title: "Reveal Worktree", target: nil, action: nil)
     private let applyWorktreeButton = NSButton(title: "Apply Worktree", target: nil, action: nil)
     private let discardWorktreeButton = NSButton(title: "Discard Worktree", target: nil, action: nil)
+    private let actionRows = NSStackView()
     private var payload: NativeLoopRunPayload?
     var onIntrinsicHeightChange: (() -> Void)?
 
@@ -1222,10 +1223,11 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
         detailField.maximumNumberOfLines = 0
         detailField.isHidden = true
 
-        for button in [detailsButton, stopButton, retryButton, saveButton, revealButton, revealWorktreeButton, applyWorktreeButton, discardWorktreeButton] {
+        for button in actionButtons {
             button.bezelStyle = .rounded
             button.controlSize = .small
             button.translatesAutoresizingMaskIntoConstraints = false
+            button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         }
         detailsButton.target = self
         detailsButton.action = #selector(openDetails)
@@ -1250,15 +1252,15 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
         header.alignment = .centerY
         header.spacing = 8
 
-        let buttons = NSStackView(views: [detailsButton, stopButton, retryButton, saveButton, revealButton, revealWorktreeButton, applyWorktreeButton, discardWorktreeButton])
-        buttons.translatesAutoresizingMaskIntoConstraints = false
-        buttons.orientation = .horizontal
-        buttons.spacing = 8
+        actionRows.translatesAutoresizingMaskIntoConstraints = false
+        actionRows.orientation = .vertical
+        actionRows.alignment = .leading
+        actionRows.spacing = 6
 
         card.addSubview(header)
         card.addSubview(statusField)
         card.addSubview(detailField)
-        card.addSubview(buttons)
+        card.addSubview(actionRows)
 
         cardWidthC = card.widthAnchor.constraint(equalToConstant: 320)
         NSLayoutConstraint.activate([
@@ -1278,9 +1280,10 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
             detailField.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             detailField.trailingAnchor.constraint(equalTo: statusField.trailingAnchor),
             detailField.topAnchor.constraint(equalTo: statusField.bottomAnchor, constant: 8),
-            buttons.leadingAnchor.constraint(equalTo: header.leadingAnchor),
-            buttons.topAnchor.constraint(equalTo: statusField.bottomAnchor, constant: 10),
-            buttons.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -AppTheme.Chat.bubbleVPadding)
+            actionRows.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            actionRows.trailingAnchor.constraint(lessThanOrEqualTo: card.trailingAnchor, constant: -AppTheme.Chat.bubbleHPadding),
+            actionRows.topAnchor.constraint(equalTo: statusField.bottomAnchor, constant: 10),
+            actionRows.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -AppTheme.Chat.bubbleVPadding)
         ])
     }
 
@@ -1308,10 +1311,53 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
         applyWorktreeButton.isEnabled = payload.canApplyWorktree && payload.onApplyWorktree != nil
         discardWorktreeButton.isHidden = !payload.canDiscardWorktree
         discardWorktreeButton.isEnabled = payload.canDiscardWorktree && payload.onDiscardWorktree != nil
+        rebuildActionRows(forCardWidth: cardWidthC.constant)
     }
 
     func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat {
-        AppTheme.Chat.bubbleVPadding * 2 + 18 + 6 + 16 + 10 + 26
+        let cardWidth = Self.cardWidth(for: rowWidth)
+        let rowCount = packedActionRows(forCardWidth: cardWidth, visibleButtons: visibleActionButtons).count
+        return AppTheme.Chat.bubbleVPadding * 2 + 18 + 6 + 16 + 10 + CGFloat(max(1, rowCount)) * 26 + CGFloat(max(0, rowCount - 1)) * 6
+    }
+
+    private var actionButtons: [NSButton] {
+        [detailsButton, stopButton, retryButton, saveButton, revealButton, revealWorktreeButton, applyWorktreeButton, discardWorktreeButton]
+    }
+
+    private var visibleActionButtons: [NSButton] { actionButtons.filter { !$0.isHidden } }
+
+    private func rebuildActionRows(forCardWidth cardWidth: CGFloat) {
+        for view in actionRows.arrangedSubviews {
+            actionRows.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        for rowButtons in packedActionRows(forCardWidth: cardWidth, visibleButtons: visibleActionButtons) {
+            let row = NSStackView(views: rowButtons)
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.spacing = 8
+            row.translatesAutoresizingMaskIntoConstraints = false
+            actionRows.addArrangedSubview(row)
+        }
+    }
+
+    private func packedActionRows(forCardWidth cardWidth: CGFloat, visibleButtons: [NSButton]) -> [[NSButton]] {
+        guard !visibleButtons.isEmpty else { return [] }
+        let availableWidth = max(120, cardWidth - AppTheme.Chat.bubbleHPadding * 2)
+        var rows: [[NSButton]] = [[]]
+        var currentWidth: CGFloat = 0
+        for button in visibleButtons {
+            let width = max(44, button.fittingSize.width)
+            let nextWidth = rows[rows.count - 1].isEmpty ? width : currentWidth + 8 + width
+            if nextWidth > availableWidth, !rows[rows.count - 1].isEmpty {
+                rows.append([button])
+                currentWidth = width
+            } else {
+                rows[rows.count - 1].append(button)
+                currentWidth = nextWidth
+            }
+        }
+        return rows
     }
 
     private static func cardWidth(for rowWidth: CGFloat) -> CGFloat {
