@@ -289,6 +289,7 @@ final class AppViewModel: NSObject {
     private let sessionWorktreeService = PiAgentSessionWorktreeService()
     @ObservationIgnored private lazy var piAgentRunner = PiAgentRunnerService(store: piAgentSessionStore)
     @ObservationIgnored private lazy var nativeSubagentRunner = PiSubagentRunService(store: piAgentSessionStore)
+    @ObservationIgnored private var activePipelineChildRunByLoopID: [UUID: UUID] = [:]
     /// Memoizes `selectableAgentUniverse(forProjectPath:)` so the subagent
     /// picker (and `catalogAgents(for:)` / `sessionHasSelectableAgents`) read
     /// a precomputed list instead of rebuilding it on every body evaluation.
@@ -372,6 +373,10 @@ final class AppViewModel: NSObject {
             projectRootURL = URL(fileURLWithPath: selectedProjectPath, isDirectory: true).standardizedFileURL
         }
         piAgentSessionStore.newSessionSubagentsEnabled = appSettings.nativeSubagentsEnabledForNewSessions
+        piAgentSessionStore.onStopLoopRun = { [weak self] runID, sessionID in
+            guard let self, let childRunID = self.activePipelineChildRunByLoopID.removeValue(forKey: runID) else { return }
+            self.nativeSubagentRunner.stop(runID: childRunID, parentSessionID: sessionID, recordTranscript: true)
+        }
         piAgentSessionStore.onLoadApplied = { [weak self] in
             self?.pruneNeverStartedDraftSessions()
         }
@@ -3333,6 +3338,74 @@ final class AppViewModel: NSObject {
             envKeys: base.envKeys,
             warnings: base.warnings
         )
+    }
+
+    @discardableResult
+    func launchAgentPipelineLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+        let snapshot = startupSnapshot(forProjectPath: session.projectPath)
+        let agentsByName = Dictionary(uniqueKeysWithValues: snapshot.effectiveAgents.map { ($0.name, $0) })
+        return await piAgentSessionStore.launchAgentPipelineLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, stageName, task, writeTarget, workingDirectory, requestedOutputPath in
+            guard let self else { return nil }
+            guard let agent = agentsByName[stageName], agent.resolved.disabled != true else {
+                self.piAgentSessionStore.append(.init(sessionID: session.id, role: .error, title: "Loop Agent Unavailable", text: "Pipeline stage \"\(stageName)\" is not available in this project."))
+                return nil
+            }
+            var executionSession = session
+            if writeTarget == .newWorktree, let workingDirectory {
+                executionSession.worktreePath = workingDirectory.path
+            }
+            let expectedOutcome: PiSubagentExpectedOutcome
+            switch writeTarget {
+            case .artifactMarkdown:
+                expectedOutcome = .reportOnly
+            case .newWorktree:
+                expectedOutcome = .editFilesInWorktree
+            case .currentCheckout:
+                expectedOutcome = .directProjectWrites
+            }
+            let childRun = await self.runNativeSubagentAndWait(
+                parentSession: executionSession,
+                agent: agent,
+                snapshot: snapshot,
+                task: task,
+                useWorktreeIsolation: false,
+                expectedOutcome: expectedOutcome,
+                requestedOutputPath: requestedOutputPath,
+                loopID: loopID
+            )
+            return childRun
+        }
+    }
+
+    private func runNativeSubagentAndWait(parentSession: PiAgentSessionRecord, agent: EffectiveAgentRecord, snapshot: ScanSnapshot, task: String, useWorktreeIsolation: Bool, expectedOutcome: PiSubagentExpectedOutcome, requestedOutputPath: String?, loopID: UUID) async -> PiSubagentRunRecord {
+        await withCheckedContinuation { continuation in
+            var didResume = false
+            Task { @MainActor in
+                let launched = await runNativeSubagent(
+                    parentSession: parentSession,
+                    agent: agent,
+                    snapshot: snapshot,
+                    task: task,
+                    useWorktreeIsolation: useWorktreeIsolation,
+                    expectedOutcome: expectedOutcome,
+                    requestedOutputPath: requestedOutputPath,
+                    allowOverwrite: true,
+                    completion: { completed in
+                        self.activePipelineChildRunByLoopID[loopID] = nil
+                        guard !didResume else { return }
+                        didResume = true
+                        continuation.resume(returning: completed)
+                    }
+                )
+                self.activePipelineChildRunByLoopID[loopID] = launched.id
+                if !launched.status.isActive {
+                    self.activePipelineChildRunByLoopID[loopID] = nil
+                    guard !didResume else { return }
+                    didResume = true
+                    continuation.resume(returning: launched)
+                }
+            }
+        }
     }
 
     @discardableResult

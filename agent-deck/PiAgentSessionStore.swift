@@ -3,6 +3,15 @@ import Combine
 import Foundation
 import Observation
 
+private extension String {
+    var safeFilenameComponent: String {
+        let slug = lowercased()
+            .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return slug.isEmpty ? "stage" : String(slug.prefix(48))
+    }
+}
+
 @MainActor
 @Observable
 final class PiAgentSessionStore {
@@ -845,6 +854,166 @@ final class PiAgentSessionStore {
         loopRuns(for: sessionID).last(where: \.isActive)
     }
 
+    var onStopLoopRun: ((UUID, UUID) -> Void)?
+
+    @discardableResult
+    func launchAgentPipelineLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool = false, executeStage: @escaping (UUID, String, String, LoopWriteTarget, URL?, String?) async -> PiSubagentRunRecord?) async -> LoopRun? {
+        guard draft.structure == .agentPipeline else { return nil }
+        guard !draft.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        if let active = activeLoopRun(for: session.id) {
+            guard stopExistingActive else { return nil }
+            stopLoopRun(active.id, sessionID: session.id)
+        }
+
+        var run = LoopRun(sessionID: session.id, projectPath: session.projectPath, draft: draft)
+        let artifactDirectory = loopArtifactDirectoryURL(sessionID: session.id, runID: run.id)
+        run.artifactDirectoryPath = artifactDirectory.path
+        upsertLoopRun(run)
+
+        do {
+            try FileManager.default.createDirectory(at: artifactDirectory, withIntermediateDirectories: true)
+        } catch {
+            run.status = .failed
+            run.endedAt = Date()
+            run.stopReason = .toolFailed
+            upsertLoopRun(run)
+            return nil
+        }
+
+        let executionContext: LoopExecutionContext
+        do {
+            executionContext = try prepareLoopExecutionContext(writeTarget: run.writeTarget, projectPath: session.projectPath, artifactDirectory: artifactDirectory)
+        } catch let error as LoopExecutionPreparationError {
+            run.status = .failed
+            run.endedAt = Date()
+            run.stopReason = error.stopReason
+            run.iterations.append(LoopIteration(index: 0, summary: error.localizedDescription, artifacts: [], validationResult: nil))
+            upsertLoopRun(run)
+            return run
+        } catch {
+            run.status = .failed
+            run.endedAt = Date()
+            run.stopReason = .toolFailed
+            run.iterations.append(LoopIteration(index: 0, summary: error.localizedDescription))
+            upsertLoopRun(run)
+            return run
+        }
+
+        let validationCommand = run.validationCommand
+        for iterationIndex in 1...run.maxIterations {
+            let iterationStartedAt = Date()
+            run.currentIteration = iterationIndex
+            upsertLoopRun(run)
+
+            var timeline: [LoopTimelineEvent] = []
+            var stageSummaries: [String] = []
+            var childRunIDs: [String] = []
+
+            for (stageIndex, stageName) in run.pipeline.stageNames.enumerated() {
+                if let stoppedRun = stoppedLoopRun(run) { return stoppedRun }
+                let stageStartedAt = Date()
+                let task = pipelineStageTask(run: run, iterationIndex: iterationIndex, stageIndex: stageIndex, stageName: stageName, previousStageSummaries: stageSummaries)
+                let requestedOutputPath = run.writeTarget == .artifactMarkdown ? artifactDirectory.appendingPathComponent("stage-\(iterationIndex)-\(stageIndex + 1)-\(stageName.safeFilenameComponent)-output.md").path : nil
+                guard let childRun = await executeStage(run.id, stageName, task, run.writeTarget, executionContext.workingDirectory, requestedOutputPath) else {
+                    let endedAt = Date()
+                    timeline.append(LoopTimelineEvent(step: .pipelineStage, roleName: stageName, note: "Pipeline stage \(stageIndex + 1) failed to launch for iteration \(iterationIndex).", timestamp: stageStartedAt))
+                    run.iterations.append(LoopIteration(
+                        index: iterationIndex,
+                        startedAt: iterationStartedAt,
+                        endedAt: endedAt,
+                        summary: "Pipeline stopped because stage \(stageIndex + 1) (\(stageName)) could not be launched.",
+                        artifacts: [],
+                        validationResult: nil,
+                        timeline: timeline
+                    ))
+                    run.status = .failed
+                    run.endedAt = endedAt
+                    run.stopReason = .agentFailed
+                    upsertLoopRun(run)
+                    return run
+                }
+
+                if let stoppedRun = stoppedLoopRun(run) { return stoppedRun }
+                childRunIDs.append(childRun.id.uuidString)
+                let summary = childRun.summary?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? childRun.error?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? childRun.status.rawValue
+                stageSummaries.append("Stage \(stageIndex + 1) — \(stageName): \(summary)")
+                let note = "Pipeline stage \(stageIndex + 1) finished with \(childRun.status.rawValue). Child run: \(childRun.id.uuidString)."
+                timeline.append(LoopTimelineEvent(step: .pipelineStage, roleName: stageName, note: note, timestamp: stageStartedAt))
+                upsertLoopRun(run)
+
+                if childRun.status != .completed {
+                    let endedAt = Date()
+                    let artifact = makeMarkdownArtifact(
+                        filename: pipelineArtifactFilename(iterationIndex: iterationIndex),
+                        markdown: pipelineArtifactMarkdown(run: run, iterationIndex: iterationIndex, stageSummaries: stageSummaries, childRunIDs: childRunIDs, validationResult: nil),
+                        artifactDirectory: artifactDirectory
+                    )
+                    run.iterations.append(LoopIteration(
+                        index: iterationIndex,
+                        startedAt: iterationStartedAt,
+                        endedAt: endedAt,
+                        summary: "Pipeline stopped at stage \(stageIndex + 1) (\(stageName)).",
+                        artifacts: [artifact].compactMap { $0 },
+                        validationResult: nil,
+                        timeline: timeline
+                    ))
+                    run.status = childRun.status == .stopped ? .stopped : .failed
+                    run.endedAt = endedAt
+                    run.stopReason = childRun.status == .stopped ? .userStopped : .agentFailed
+                    upsertLoopRun(run)
+                    return run
+                }
+            }
+
+            if let stoppedRun = stoppedLoopRun(run) { return stoppedRun }
+
+            let validationResult: LoopValidationResult
+            if validationCommand.isEmpty {
+                validationResult = LoopValidationResult(command: "", workingDirectory: executionContext.workingDirectory?.path, exitCode: nil, duration: 0, stdout: "", stderr: "Validation command is empty.")
+            } else {
+                validationResult = runValidationCommand(validationCommand, workingDirectory: executionContext.workingDirectory)
+            }
+
+            let artifact = makeMarkdownArtifact(
+                filename: pipelineArtifactFilename(iterationIndex: iterationIndex),
+                markdown: pipelineArtifactMarkdown(run: run, iterationIndex: iterationIndex, stageSummaries: stageSummaries, childRunIDs: childRunIDs, validationResult: validationCommand.isEmpty ? nil : validationResult),
+                artifactDirectory: artifactDirectory
+            )
+            let iterationEndedAt = Date()
+            run.iterations.append(LoopIteration(
+                index: iterationIndex,
+                startedAt: iterationStartedAt,
+                endedAt: iterationEndedAt,
+                summary: "Pipeline completed stages: \(run.pipeline.stageNames.joined(separator: " → ")).",
+                artifacts: [artifact].compactMap { $0 },
+                validationResult: validationCommand.isEmpty ? nil : validationResult,
+                timeline: timeline
+            ))
+
+            if validationCommand.isEmpty {
+                run.status = .failed
+                run.endedAt = iterationEndedAt
+                run.stopReason = .validationUnavailable
+                upsertLoopRun(run)
+                return run
+            }
+            if validationResult.didPass {
+                run.status = .completed
+                run.endedAt = iterationEndedAt
+                run.stopReason = .success
+                upsertLoopRun(run)
+                return run
+            }
+            upsertLoopRun(run)
+        }
+
+        run.status = .failed
+        run.endedAt = Date()
+        run.stopReason = .validationFailedAfterFinalIteration
+        upsertLoopRun(run)
+        return run
+    }
+
     @discardableResult
     func launchSmokeLoop(sessionID: UUID, projectPath: String?, draft: LoopDraft, stopExistingActive: Bool = false) -> LoopRun? {
         guard !draft.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
@@ -1171,6 +1340,83 @@ final class PiAgentSessionStore {
         return run
     }
 
+    private func stoppedLoopRun(_ run: LoopRun) -> LoopRun? {
+        guard let current = loopRunsBySessionID[run.sessionID]?.first(where: { $0.id == run.id }), !current.isActive else { return nil }
+        return current
+    }
+
+    private func pipelineStageTask(run: LoopRun, iterationIndex: Int, stageIndex: Int, stageName: String, previousStageSummaries: [String]) -> String {
+        var lines: [String] = [
+            "You are stage \(stageIndex + 1) of \(run.pipeline.stageNames.count) in an Agent Deck loop pipeline.",
+            "Selected agent/stage: \(stageName)",
+            "Loop goal: \(run.goal)",
+            "Iteration: \(iterationIndex) of \(run.maxIterations)",
+            "Write target: \(run.writeTarget.displayName)",
+            "Pipeline order: \(run.pipeline.stageNames.joined(separator: " → "))"
+        ]
+        if !run.validationCommand.isEmpty {
+            lines.append("Validation after the final stage: \(run.validationCommand)")
+        }
+        if !previousStageSummaries.isEmpty {
+            lines.append("")
+            lines.append("Previous stage handoff summaries:")
+            lines.append(contentsOf: previousStageSummaries.map { "- \($0)" })
+        }
+        lines.append("")
+        lines.append("Do only the work appropriate for this stage. Be explicit about what you changed, found, or verified. End with a concise handoff summary for the next stage.")
+        return lines.joined(separator: "\n")
+    }
+
+    private func pipelineArtifactFilename(iterationIndex: Int) -> String {
+        iterationIndex == 1 ? "pipeline-summary.md" : "pipeline-summary-\(iterationIndex).md"
+    }
+
+    private func pipelineArtifactMarkdown(run: LoopRun, iterationIndex: Int, stageSummaries: [String], childRunIDs: [String], validationResult: LoopValidationResult?) -> String {
+        var lines: [String] = [
+            "# Agent Pipeline Summary",
+            "",
+            "Goal: \(run.goal)",
+            "",
+            "Iteration: \(iterationIndex)",
+            "Stages: \(run.pipeline.stageNames.joined(separator: " → "))",
+            "",
+            "## Child runs"
+        ]
+        if childRunIDs.isEmpty {
+            lines.append("No child runs recorded.")
+        } else {
+            lines.append(contentsOf: childRunIDs.map { "- \($0)" })
+        }
+        lines.append("")
+        lines.append("## Stage handoffs")
+        if stageSummaries.isEmpty {
+            lines.append("No stage summaries recorded.")
+        } else {
+            lines.append(contentsOf: stageSummaries.map { "- \($0)" })
+        }
+        if let validationResult {
+            lines.append("")
+            lines.append("## Validation")
+            lines.append("Command: \(validationResult.command)")
+            lines.append("Exit code: \(validationResult.exitCode.map(String.init) ?? "unavailable")")
+            if !validationResult.stdout.isEmpty {
+                lines.append("")
+                lines.append("### stdout")
+                lines.append("```")
+                lines.append(validationResult.stdout)
+                lines.append("```")
+            }
+            if !validationResult.stderr.isEmpty {
+                lines.append("")
+                lines.append("### stderr")
+                lines.append("```")
+                lines.append(validationResult.stderr)
+                lines.append("```")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
     private func makeMarkdownArtifact(filename: String, markdown: String, artifactDirectory: URL) -> LoopArtifact? {
         let artifactURL = artifactDirectory.appendingPathComponent(filename, isDirectory: false)
         do {
@@ -1349,6 +1595,7 @@ final class PiAgentSessionStore {
         run.status = .stopped
         run.endedAt = Date()
         run.stopReason = .userStopped
+        onStopLoopRun?(runID, sessionID)
         runs[index] = run
         loopRunsBySessionID[sessionID] = runs
         upsert(LoopRunTranscriptCodec.transcriptEntry(for: run))

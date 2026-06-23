@@ -3850,16 +3850,28 @@ struct PiAgentScreen: View {
                                 return
                             }
                         }
-                        guard store.launchSmokeLoop(
-                            sessionID: session.id,
-                            projectPath: session.projectPath,
-                            draft: request.draft,
-                            stopExistingActive: request.stopExistingActive
-                        ) != nil else {
-                            store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "The loop could not be started."))
-                            return
+                        Task { @MainActor in
+                            isLoopLaunchSheetPresented = false
+                            let launched: LoopRun?
+                            if request.draft.structure == .agentPipeline {
+                                launched = await viewModel.launchAgentPipelineLoop(
+                                    session: session,
+                                    draft: request.draft,
+                                    stopExistingActive: request.stopExistingActive
+                                )
+                            } else {
+                                launched = store.launchSmokeLoop(
+                                    sessionID: session.id,
+                                    projectPath: session.projectPath,
+                                    draft: request.draft,
+                                    stopExistingActive: request.stopExistingActive
+                                )
+                            }
+                            guard launched != nil else {
+                                store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "The loop could not be started."))
+                                return
+                            }
                         }
-                        isLoopLaunchSheetPresented = false
                     }
                 )
             }
@@ -6487,16 +6499,28 @@ private struct PiAgentComposerPanel: View {
                                 return
                             }
                         }
-                        guard store.launchSmokeLoop(
-                            sessionID: session.id,
-                            projectPath: session.projectPath,
-                            draft: request.draft,
-                            stopExistingActive: request.stopExistingActive
-                        ) != nil else {
-                            store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "The loop could not be started."))
-                            return
+                        Task { @MainActor in
+                            isLoopLaunchSheetPresented = false
+                            let launched: LoopRun?
+                            if request.draft.structure == .agentPipeline {
+                                launched = await viewModel.launchAgentPipelineLoop(
+                                    session: session,
+                                    draft: request.draft,
+                                    stopExistingActive: request.stopExistingActive
+                                )
+                            } else {
+                                launched = store.launchSmokeLoop(
+                                    sessionID: session.id,
+                                    projectPath: session.projectPath,
+                                    draft: request.draft,
+                                    stopExistingActive: request.stopExistingActive
+                                )
+                            }
+                            guard launched != nil else {
+                                store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "The loop could not be started."))
+                                return
+                            }
                         }
-                        isLoopLaunchSheetPresented = false
                     }
                 )
             }
