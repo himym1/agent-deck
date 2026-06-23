@@ -270,9 +270,10 @@ struct LoopBankScreen: View {
     private var definitionFields: some View {
         VStack(alignment: .leading, spacing: 0) {
             detailRow("Name", info: "Use a short action-oriented name. This is what appears in the Loop Bank and launch menus.") {
-                TextField("Name", text: $editorDraft.name)
+                TextField("", text: $editorDraft.name)
                     .multilineTextAlignment(.trailing)
                     .textFieldStyle(.plain)
+                    .foregroundStyle(.primary)
             }
             detailEditor("Description", text: $editorDraft.description, minHeight: 64, info: "Optional summary for the Loop Bank list. Use it to explain when someone should choose this loop.")
             detailRow("Structure", infoRows: loopStructureInfoRows) {
@@ -296,9 +297,10 @@ struct LoopBankScreen: View {
             }
             detailEditor("Goal template", text: $editorDraft.goalTemplate, minHeight: 120, info: "The reusable instruction the loop runs against. Be explicit about the desired outcome, constraints, and what counts as done.")
             detailRow("Validation command", info: "Optional shell command for checking the result. It runs from the project directory when available and is attached to the loop result.") {
-                TextField("Validation command", text: $editorDraft.validationCommand)
+                TextField("", text: $editorDraft.validationCommand)
                     .multilineTextAlignment(.trailing)
                     .textFieldStyle(.plain)
+                    .foregroundStyle(.primary)
             }
         }
     }
