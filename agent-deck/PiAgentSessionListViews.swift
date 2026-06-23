@@ -353,6 +353,7 @@ struct PiAgentSessionRow: View, Equatable {
     let hasUIRequest: Bool
     let isRenaming: Bool
     let isGeneratingTitle: Bool
+    let hasActiveLoop: Bool
     let gitActivity: PiAgentSessionGitActivity
     let onSelect: () -> Void
     let onBeginRename: () -> Void
@@ -374,6 +375,7 @@ struct PiAgentSessionRow: View, Equatable {
             && lhs.hasUIRequest == rhs.hasUIRequest
             && lhs.isRenaming == rhs.isRenaming
             && lhs.isGeneratingTitle == rhs.isGeneratingTitle
+            && lhs.hasActiveLoop == rhs.hasActiveLoop
             && lhs.gitActivity == rhs.gitActivity
     }
 
@@ -440,7 +442,7 @@ struct PiAgentSessionRow: View, Equatable {
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                 Spacer(minLength: 4)
-                SessionGitActivityStrip(activity: gitActivity, isSelected: isSelected)
+                SessionGitActivityStrip(activity: gitActivity, isSelected: isSelected, hasLoop: hasActiveLoop)
             }
         }
         .saturation(seenAppearanceAmount)
@@ -507,6 +509,13 @@ struct PiAgentSessionRow: View, Equatable {
             if hasUIRequest {
                 askUserBadge
                     .transition(.opacity)
+            } else if hasActiveLoop {
+                AppSpinner()
+                    .controlSize(.small)
+                    .frame(width: 14, height: 14)
+                    .help("Loop running")
+                    .accessibilityLabel("Loop running")
+                    .transition(.opacity)
             } else if isRunning {
                 PiAgentTypingIndicator()
                     .transition(.opacity)
@@ -517,6 +526,7 @@ struct PiAgentSessionRow: View, Equatable {
         }
         .animation(.snappy(duration: 0.24), value: hasUIRequest)
         .animation(.snappy(duration: 0.24), value: isRunning)
+        .animation(.snappy(duration: 0.24), value: hasActiveLoop)
         .animation(.snappy(duration: 0.24), value: session.needsAttention)
     }
 
@@ -643,6 +653,7 @@ struct PiAgentSessionRow: View, Equatable {
 
     private var statusHelp: String {
         if hasUIRequest { return "Waiting for your response" }
+        if hasActiveLoop { return "Loop running" }
         if isRunning { return "Active" }
         return session.status.rawValue
     }
@@ -661,9 +672,17 @@ struct PiAgentSessionRow: View, Equatable {
 private struct SessionGitActivityStrip: View {
     let activity: PiAgentSessionGitActivity
     let isSelected: Bool
+    let hasLoop: Bool
 
     var body: some View {
         HStack(spacing: 5) {
+            if hasLoop {
+                Image(systemName: "infinity")
+                    .font(AppTheme.Font.caption2.weight(.semibold))
+                    .foregroundStyle(isSelected ? AppTheme.brandAccent : AppTheme.mutedText)
+                    .help("Loop active")
+                    .accessibilityLabel("Loop active")
+            }
             pip(kind: .commit, date: activity.lastCommit, verb: "commit")
             pip(kind: .push,   date: activity.lastPush,   verb: "push")
             pip(kind: .merge,  date: activity.lastMerge,  verb: "merge")
