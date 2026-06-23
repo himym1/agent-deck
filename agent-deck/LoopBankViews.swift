@@ -172,7 +172,7 @@ struct LoopBankScreen: View {
     private var loopDetailPane: some View {
         AppPage(editorDraft.isNew ? "New Loop" : editorDraft.name.nonEmpty ?? "Loop", subtitle: detailSubtitle, constrainsContentToViewport: true) {
             AppCard(title: "Definition") {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
                     HStack(alignment: .top) {
                         Label(editorDraft.isNew ? "User loop draft" : "User loop", systemImage: "infinity")
                             .font(.headline)
@@ -180,121 +180,209 @@ struct LoopBankScreen: View {
                         AppLabelTag(text: availabilityLabel(for: editorDraft), color: availabilityColor(for: editorDraft))
                     }
 
-                    Form {
+                    VStack(alignment: .leading, spacing: 0) {
                         if editorDraft.isBuiltin {
                             Text("Built-in templates are read-only. Duplicate to create an editable user copy.")
                                 .font(AppTheme.Font.caption)
                                 .foregroundStyle(AppTheme.mutedText)
+                                .padding(.bottom, 12)
+                            Divider()
                         }
 
-                        TextField("Name", text: $editorDraft.name)
-                        TextField("Description", text: $editorDraft.description, axis: .vertical)
-                            .lineLimit(2...4)
-
-                        Picker("Structure", selection: $editorDraft.structure) {
-                            ForEach(LoopStructureKind.allCases) { kind in
-                                Text(kind.displayName).tag(kind)
-                            }
-                        }
-
-                        Picker("Write target", selection: $editorDraft.writeTarget) {
-                            ForEach(LoopWriteTarget.allCases) { target in
-                                Text(target.displayName).tag(target)
-                            }
-                        }
-
-                        Stepper(value: $editorDraft.maxIterations, in: 1...20) {
-                            Text("Max iterations: \(editorDraft.maxIterations)")
-                        }
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Goal template")
-                            TextEditor(text: $editorDraft.goalTemplate)
-                                .font(AppTheme.Font.body)
-                                .frame(minHeight: 120)
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .stroke(Color.secondary.opacity(0.25))
-                                }
-                        }
-
-                        TextField("Validation command", text: $editorDraft.validationCommand)
-                            .textFieldStyle(.roundedBorder)
-
-                        switch editorDraft.structure {
-                        case .makerChecker:
-                            Section("Maker + Checker") {
-                                TextField("Maker name", text: $editorDraft.makerName)
-                                TextField("Checker name", text: $editorDraft.checkerName)
-                                TextField("Checker rubric", text: $editorDraft.checkerRubric, axis: .vertical)
-                                    .lineLimit(2...4)
-                                Stepper(value: $editorDraft.maxReviewRounds, in: 1...20) {
-                                    Text("Max review rounds: \(editorDraft.maxReviewRounds)")
-                                }
-                            }
-                        case .agentPipeline:
-                            Section("Agent Pipeline") {
-                                TextField("Stages, separated by |", text: $editorDraft.pipelineStagesText)
-                            }
-                        case .parallelAgents:
-                            Section("Parallel Agents") {
-                                TextField("Branches, separated by |", text: $editorDraft.parallelBranchesText)
-                            }
-                        case .discoveryTriage:
-                            Section("Discovery / Triage") {
-                                TextField("Classification prompt", text: $editorDraft.classificationPrompt, axis: .vertical)
-                                    .lineLimit(2...4)
-                            }
-                        case .humanApproval:
-                            Section("Human Approval") {
-                                TextField("Checkpoint prompt", text: $editorDraft.checkpointPrompt, axis: .vertical)
-                                    .lineLimit(2...4)
-                            }
-                        case .singleAgent:
-                            EmptyView()
-                        }
-
-                        Section("Availability") {
-                            Picker("Available in", selection: $editorDraft.availability) {
-                                Text("All Projects/default").tag(LoopDefinitionAvailability.allProjects)
-                                Text("Project path list").tag(LoopDefinitionAvailability.projectPaths)
-                            }
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Project paths")
-                                TextEditor(text: $editorDraft.projectPathsText)
-                                    .font(.body.monospaced())
-                                    .frame(minHeight: 72)
-                                    .disabled(editorDraft.availability == .allProjects)
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .stroke(Color.secondary.opacity(0.25))
-                                    }
-                                Text("One absolute path per line. Leave the list empty with Project path list selected to keep the loop unassigned.")
-                                    .font(AppTheme.Font.caption)
-                                    .foregroundStyle(AppTheme.mutedText)
-                            }
-                        }
+                        definitionFields
                     }
-                    .formStyle(.grouped)
                     .disabled(editorDraft.isBuiltin)
+                }
+            }
 
-                    HStack {
-                        if let selected = viewModel.selectedLoopDefinition, !editorDraft.isNew {
-                            Button("Duplicate") { duplicate(selected) }
-                            if selected.source == .user {
-                                Button("Delete", role: .destructive) { pendingDelete = selected }
-                            }
-                        }
-                        Spacer()
-                        Button("Revert") { resetEditor(to: viewModel.selectedLoopDefinition) }
-                            .disabled(editorDraft.isNew && editorDraft.trimmedName.isEmpty && editorDraft.goalTemplate.isEmpty)
-                        Button("Save") { save() }
-                            .keyboardShortcut(.defaultAction)
-                            .disabled(editorDraft.trimmedName.isEmpty || editorDraft.isBuiltin)
+            loopStructureSection
+                .disabled(editorDraft.isBuiltin)
+
+            availabilitySection
+                .disabled(editorDraft.isBuiltin)
+
+            loopActionsCard
+        }
+    }
+
+    private var definitionFields: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            detailRow("Name") {
+                TextField("Name", text: $editorDraft.name)
+                    .multilineTextAlignment(.trailing)
+                    .textFieldStyle(.plain)
+            }
+            detailRow("Description") {
+                TextField("Description", text: $editorDraft.description, axis: .vertical)
+                    .lineLimit(2...4)
+                    .multilineTextAlignment(.trailing)
+                    .textFieldStyle(.plain)
+            }
+            detailRow("Structure") {
+                Picker("Structure", selection: $editorDraft.structure) {
+                    ForEach(LoopStructureKind.allCases) { kind in
+                        Text(kind.displayName).tag(kind)
+                    }
+                }
+                .labelsHidden()
+            }
+            detailRow("Write target") {
+                Picker("Write target", selection: $editorDraft.writeTarget) {
+                    ForEach(LoopWriteTarget.allCases) { target in
+                        Text(target.displayName).tag(target)
+                    }
+                }
+                .labelsHidden()
+            }
+            detailRow("Max iterations") {
+                LoopNumericStepper(value: $editorDraft.maxIterations, range: 1...20)
+            }
+            detailEditor("Goal template", text: $editorDraft.goalTemplate, minHeight: 120)
+            detailRow("Validation command") {
+                TextField("Validation command", text: $editorDraft.validationCommand)
+                    .multilineTextAlignment(.trailing)
+                    .textFieldStyle(.plain)
+            }
+        }
+    }
+
+    private var availabilitySection: some View {
+        AppCard(title: "Availability") {
+            VStack(alignment: .leading, spacing: 0) {
+                detailRow("Available in") {
+                    Picker("Available in", selection: $editorDraft.availability) {
+                        Text("All Projects/default").tag(LoopDefinitionAvailability.allProjects)
+                        Text("Project path list").tag(LoopDefinitionAvailability.projectPaths)
+                    }
+                    .labelsHidden()
+                }
+                detailEditor("Project paths", text: $editorDraft.projectPathsText, minHeight: 72, monospaced: true)
+                    .disabled(editorDraft.availability == .allProjects)
+                Text("One absolute path per line. Leave the list empty with Project path list selected to keep the loop unassigned.")
+                    .font(AppTheme.Font.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .padding(.top, 8)
+            }
+        }
+    }
+
+    private var loopActionsCard: some View {
+        AppCard {
+            HStack {
+                if let selected = viewModel.selectedLoopDefinition, !editorDraft.isNew {
+                    Button("Duplicate") { duplicate(selected) }
+                    if selected.source == .user {
+                        Button("Delete", role: .destructive) { pendingDelete = selected }
+                    }
+                }
+                Spacer()
+                Button("Revert") { resetEditor(to: viewModel.selectedLoopDefinition) }
+                    .disabled(editorDraft.isNew && editorDraft.trimmedName.isEmpty && editorDraft.goalTemplate.isEmpty)
+                Button("Save") { save() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(editorDraft.trimmedName.isEmpty || editorDraft.isBuiltin)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var loopStructureSection: some View {
+        switch editorDraft.structure {
+        case .makerChecker:
+            AppCard(title: "Maker + Checker") {
+                VStack(alignment: .leading, spacing: 0) {
+                    detailRow("Maker name") {
+                        TextField("Maker name", text: $editorDraft.makerName)
+                            .multilineTextAlignment(.trailing)
+                            .textFieldStyle(.plain)
+                    }
+                    detailRow("Checker name") {
+                        TextField("Checker name", text: $editorDraft.checkerName)
+                            .multilineTextAlignment(.trailing)
+                            .textFieldStyle(.plain)
+                    }
+                    detailRow("Checker rubric") {
+                        TextField("Checker rubric", text: $editorDraft.checkerRubric, axis: .vertical)
+                            .lineLimit(2...4)
+                            .multilineTextAlignment(.trailing)
+                            .textFieldStyle(.plain)
+                    }
+                    detailRow("Max review rounds") {
+                        LoopNumericStepper(value: $editorDraft.maxReviewRounds, range: 1...20)
                     }
                 }
             }
+        case .agentPipeline:
+            AppCard(title: "Agent Pipeline") {
+                detailRow("Stages") {
+                    TextField("Stages, separated by |", text: $editorDraft.pipelineStagesText)
+                        .multilineTextAlignment(.trailing)
+                        .textFieldStyle(.plain)
+                }
+            }
+        case .parallelAgents:
+            AppCard(title: "Parallel Agents") {
+                detailRow("Branches") {
+                    TextField("Branches, separated by |", text: $editorDraft.parallelBranchesText)
+                        .multilineTextAlignment(.trailing)
+                        .textFieldStyle(.plain)
+                }
+            }
+        case .discoveryTriage:
+            AppCard(title: "Discovery / Triage") {
+                detailRow("Classification prompt") {
+                    TextField("Classification prompt", text: $editorDraft.classificationPrompt, axis: .vertical)
+                        .lineLimit(2...4)
+                        .multilineTextAlignment(.trailing)
+                        .textFieldStyle(.plain)
+                }
+            }
+        case .humanApproval:
+            AppCard(title: "Human Approval") {
+                detailRow("Checkpoint prompt") {
+                    TextField("Checkpoint prompt", text: $editorDraft.checkpointPrompt, axis: .vertical)
+                        .lineLimit(2...4)
+                        .multilineTextAlignment(.trailing)
+                        .textFieldStyle(.plain)
+                }
+            }
+        case .singleAgent:
+            EmptyView()
         }
+    }
+
+    private func detailRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: AppTheme.contentSpacing) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Spacer(minLength: AppTheme.contentSpacing)
+                content()
+                    .foregroundStyle(AppTheme.mutedText)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .padding(.vertical, 11)
+            Divider()
+        }
+    }
+
+    private func detailEditor(_ title: String, text: Binding<String>, minHeight: CGFloat, monospaced: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.headline)
+            TextEditor(text: text)
+                .font(monospaced ? .body.monospaced() : AppTheme.Font.body)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: minHeight)
+                .padding(8)
+                .background(AppTheme.textContentFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(AppTheme.contentStroke, lineWidth: 1)
+                }
+        }
+        .padding(.vertical, 11)
     }
 
     private var detailSubtitle: String {
