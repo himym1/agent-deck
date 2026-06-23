@@ -328,6 +328,13 @@ struct LoopBankScreen: View {
                         detailRow("Project") { Text(URL(fileURLWithPath: projectPath).lastPathComponent.nonEmpty ?? projectPath) }
                     }
                     detailRow("Ended") { Text((run.endedAt ?? run.startedAt).formatted(date: .abbreviated, time: .shortened)) }
+                    if let session = session(for: run) {
+                        detailRow("Transcript") {
+                            Button(session.displayTitle) { viewModel.selectPiAgentSession(session.id) }
+                                .buttonStyle(.link)
+                                .help("Open the transcript that owns this loop run")
+                        }
+                    }
                 }
             } else {
                 Text("No exact matching loop runs yet.")
@@ -335,6 +342,10 @@ struct LoopBankScreen: View {
                     .foregroundStyle(AppTheme.mutedText)
             }
         }
+    }
+
+    private func session(for run: LoopRun) -> PiAgentSessionRecord? {
+        viewModel.piAgentSessionStore.sessions.first { $0.id == run.sessionID }
     }
 
     private func lastRun(for definition: LoopDefinition) -> LoopRun? {
