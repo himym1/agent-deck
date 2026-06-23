@@ -139,10 +139,9 @@ struct LoopLaunchSheet: View {
                             }
 
                             HStack(spacing: 8) {
-                                Stepper(value: $draft.maxIterations, in: 1...20) {
-                                    Text("Max iterations: \(draft.maxIterations)")
-                                        .font(AppTheme.Font.body)
-                                }
+                                Text("Max iterations")
+                                    .font(AppTheme.Font.body)
+                                LoopNumericStepper(value: $draft.maxIterations, range: 1...20)
 
                                 LoopInlineInfoButton(
                                     title: "Max iterations",
@@ -306,10 +305,9 @@ struct LoopLaunchSheet: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     HStack(spacing: 8) {
-                        Stepper(value: $draft.makerChecker.maxReviewRounds, in: 1...20) {
-                            Text("Max review rounds: \(draft.makerChecker.maxReviewRounds)")
-                                .font(AppTheme.Font.body)
-                        }
+                        Text("Max review rounds")
+                            .font(AppTheme.Font.body)
+                        LoopNumericStepper(value: $draft.makerChecker.maxReviewRounds, range: 1...20)
                         LoopInlineInfoButton(
                             title: "Max review rounds",
                             message: "Caps maker/checker retry cycles so a rejected result cannot loop indefinitely."
