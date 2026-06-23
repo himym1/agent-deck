@@ -5,7 +5,7 @@ import XCTest
 
 @MainActor
 final class PiAgentUIRequestSheetLayoutTests: XCTestCase {
-    func testNativeAskChoiceSheetFitsWithinBoundedGlassSheet() {
+    func testNativeAskChoiceSheetUsesStableCanonicalSheetSize() {
         let request = makeNativeAskRequest()
         let host = NSHostingView(rootView: PiAgentUIRequestSheet(
             request: request,
@@ -19,14 +19,15 @@ final class PiAgentUIRequestSheetLayoutTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
 
         let size = host.fittingSize
-        XCTAssertGreaterThan(size.width, 700)
-        XCTAssertLessThanOrEqual(size.width, 1_160)
-        XCTAssertLessThanOrEqual(size.height, 900)
+        XCTAssertGreaterThanOrEqual(size.width, 800)
+        XCTAssertLessThanOrEqual(size.width, 840)
+        XCTAssertGreaterThanOrEqual(size.height, 580)
+        XCTAssertLessThanOrEqual(size.height, 620)
         XCTAssertTrue(size.width.isFinite)
         XCTAssertTrue(size.height.isFinite)
     }
 
-    func testNativeAskFreeformPageFitsWithinBoundedGlassSheet() {
+    func testNativeAskFreeformPageUsesStableCanonicalSheetSize() {
         let request = makeNativeAskRequest()
         let host = NSHostingView(rootView: PiAgentUIRequestSheet(
             request: request,
@@ -41,9 +42,10 @@ final class PiAgentUIRequestSheetLayoutTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
 
         let size = host.fittingSize
-        XCTAssertGreaterThan(size.width, 700)
-        XCTAssertLessThanOrEqual(size.width, 1_160)
-        XCTAssertLessThanOrEqual(size.height, 900)
+        XCTAssertGreaterThanOrEqual(size.width, 800)
+        XCTAssertLessThanOrEqual(size.width, 840)
+        XCTAssertGreaterThanOrEqual(size.height, 580)
+        XCTAssertLessThanOrEqual(size.height, 620)
         XCTAssertTrue(size.width.isFinite)
         XCTAssertTrue(size.height.isFinite)
     }
