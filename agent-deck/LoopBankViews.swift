@@ -113,6 +113,7 @@ struct LoopBankScreen: View {
     @State private var launchDefinition: LoopDefinition?
     @State private var isLaunchSheetPresented = false
     @State private var isCreatingNewLoop = false
+    @State private var isDiscardNewLoopDraftAlertPresented = false
 
     private var availableLoopAgents: [EffectiveAgentRecord] {
         viewModel.allDisplayAgents
@@ -128,11 +129,17 @@ struct LoopBankScreen: View {
         }
         .onAppear {
             viewModel.reloadLoopDefinitions()
-            if viewModel.selectedLoopDefinitionID == nil, let first = viewModel.loopDefinitions.first {
-                viewModel.selectedLoopDefinitionID = first.id
-            }
-            if viewModel.selectedLoopDefinition != nil || isCreatingNewLoop {
-                resetEditor(to: viewModel.selectedLoopDefinition)
+            if let pendingDraft = viewModel.pendingNewLoopEditorDraft {
+                isCreatingNewLoop = true
+                viewModel.selectedLoopDefinitionID = nil
+                editorDraft = pendingDraft
+            } else {
+                if viewModel.selectedLoopDefinitionID == nil, let first = viewModel.loopDefinitions.first {
+                    viewModel.selectedLoopDefinitionID = first.id
+                }
+                if viewModel.selectedLoopDefinition != nil {
+                    resetEditor(to: viewModel.selectedLoopDefinition)
+                }
             }
         }
         .onChange(of: viewModel.selectedLoopDefinitionID) { _, newID in
@@ -144,7 +151,7 @@ struct LoopBankScreen: View {
             }
         }
         .onChange(of: viewModel.loopDefinitions) { _, definitions in
-            if viewModel.selectedLoopDefinitionID == nil, let first = definitions.first, !isCreatingNewLoop {
+            if viewModel.selectedLoopDefinitionID == nil, let first = definitions.first, !isCreatingNewLoop, viewModel.pendingNewLoopEditorDraft == nil {
                 viewModel.selectedLoopDefinitionID = first.id
             }
             if viewModel.selectedLoopDefinition != nil || isCreatingNewLoop {
@@ -166,6 +173,14 @@ struct LoopBankScreen: View {
             Button("OK") { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
+        }
+        .alert("Discard new loop draft?", isPresented: $isDiscardNewLoopDraftAlertPresented) {
+            Button("Discard and Create New", role: .destructive) {
+                startNewLoop(discardPendingDraft: true)
+            }
+            Button("Keep Editing", role: .cancel) { }
+        } message: {
+            Text("You already have an unsaved new loop draft. Discard it and start over?")
         }
         .alert("Delete Loop?", isPresented: Binding(
             get: { pendingDelete != nil },
@@ -686,8 +701,19 @@ struct LoopBankScreen: View {
     }
 
     private func createNewLoop() {
+        if isCreatingNewLoop || viewModel.pendingNewLoopEditorDraft != nil {
+            isDiscardNewLoopDraftAlertPresented = true
+        } else {
+            startNewLoop(discardPendingDraft: false)
+        }
+    }
+
+    private func startNewLoop(discardPendingDraft: Bool) {
         isCreatingNewLoop = true
         viewModel.selectedLoopDefinitionID = nil
+        if discardPendingDraft {
+            viewModel.pendingNewLoopEditorDraft = nil
+        }
         editorDraft = viewModel.pendingNewLoopEditorDraft ?? LoopDefinitionEditorDraft(currentProjectPath: viewModel.selectedProjectPath)
     }
 
