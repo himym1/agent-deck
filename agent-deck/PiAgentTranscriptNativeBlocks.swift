@@ -1113,6 +1113,8 @@ private func loopRunDetailsText(for run: LoopRun) -> String {
                 lines.append("• Validation:")
                 lines.append("  - Exit code: \(validation.exitCode.map(String.init) ?? "unavailable")")
                 lines.append("  - Duration: \(String(format: "%.2fs", validation.duration))")
+                if let stdoutPath = validation.stdoutPath { lines.append("  - Stdout artifact: \(stdoutPath)") }
+                if let stderrPath = validation.stderrPath { lines.append("  - Stderr artifact: \(stderrPath)") }
                 if !validation.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     lines.append("  - Stdout:\n\(validation.stdout)")
                 }

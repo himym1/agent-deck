@@ -1839,8 +1839,6 @@ final class PiAgentSessionStore {
             defer {
                 try? stdoutHandle.close()
                 try? stderrHandle.close()
-                try? FileManager.default.removeItem(at: stdoutURL)
-                try? FileManager.default.removeItem(at: stderrURL)
             }
 
             let process = Process()
@@ -1868,7 +1866,9 @@ final class PiAgentSessionStore {
                 exitCode: timedOut ? nil : Int(process.terminationStatus),
                 duration: Date().timeIntervalSince(startedAt),
                 stdout: cappedText(at: stdoutURL),
-                stderr: stderr
+                stderr: stderr,
+                stdoutPath: stdoutURL.path,
+                stderrPath: stderrURL.path
             )
         } catch {
             return LoopValidationResult(

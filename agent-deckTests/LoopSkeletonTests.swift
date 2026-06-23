@@ -264,6 +264,9 @@ final class LoopSkeletonTests: XCTestCase {
         XCTAssertEqual(run.currentIteration, 1)
         XCTAssertEqual(run.iterations.count, 1)
         XCTAssertEqual(run.iterations[0].validationResult?.exitCode, 0)
+        let validation = try XCTUnwrap(run.iterations[0].validationResult)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(validation.stdoutPath)))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(validation.stderrPath)))
     }
 
     func testFailingValidationRepeatsToMaxIterationsAndRecordsFinalStopReason() throws {

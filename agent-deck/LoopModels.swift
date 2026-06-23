@@ -378,6 +378,19 @@ nonisolated struct LoopValidationResult: Codable, Equatable, Sendable {
     var duration: TimeInterval
     var stdout: String
     var stderr: String
+    var stdoutPath: String?
+    var stderrPath: String?
+
+    init(command: String, workingDirectory: String?, exitCode: Int?, duration: TimeInterval, stdout: String, stderr: String, stdoutPath: String? = nil, stderrPath: String? = nil) {
+        self.command = command
+        self.workingDirectory = workingDirectory
+        self.exitCode = exitCode
+        self.duration = duration
+        self.stdout = stdout
+        self.stderr = stderr
+        self.stdoutPath = stdoutPath
+        self.stderrPath = stderrPath
+    }
 
     var didPass: Bool { exitCode == 0 }
 }
