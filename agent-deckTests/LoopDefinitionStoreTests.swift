@@ -140,6 +140,38 @@ final class LoopDefinitionStoreTests: XCTestCase {
         XCTAssertEqual(saved.makeDraft().makerChecker, makerChecker)
     }
 
+    func testAppViewModelSaveRequestControlsLoopAvailability() throws {
+        let directory = PiTestSupport.temporaryStateFile().deletingLastPathComponent().appendingPathComponent("loops", isDirectory: true)
+        let viewModel = AppViewModel()
+        viewModel.configureLoopDefinitionStoreForTesting(directoryURL: directory)
+
+        let allProjects = try viewModel.saveLoopDefinitionFromDraft(
+            LoopDraft(goal: "Global goal"),
+            request: LoopSaveRequest(name: "Global", description: "", availability: .allProjects, projectPaths: ["/tmp/ignored"])
+        )
+        XCTAssertEqual(allProjects.availability, .allProjects)
+        XCTAssertEqual(allProjects.projectPaths, [])
+        XCTAssertTrue(allProjects.isAvailable(in: nil))
+        XCTAssertTrue(allProjects.isAvailable(in: "/tmp/project-a"))
+
+        let currentProject = try viewModel.saveLoopDefinitionFromDraft(
+            LoopDraft(goal: "Project goal"),
+            request: LoopSaveRequest(name: "Project", description: "", availability: .projectPaths, projectPaths: ["/tmp/project-a"])
+        )
+        XCTAssertEqual(currentProject.availability, .projectPaths)
+        XCTAssertEqual(currentProject.projectPaths, ["/tmp/project-a"])
+        XCTAssertTrue(currentProject.isAvailable(in: "/tmp/project-a"))
+        XCTAssertFalse(currentProject.isAvailable(in: "/tmp/project-b"))
+
+        let unassigned = try viewModel.saveLoopDefinitionFromDraft(
+            LoopDraft(goal: "Catalog goal"),
+            request: LoopSaveRequest(name: "Catalog", description: "", availability: .projectPaths, projectPaths: [])
+        )
+        XCTAssertEqual(unassigned.availability, .projectPaths)
+        XCTAssertEqual(unassigned.projectPaths, [])
+        XCTAssertFalse(unassigned.isAvailable(in: "/tmp/project-a"))
+    }
+
     func testSavedLoopConvertsToFreshLaunchDraft() {
         let definition = LoopDefinition(
             name: "Reusable",

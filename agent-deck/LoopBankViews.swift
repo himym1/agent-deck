@@ -268,21 +268,50 @@ struct LoopBankScreen: View {
     private var availabilitySection: some View {
         AppCard(title: "Availability") {
             VStack(alignment: .leading, spacing: 0) {
-                detailRow("Available in") {
-                    Picker("Available in", selection: $editorDraft.availability) {
-                        Text("All Projects/default").tag(LoopDefinitionAvailability.allProjects)
-                        Text("Project path list").tag(LoopDefinitionAvailability.projectPaths)
+                detailRow("Assignment") {
+                    HStack(spacing: 8) {
+                        Button("All Projects/default") { setAllProjectsAvailability() }
+                            .buttonStyle(.bordered)
+                        if currentProjectPath != nil {
+                            Button("Current Project only") { setCurrentProjectAvailability() }
+                                .buttonStyle(.bordered)
+                        }
+                        Button("Unassigned/catalog") { setUnassignedAvailability() }
+                            .buttonStyle(.bordered)
                     }
-                    .labelsHidden()
                 }
-                detailEditor("Project paths", text: $editorDraft.projectPathsText, minHeight: 72, monospaced: true)
+                detailRow("Current setting") {
+                    Text(availabilityLabel(for: editorDraft))
+                }
+                detailEditor("Advanced project paths", text: $editorDraft.projectPathsText, minHeight: 72, monospaced: true)
                     .disabled(editorDraft.availability == .allProjects)
-                Text("One absolute path per line. Leave the list empty with Project path list selected to keep the loop unassigned.")
+                Text("One absolute path per line. Editing the list uses project-specific assignment; an empty list keeps the loop unassigned in the catalog.")
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .padding(.top, 8)
             }
         }
+    }
+
+    private var currentProjectPath: String? {
+        let trimmed = viewModel.selectedProjectPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func setAllProjectsAvailability() {
+        editorDraft.availability = .allProjects
+        editorDraft.projectPathsText = ""
+    }
+
+    private func setCurrentProjectAvailability() {
+        guard let currentProjectPath else { return }
+        editorDraft.availability = .projectPaths
+        editorDraft.projectPathsText = currentProjectPath
+    }
+
+    private func setUnassignedAvailability() {
+        editorDraft.availability = .projectPaths
+        editorDraft.projectPathsText = ""
     }
 
     private var lastRunSection: some View {
@@ -634,8 +663,12 @@ struct LoopBankScreen: View {
 
     private func availabilityLabel(for draft: LoopDefinitionEditorDraft) -> String {
         switch draft.availability {
-        case .allProjects: return "All Projects/default"
-        case .projectPaths: return draft.projectPaths.isEmpty ? "Unassigned" : "\(draft.projectPaths.count) Project(s)"
+        case .allProjects:
+            return "All Projects/default"
+        case .projectPaths:
+            if draft.projectPaths.isEmpty { return "Unassigned/catalog" }
+            if let currentProjectPath, draft.projectPaths == [currentProjectPath] { return "Current Project only" }
+            return draft.projectPaths.count == 1 ? "1 Project" : "\(draft.projectPaths.count) Projects"
         }
     }
 
