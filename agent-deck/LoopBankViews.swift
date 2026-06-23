@@ -179,16 +179,10 @@ struct LoopBankScreen: View {
 
     private var loopDetailPane: some View {
         AppPage(editorDraft.isNew ? "New Loop" : editorDraft.name.nonEmpty ?? "Loop", subtitle: detailSubtitle, constrainsContentToViewport: true) {
-            AppCard(title: "Definition") {
-                VStack(alignment: .leading, spacing: AppTheme.contentSpacing) {
-                    HStack(alignment: .top) {
-                        Label(editorDraft.isNew ? "User loop draft" : "User loop", systemImage: "infinity")
-                            .font(.headline)
-                        Spacer()
-                        AppLabelTag(text: availabilityLabel(for: editorDraft), color: availabilityColor(for: editorDraft))
-                    }
-
-                    VStack(alignment: .leading, spacing: 0) {
+            AppCard(title: "Definition", trailing: {
+                AppLabelTag(text: availabilityLabel(for: editorDraft), color: availabilityColor(for: editorDraft))
+            }) {
+                VStack(alignment: .leading, spacing: 0) {
                         if editorDraft.isBuiltin {
                             Text("Built-in templates are read-only. Duplicate to create an editable user copy.")
                                 .font(AppTheme.Font.caption)
@@ -198,9 +192,8 @@ struct LoopBankScreen: View {
                         }
 
                         definitionFields
-                    }
-                    .disabled(editorDraft.isBuiltin)
                 }
+                .disabled(editorDraft.isBuiltin)
             }
 
             loopStructureSection
@@ -222,12 +215,7 @@ struct LoopBankScreen: View {
                     .multilineTextAlignment(.trailing)
                     .textFieldStyle(.plain)
             }
-            detailRow("Description") {
-                TextField("Description", text: $editorDraft.description, axis: .vertical)
-                    .lineLimit(2...4)
-                    .multilineTextAlignment(.trailing)
-                    .textFieldStyle(.plain)
-            }
+            detailEditor("Description", text: $editorDraft.description, minHeight: 64)
             detailRow("Structure") {
                 Picker("Structure", selection: $editorDraft.structure) {
                     ForEach(LoopStructureKind.allCases) { kind in
@@ -354,12 +342,7 @@ struct LoopBankScreen: View {
                     detailRow("Checker agent") {
                         LoopAgentNameMenu(selection: $editorDraft.checkerName, availableAgents: availableLoopAgents, fallbackLabel: "Checker")
                     }
-                    detailRow("Checker rubric") {
-                        TextField("Checker rubric", text: $editorDraft.checkerRubric, axis: .vertical)
-                            .lineLimit(2...4)
-                            .multilineTextAlignment(.trailing)
-                            .textFieldStyle(.plain)
-                    }
+                    detailEditor("Checker rubric", text: $editorDraft.checkerRubric, minHeight: 84)
                     detailRow("Max review rounds") {
                         LoopNumericStepper(value: $editorDraft.maxReviewRounds, range: 1...20)
                     }
@@ -387,21 +370,11 @@ struct LoopBankScreen: View {
                 detailRow("Triage agent") {
                     LoopAgentNameMenu(selection: $editorDraft.triageAgentName, availableAgents: availableLoopAgents, fallbackLabel: "Explorer")
                 }
-                detailRow("Classification prompt") {
-                    TextField("Classification prompt", text: $editorDraft.classificationPrompt, axis: .vertical)
-                        .lineLimit(2...4)
-                        .multilineTextAlignment(.trailing)
-                        .textFieldStyle(.plain)
-                }
+                detailEditor("Classification prompt", text: $editorDraft.classificationPrompt, minHeight: 84)
             }
         case .humanApproval:
             AppCard(title: "Human Approval") {
-                detailRow("Checkpoint prompt") {
-                    TextField("Checkpoint prompt", text: $editorDraft.checkpointPrompt, axis: .vertical)
-                        .lineLimit(2...4)
-                        .multilineTextAlignment(.trailing)
-                        .textFieldStyle(.plain)
-                }
+                detailEditor("Checkpoint prompt", text: $editorDraft.checkpointPrompt, minHeight: 84)
             }
         case .singleAgent:
             AppCard(title: "Single Agent") {
@@ -416,8 +389,9 @@ struct LoopBankScreen: View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: AppTheme.contentSpacing) {
                 Text(title)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
+                    .font(.subheadline.weight(.semibold))
+                    .fontWidth(.expanded)
+                    .foregroundStyle(AppTheme.mutedText)
                 Spacer(minLength: AppTheme.contentSpacing)
                 content()
                     .foregroundStyle(AppTheme.mutedText)
@@ -431,7 +405,9 @@ struct LoopBankScreen: View {
     private func detailEditor(_ title: String, text: Binding<String>, minHeight: CGFloat, monospaced: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.headline)
+                .font(.subheadline.weight(.semibold))
+                .fontWidth(.expanded)
+                .foregroundStyle(AppTheme.mutedText)
             TextEditor(text: text)
                 .font(monospaced ? .body.monospaced() : AppTheme.Font.body)
                 .scrollContentBackground(.hidden)
