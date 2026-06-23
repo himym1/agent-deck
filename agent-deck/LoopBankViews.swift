@@ -110,6 +110,8 @@ struct LoopBankScreen: View {
     @State private var editorDraft = LoopDefinitionEditorDraft()
     @State private var errorMessage: String?
     @State private var pendingDelete: LoopDefinition?
+    @State private var launchDefinition: LoopDefinition?
+    @State private var isLaunchSheetPresented = false
 
     private var availableLoopAgents: [EffectiveAgentRecord] {
         viewModel.snapshot.effectiveAgents
@@ -160,6 +162,25 @@ struct LoopBankScreen: View {
             Button("Cancel", role: .cancel) { pendingDelete = nil }
         } message: { definition in
             Text("Delete \"\(definition.name)\" from the user Loop Bank? Built-in loop resources are never edited.")
+        }
+        .sheet(isPresented: $isLaunchSheetPresented) {
+            if let session = viewModel.piAgentSessionStore.selectedSession,
+               let definition = launchDefinition {
+                LoopLaunchSheet(
+                    session: session,
+                    activeRun: viewModel.piAgentSessionStore.activeLoopRun(for: session.id),
+                    initialDraft: definition.makeDraft(),
+                    sourceDefinition: definition,
+                    availableAgents: viewModel.startupSnapshot(forProjectPath: session.projectPath).effectiveAgents,
+                    onCancel: {
+                        isLaunchSheetPresented = false
+                        launchDefinition = nil
+                    },
+                    onLaunch: { request in
+                        launch(definition, in: session, request: request)
+                    }
+                )
+            }
         }
     }
 
@@ -315,6 +336,9 @@ struct LoopBankScreen: View {
         AppCard {
             HStack {
                 if let selected = viewModel.selectedLoopDefinition, !editorDraft.isNew {
+                    Button("Launch") { presentLaunch(selected) }
+                        .disabled(viewModel.piAgentSessionStore.selectedSession == nil || !selected.isAvailable(in: viewModel.piAgentSessionStore.selectedSession?.projectPath))
+                        .help(launchHelp(for: selected))
                     Button("Duplicate") { duplicate(selected) }
                     if selected.source == .user {
                         Button("Delete", role: .destructive) { pendingDelete = selected }
@@ -538,6 +562,68 @@ struct LoopBankScreen: View {
             pendingDelete = nil
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func presentLaunch(_ definition: LoopDefinition) {
+        guard let session = viewModel.piAgentSessionStore.selectedSession else {
+            errorMessage = "Select a Pi session before launching a saved loop."
+            return
+        }
+        guard definition.isAvailable(in: session.projectPath) else {
+            errorMessage = "This loop is not available for the selected session project. Assign it to the project or duplicate it before launching."
+            return
+        }
+        launchDefinition = definition
+        isLaunchSheetPresented = true
+    }
+
+    private func launchHelp(for definition: LoopDefinition) -> String {
+        guard let session = viewModel.piAgentSessionStore.selectedSession else {
+            return "Select a Pi session before launching a saved loop."
+        }
+        guard definition.isAvailable(in: session.projectPath) else {
+            return "This loop is not available for the selected session project."
+        }
+        return "Launch this saved loop in the selected Pi session."
+    }
+
+    private func launch(_ definition: LoopDefinition, in session: PiAgentSessionRecord, request: LoopLaunchRequest) {
+        let store = viewModel.piAgentSessionStore
+        if store.activeLoopRun(for: session.id) != nil && !request.stopExistingActive {
+            store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "This transcript already has an active loop."))
+            return
+        }
+        if let saveRequest = request.saveRequest {
+            do {
+                try viewModel.saveLoopDefinitionFromDraft(request.draft, request: saveRequest)
+            } catch {
+                store.append(.init(sessionID: session.id, role: .error, title: "Loop Save Failed", text: error.localizedDescription))
+                return
+            }
+        }
+        Task { @MainActor in
+            isLaunchSheetPresented = false
+            launchDefinition = nil
+            let launched: LoopRun?
+            switch request.draft.structure {
+            case .singleAgent:
+                launched = await viewModel.launchSingleAgentLoop(session: session, draft: request.draft, stopExistingActive: request.stopExistingActive)
+            case .agentPipeline:
+                launched = await viewModel.launchAgentPipelineLoop(session: session, draft: request.draft, stopExistingActive: request.stopExistingActive)
+            case .makerChecker:
+                launched = await viewModel.launchMakerCheckerLoop(session: session, draft: request.draft, stopExistingActive: request.stopExistingActive)
+            case .discoveryTriage:
+                launched = await viewModel.launchDiscoveryTriageLoop(session: session, draft: request.draft, stopExistingActive: request.stopExistingActive)
+            case .parallelAgents:
+                launched = await viewModel.launchParallelAgentsLoop(session: session, draft: request.draft, stopExistingActive: request.stopExistingActive)
+            case .humanApproval:
+                launched = store.launchSmokeLoop(sessionID: session.id, projectPath: session.projectPath, draft: request.draft, stopExistingActive: request.stopExistingActive)
+            }
+            guard launched != nil else {
+                store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "\"\(definition.name)\" could not be started."))
+                return
+            }
         }
     }
 
