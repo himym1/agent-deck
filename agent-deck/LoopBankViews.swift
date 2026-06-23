@@ -327,52 +327,59 @@ struct LoopBankScreen: View {
             guard let selectedProjectPath else { return false }
             return definition.source == .user && definition.availability == .projectPaths && definition.projectPaths.contains(selectedProjectPath)
         }
-        let all = definitions.filter { $0.source == .user && $0.availability == .allProjects }
-        let unassigned = definitions.filter { $0.source == .user && $0.availability == .projectPaths && $0.projectPaths.isEmpty }
-        let otherProjects = definitions.filter { definition in
+        let defaults = definitions.filter { $0.source == .user && $0.availability == .allProjects }
+        let catalog = definitions.filter { definition in
             definition.source == .user
                 && definition.availability == .projectPaths
-                && !definition.projectPaths.isEmpty
-                && !current.contains(definition)
+                && (definition.projectPaths.isEmpty || !current.contains(definition))
         }
         let builtins = definitions.filter { $0.source == .builtin }
 
         return [
-            AppListSection(id: "current", title: "Current Project", items: current, emptyMessage: "No loops assigned to the selected project"),
-            AppListSection(id: "all", title: "All Projects/default", items: all, emptyMessage: "No default loops"),
-            AppListSection(id: "unassigned", title: "Unassigned", items: unassigned, emptyMessage: "No unassigned loops"),
-            AppListSection(id: "other", title: "Other Projects", items: otherProjects, emptyMessage: "No other project loops"),
-            AppListSection(id: "builtin", title: "Built-in", items: builtins, emptyMessage: "No built-in loops discovered")
+            AppListSection(
+                id: "default",
+                title: "Default Loops",
+                info: "User loops available to every project. Assign one to specific projects from its detail card.",
+                items: defaults,
+                emptyMessage: "No default loops."
+            ),
+            AppListSection(
+                id: "project",
+                title: "Project Loops",
+                items: current,
+                emptyMessage: "No loops assigned to the selected project."
+            ),
+            AppListSection(
+                id: "catalog",
+                title: "Catalog Loops",
+                items: catalog,
+                emptyMessage: "No catalog loops."
+            ),
+            AppListSection(
+                id: "builtin",
+                title: "Builtin Loops",
+                info: "Builtins are bundled with \(AppBrand.displayName) and customized by duplicating them into the user Loop Bank.",
+                items: builtins,
+                emptyMessage: "No builtin loops discovered."
+            )
         ]
     }
 
     private func loopRow(_ definition: LoopDefinition) -> some View {
-        HStack(alignment: .center, spacing: 10) {
-            Image(systemName: "infinity")
-                .foregroundStyle(availabilityColor(for: definition))
-                .frame(width: 18)
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(definition.name)
-                    .font(.headline)
-                    .fontWidth(.expanded)
-                    .lineLimit(1)
-                Text(definition.description.isEmpty ? definition.goalTemplate : definition.description)
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-                    .lineLimit(2)
-                HStack(spacing: 6) {
-                    AppLabelTag(text: definition.structure.displayName, color: .secondary)
-                    AppLabelTag(text: definition.writeTarget.displayName, color: .secondary)
-                    AppLabelTag(text: availabilityLabel(for: definition), color: availabilityColor(for: definition))
-                }
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 6)
+        LoopListRow(
+            definition: definition,
+            tint: availabilityColor(for: definition),
+            availabilityText: availabilityLabel(for: definition),
+            isMuted: loopIsInactive(definition)
+        )
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+    }
+
+    private func loopIsInactive(_ definition: LoopDefinition) -> Bool {
+        guard definition.source == .user, definition.availability == .projectPaths else { return false }
+        guard let selectedProjectPath = viewModel.selectedProjectPath else { return definition.projectPaths.isEmpty }
+        return !definition.projectPaths.contains(selectedProjectPath)
     }
 
     private func createNewLoop() {
@@ -435,17 +442,63 @@ struct LoopBankScreen: View {
     }
 
     private func availabilityColor(for definition: LoopDefinition) -> Color {
-        if definition.source == .builtin { return .gray }
+        if definition.source == .builtin { return AppTheme.sourceBuiltin }
         switch definition.availability {
-        case .allProjects: return .blue
-        case .projectPaths: return definition.projectPaths.isEmpty ? .orange : .cyan
+        case .allProjects: return AppTheme.brandAccent
+        case .projectPaths: return definition.projectPaths.isEmpty ? AppTheme.sourceLibrary : AppTheme.sourceProject
         }
     }
 
     private func availabilityColor(for draft: LoopDefinitionEditorDraft) -> Color {
         switch draft.availability {
-        case .allProjects: return .blue
-        case .projectPaths: return draft.projectPaths.isEmpty ? .orange : .cyan
+        case .allProjects: return AppTheme.brandAccent
+        case .projectPaths: return draft.projectPaths.isEmpty ? AppTheme.sourceLibrary : AppTheme.sourceProject
         }
+    }
+}
+
+private struct LoopListRow: View {
+    let definition: LoopDefinition
+    let tint: Color
+    let availabilityText: String
+    let isMuted: Bool
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(tint.opacity(0.10))
+                Circle()
+                    .stroke(tint.opacity(0.18), lineWidth: 1)
+                Image(systemName: "infinity")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(tint)
+            }
+            .frame(width: 40, height: 40)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(definition.name)
+                    .font(.headline)
+                    .fontWidth(.expanded)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Text(definition.description.isEmpty ? definition.goalTemplate : definition.description)
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .lineLimit(2)
+
+                HStack(spacing: 6) {
+                    AppLabelTag(text: definition.structure.displayName, color: .secondary)
+                    AppLabelTag(text: definition.writeTarget.displayName, color: .secondary)
+                    AppLabelTag(text: availabilityText, color: tint)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 6)
+        .opacity(isMuted ? 0.62 : 1)
+        .saturation(isMuted ? 0.25 : 1)
     }
 }
