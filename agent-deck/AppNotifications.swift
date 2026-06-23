@@ -5,7 +5,6 @@ extension Notification.Name {
     static let agentDeckImportSkillsRequested = Notification.Name("agentDeckImportSkillsRequested")
     static let agentDeckNewSkillRequested = Notification.Name("agentDeckNewSkillRequested")
     static let agentDeckNewPromptRequested = Notification.Name("agentDeckNewPromptRequested")
-    static let agentDeckNewLoopRequested = Notification.Name("agentDeckNewLoopRequested")
     static let agentDeckImportPromptRequested = Notification.Name("agentDeckImportPromptRequested")
     static let agentDeckNewMemoryRequested = Notification.Name("agentDeckNewMemoryRequested")
     /// Posted from a transcript memory-recall card when the user taps an injected

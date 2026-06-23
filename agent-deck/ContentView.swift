@@ -1378,7 +1378,7 @@ struct ContentView: View {
     private var loopsPrimaryToolbarContent: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             Button {
-                NotificationCenter.default.post(name: .agentDeckNewLoopRequested, object: nil)
+                viewModel.requestNewLoopDefinition()
             } label: {
                 Label("New Loop", systemImage: "plus")
             }

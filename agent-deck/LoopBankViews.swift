@@ -141,7 +141,7 @@ struct LoopBankScreen: View {
             }
             resetEditor(to: viewModel.selectedLoopDefinition)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .agentDeckNewLoopRequested)) { _ in
+        .onChange(of: viewModel.newLoopRequestID) { _, _ in
             createNewLoop()
         }
         .alert("Loop Bank", isPresented: Binding(

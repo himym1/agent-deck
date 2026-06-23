@@ -194,6 +194,7 @@ final class AppViewModel: NSObject {
     var githubLastStatusCheckAt: Date?
     var loopDefinitions: [LoopDefinition] = []
     var selectedLoopDefinitionID: LoopDefinition.ID?
+    var newLoopRequestID = UUID()
     @ObservationIgnored private var loopDefinitionStore = LoopDefinitionStore()
 
     var appSettings: AppSettings = AppSettings() {
@@ -8848,6 +8849,11 @@ final class AppViewModel: NSObject {
     var selectedLoopDefinition: LoopDefinition? {
         guard let selectedLoopDefinitionID else { return nil }
         return loopDefinitions.first { $0.id == selectedLoopDefinitionID }
+    }
+
+    func requestNewLoopDefinition() {
+        selectedLoopDefinitionID = nil
+        newLoopRequestID = UUID()
     }
 
     @discardableResult
