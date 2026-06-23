@@ -628,7 +628,7 @@ struct PiAgentUIRequestSheet: View {
             Image(systemName: "questionmark.bubble.fill")
                 .font(AppTheme.Font.headline)
                 .foregroundStyle(AppTheme.brandAccent)
-                .frame(width: 22, alignment: .center)
+                .frame(width: 22, height: 34, alignment: .center)
 
             VStack(alignment: .leading, spacing: 5) {
                 Text("Ask User")
@@ -747,8 +747,9 @@ struct PiAgentUIRequestSheet: View {
         } label: {
             HStack(alignment: .center, spacing: 10) {
                 Image(systemName: selectionIcon(for: option, allowsMultiple: allowsMultiple))
+                    .font(AppTheme.Font.body.weight(.semibold))
                     .foregroundStyle(selectedOptions.contains(option) ? AppTheme.brandAccent : AppTheme.mutedText)
-                    .frame(width: 18)
+                    .frame(width: 18, height: 24, alignment: .center)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(option)
                         .fontWeight(.semibold)
@@ -782,10 +783,12 @@ struct PiAgentUIRequestSheet: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: "square.and.pencil")
+                    .font(AppTheme.Font.body.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
-                    .frame(width: 18)
+                    .frame(width: 18, height: 24, alignment: .center)
                 Text(label)
                     .fontWeight(.semibold)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -817,13 +820,12 @@ struct PiAgentUIRequestSheet: View {
                 .font(.system(.body, design: .monospaced))
                 .scrollContentBackground(.hidden)
                 .scrollIndicators(.hidden)
-                .padding(10)
+                .padding(14)
             if draft.isEmpty {
                 Text("Type your custom response…")
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(AppTheme.mutedText.opacity(0.6))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 14)
+                    .padding(14)
                     .allowsHitTesting(false)
             }
         }
