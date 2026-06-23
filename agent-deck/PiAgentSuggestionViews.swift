@@ -628,17 +628,12 @@ struct PiAgentUIRequestSheet: View {
             Image(systemName: "questionmark.bubble.fill")
                 .font(AppTheme.Font.headline)
                 .foregroundStyle(AppTheme.brandAccent)
-                .frame(width: 22, height: 34, alignment: .center)
+                .frame(width: 22, alignment: .center)
 
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Ask User")
-                    .font(AppTheme.Font.headline)
-                    .fontWidth(.expanded)
-                Text("Pi is waiting for your response")
-                    .font(AppTheme.Font.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Text("Ask User")
+                .font(AppTheme.Font.headline)
+                .fontWidth(.expanded)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 18)
@@ -745,11 +740,11 @@ struct PiAgentUIRequestSheet: View {
             }
             draft = ""
         } label: {
-            HStack(alignment: .center, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
                 Image(systemName: selectionIcon(for: option, allowsMultiple: allowsMultiple))
-                    .font(AppTheme.Font.body.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                     .foregroundStyle(selectedOptions.contains(option) ? AppTheme.brandAccent : AppTheme.mutedText)
-                    .frame(width: 18, height: 24, alignment: .center)
+                    .frame(width: 18, height: 20, alignment: .center)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(option)
                         .fontWeight(.semibold)
@@ -781,11 +776,11 @@ struct PiAgentUIRequestSheet: View {
             selectedOptions = []
             isComposingFreeform = true
         } label: {
-            HStack(spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
                 Image(systemName: "square.and.pencil")
-                    .font(AppTheme.Font.body.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
-                    .frame(width: 18, height: 24, alignment: .center)
+                    .frame(width: 18, alignment: .center)
                 Text(label)
                     .fontWeight(.semibold)
                     .fixedSize(horizontal: false, vertical: true)
