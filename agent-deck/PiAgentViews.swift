@@ -3876,6 +3876,12 @@ struct PiAgentScreen: View {
                                     draft: request.draft,
                                     stopExistingActive: request.stopExistingActive
                                 )
+                            } else if request.draft.structure == .discoveryTriage {
+                                launched = await viewModel.launchDiscoveryTriageLoop(
+                                    session: session,
+                                    draft: request.draft,
+                                    stopExistingActive: request.stopExistingActive
+                                )
                             } else {
                                 launched = store.launchSmokeLoop(
                                     sessionID: session.id,
@@ -6558,6 +6564,12 @@ private struct PiAgentComposerPanel: View {
                                 )
                             } else if request.draft.structure == .makerChecker {
                                 launched = await viewModel.launchMakerCheckerLoop(
+                                    session: session,
+                                    draft: request.draft,
+                                    stopExistingActive: request.stopExistingActive
+                                )
+                            } else if request.draft.structure == .discoveryTriage {
+                                launched = await viewModel.launchDiscoveryTriageLoop(
                                     session: session,
                                     draft: request.draft,
                                     stopExistingActive: request.stopExistingActive

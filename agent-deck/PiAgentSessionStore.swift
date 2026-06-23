@@ -1015,6 +1015,56 @@ final class PiAgentSessionStore {
     }
 
     @discardableResult
+    func launchDiscoveryTriageLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool = false, executeTriage: @escaping (UUID, String, String, LoopWriteTarget, URL?, String?) async -> PiSubagentRunRecord?) async -> LoopRun? {
+        guard draft.structure == .discoveryTriage else { return nil }
+        guard !draft.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        if let active = activeLoopRun(for: session.id) {
+            guard stopExistingActive else { return nil }
+            stopLoopRun(active.id, sessionID: session.id)
+        }
+        var run = LoopRun(sessionID: session.id, projectPath: session.projectPath, draft: draft)
+        let artifactDirectory = loopArtifactDirectoryURL(sessionID: session.id, runID: run.id)
+        run.artifactDirectoryPath = artifactDirectory.path
+        upsertLoopRun(run)
+        do { try FileManager.default.createDirectory(at: artifactDirectory, withIntermediateDirectories: true) } catch {
+            run.status = .failed; run.endedAt = Date(); run.stopReason = .toolFailed; upsertLoopRun(run); return nil
+        }
+        let executionContext: LoopExecutionContext
+        do { executionContext = try prepareLoopExecutionContext(writeTarget: run.writeTarget, projectPath: session.projectPath, artifactDirectory: artifactDirectory) } catch let error as LoopExecutionPreparationError {
+            run.status = .failed; run.endedAt = Date(); run.stopReason = error.stopReason; run.iterations.append(LoopIteration(index: 0, summary: error.localizedDescription)); upsertLoopRun(run); return run
+        } catch { run.status = .failed; run.endedAt = Date(); run.stopReason = .toolFailed; run.iterations.append(LoopIteration(index: 0, summary: error.localizedDescription)); upsertLoopRun(run); return run }
+
+        for iterationIndex in 1...run.maxIterations {
+            if let stoppedRun = stoppedLoopRun(run) { return stoppedRun }
+            let started = Date()
+            run.currentIteration = iterationIndex
+            upsertLoopRun(run)
+            let outputPath = artifactDirectory.appendingPathComponent(iterationIndex == 1 ? "discovery-triage.md" : "discovery-triage-\(iterationIndex).md").path
+            let task = discoveryTriageTask(run: run, iterationIndex: iterationIndex)
+            guard let childRun = await executeTriage(run.id, run.discoveryTriage.agentName, task, run.writeTarget, executionContext.workingDirectory, outputPath) else {
+                run.status = .failed; run.endedAt = Date(); run.stopReason = .agentFailed; upsertLoopRun(run); return run
+            }
+            if let stoppedRun = stoppedLoopRun(run) { return stoppedRun }
+            let childSummary = childRun.summary?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? childRun.status.rawValue
+            let artifact = makeMarkdownArtifact(filename: iterationIndex == 1 ? "discovery-triage-summary.md" : "discovery-triage-summary-\(iterationIndex).md", markdown: discoveryTriageArtifactMarkdown(run: run, iterationIndex: iterationIndex, childRunID: childRun.id, summary: childSummary), artifactDirectory: artifactDirectory)
+            let validationResult = run.validationCommand.isEmpty ? nil : runValidationCommand(run.validationCommand, workingDirectory: executionContext.workingDirectory)
+            let ended = Date()
+            run.iterations.append(LoopIteration(index: iterationIndex, startedAt: started, endedAt: ended, summary: childRun.status == .completed ? "Discovery triage completed." : "Discovery triage stopped with \(childRun.status.rawValue).", artifacts: [artifact].compactMap { $0 }, validationResult: validationResult, timeline: [LoopTimelineEvent(step: .discoveryTriage, roleName: run.discoveryTriage.agentName, note: "Triage child run: \(childRun.id.uuidString)", timestamp: started)]))
+            if childRun.status != .completed {
+                run.status = childRun.status == .stopped ? .stopped : .failed; run.endedAt = ended; run.stopReason = childRun.status == .stopped ? .userStopped : .agentFailed; upsertLoopRun(run); return run
+            }
+            if run.validationCommand.isEmpty {
+                run.status = .failed; run.endedAt = ended; run.stopReason = .validationUnavailable; upsertLoopRun(run); return run
+            }
+            if validationResult?.didPass == true {
+                run.status = .completed; run.endedAt = ended; run.stopReason = .success; upsertLoopRun(run); return run
+            }
+            upsertLoopRun(run)
+        }
+        run.status = .failed; run.endedAt = Date(); run.stopReason = .validationFailedAfterFinalIteration; upsertLoopRun(run); return run
+    }
+
+    @discardableResult
     func launchMakerCheckerLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool = false, executeRole: @escaping (UUID, String, String, LoopWriteTarget, URL?, String?) async -> PiSubagentRunRecord?) async -> LoopRun? {
         guard draft.structure == .makerChecker else { return nil }
         guard !draft.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
@@ -1505,6 +1555,33 @@ final class PiAgentSessionStore {
         } catch {
             return nil
         }
+    }
+
+    private func discoveryTriageTask(run: LoopRun, iterationIndex: Int) -> String {
+        [
+            "You are the Discovery / Triage agent in an Agent Deck loop.",
+            "Loop goal: \(run.goal)",
+            "Iteration: \(iterationIndex) of \(run.maxIterations)",
+            "Write target: \(run.writeTarget.displayName)",
+            "Classification prompt: \(run.discoveryTriage.classificationPrompt)",
+            "Inspect the requested signals and repository context. Group findings by severity/category, cite evidence, and recommend the safest next action. Produce a concise Markdown triage artifact."
+        ].joined(separator: "\n\n")
+    }
+
+    private func discoveryTriageArtifactMarkdown(run: LoopRun, iterationIndex: Int, childRunID: UUID, summary: String) -> String {
+        """
+        # Discovery / Triage
+
+        Goal: \(run.goal)
+
+        Iteration: \(iterationIndex)
+        Agent: \(run.discoveryTriage.agentName)
+        Child run: \(childRunID.uuidString)
+
+        Classification prompt: \(run.discoveryTriage.classificationPrompt)
+
+        Summary: \(summary)
+        """
     }
 
     private func makerCheckerTask(run: LoopRun, iterationIndex: Int, role: String, priorReview: String) -> String {

@@ -3341,6 +3341,27 @@ final class AppViewModel: NSObject {
     }
 
     @discardableResult
+    func launchDiscoveryTriageLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+        let snapshot = startupSnapshot(forProjectPath: session.projectPath)
+        let agentsByName = Dictionary(uniqueKeysWithValues: snapshot.effectiveAgents.map { ($0.name, $0) })
+        return await piAgentSessionStore.launchDiscoveryTriageLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, agentName, task, writeTarget, workingDirectory, requestedOutputPath in
+            guard let self else { return nil }
+            guard let agent = agentsByName[agentName], agent.resolved.disabled != true else {
+                self.piAgentSessionStore.append(.init(sessionID: session.id, role: .error, title: "Loop Agent Unavailable", text: "Discovery/Triage agent \"\(agentName)\" is not available in this project."))
+                return nil
+            }
+            var executionSession = session
+            if writeTarget == .newWorktree, let workingDirectory { executionSession.worktreePath = workingDirectory.path }
+            let expectedOutcome: PiSubagentExpectedOutcome = switch writeTarget {
+            case .artifactMarkdown: .reportOnly
+            case .newWorktree: .editFilesInWorktree
+            case .currentCheckout: .directProjectWrites
+            }
+            return await self.runNativeSubagentAndWait(parentSession: executionSession, agent: agent, snapshot: snapshot, task: task, useWorktreeIsolation: false, expectedOutcome: expectedOutcome, requestedOutputPath: requestedOutputPath, loopID: loopID)
+        }
+    }
+
+    @discardableResult
     func launchMakerCheckerLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
         let snapshot = startupSnapshot(forProjectPath: session.projectPath)
         let agentsByName = Dictionary(uniqueKeysWithValues: snapshot.effectiveAgents.map { ($0.name, $0) })

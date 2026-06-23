@@ -358,6 +358,9 @@ struct LoopLaunchSheet: View {
                             .foregroundStyle(AppTheme.mutedText)
                     }
                 case .discoveryTriage:
+                    fieldGroup("Triage agent") {
+                        LoopAgentNameMenu(selection: $draft.discoveryTriage.agentName, availableAgents: availableAgents, fallbackLabel: "Explorer")
+                    }
                     fieldGroup {
                         HStack(spacing: 6) {
                             Text("Classification prompt")

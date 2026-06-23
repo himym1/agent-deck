@@ -129,10 +129,21 @@ nonisolated struct LoopParallelConfig: Codable, Equatable, Hashable, Sendable {
 }
 
 nonisolated struct LoopDiscoveryTriageConfig: Codable, Equatable, Hashable, Sendable {
+    var agentName: String
     var classificationPrompt: String
 
-    init(classificationPrompt: String = "Classify findings by severity and summarize recommended next action.") {
+    init(agentName: String = "Explorer", classificationPrompt: String = "Classify findings by severity and summarize recommended next action.") {
+        self.agentName = agentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Explorer" : agentName
         self.classificationPrompt = classificationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Classify findings by severity and summarize recommended next action." : classificationPrompt
+    }
+
+    enum CodingKeys: String, CodingKey { case agentName, classificationPrompt }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        agentName = try container.decodeIfPresent(String.self, forKey: .agentName) ?? "Explorer"
+        classificationPrompt = try container.decodeIfPresent(String.self, forKey: .classificationPrompt) ?? "Classify findings by severity and summarize recommended next action."
+        self = LoopDiscoveryTriageConfig(agentName: agentName, classificationPrompt: classificationPrompt)
     }
 }
 

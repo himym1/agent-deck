@@ -138,7 +138,7 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
         )
         let pipeline = LoopPipelineConfig(stageNames: splitList(fm["pipelineStages"]))
         let parallel = LoopParallelConfig(branchNames: splitList(fm["parallelBranches"]))
-        let discoveryTriage = LoopDiscoveryTriageConfig(classificationPrompt: fm["classificationPrompt"]?.nonEmpty ?? "Classify findings by severity and summarize recommended next action.")
+        let discoveryTriage = LoopDiscoveryTriageConfig(agentName: fm["triageAgent"]?.nonEmpty ?? "Explorer", classificationPrompt: fm["classificationPrompt"]?.nonEmpty ?? "Classify findings by severity and summarize recommended next action.")
         let humanApproval = LoopHumanApprovalConfig(checkpointPrompt: fm["checkpointPrompt"]?.nonEmpty ?? "Review the proposal before continuing.")
         let availability = LoopDefinitionAvailability(rawValue: fm["availability"]?.nonEmpty ?? "") ?? .allProjects
         let projectPaths = decodeProjectPaths(json: fm["projectPathsJSON"]) ?? splitProjectPaths(fm["projectPaths"])
@@ -192,6 +192,7 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
             lines.append("parallelBranches: \(oneLine(definition.parallel.branchNames.joined(separator: " | ")))")
         }
         if definition.structure == .discoveryTriage {
+            lines.append("triageAgent: \(oneLine(definition.discoveryTriage.agentName))")
             lines.append("classificationPrompt: \(oneLine(definition.discoveryTriage.classificationPrompt))")
         }
         if definition.structure == .humanApproval {
@@ -274,6 +275,7 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
                 writeTarget: .artifactMarkdown,
                 validationCommand: "/usr/bin/true",
                 discoveryTriage: LoopDiscoveryTriageConfig(
+                    agentName: "Explorer",
                     classificationPrompt: "Classify findings as blockers, follow-ups, or notes, then summarize the safest next action."
                 ),
                 source: .builtin

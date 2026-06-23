@@ -16,6 +16,7 @@ private struct LoopDefinitionEditorDraft: Equatable {
     var maxReviewRounds: Int
     var pipelineStageNames: [String]
     var parallelBranchesText: String
+    var triageAgentName: String
     var classificationPrompt: String
     var checkpointPrompt: String
     var source: LoopDefinitionSource
@@ -41,6 +42,7 @@ private struct LoopDefinitionEditorDraft: Equatable {
         maxReviewRounds = makerChecker.maxReviewRounds
         pipelineStageNames = definition?.pipeline.stageNames ?? LoopPipelineConfig().stageNames
         parallelBranchesText = (definition?.parallel.branchNames ?? LoopParallelConfig().branchNames).joined(separator: " | ")
+        triageAgentName = definition?.discoveryTriage.agentName ?? LoopDiscoveryTriageConfig().agentName
         classificationPrompt = definition?.discoveryTriage.classificationPrompt ?? LoopDiscoveryTriageConfig().classificationPrompt
         checkpointPrompt = definition?.humanApproval.checkpointPrompt ?? LoopHumanApprovalConfig().checkpointPrompt
         source = definition?.source ?? .user
@@ -84,7 +86,7 @@ private struct LoopDefinitionEditorDraft: Equatable {
             ),
             pipeline: LoopPipelineConfig(stageNames: pipelineStageNames),
             parallel: LoopParallelConfig(branchNames: splitList(parallelBranchesText)),
-            discoveryTriage: LoopDiscoveryTriageConfig(classificationPrompt: classificationPrompt),
+            discoveryTriage: LoopDiscoveryTriageConfig(agentName: triageAgentName, classificationPrompt: classificationPrompt),
             humanApproval: LoopHumanApprovalConfig(checkpointPrompt: checkpointPrompt),
             source: .user,
             availability: availability,
@@ -333,6 +335,9 @@ struct LoopBankScreen: View {
             }
         case .discoveryTriage:
             AppCard(title: "Discovery / Triage") {
+                detailRow("Triage agent") {
+                    LoopAgentNameMenu(selection: $editorDraft.triageAgentName, availableAgents: availableLoopAgents, fallbackLabel: "Explorer")
+                }
                 detailRow("Classification prompt") {
                     TextField("Classification prompt", text: $editorDraft.classificationPrompt, axis: .vertical)
                         .lineLimit(2...4)
