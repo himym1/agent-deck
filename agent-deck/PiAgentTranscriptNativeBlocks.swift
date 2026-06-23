@@ -1133,6 +1133,8 @@ struct NativeLoopRunPayload {
     var isActive: Bool
     var canRevealArtifacts: Bool
     var canRevealWorktree: Bool
+    var canApplyWorktree: Bool
+    var canDiscardWorktree: Bool
     var canRetry: Bool
     var canSave: Bool
     var onStop: (() -> Void)?
@@ -1140,23 +1142,35 @@ struct NativeLoopRunPayload {
     var onSave: (() -> Void)?
     var onRevealArtifacts: (() -> Void)?
     var onRevealWorktree: (() -> Void)?
+    var onApplyWorktree: (() -> Void)?
+    var onDiscardWorktree: (() -> Void)?
 
-    static func make(run: LoopRun, onStop: (() -> Void)?, onRetry: (() -> Void)?, onSave: (() -> Void)?, onRevealArtifacts: (() -> Void)?, onRevealWorktree: (() -> Void)?) -> NativeLoopRunPayload {
+    static func make(run: LoopRun, onStop: (() -> Void)?, onRetry: (() -> Void)?, onSave: (() -> Void)?, onRevealArtifacts: (() -> Void)?, onRevealWorktree: (() -> Void)?, onApplyWorktree: (() -> Void)? = nil, onDiscardWorktree: (() -> Void)? = nil) -> NativeLoopRunPayload {
         let details = loopRunDetailsText(for: run)
+        let worktreeURL = run.artifactDirectoryPath.map { URL(fileURLWithPath: $0).appendingPathComponent("worktree", isDirectory: true) }
+        let hasWorktree = worktreeURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        let hasAppliedMarker = run.artifactDirectoryPath.map { FileManager.default.fileExists(atPath: URL(fileURLWithPath: $0).appendingPathComponent("worktree.applied").path) } ?? false
+        let hasDiscardedMarker = run.artifactDirectoryPath.map { FileManager.default.fileExists(atPath: URL(fileURLWithPath: $0).appendingPathComponent("worktree.discarded").path) } ?? false
+        let worktreeAlreadyHandled = run.worktreeState == .applied || run.worktreeState == .discarded || hasAppliedMarker || hasDiscardedMarker
+        let canOperateOnWorktree = run.writeTarget == .newWorktree && !run.isActive && hasWorktree && !worktreeAlreadyHandled
         return NativeLoopRunPayload(
             title: run.status == .completed ? "Loop completed" : "Loop: \(run.structure.displayName)",
             statusText: "Status: \(run.status.displayName)",
             detailText: details,
             isActive: run.isActive,
             canRevealArtifacts: run.artifactDirectoryPath != nil,
-            canRevealWorktree: run.writeTarget == .newWorktree && run.artifactDirectoryPath != nil,
+            canRevealWorktree: run.writeTarget == .newWorktree && hasWorktree && !worktreeAlreadyHandled,
+            canApplyWorktree: canOperateOnWorktree,
+            canDiscardWorktree: canOperateOnWorktree,
             canRetry: !run.isActive && run.status == .failed,
             canSave: !run.isActive,
             onStop: onStop,
             onRetry: onRetry,
             onSave: onSave,
             onRevealArtifacts: onRevealArtifacts,
-            onRevealWorktree: onRevealWorktree
+            onRevealWorktree: onRevealWorktree,
+            onApplyWorktree: onApplyWorktree,
+            onDiscardWorktree: onDiscardWorktree
         )
     }
 }
@@ -1174,6 +1188,8 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
     private let saveButton = NSButton(title: "Save Loop", target: nil, action: nil)
     private let revealButton = NSButton(title: "Reveal Artifacts", target: nil, action: nil)
     private let revealWorktreeButton = NSButton(title: "Reveal Worktree", target: nil, action: nil)
+    private let applyWorktreeButton = NSButton(title: "Apply Worktree", target: nil, action: nil)
+    private let discardWorktreeButton = NSButton(title: "Discard Worktree", target: nil, action: nil)
     private var payload: NativeLoopRunPayload?
     var onIntrinsicHeightChange: (() -> Void)?
 
@@ -1206,7 +1222,7 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
         detailField.maximumNumberOfLines = 0
         detailField.isHidden = true
 
-        for button in [detailsButton, stopButton, retryButton, saveButton, revealButton, revealWorktreeButton] {
+        for button in [detailsButton, stopButton, retryButton, saveButton, revealButton, revealWorktreeButton, applyWorktreeButton, discardWorktreeButton] {
             button.bezelStyle = .rounded
             button.controlSize = .small
             button.translatesAutoresizingMaskIntoConstraints = false
@@ -1223,6 +1239,10 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
         revealButton.action = #selector(revealTapped)
         revealWorktreeButton.target = self
         revealWorktreeButton.action = #selector(revealWorktreeTapped)
+        applyWorktreeButton.target = self
+        applyWorktreeButton.action = #selector(applyWorktreeTapped)
+        discardWorktreeButton.target = self
+        discardWorktreeButton.action = #selector(discardWorktreeTapped)
 
         let header = NSStackView(views: [iconView, titleField])
         header.translatesAutoresizingMaskIntoConstraints = false
@@ -1230,7 +1250,7 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
         header.alignment = .centerY
         header.spacing = 8
 
-        let buttons = NSStackView(views: [detailsButton, stopButton, retryButton, saveButton, revealButton, revealWorktreeButton])
+        let buttons = NSStackView(views: [detailsButton, stopButton, retryButton, saveButton, revealButton, revealWorktreeButton, applyWorktreeButton, discardWorktreeButton])
         buttons.translatesAutoresizingMaskIntoConstraints = false
         buttons.orientation = .horizontal
         buttons.spacing = 8
@@ -1284,6 +1304,10 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
         revealButton.isEnabled = payload.canRevealArtifacts && payload.onRevealArtifacts != nil
         revealWorktreeButton.isHidden = !payload.canRevealWorktree
         revealWorktreeButton.isEnabled = payload.canRevealWorktree && payload.onRevealWorktree != nil
+        applyWorktreeButton.isHidden = !payload.canApplyWorktree
+        applyWorktreeButton.isEnabled = payload.canApplyWorktree && payload.onApplyWorktree != nil
+        discardWorktreeButton.isHidden = !payload.canDiscardWorktree
+        discardWorktreeButton.isEnabled = payload.canDiscardWorktree && payload.onDiscardWorktree != nil
     }
 
     func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat {
@@ -1308,4 +1332,6 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
     @objc private func saveTapped() { payload?.onSave?() }
     @objc private func revealTapped() { payload?.onRevealArtifacts?() }
     @objc private func revealWorktreeTapped() { payload?.onRevealWorktree?() }
+    @objc private func applyWorktreeTapped() { payload?.onApplyWorktree?() }
+    @objc private func discardWorktreeTapped() { payload?.onDiscardWorktree?() }
 }

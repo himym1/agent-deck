@@ -4905,7 +4905,18 @@ struct PiAgentScreen: View {
                     },
                     onRevealWorktree: loopRun.artifactDirectoryPath.map { path in
                         { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path).appendingPathComponent("worktree", isDirectory: true)]) }
-                    }
+                    },
+                    onApplyWorktree: loopRun.writeTarget == .newWorktree && !loopRun.isActive ? { [viewModel] in viewModel.applyLoopWorktree(loopRun) } : nil,
+                    onDiscardWorktree: loopRun.writeTarget == .newWorktree && !loopRun.isActive ? { [viewModel] in
+                        let alert = NSAlert()
+                        alert.messageText = "Discard loop worktree?"
+                        alert.informativeText = "This removes the loop worktree. Loop artifacts are kept, but unapplied worktree changes will be lost."
+                        alert.alertStyle = .warning
+                        alert.addButton(withTitle: "Discard Worktree")
+                        alert.addButton(withTitle: "Cancel")
+                        guard alert.runModal() == .alertFirstButtonReturn else { return }
+                        viewModel.discardLoopWorktree(loopRun)
+                    } : nil
                 )
                 return .native(.of(PiAgentNativeLoopRunCardView.self) { view, width in
                     view.configure(payload: payload, width: width)

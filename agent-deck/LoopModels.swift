@@ -64,6 +64,12 @@ nonisolated enum LoopRunStatus: String, Codable, CaseIterable, Identifiable, Sen
     }
 }
 
+nonisolated enum LoopWorktreeState: String, Codable, Equatable, Sendable {
+    case available
+    case applied
+    case discarded
+}
+
 nonisolated enum LoopStopReason: String, Codable, CaseIterable, Identifiable, Sendable {
     case success
     case maxIterationsReached
@@ -441,6 +447,7 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
     var stopReason: LoopStopReason?
     var iterations: [LoopIteration]
     var artifactDirectoryPath: String?
+    var worktreeState: LoopWorktreeState?
     var transcriptEntryID: UUID
 
     init(id: UUID = UUID(), sessionID: UUID, projectPath: String?, draft: LoopDraft, startedAt: Date = Date(), artifactDirectoryPath: String? = nil, transcriptEntryID: UUID = UUID()) {
@@ -464,11 +471,12 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
         self.stopReason = nil
         self.iterations = []
         self.artifactDirectoryPath = artifactDirectoryPath
+        self.worktreeState = draft.writeTarget == .newWorktree ? .available : nil
         self.transcriptEntryID = transcriptEntryID
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, sessionID, projectPath, goal, structure, status, writeTarget, currentIteration, maxIterations, validationCommand, makerChecker, pipeline, parallel, discoveryTriage, humanApproval, startedAt, endedAt, stopReason, iterations, artifactDirectoryPath, transcriptEntryID
+        case id, sessionID, projectPath, goal, structure, status, writeTarget, currentIteration, maxIterations, validationCommand, makerChecker, pipeline, parallel, discoveryTriage, humanApproval, startedAt, endedAt, stopReason, iterations, artifactDirectoryPath, worktreeState, transcriptEntryID
     }
 
     init(from decoder: Decoder) throws {
@@ -493,6 +501,7 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
         stopReason = try container.decodeIfPresent(LoopStopReason.self, forKey: .stopReason)
         iterations = try container.decode([LoopIteration].self, forKey: .iterations)
         artifactDirectoryPath = try container.decodeIfPresent(String.self, forKey: .artifactDirectoryPath)
+        worktreeState = try container.decodeIfPresent(LoopWorktreeState.self, forKey: .worktreeState)
         transcriptEntryID = try container.decode(UUID.self, forKey: .transcriptEntryID)
     }
 

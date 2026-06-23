@@ -1863,6 +1863,13 @@ final class PiAgentSessionStore {
         return run
     }
 
+    func markLoopWorktreeState(runID: UUID, sessionID: UUID, state: LoopWorktreeState) {
+        guard var runs = loopRunsBySessionID[sessionID], let index = runs.firstIndex(where: { $0.id == runID }) else { return }
+        runs[index].worktreeState = state
+        loopRunsBySessionID[sessionID] = runs
+        upsert(LoopRunTranscriptCodec.transcriptEntry(for: runs[index]))
+    }
+
     func hydrateLoopRunsFromTranscript(sessionID: UUID) {
         let runs = (transcriptsBySessionID[sessionID] ?? []).compactMap(LoopRunTranscriptCodec.decode(from:))
         if runs.isEmpty {

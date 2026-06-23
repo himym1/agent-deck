@@ -4286,6 +4286,88 @@ final class AppViewModel: NSObject {
         }
     }
 
+    func applyLoopWorktree(_ loopRun: LoopRun) {
+        guard let syntheticRun = loopWorktreeSubagentRecord(for: loopRun) else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let patch = try await subagentWorktreeService.applyPatch(for: syntheticRun)
+                try? "Applied at \(Date().formatted(date: .numeric, time: .standard))\nPatch: \(patch.patchPath)\n".write(to: URL(fileURLWithPath: syntheticRun.artifactDirectory).appendingPathComponent("worktree.applied"), atomically: true, encoding: .utf8)
+                await MainActor.run {
+                    piAgentSessionStore.markLoopWorktreeState(runID: loopRun.id, sessionID: loopRun.sessionID, state: .applied)
+                    piAgentSessionStore.append(.init(sessionID: loopRun.sessionID, role: .status, title: "Loop Worktree Applied", text: "Applied \(patch.changedFiles.count) changed file(s) from the loop worktree.\n\nPatch: \(patch.patchPath)"))
+                }
+            } catch {
+                await MainActor.run { piAgentSessionStore.append(.init(sessionID: loopRun.sessionID, role: .error, title: "Loop Worktree Apply Failed", text: error.localizedDescription)) }
+            }
+        }
+    }
+
+    func discardLoopWorktree(_ loopRun: LoopRun) {
+        guard let syntheticRun = loopWorktreeSubagentRecord(for: loopRun) else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await subagentWorktreeService.discardWorktree(for: syntheticRun)
+                try? "Discarded at \(Date().formatted(date: .numeric, time: .standard))\n".write(to: URL(fileURLWithPath: syntheticRun.artifactDirectory).appendingPathComponent("worktree.discarded"), atomically: true, encoding: .utf8)
+                await MainActor.run {
+                    piAgentSessionStore.markLoopWorktreeState(runID: loopRun.id, sessionID: loopRun.sessionID, state: .discarded)
+                    piAgentSessionStore.append(.init(sessionID: loopRun.sessionID, role: .status, title: "Loop Worktree Discarded", text: "Removed loop worktree for run \(loopRun.id.uuidString). Artifacts were kept."))
+                }
+            } catch {
+                await MainActor.run { piAgentSessionStore.append(.init(sessionID: loopRun.sessionID, role: .error, title: "Loop Worktree Discard Failed", text: error.localizedDescription)) }
+            }
+        }
+    }
+
+    private func loopWorktreeSubagentRecord(for loopRun: LoopRun) -> PiSubagentRunRecord? {
+        guard loopRun.writeTarget == .newWorktree, let artifactDirectoryPath = loopRun.artifactDirectoryPath else { return nil }
+        let artifactURL = URL(fileURLWithPath: artifactDirectoryPath).standardizedFileURL
+        let worktreePath = artifactURL.appendingPathComponent("worktree", isDirectory: true).path
+        let now = Date()
+        return PiSubagentRunRecord(
+            id: loopRun.id,
+            parentSessionID: loopRun.sessionID,
+            mode: .single,
+            status: loopRun.status == .completed ? .completed : .stopped,
+            agentName: "Loop Worktree",
+            task: loopRun.goal,
+            model: nil,
+            thinking: nil,
+            expectedOutcome: .editFilesInWorktree,
+            requestedOutputPath: nil,
+            allowOverwrite: nil,
+            readFirstPaths: nil,
+            tools: [],
+            skills: [],
+            concurrencyLimit: nil,
+            worktreePolicy: "loop-new-worktree",
+            aggregateSummary: nil,
+            artifactDirectory: artifactURL.path,
+            outputPath: nil,
+            worktreePath: worktreePath,
+            parentRepoPath: loopRun.projectPath,
+            baseCommit: nil,
+            isWorktreeIsolated: true,
+            worktreeStatus: nil,
+            worktreePatchPath: nil,
+            childSessionID: nil,
+            childPiSessionFile: nil,
+            launchCommand: nil,
+            summary: nil,
+            error: nil,
+            child: nil,
+            children: nil,
+            graphEdges: nil,
+            injectedMemoryIDs: nil,
+            injectedMemoryTitles: nil,
+            createdAt: loopRun.startedAt,
+            updatedAt: loopRun.endedAt ?? now,
+            completedAt: loopRun.endedAt,
+            durationMs: nil
+        )
+    }
+
     private func recordSubagentWorktreeError(_ error: Error, runID: UUID, parentSessionID: UUID) {
         let message = error.localizedDescription
         piAgentSessionStore.updateSubagentRun(runID, parentSessionID: parentSessionID) { run in
