@@ -90,7 +90,7 @@ struct LoopLaunchSheet: View {
 
                                     LoopInlineInfoButton(
                                         title: "Structure",
-                                        message: "Controls the loop shape: one repeated agent, maker/checker review, fixed pipeline stages, parallel branches, discovery triage, or a human checkpoint."
+                                        message: "Single Agent: repeats one agent against the goal.\nMaker/Checker: maker produces work, checker reviews it, and retries can happen.\nAgent Pipeline: runs named stages in order, like Explorer → Implementer → Verifier.\nParallel Agents: tracks independent branches or hypotheses in the same run.\nDiscovery Triage: collects findings and classifies them by severity / next action.\nHuman Approval: pauses at a checkpoint for explicit approval before continuing."
                                     )
                                 }
                             }
@@ -107,7 +107,7 @@ struct LoopLaunchSheet: View {
 
                                     LoopInlineInfoButton(
                                         title: "Write Target",
-                                        message: "Choose where loop output may go. Artifact is safest and never edits project files; New worktree isolates code changes; Current checkout edits this project directly."
+                                        message: "Artifact / Markdown output: safest mode; writes only loop artifacts and never modifies project files.\nNew worktree: creates an isolated git worktree for code changes and validation, leaving the current checkout untouched.\nCurrent checkout: writes directly into this project checkout; use only when you want the loop to edit files in place."
                                     )
                                 }
                             }
