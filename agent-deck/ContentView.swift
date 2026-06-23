@@ -532,6 +532,7 @@ struct ContentView: View {
     @State private var projectSearchText = ""
     @State private var skillSearchText = ""
     @State private var promptSearchText = ""
+    @State private var loopSearchText = ""
     @State private var piAgentSessionSearchText = ""
     @State private var isMemoryInfoPresented = false
     @State private var isSkillsInfoPresented = false
@@ -799,7 +800,7 @@ struct ContentView: View {
 
     private var toolbarSearchIsVisible: Bool {
         switch viewModel.selectedSidebarItem {
-        case .projects, .agents, .issues, .memory, .skills, .prompts, .agent:
+        case .projects, .agents, .issues, .memory, .skills, .prompts, .loops, .agent:
             return true
         default:
             return false
@@ -814,6 +815,7 @@ struct ContentView: View {
         case .memory: return "Search memories"
         case .skills: return "Search skills"
         case .prompts: return "Search prompts"
+        case .loops: return "Search loops"
         case .agent: return "Search sessions"
         default: return "Search"
         }
@@ -829,6 +831,7 @@ struct ContentView: View {
                 case .memory: return memorySearchText
                 case .skills: return skillSearchText
                 case .prompts: return promptSearchText
+                case .loops: return loopSearchText
                 case .agent: return piAgentSessionSearchText
                 default: return ""
                 }
@@ -841,6 +844,7 @@ struct ContentView: View {
                 case .memory: memorySearchText = value
                 case .skills: skillSearchText = value
                 case .prompts: promptSearchText = value
+                case .loops: loopSearchText = value
                 case .agent: piAgentSessionSearchText = value
                 default: break
                 }
@@ -1069,6 +1073,13 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var primaryActionToolbarItems: some ToolbarContent {
+        workspaceToolbarItems
+        resourceToolbarItems
+        runtimeToolbarItems
+    }
+
+    @ToolbarContentBuilder
+    private var workspaceToolbarItems: some ToolbarContent {
         if viewModel.selectedSidebarItem == .projects {
             projectsPrimaryToolbarContent
         }
@@ -1078,29 +1089,35 @@ struct ContentView: View {
         if viewModel.selectedSidebarItem == .memory {
             memoryPrimaryToolbarContent
         }
+        if viewModel.selectedSidebarItem == .agent {
+            piAgentPrimaryToolbarContent
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var resourceToolbarItems: some ToolbarContent {
         if viewModel.selectedSidebarItem == .agents {
             agentsPrimaryToolbarContent
-        }
-        if viewModel.selectedSidebarItem == .environment {
-            environmentPrimaryToolbarContent
         }
         if viewModel.selectedSidebarItem == .prompts {
             promptsPrimaryToolbarContent
         }
+        if viewModel.selectedSidebarItem == .loops {
+            loopsPrimaryToolbarContent
+        }
         if viewModel.selectedSidebarItem == .skills {
             skillsPrimaryToolbarContent
         }
-        if viewModel.selectedSidebarItem == .agent {
-            piAgentPrimaryToolbarContent
-        }
-        if viewModel.selectedSidebarItem == .models {
-            modelsPrimaryToolbarContent
-        }
-        runtimeToolbarItems
     }
 
     @ToolbarContentBuilder
     private var runtimeToolbarItems: some ToolbarContent {
+        if viewModel.selectedSidebarItem == .environment {
+            environmentPrimaryToolbarContent
+        }
+        if viewModel.selectedSidebarItem == .models {
+            modelsPrimaryToolbarContent
+        }
         if viewModel.selectedSidebarItem == .extensions {
             extensionsPrimaryToolbarContent
         }
@@ -1353,6 +1370,19 @@ struct ContentView: View {
             .menuIndicator(.hidden)
             .toolbarPrimaryActionChrome()
             .help("Create a new prompt template or import an existing markdown file")
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var loopsPrimaryToolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                NotificationCenter.default.post(name: .agentDeckNewLoopRequested, object: nil)
+            } label: {
+                Label("New Loop", systemImage: "plus")
+            }
+            .toolbarPrimaryActionChrome()
+            .help("Create a user loop")
         }
     }
 
@@ -1751,7 +1781,7 @@ struct ContentView: View {
         case .prompts:
             PromptsScreen(viewModel: viewModel, searchText: $promptSearchText)
         case .loops:
-            LoopBankScreen(viewModel: viewModel)
+            LoopBankScreen(viewModel: viewModel, searchText: $loopSearchText)
         case .agent:
             // Handled by the always-mounted layer above.
             EmptyView()

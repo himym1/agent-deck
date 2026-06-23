@@ -104,6 +104,7 @@ private struct LoopDefinitionEditorDraft: Equatable {
 
 struct LoopBankScreen: View {
     var viewModel: AppViewModel
+    @Binding var searchText: String
     @State private var editorDraft = LoopDefinitionEditorDraft()
     @State private var errorMessage: String?
     @State private var pendingDelete: LoopDefinition?
@@ -130,6 +131,9 @@ struct LoopBankScreen: View {
             }
             resetEditor(to: viewModel.selectedLoopDefinition)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .agentDeckNewLoopRequested)) { _ in
+            createNewLoop()
+        }
         .alert("Loop Bank", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
@@ -152,37 +156,16 @@ struct LoopBankScreen: View {
     }
 
     private var loopListPane: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Loop Bank")
-                        .font(.headline)
-                    Text("Saved user loops")
-                        .font(AppTheme.Font.caption)
-                        .foregroundStyle(AppTheme.mutedText)
-                }
-                Spacer()
-                Button {
-                    createNewLoop()
-                } label: {
-                    Label("New Loop", systemImage: "plus")
-                }
-                .help("Create a user loop")
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-
-            AppList(
-                sections: listSections,
-                selection: .single(Binding(
-                    get: { viewModel.selectedLoopDefinitionID },
-                    set: { viewModel.selectedLoopDefinitionID = $0 }
-                )),
-                isDisabled: { _ in false },
-                keyboardNavigation: true
-            ) { definition in
-                loopRow(definition)
-            }
+        AppList(
+            sections: listSections,
+            selection: .single(Binding(
+                get: { viewModel.selectedLoopDefinitionID },
+                set: { viewModel.selectedLoopDefinitionID = $0 }
+            )),
+            isDisabled: { _ in false },
+            keyboardNavigation: true
+        ) { definition in
+            loopRow(definition)
         }
     }
 
@@ -322,7 +305,21 @@ struct LoopBankScreen: View {
 
     private var listSections: [AppListSection<LoopDefinition>] {
         let selectedProjectPath = viewModel.selectedProjectPath
-        let definitions = viewModel.loopDefinitions.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let definitions = viewModel.loopDefinitions
+            .filter { definition in
+                guard !query.isEmpty else { return true }
+                return [
+                    definition.name,
+                    definition.description,
+                    definition.goalTemplate,
+                    definition.structure.displayName,
+                    definition.writeTarget.displayName,
+                    availabilityLabel(for: definition),
+                    definition.filePath ?? ""
+                ].contains { $0.lowercased().contains(query) }
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         let current = definitions.filter { definition in
             guard let selectedProjectPath else { return false }
             return definition.source == .user && definition.availability == .projectPaths && definition.projectPaths.contains(selectedProjectPath)
