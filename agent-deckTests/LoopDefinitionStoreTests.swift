@@ -162,20 +162,37 @@ final class LoopDefinitionStoreTests: XCTestCase {
         viewModel.configureLoopDefinitionStoreForTesting(directoryURL: directory)
 
         let builtins = viewModel.loopDefinitions.filter { $0.source == .builtin }
-        XCTAssertTrue(builtins.contains { $0.name == "Research / Markdown Artifact" && $0.structure == .singleAgent })
-        XCTAssertTrue(builtins.contains { $0.structure == .agentPipeline })
-        XCTAssertTrue(builtins.contains { $0.structure == .parallelAgents })
-        XCTAssertTrue(builtins.contains { $0.structure == .discoveryTriage })
-        XCTAssertTrue(builtins.contains { $0.structure == .humanApproval })
+        XCTAssertEqual(builtins.count, 3)
+        XCTAssertTrue(builtins.contains {
+            $0.name == "Docs + Codebase Sweep"
+                && $0.structure == .discoveryTriage
+                && $0.writeTarget == .artifactMarkdown
+                && $0.validationCommand == "/usr/bin/true"
+        })
+        XCTAssertTrue(builtins.contains {
+            $0.name == "Ticket → Verified Fix"
+                && $0.structure == .agentPipeline
+                && $0.pipeline.stageNames == ["Triage", "Build", "Verify"]
+                && $0.writeTarget == .artifactMarkdown
+                && $0.validationCommand == "/usr/bin/true"
+        })
+        XCTAssertTrue(builtins.contains {
+            $0.name == "Builder + Reviewer Verification"
+                && $0.structure == .makerChecker
+                && $0.makerChecker.makerName == "Builder"
+                && $0.makerChecker.checkerName == "Reviewer"
+                && $0.writeTarget == .artifactMarkdown
+                && $0.validationCommand == "/usr/bin/true"
+        })
 
         let universe = viewModel.slashUniverse(forProjectPath: "/tmp/project-a")
-        XCTAssertTrue(universe.loops.contains { $0.displayName == "Research / Markdown Artifact" && $0.scopeLabel == "Built-in" })
+        XCTAssertTrue(universe.loops.contains { $0.displayName == "Docs + Codebase Sweep" && $0.scopeLabel == "Built-in" })
     }
 
     func testBuiltInTemplatesAreReadOnlyButDuplicateCreatesUserCopy() throws {
         let directory = PiTestSupport.temporaryStateFile().deletingLastPathComponent().appendingPathComponent("loops", isDirectory: true)
         let store = LoopDefinitionStore(directoryURL: directory)
-        let builtin = try XCTUnwrap(store.loadDefinitions().first { $0.source == .builtin && $0.structure == .agentPipeline })
+        let builtin = try XCTUnwrap(store.loadDefinitions().first { $0.source == .builtin && $0.name == "Builder + Reviewer Verification" })
 
         XCTAssertThrowsError(try store.saveUserDefinition(builtin))
         XCTAssertThrowsError(try store.deleteUserDefinition(builtin))
@@ -184,7 +201,7 @@ final class LoopDefinitionStoreTests: XCTestCase {
         XCTAssertEqual(copy.source, .user)
         XCTAssertNotNil(copy.filePath)
         XCTAssertEqual(copy.structure, builtin.structure)
-        XCTAssertEqual(copy.pipeline, builtin.pipeline)
+        XCTAssertEqual(copy.makerChecker, builtin.makerChecker)
         XCTAssertTrue(store.loadUserDefinitions().contains { $0.name == copy.name && $0.source == .user })
     }
 }

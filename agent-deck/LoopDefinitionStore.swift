@@ -266,56 +266,43 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
     static var builtinDefinitions: [LoopDefinition] {
         [
             LoopDefinition(
-                id: "builtin:research-markdown-artifact",
-                name: "Research / Markdown Artifact",
-                description: "Research or audit a topic and write a Markdown artifact.",
-                goalTemplate: "Research the requested topic and produce a concise Markdown artifact with findings, evidence, and open questions.",
-                structure: .singleAgent,
-                writeTarget: .artifactMarkdown,
-                validationCommand: "/usr/bin/true",
-                source: .builtin
-            ),
-            LoopDefinition(
-                id: "builtin:pipeline-research-verify",
-                name: "Pipeline / Research → Verify",
-                description: "Preview a fixed explorer, implementer, verifier handoff timeline.",
-                goalTemplate: "Run a deterministic pipeline preview for this goal and summarize each stage handoff.",
-                structure: .agentPipeline,
-                writeTarget: .artifactMarkdown,
-                validationCommand: "/usr/bin/true",
-                pipeline: LoopPipelineConfig(stageNames: ["Explorer", "Implementer", "Verifier"]),
-                source: .builtin
-            ),
-            LoopDefinition(
-                id: "builtin:parallel-hypotheses",
-                name: "Parallel Agents / Compare Hypotheses",
-                description: "Preview parallel branches and compare their results.",
-                goalTemplate: "Run two deterministic branches for the same goal and summarize the comparison.",
-                structure: .parallelAgents,
-                writeTarget: .artifactMarkdown,
-                validationCommand: "/usr/bin/true",
-                parallel: LoopParallelConfig(branchNames: ["Hypothesis A", "Hypothesis B"]),
-                source: .builtin
-            ),
-            LoopDefinition(
-                id: "builtin:discovery-triage-report",
-                name: "Discovery / Triage Report",
-                description: "Classify findings and write a triage summary artifact.",
-                goalTemplate: "Inspect the requested signals, classify findings, and recommend the next action.",
+                id: "builtin:docs-codebase-sweep",
+                name: "Docs + Codebase Sweep",
+                description: "Survey documentation and code, classify findings, and recommend next actions.",
+                goalTemplate: "Sweep the relevant docs and code for the requested topic. Group findings by severity, cite evidence, and recommend the next action.",
                 structure: .discoveryTriage,
                 writeTarget: .artifactMarkdown,
                 validationCommand: "/usr/bin/true",
-                discoveryTriage: LoopDiscoveryTriageConfig(),
+                discoveryTriage: LoopDiscoveryTriageConfig(
+                    classificationPrompt: "Classify findings as blockers, follow-ups, or notes, then summarize the safest next action."
+                ),
                 source: .builtin
             ),
             LoopDefinition(
-                id: "builtin:human-approval-checkpoint",
-                name: "Human Approval / Checkpoint",
-                description: "Stop at a human-input checkpoint before continuing.",
-                goalTemplate: "Prepare a proposal and stop for human approval before taking further action.",
-                structure: .humanApproval,
+                id: "builtin:ticket-to-verified-fix",
+                name: "Ticket → Verified Fix",
+                description: "Turn a ticket into a scoped plan, implementation notes, and verification summary.",
+                goalTemplate: "Start from the ticket or bug report. Clarify the failure, propose the smallest fix, describe the implementation, and verify the result with evidence.",
+                structure: .agentPipeline,
                 writeTarget: .artifactMarkdown,
-                humanApproval: LoopHumanApprovalConfig(),
+                validationCommand: "/usr/bin/true",
+                pipeline: LoopPipelineConfig(stageNames: ["Triage", "Build", "Verify"]),
+                source: .builtin
+            ),
+            LoopDefinition(
+                id: "builtin:builder-reviewer-verification",
+                name: "Builder + Reviewer Verification",
+                description: "Use a builder pass and an independent reviewer pass before accepting the result.",
+                goalTemplate: "Have the builder produce the requested artifact or implementation notes. Have the reviewer check correctness, risks, and verification evidence before approval.",
+                structure: .makerChecker,
+                writeTarget: .artifactMarkdown,
+                validationCommand: "/usr/bin/true",
+                makerChecker: LoopMakerCheckerConfig(
+                    makerName: "Builder",
+                    checkerName: "Reviewer",
+                    checkerRubric: "Approve only when the result is complete, evidence-backed, and safe to hand off. Otherwise reject with concrete fixes.",
+                    maxReviewRounds: 3
+                ),
                 source: .builtin
             )
         ]
