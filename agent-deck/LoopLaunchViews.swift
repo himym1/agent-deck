@@ -4,8 +4,10 @@ struct LoopLaunchSheet: View {
     let session: PiAgentSessionRecord
     let activeRun: LoopRun?
     let sourceDefinition: LoopDefinition?
+    let allAgents: [EffectiveAgentRecord]
     let availableAgents: [EffectiveAgentRecord]
     let onCancel: () -> Void
+    let onAssignMissingAgents: ([String]) -> Void
     let onLaunch: (LoopLaunchRequest) -> Void
 
     @State private var draft: LoopDraft
@@ -24,13 +26,16 @@ struct LoopLaunchSheet: View {
         sourceDefinition: LoopDefinition? = nil,
         availableAgents: [EffectiveAgentRecord] = [],
         onCancel: @escaping () -> Void,
+        onAssignMissingAgents: @escaping ([String]) -> Void = { _ in },
         onLaunch: @escaping (LoopLaunchRequest) -> Void
     ) {
         self.session = session
         self.activeRun = activeRun
         self.sourceDefinition = sourceDefinition
+        self.allAgents = availableAgents.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         self.availableAgents = availableAgents.filter { $0.resolved.disabled != true }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         self.onCancel = onCancel
+        self.onAssignMissingAgents = onAssignMissingAgents
         self.onLaunch = onLaunch
         _draft = State(initialValue: initialDraft)
         _saveName = State(initialValue: sourceDefinition?.name ?? "")
@@ -44,7 +49,7 @@ struct LoopLaunchSheet: View {
     private var canLaunch: Bool {
         let saveIsValid = !saveToLoopBank || !saveName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let writeTargetIsConfirmed = draft.writeTarget != .currentCheckout || confirmsCurrentCheckoutWrite
-        return !trimmedGoal.isEmpty && requiredAgentsAreSelected && saveIsValid && writeTargetIsConfirmed && (activeRun == nil || stopExistingActive)
+        return !trimmedGoal.isEmpty && requiredAgentsAreSelected && unavailableRequiredAgentNames.isEmpty && saveIsValid && writeTargetIsConfirmed && (activeRun == nil || stopExistingActive)
     }
 
     private var requiredAgentsAreSelected: Bool {
@@ -62,6 +67,31 @@ struct LoopLaunchSheet: View {
         case .parallelAgents, .humanApproval:
             return true
         }
+    }
+
+    private var requiredAgentNames: [String] {
+        switch draft.structure {
+        case .singleAgent:
+            return [draft.makerChecker.makerName]
+        case .makerChecker:
+            return [draft.makerChecker.makerName, draft.makerChecker.checkerName]
+        case .discoveryTriage:
+            return [draft.discoveryTriage.agentName]
+        case .agentPipeline:
+            return draft.pipeline.stageNames
+        case .parallelAgents, .humanApproval:
+            return []
+        }
+    }
+
+    private var unavailableRequiredAgentNames: [String] {
+        let activeNames = Set(availableAgents.map(\.name))
+        var seen = Set<String>()
+        return requiredAgentNames
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .filter { !activeNames.contains($0) }
+            .filter { seen.insert($0).inserted }
     }
 
     private var canSaveToLoopBank: Bool {
@@ -97,6 +127,8 @@ struct LoopLaunchSheet: View {
                     if let activeRun {
                         activeLoopWarning(activeRun)
                     }
+
+                    loopPreflightSection
 
                     AppCard(title: "Loop") {
                         VStack(alignment: .leading, spacing: 14) {
@@ -295,6 +327,51 @@ struct LoopLaunchSheet: View {
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(.orange.opacity(0.20), lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
+    private var loopPreflightSection: some View {
+        if !unavailableRequiredAgentNames.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("This loop needs agents that are not available to this project.", systemImage: "person.crop.circle.badge.exclamationmark")
+                    .font(AppTheme.Font.body.weight(.semibold))
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(unavailableRequiredAgentNames, id: \.self) { name in
+                        Text("• \(name)")
+                            .font(AppTheme.Font.caption)
+                            .foregroundStyle(.primary)
+                    }
+                }
+                Text("Agent Deck will not guess replacements. Assign the missing agents, or choose different agents before launching.")
+                    .font(AppTheme.Font.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Button {
+                        onAssignMissingAgents(unavailableRequiredAgentNames)
+                    } label: {
+                        Label("Assign missing agents", systemImage: "plus.circle")
+                    }
+                    .appSecondaryButton()
+                    .disabled(session.projectPath.isEmpty)
+                    .help(session.projectPath.isEmpty ? "This session has no project path to assign agents to." : "Assign these agents to the current project")
+
+                    if session.projectPath.isEmpty {
+                        Text("No project path available.")
+                            .font(AppTheme.Font.caption2)
+                            .foregroundStyle(AppTheme.mutedText)
+                    }
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(.orange.opacity(0.20), lineWidth: 1)
+            }
         }
     }
 

@@ -3848,6 +3848,9 @@ struct PiAgentScreen: View {
                     sourceDefinition: loopLaunchDefinition,
                     availableAgents: viewModel.allDisplayAgents,
                     onCancel: { isLoopLaunchSheetPresented = false },
+                    onAssignMissingAgents: { names in
+                        viewModel.assignAgentNames(names, toProjectPath: session.projectPath)
+                    },
                     onLaunch: { request in
                         if store.activeLoopRun(for: session.id) != nil && !request.stopExistingActive {
                             store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "This transcript already has an active loop."))
@@ -6535,6 +6538,9 @@ private struct PiAgentComposerPanel: View {
                     sourceDefinition: loopLaunchDefinition,
                     availableAgents: viewModel.allDisplayAgents,
                     onCancel: { isLoopLaunchSheetPresented = false },
+                    onAssignMissingAgents: { names in
+                        viewModel.assignAgentNames(names, toProjectPath: session.projectPath)
+                    },
                     onLaunch: { request in
                         if store.activeLoopRun(for: session.id) != nil && !request.stopExistingActive {
                             store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "This transcript already has an active loop."))

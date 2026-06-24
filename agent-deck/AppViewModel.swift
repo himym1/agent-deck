@@ -8226,6 +8226,18 @@ final class AppViewModel: NSObject {
         reconcileSnapshotsFromPreferences()
     }
 
+    func assignAgentNames(_ names: [String], toProjectPath projectPath: String) {
+        let cleaned = names
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !projectPath.isEmpty, !cleaned.isEmpty else { return }
+        for name in Set(cleaned) {
+            projectPreferencesStore.setAssignedAgent(name, assigned: true, for: projectPath)
+        }
+        applyProjectPreferenceChanges()
+        reconcileSnapshotsFromPreferences()
+    }
+
     func enableAgentGlobally(_ agent: AgentRecord) throws {
         guard appSettingsController.setDefaultAgent(agent.name, enabled: true) else { return }
         appSettings = appSettingsController.settings

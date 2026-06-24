@@ -206,6 +206,9 @@ struct LoopBankScreen: View {
                         isLaunchSheetPresented = false
                         launchDefinition = nil
                     },
+                    onAssignMissingAgents: { names in
+                        viewModel.assignAgentNames(names, toProjectPath: session.projectPath)
+                    },
                     onLaunch: { request in
                         launch(definition, in: session, request: request)
                     }
