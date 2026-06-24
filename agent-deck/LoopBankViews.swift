@@ -336,8 +336,8 @@ struct LoopBankScreen: View {
                 LoopNumericStepper(value: $editorDraft.maxIterations, range: 1...20)
             }
             detailEditor("Goal template", text: $editorDraft.goalTemplate, minHeight: 120, info: "The reusable instruction the loop runs against. Be explicit about the desired outcome, constraints, and what counts as done.")
-            detailRow("Validation command", info: "Optional shell command for checking the result. It runs from the project directory when available and is attached to the loop result.", showsDivider: false) {
-                AppTextField(text: $editorDraft.validationCommand, placeholder: "Optional shell command")
+            detailRow("Optional validation command", info: "Agent Deck can run one shell command after each loop iteration, from the project directory when available. Its output is attached as evidence. Leave empty to skip automatic validation.", showsDivider: false) {
+                AppTextField(text: $editorDraft.validationCommand, placeholder: "Optional, e.g. swift test")
                     .frame(maxWidth: 360)
             }
         }

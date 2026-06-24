@@ -277,21 +277,21 @@ struct LoopLaunchSheet: View {
 
                     structureFields
 
-                    AppCard(title: "Validation") {
+                    AppCard(title: "Optional Validation") {
                         fieldGroup {
                             HStack(spacing: 6) {
-                                Text("Validation command")
+                                Text("Command")
                                     .font(AppTheme.Font.caption.weight(.semibold))
                                     .foregroundStyle(AppTheme.mutedText)
                                 LoopInlineInfoButton(
-                                    title: "Validation command",
-                                    message: "Optional shell command for checking the result. It runs from the project directory when available and its output is attached to the loop result."
+                                    title: "Optional validation command",
+                                    message: "Agent Deck can run one shell command after each loop iteration, from the project directory when available. Its output is attached to the iteration so the loop/checker can use it as evidence. Leave this empty to skip automatic validation."
                                 )
                             }
                         } content: {
-                            AppTextField(text: $draft.validationCommand, placeholder: "Example: swift test")
+                            AppTextField(text: $draft.validationCommand, placeholder: "Optional, e.g. swift test")
                                 .frame(maxWidth: .infinity)
-                            Text("Runs through your shell in the project directory when available. Leave empty to stop with Validation unavailable.")
+                            Text("Leave empty to skip automatic validation. The loop can still use checker judgment, logs, artifacts, or commands it runs itself.")
                                 .font(AppTheme.Font.caption)
                                 .foregroundStyle(AppTheme.mutedText)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -1005,7 +1005,7 @@ struct LoopLaunchInfoPopover: View {
                 infoRow("What runs", "A loop repeatedly asks Pi to work toward the goal, records each iteration, and stops when it reaches the max iterations or needs attention.")
                 infoRow("Structure", "Choose a single agent, maker/checker review, a pipeline, parallel branches, discovery triage, or a human approval checkpoint.")
                 infoRow("Write target", "Artifact writes keep project files untouched. Worktree writes isolate code changes. Current checkout writes directly to this project.")
-                infoRow("Validation", "An optional command runs from the project directory when available and is included in the loop result.")
+                infoRow("Optional validation", "If provided, Agent Deck runs this shell command after each loop iteration and attaches its output as evidence. Leave it empty to skip automatic validation.")
             }
         }
         .padding(16)
