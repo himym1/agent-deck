@@ -277,14 +277,14 @@ struct LoopLaunchSheet: View {
 
                     structureFields
 
-                    AppCard(title: "Optional Validation") {
+                    AppCard(title: "Validation (optional)") {
                         fieldGroup {
                             HStack(spacing: 6) {
                                 Text("Command")
                                     .font(AppTheme.Font.caption.weight(.semibold))
                                     .foregroundStyle(AppTheme.mutedText)
                                 LoopInlineInfoButton(
-                                    title: "Optional validation command",
+                                    title: "Validation command (optional)",
                                     message: "Agent Deck can run one shell command after each loop iteration, from the project directory when available. Its output is attached to the iteration so the loop/checker can use it as evidence. Leave this empty to skip automatic validation."
                                 )
                             }
@@ -1005,7 +1005,7 @@ struct LoopLaunchInfoPopover: View {
                 infoRow("What runs", "A loop repeatedly asks Pi to work toward the goal, records each iteration, and stops when it reaches the max iterations or needs attention.")
                 infoRow("Structure", "Choose a single agent, maker/checker review, a pipeline, parallel branches, discovery triage, or a human approval checkpoint.")
                 infoRow("Write target", "Artifact writes keep project files untouched. Worktree writes isolate code changes. Current checkout writes directly to this project.")
-                infoRow("Optional validation", "If provided, Agent Deck runs this shell command after each loop iteration and attaches its output as evidence. Leave it empty to skip automatic validation.")
+                infoRow("Validation (optional)", "If provided, Agent Deck runs this shell command after each loop iteration and attaches its output as evidence. Leave it empty to skip automatic validation.")
             }
         }
         .padding(16)
