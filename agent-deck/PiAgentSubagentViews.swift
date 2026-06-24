@@ -32,62 +32,92 @@ struct PiAgentFolderAttachment: Identifiable, Hashable {
     }
 }
 
-struct PiSubagentSupervisorRequestCard: View {
+struct PiSubagentSupervisorRequestInlineNotice: View {
+    let request: PiSubagentSupervisorRequest
+    let onRespond: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "questionmark.bubble.fill")
+                .font(AppTheme.Font.headline)
+                .foregroundStyle(AppTheme.brandAccent)
+                .frame(width: 24, alignment: .center)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Supervisor question")
+                    .font(AppTheme.Font.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.mutedText)
+                Text(request.title)
+                    .font(AppTheme.Font.subheadline.weight(.semibold))
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+            Button("Cancel", action: onCancel)
+                .appSecondaryButton()
+            Button("Respond", action: onRespond)
+                .appPrimaryButton()
+        }
+        .padding(12)
+        .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous)
+                .strokeBorder(AppTheme.contentStroke, lineWidth: 0.5)
+        )
+    }
+}
+
+struct PiSubagentSupervisorRequestSheet: View {
     let request: PiSubagentSupervisorRequest
     let onRespond: (String) -> Void
     let onCancel: () -> Void
-    @State private var response = ""
-    @State private var structuredResponses: [String: String] = [:]
 
     var body: some View {
-        AppRowCard {
-            VStack(alignment: .leading, spacing: 10) {
-                Label(request.title, systemImage: "questionmark.bubble")
-                    .font(AppTheme.Font.headline)
-                    .foregroundStyle(.orange)
-                if let interview = structuredInterview {
-                    if let intro = interview.prompt ?? interview.message, !intro.isEmpty {
-                        Text(intro).font(AppTheme.Font.subheadline)
-                    }
-                    ForEach(interview.questions) { question in
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(question.labelText)
-                                .font(AppTheme.Font.caption.weight(.semibold))
-                            if question.type == "info" {
-                                Text(question.placeholder ?? "No response required.")
-                                    .font(AppTheme.Font.caption)
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                AppTextField(text: binding(for: question.id), placeholder: question.placeholder ?? "Response", axis: .vertical)
-                                    .lineLimit(1...4)
-                            }
-                        }
-                    }
-                } else {
-                    Text(request.message)
-                        .font(AppTheme.Font.subheadline)
-                    TextEditor(text: $response)
-                        .frame(minHeight: 76)
-                        .padding(6)
-                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: AppTheme.Chat.codeCornerRadius))
-                }
-                HStack {
-                    Spacer()
-                    Button("Cancel", action: onCancel)
-                        .appSecondaryButton()
-                    Button("Send Response") { onRespond(responsePayload) }
-                        .appPrimaryButton()
-                        .disabled(!canRespond)
-                }
-            }
+        PiAgentUIRequestSheet(
+            request: askUserRequest,
+            onSubmitValue: { onRespond($0.trimmingCharacters(in: .whitespacesAndNewlines)) },
+            onSubmitFreeform: { _, value in onRespond(value.trimmingCharacters(in: .whitespacesAndNewlines)) },
+            onConfirm: { _ in },
+            onCancel: onCancel
+        )
+    }
+
+    private var askUserRequest: PiAgentUIRequest {
+        PiAgentUIRequest(
+            id: "supervisor-\(request.id)",
+            sessionID: request.parentSessionID,
+            method: .editor,
+            title: request.title,
+            message: supervisorMessage,
+            options: [],
+            optionDescriptions: [:],
+            placeholder: "Response",
+            prefill: nil,
+            allowsFreeform: false,
+            allowsComment: false,
+            responseFormat: .plain
+        )
+    }
+
+    private var supervisorMessage: String? {
+        guard request.kind == .interviewRequest,
+              let interview = structuredInterview else {
+            return request.message
         }
+        let intro = interview.prompt ?? interview.message ?? ""
+        let questions = interview.questions.map { question -> String in
+            let suffix = question.required == false ? " (optional)" : ""
+            if question.type == "info" {
+                return "• \(question.labelText): \(question.placeholder ?? "No response required.")"
+            }
+            return "• \(question.labelText)\(suffix)"
+        }
+        return ([intro.trimmingCharacters(in: .whitespacesAndNewlines)] + questions)
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
     }
 
     private var structuredInterview: SupervisorInterviewPayload? {
-        guard request.kind == .interviewRequest else { return nil }
         let trimmed = request.message.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Memoized by message content — `body` re-evaluates on every keystroke
-        // while the user fills in the interview, and would otherwise re-decode.
         return JSONParseMemo.value("structuredInterview\(JSONParseMemo.separator)\(trimmed)") {
             let jsonText: String
             if trimmed.hasPrefix("```") {
@@ -105,38 +135,13 @@ struct PiSubagentSupervisorRequestCard: View {
         }
     }
 
-    private var canRespond: Bool {
-        if let interview = structuredInterview {
-            return interview.questions.filter { $0.type != "info" && $0.required != false }.allSatisfy { !(structuredResponses[$0.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        }
-        return !response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var responsePayload: String {
-        guard let interview = structuredInterview else { return response.trimmingCharacters(in: .whitespacesAndNewlines) }
-        let responses = interview.questions
-            .filter { $0.type != "info" }
-            .map { ["id": $0.id, "value": (structuredResponses[$0.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)] }
-        let object: [String: Any] = ["responses": responses]
-        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]),
-              let text = String(data: data, encoding: .utf8) else { return "{\"responses\":[]}" }
-        return text
-    }
-
-    private func binding(for id: String) -> Binding<String> {
-        Binding(
-            get: { structuredResponses[id] ?? "" },
-            set: { structuredResponses[id] = $0 }
-        )
-    }
-
     private struct SupervisorInterviewPayload: Codable {
         var prompt: String?
         var message: String?
         var questions: [SupervisorInterviewQuestion]
     }
 
-    private struct SupervisorInterviewQuestion: Codable, Identifiable {
+    private struct SupervisorInterviewQuestion: Codable {
         var id: String
         var label: String?
         var question: String?
