@@ -2377,15 +2377,14 @@ final class AppViewModel: NSObject {
             repository: project.gitHubRemote?.nameWithOwner
         )
         // Settle selection synchronously: createSession already inserts, sorts,
-        // and assigns `selectedSessionID`; revealSessionGroup expands the
-        // target's group so the row is on screen; selectPiAgentSession commits
-        // the sidebar tab. A second re-assertion on the next runloop was only
-        // here to win the fight against the per-project `selectedProjectPath`
-        // reconciler, which is gone now (see
-        // `reconcileSelectedSessionWithProjectScope`). Re-running it a frame
-        // later rebuilt the cached sections a second time and visibly jumped
-        // the freshly-created row — so it has been removed.
-        revealSessionGroup(session)
+        // and assigns `selectedSessionID`; uncollapse the target's group so the
+        // new row can render, but do not activate "Show more". New sessions are
+        // already in the preview set, and expanding here makes the 5-row
+        // "Show less" list unexpectedly become the full list when pressing +.
+        // selectPiAgentSession commits the sidebar tab. A second re-assertion on
+        // the next runloop was only here to win the fight against the old
+        // per-project `selectedProjectPath` reconciler, which is gone now.
+        uncollapseSessionGroup(session)
         selectPiAgentSession(session.id)
     }
 
@@ -2618,6 +2617,19 @@ final class AppViewModel: NSObject {
         ).flatMap(\.items)
     }
 
+    private func sessionGroupID(for session: PiAgentSessionRecord) -> String {
+        projectByPath[session.projectPath] != nil
+            ? session.projectPath
+            : PiAgentSessionGrouping.otherSectionID
+    }
+
+    /// Ensure the group owning `session` is not disclosure-collapsed without
+    /// changing its Show more/less state. Used for newly-created sessions, which
+    /// are already visible in the capped preview.
+    private func uncollapseSessionGroup(_ session: PiAgentSessionRecord) {
+        collapsedProjects.remove(sessionGroupID(for: session))
+    }
+
     /// Auto-reveal the group owning `session` so it lands on a rendered row:
     /// expand a disclosure-collapsed group and activate "Show more" for a
     /// capped one. State is shared on the view model so every mounted session
@@ -2625,9 +2637,7 @@ final class AppViewModel: NSObject {
     /// a hidden target visible (e.g. notification tap); keyboard navigation no
     /// longer calls this.
     private func revealSessionGroup(_ session: PiAgentSessionRecord) {
-        let groupID = projectByPath[session.projectPath] != nil
-            ? session.projectPath
-            : PiAgentSessionGrouping.otherSectionID
+        let groupID = sessionGroupID(for: session)
         collapsedProjects.remove(groupID)
         expandedProjects.insert(groupID)
     }
