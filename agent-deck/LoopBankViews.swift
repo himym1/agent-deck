@@ -374,22 +374,6 @@ struct LoopBankScreen: View {
                         if project.id != availableProjectsForLoopAssignment.last?.id { Divider() }
                     }
                 }
-                detailRow("Current setting", showsDivider: false) {
-                    Text(availabilityLabel(for: editorDraft))
-                }
-                DisclosureGroup("Advanced project paths") {
-                    detailEditor("Paths", text: Binding(
-                        get: { editorDraft.projectPathsText },
-                        set: { value in
-                            editorDraft.projectPathsText = value
-                            editorDraft.availability = .projectPaths
-                        }
-                    ), minHeight: 72, monospaced: true, info: "Optional: add absolute project paths that are not currently listed above. One path per line.")
-                        .disabled(editorDraft.availability == .allProjects)
-                    Text("All Projects/default overrides per-project assignment. With All Projects off, an empty project list keeps the loop unassigned in the catalog.")
-                        .font(AppTheme.Font.caption)
-                        .foregroundStyle(AppTheme.mutedText)
-                }
             }
         }
     }
