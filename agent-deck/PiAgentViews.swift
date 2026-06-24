@@ -1132,6 +1132,12 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private let prewarmWidthChangeCooldown: CFTimeInterval = 0.35
         private let prewarmMaxEstimatedHeight: CGFloat = 420
 
+        private func isPrewarmEligible(_ item: PiAgentAppKitTranscriptItem) -> Bool {
+            guard case .native(let spec) = item.kind,
+                  spec.typeID == ObjectIdentifier(PiAgentNativeBubbleView.self) else { return false }
+            return item.estimatedHeight(contentWidth) <= prewarmMaxEstimatedHeight
+        }
+
         func schedulePrewarm() {
             guard !Self.prewarmDisabled, let tableView else { return }
             let now = CACurrentMediaTime()
@@ -1159,11 +1165,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // visible path takes priority.
             let pending = orderedIDs.filter { id in
                 guard cellCache[id] == nil, !prewarmBlockedIDs.contains(id) else { return false }
-                // Heavy markdown/tool rows are exactly the rows that can block the
-                // main thread for a visible hitch if built speculatively. Let them
-                // build only when actually needed; prewarm the cheaper majority.
                 guard let item = itemByID[id] else { return false }
-                return item.estimatedHeight(contentWidth) <= prewarmMaxEstimatedHeight
+                return isPrewarmEligible(item)
             }
             guard !pending.isEmpty, cellCache.count < cellCacheLimit else { return }
             // Build outward from the viewport: the user scrolls away from where they
@@ -1201,9 +1204,12 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 #endif
             while !prewarmQueue.isEmpty {
                 let id = prewarmQueue.removeFirst()
-                // Skip rows that scrolled into view (already built) or vanished.
+                // Skip rows that scrolled into view (already built), vanished, or
+                // are not on the cheap prewarm allow-list. Native tool-group/diff
+                // rows can build deep AppKit trees in one configure call, before
+                // the slice budget can yield; leave them to the visible path.
                 guard cellCache[id] == nil, !prewarmBlockedIDs.contains(id),
-                      let item = itemByID[id],
+                      let item = itemByID[id], isPrewarmEligible(item),
                       let row = orderedIDs.firstIndex(of: id) else { continue }
                 let cell = cachedCell(for: id)
                 let rowStart = CACurrentMediaTime()
