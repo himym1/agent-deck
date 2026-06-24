@@ -565,7 +565,7 @@ enum PiAgentTranscriptCellKind {
 extension PiAgentTranscriptCellKind {
     /// Convenience for a native message bubble.
     static func bubble(_ payload: NativeBubblePayload) -> PiAgentTranscriptCellKind {
-        .native(.of(PiAgentNativeBubbleView.self) { view, width in
+        .native(.of(PiAgentNativeBubbleView.self, prewarmPolicy: .extendedIdle) { view, width in
             view.configure(payload: payload, width: width)
         })
     }
@@ -1138,12 +1138,27 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// of the post-gesture layout/display tail that still showed up in hitch
         /// samples as `prewarmStep → configure → installNativeRow`.
         private let prewarmUserScrollGraceWindow: CFTimeInterval = 0.9
+        private let prewarmExtendedIdleWindow: CFTimeInterval = 2.5
         private let prewarmRetryDelay: CFTimeInterval = 0.25
         private let prewarmInterSliceDelay: CFTimeInterval = 0.05
         private let prewarmMaxEstimatedHeight: CGFloat = 420
+        private var lastPrewarmBlockingActivityTime: CFTimeInterval = CACurrentMediaTime()
 
-        private func isPrewarmEligible(_ item: PiAgentAppKitTranscriptItem) -> Bool {
-            guard case .native = item.kind else { return false }
+        private func extendedPrewarmIdleReady(now: CFTimeInterval) -> Bool {
+            let lastBlockingActivity = max(lastPrewarmBlockingActivityTime, max(lastUserScrollTime, lastWidthChangeTime))
+            return now - lastBlockingActivity >= prewarmExtendedIdleWindow
+        }
+
+        private func isPrewarmEligible(_ item: PiAgentAppKitTranscriptItem, extendedIdleReady: Bool) -> Bool {
+            guard case .native(let spec) = item.kind else { return false }
+            switch spec.prewarmPolicy {
+            case .immediate:
+                break
+            case .extendedIdle:
+                guard extendedIdleReady else { return false }
+            case .disabled:
+                return false
+            }
             return item.estimatedHeight(contentWidth) <= prewarmMaxEstimatedHeight
         }
 
@@ -1172,6 +1187,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // stream is off-screen — pre-warm the history they're scrolling toward so
             // those rows are already built (no construction stutter) once idle.
             if profiler.isScrollWindowActive || (profiler.isStreamingRecently && isAutoFollowing) {
+                lastPrewarmBlockingActivityTime = now
                 guard !prewarmScheduled else { return }
                 prewarmScheduled = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
@@ -1185,12 +1201,27 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // order, capped to the cache limit (pre-warming past it would just evict
             // what we built). Streaming/following and active-scroll periods defer
             // above so the visible path takes priority.
+            let extendedIdleReady = extendedPrewarmIdleReady(now: now)
             let pending = orderedIDs.filter { id in
                 guard cellCache[id] == nil, !prewarmBlockedIDs.contains(id) else { return false }
                 guard let item = itemByID[id] else { return false }
-                return isPrewarmEligible(item)
+                return isPrewarmEligible(item, extendedIdleReady: extendedIdleReady)
             }
-            guard !pending.isEmpty, cellCache.count < cellCacheLimit else { return }
+            guard !pending.isEmpty, cellCache.count < cellCacheLimit else {
+                let hasDeferredCandidate = !extendedIdleReady && cellCache.count < cellCacheLimit && orderedIDs.contains { id in
+                    guard cellCache[id] == nil, !prewarmBlockedIDs.contains(id), let item = itemByID[id] else { return false }
+                    return isPrewarmEligible(item, extendedIdleReady: true)
+                }
+                guard hasDeferredCandidate, !prewarmScheduled else { return }
+                prewarmScheduled = true
+                let delay = max(prewarmRetryDelay, prewarmExtendedIdleWindow - (now - max(lastPrewarmBlockingActivityTime, max(lastUserScrollTime, lastWidthChangeTime))))
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self else { return }
+                    self.prewarmScheduled = false
+                    self.schedulePrewarm()
+                }
+                return
+            }
             // Build outward from the viewport: the user scrolls away from where they
             // are (the view opens pinned to the bottom), so rows nearest the visible
             // range should be ready first. Order pending ids by row distance from the
@@ -1222,10 +1253,29 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 || pendingGlideLandingSettleWork != nil
                 || pendingRemeasureWork != nil
             if prewarmScrollGraceActive || profiler.isScrollWindowActive || profiler.isStreamingRecently || widthSettlesIn > 0 || displayOrLayoutWorkPending {
+                lastPrewarmBlockingActivityTime = now
                 prewarmScheduled = true
                 let delay = max(prewarmRetryDelay, widthSettlesIn)
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.prewarmStep() }
                 return
+            }
+            let extendedIdleReady = extendedPrewarmIdleReady(now: now)
+            if !extendedIdleReady {
+                let hasOnlyDeferredRows = prewarmQueue.contains { id in
+                    guard let item = itemByID[id] else { return false }
+                    return isPrewarmEligible(item, extendedIdleReady: true)
+                        && !isPrewarmEligible(item, extendedIdleReady: false)
+                }
+                if hasOnlyDeferredRows {
+                    prewarmScheduled = true
+                    let delay = max(prewarmRetryDelay, prewarmExtendedIdleWindow - (now - max(lastPrewarmBlockingActivityTime, max(lastUserScrollTime, lastWidthChangeTime))))
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.prewarmStep() }
+                    return
+                }
+            }
+            prewarmQueue.removeAll { id in
+                guard let item = itemByID[id] else { return true }
+                return !isPrewarmEligible(item, extendedIdleReady: extendedIdleReady)
             }
             let start = CACurrentMediaTime()
 #if DEBUG
@@ -1238,7 +1288,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 // rows can build deep AppKit trees in one configure call, before
                 // the slice budget can yield; leave them to the visible path.
                 guard cellCache[id] == nil, !prewarmBlockedIDs.contains(id),
-                      let item = itemByID[id], isPrewarmEligible(item),
+                      let item = itemByID[id], isPrewarmEligible(item, extendedIdleReady: extendedIdleReady),
                       let row = orderedIDs.firstIndex(of: id) else { continue }
                 let cell = cachedCell(for: id)
                 let rowStart = CACurrentMediaTime()
