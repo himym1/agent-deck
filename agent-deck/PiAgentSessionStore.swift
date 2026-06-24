@@ -1574,13 +1574,19 @@ final class PiAgentSessionStore {
         return current
     }
 
-    private func pipelineStageTask(run: LoopRun, iterationIndex: Int, stageIndex: Int, stageName: String, previousStageSummaries: [String]) -> String {
-        var lines: [String] = [
-            "You are stage \(stageIndex + 1) of \(run.pipeline.stageNames.count) in an Agent Deck loop pipeline.",
-            "Selected agent/stage: \(stageName)",
+    private func loopRuntimeContext(run: LoopRun, iterationIndex: Int) -> [String] {
+        [
+            "Agent Deck is running this loop. Agent Deck controls iteration count, retries, stopping, artifacts, and validation. Do not run your own open-ended loop; complete only this assigned step.",
             "Loop goal: \(run.goal)",
             "Iteration: \(iterationIndex) of \(run.maxIterations)",
-            "Write target: \(run.writeTarget.displayName)",
+            "Write target: \(run.writeTarget.displayName)"
+        ]
+    }
+
+    private func pipelineStageTask(run: LoopRun, iterationIndex: Int, stageIndex: Int, stageName: String, previousStageSummaries: [String]) -> String {
+        var lines: [String] = loopRuntimeContext(run: run, iterationIndex: iterationIndex) + [
+            "You are completing stage \(stageIndex + 1) of \(run.pipeline.stageNames.count) in an ordered pipeline.",
+            "Assigned stage/agent: \(stageName)",
             "Pipeline order: \(run.pipeline.stageNames.joined(separator: " → "))"
         ]
         if !run.validationCommand.isEmpty {
@@ -1592,7 +1598,7 @@ final class PiAgentSessionStore {
             lines.append(contentsOf: previousStageSummaries.map { "- \($0)" })
         }
         lines.append("")
-        lines.append("Do only the work appropriate for this stage. Be explicit about what you changed, found, or verified. End with a concise handoff summary for the next stage.")
+        lines.append("Do only the work appropriate for this assigned stage. Be explicit about what you changed, found, or verified. End with a concise handoff summary for the next stage or final loop summary.")
         return lines.joined(separator: "\n")
     }
 
@@ -1657,13 +1663,10 @@ final class PiAgentSessionStore {
     }
 
     private func singleAgentTask(run: LoopRun, iterationIndex: Int) -> String {
-        [
-            "You are running a Single Agent loop in Agent Deck.",
-            "Loop goal: \(run.goal)",
-            "Iteration: \(iterationIndex) of \(run.maxIterations)",
-            "Write target: \(run.writeTarget.displayName)",
+        (loopRuntimeContext(run: run, iterationIndex: iterationIndex) + [
+            "You are completing one implementation/review pass for this loop.",
             "Complete the requested work within the selected write target. End with a concise summary of changes, evidence, risks, and next steps."
-        ].joined(separator: "\n\n")
+        ]).joined(separator: "\n\n")
     }
 
     private func singleAgentArtifactMarkdown(run: LoopRun, iterationIndex: Int, childRunID: UUID, summary: String) -> String {
@@ -1682,14 +1685,11 @@ final class PiAgentSessionStore {
     }
 
     private func parallelBranchTask(run: LoopRun, iterationIndex: Int, branchName: String) -> String {
-        [
-            "You are one branch in an Agent Deck Parallel Agents loop.",
-            "Loop goal: \(run.goal)",
-            "Branch agent: \(branchName)",
-            "Iteration: \(iterationIndex) of \(run.maxIterations)",
-            "Write target: \(run.writeTarget.displayName)",
-            "Work independently on this branch. End with a concise Markdown summary of findings, changes, risks, and recommended next action."
-        ].joined(separator: "\n\n")
+        (loopRuntimeContext(run: run, iterationIndex: iterationIndex) + [
+            "You are working on one assigned branch/hypothesis of a parallel loop.",
+            "Assigned branch/agent: \(branchName)",
+            "Work independently on this branch. Do not coordinate with sibling branches unless the task explicitly asks you to. End with a concise Markdown summary of findings, changes, risks, and recommended next action."
+        ]).joined(separator: "\n\n")
     }
 
     private func parallelAgentsArtifactMarkdown(run: LoopRun, iterationIndex: Int, graphRunID: UUID, summary: String) -> String {
@@ -1708,14 +1708,11 @@ final class PiAgentSessionStore {
     }
 
     private func discoveryTriageTask(run: LoopRun, iterationIndex: Int) -> String {
-        [
-            "You are the Discovery / Triage agent in an Agent Deck loop.",
-            "Loop goal: \(run.goal)",
-            "Iteration: \(iterationIndex) of \(run.maxIterations)",
-            "Write target: \(run.writeTarget.displayName)",
+        (loopRuntimeContext(run: run, iterationIndex: iterationIndex) + [
+            "You are performing discovery and triage for this loop step.",
             "Classification prompt: \(run.discoveryTriage.classificationPrompt)",
-            "Inspect the requested signals and repository context. Group findings by severity/category, cite evidence, and recommend the safest next action. Produce a concise Markdown triage artifact."
-        ].joined(separator: "\n\n")
+            "Inspect the requested signals and repository context. Group findings by severity/category, cite evidence, and recommend the safest next action. Do not implement fixes unless the loop goal explicitly asks you to. Produce a concise Markdown triage artifact."
+        ]).joined(separator: "\n\n")
     }
 
     private func discoveryTriageArtifactMarkdown(run: LoopRun, iterationIndex: Int, childRunID: UUID, summary: String) -> String {
@@ -1735,28 +1732,23 @@ final class PiAgentSessionStore {
     }
 
     private func makerCheckerTask(run: LoopRun, iterationIndex: Int, role: String, priorReview: String) -> String {
-        var lines = [
-            "You are the \(role) in an Agent Deck Maker + Checker loop.",
-            "Loop goal: \(run.goal)",
-            "Iteration: \(iterationIndex) of \(run.maxIterations)",
-            "Write target: \(run.writeTarget.displayName)"
+        var lines = loopRuntimeContext(run: run, iterationIndex: iterationIndex) + [
+            "You are implementing one maker pass for this loop step."
         ]
         if !priorReview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             lines.append("Previous checker review to address:\n\(priorReview)")
         }
-        lines.append("Do the maker work. End with a concise summary for the checker.")
+        lines.append("Do only the requested work for this maker pass. End with a concise summary for the reviewer/checker, including what changed, what evidence you used, and what remains.")
         return lines.joined(separator: "\n\n")
     }
 
     private func checkerTask(run: LoopRun, iterationIndex: Int, makerSummary: String) -> String {
-        [
-            "You are the report-only Checker in an Agent Deck Maker + Checker loop.",
-            "Loop goal: \(run.goal)",
-            "Iteration: \(iterationIndex) of \(run.maxIterations)",
-            "Checker rubric: \(run.makerChecker.checkerRubric)",
+        (loopRuntimeContext(run: run, iterationIndex: iterationIndex) + [
+            "You are reviewing one completed loop iteration. Review only; do not edit project files.",
+            "Review criteria: \(run.makerChecker.checkerRubric)",
             "Maker summary:\n\(makerSummary)",
-            "Review without editing project files. Start your final response with exactly one decision line: APPROVE, REJECT, ASK_HUMAN, or FAIL. Then explain why."
-        ].joined(separator: "\n\n")
+            "Agent Deck parses your first line to decide the next step. Start your final response with exactly one decision line: APPROVE, REJECT, ASK_HUMAN, or FAIL. Then briefly explain the decision with evidence."
+        ]).joined(separator: "\n\n")
     }
 
     private func checkerResult(from text: String, fallbackRubric: String) -> LoopCheckerResult {

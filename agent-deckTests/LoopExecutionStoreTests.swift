@@ -9,6 +9,7 @@ final class LoopExecutionStoreTests: XCTestCase {
         var observedAgent = ""
         var observedWriteTarget: LoopWriteTarget?
         var observedOutputPath: String?
+        var observedTask = ""
         let draft = LoopDraft(
             goal: "Produce report",
             structure: .singleAgent,
@@ -21,6 +22,7 @@ final class LoopExecutionStoreTests: XCTestCase {
             observedAgent = agentName
             observedWriteTarget = writeTarget
             observedOutputPath = outputPath
+            observedTask = task
             return Self.fakeRun(parentSessionID: session.id, agentName: agentName, task: task, status: .completed, summary: "done")
         }
         let run = try XCTUnwrap(maybeRun)
@@ -35,6 +37,9 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertEqual(observedAgent, "Explorer")
         XCTAssertEqual(observedWriteTarget, .artifactMarkdown)
         XCTAssertNotNil(observedOutputPath)
+        XCTAssertTrue(observedTask.contains("Agent Deck controls iteration count, retries, stopping, artifacts, and validation"))
+        XCTAssertTrue(observedTask.contains("Do not run your own open-ended loop"))
+        XCTAssertTrue(observedTask.contains("You are completing one implementation/review pass"))
     }
 
     func testSingleAgentLoopMapsChildFailureAndStop() async throws {
@@ -72,6 +77,10 @@ final class LoopExecutionStoreTests: XCTestCase {
 
         let maybeRun = await store.launchAgentPipelineLoop(session: session, draft: draft) { _, role, task, writeTarget, _, outputPath in
             observed.append((role, writeTarget, outputPath))
+            if role == "Analyze" {
+                XCTAssertTrue(task.contains("You are completing stage 1 of 2 in an ordered pipeline"))
+                XCTAssertTrue(task.contains("Do only the work appropriate for this assigned stage"))
+            }
             return Self.fakeRun(parentSessionID: session.id, agentName: role, task: task, status: .completed, summary: "\(role) done")
         }
         let run = try XCTUnwrap(maybeRun)
@@ -145,6 +154,8 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertEqual(run.iterations[0].timeline.map(\.roleName), ["BranchA", "BranchB"])
         XCTAssertEqual(run.iterations[0].artifacts.first?.filename, "parallel-summary.md")
         XCTAssertEqual(observedTasks.map(\.0), ["BranchA", "BranchB"])
+        XCTAssertTrue(observedTasks[0].1.contains("one assigned branch/hypothesis"))
+        XCTAssertTrue(observedTasks[0].1.contains("Do not coordinate with sibling branches"))
         XCTAssertEqual(observedConcurrency, 2)
         XCTAssertFalse(observedUseWorktree)
     }
@@ -178,12 +189,15 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertEqual(observedAgent, "Triage Agent")
         XCTAssertTrue(observedTask.contains("Triage failures"))
         XCTAssertTrue(observedTask.contains("severity and owner"))
+        XCTAssertTrue(observedTask.contains("performing discovery and triage"))
+        XCTAssertTrue(observedTask.contains("Do not implement fixes unless the loop goal explicitly asks"))
     }
 
     func testMakerCheckerLoopRejectThenApproveAcrossIterations() async throws {
         let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
         let session = try makeSession(store: store)
         var responses = ["Maker pass", "REJECT", "Maker revised", "APPROVE"]
+        var observedTasks: [(role: String, task: String)] = []
         let draft = LoopDraft(
             goal: "Build safely",
             structure: .makerChecker,
@@ -193,6 +207,7 @@ final class LoopExecutionStoreTests: XCTestCase {
         )
 
         let maybeRun = await store.launchMakerCheckerLoop(session: session, draft: draft) { _, role, task, _, _, _ in
+            observedTasks.append((role, task))
             let summary = responses.removeFirst()
             return Self.fakeRun(parentSessionID: session.id, agentName: role, task: task, status: .completed, summary: summary)
         }
@@ -204,6 +219,10 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertEqual(run.iterations.count, 2)
         XCTAssertEqual(run.iterations.map(\.checkerResult), [.reject, .approve])
         XCTAssertEqual(run.iterations.flatMap { $0.timeline.map(\.step) }, [.makerAct, .checkerReview, .makerAct, .checkerReview])
+        XCTAssertTrue(observedTasks[0].task.contains("implementing one maker pass"))
+        XCTAssertTrue(observedTasks[1].task.contains("Agent Deck parses your first line"))
+        XCTAssertTrue(observedTasks[1].task.contains("APPROVE, REJECT, ASK_HUMAN, or FAIL"))
+        XCTAssertTrue(observedTasks[2].task.contains("Previous checker review to address"))
         XCTAssertTrue(responses.isEmpty)
     }
 
