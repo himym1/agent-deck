@@ -1045,6 +1045,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
         private struct ScrollAnchor {
             let id: String
+            let rowIndex: Int
             let offsetFromRowTop: CGFloat
         }
 
@@ -2288,8 +2289,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             let wasProgrammatic = isProgrammaticScroll
             isProgrammaticScroll = true
             tableView.noteHeightOfRows(withIndexesChanged: rows)
-            if let anchor {
-                // rect(ofRow:) must see the new heights before we re-anchor.
+            if let anchor, let changedRowAboveAnchor = rows.min(), changedRowAboveAnchor < anchor.rowIndex {
+                // rect(ofRow:) must see the new heights before we re-anchor. If
+                // every changed row is at/below the anchor, the anchor's minY is
+                // unchanged, so avoid the synchronous full subtree layout entirely.
                 tableView.layoutSubtreeIfNeeded()
                 restoreScrollAnchor(anchor)
             } else if willAutoFollow, let scrollView,
@@ -2371,7 +2374,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             let row = tableView.row(at: NSPoint(x: 0, y: originY))
             guard row >= 0, row < orderedIDs.count else { return nil }
             let rowRect = tableView.rect(ofRow: row)
-            return ScrollAnchor(id: orderedIDs[row], offsetFromRowTop: originY - rowRect.minY)
+            return ScrollAnchor(id: orderedIDs[row], rowIndex: row, offsetFromRowTop: originY - rowRect.minY)
         }
 
         private func restoreScrollAnchorIfNeeded(_ anchor: ScrollAnchor?) {
