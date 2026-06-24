@@ -356,6 +356,15 @@ extension View {
             .buttonBorderShape(.capsule)
     }
 
+    /// Tinted secondary action — translucent glass capsule with a semantic tint.
+    /// Use when the action belongs to a warning/success/info surface but is not
+    /// the primary dialog CTA.
+    func appTintedSecondaryButton(_ tint: Color) -> some View {
+        buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
+            .tint(tint)
+    }
+
     /// Compact secondary action — translucent glass capsule with small native metrics.
     /// Use for inline edit/reveal/preview controls that should remain button-like but
     /// lighter and smaller than a standard row action.

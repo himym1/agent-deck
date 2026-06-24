@@ -416,7 +416,7 @@ struct LoopLaunchSheet: View {
                 } label: {
                     Label("Enable Deck agents", systemImage: "checkmark.circle")
                 }
-                .appSecondaryButton()
+                .appTintedSecondaryButton(.orange)
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -457,7 +457,7 @@ struct LoopLaunchSheet: View {
                     } label: {
                         Label("Assign fixable agents", systemImage: "plus.circle")
                     }
-                    .appSecondaryButton()
+                    .appTintedSecondaryButton(.orange)
                     .disabled(session.projectPath.isEmpty || assignablePreflightAgentNames.isEmpty)
                     .help(assignablePreflightAgentNames.isEmpty ? "No unassigned existing agents can be fixed automatically." : "Assign existing unassigned agents to the current project")
 
