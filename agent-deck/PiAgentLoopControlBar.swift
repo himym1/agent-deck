@@ -70,7 +70,7 @@ struct PiAgentLoopControlBar: View {
             Button("Details", action: onOpenDetails)
                 .appSmallSecondaryButton()
             if hasMoreActions {
-                Menu("More") {
+                Menu {
                     if canRetry {
                         Button("Retry Failed Iteration", action: { onRetry?() })
                             .disabled(onRetry == nil)
@@ -95,9 +95,15 @@ struct PiAgentLoopControlBar: View {
                         Button("Discard Worktree", role: .destructive, action: { onDiscardWorktree?() })
                             .disabled(onDiscardWorktree == nil)
                     }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("More")
+                        Image(systemName: "chevron.down")
+                            .imageScale(.small)
+                    }
                 }
-                .menuStyle(.button)
-                .controlSize(.small)
+                .menuIndicator(.hidden)
+                .appSmallSecondaryButton()
             }
         }
     }
