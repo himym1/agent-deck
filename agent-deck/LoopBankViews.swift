@@ -320,13 +320,13 @@ struct LoopBankScreen: View {
     private func readOnlyDefinitionFields(for definition: LoopDefinition) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             readOnlyFieldRow("Name", value: definition.name, placeholder: "Untitled loop")
-            readOnlyFieldRow("Description", value: definition.description, placeholder: "No description")
+            readOnlyMarkdownFieldRow("Description", value: definition.description, placeholder: "No description")
             readOnlyFieldRow("Structure", value: definition.structure.displayName)
             readOnlyFieldRow("Write target", value: definition.writeTarget.displayName)
             readOnlyFieldRow("Max iterations", value: "\(definition.maxIterations)")
-            readOnlyFieldRow("Goal template", value: definition.goalTemplate, placeholder: "No goal template")
+            readOnlyMarkdownFieldRow("Goal template", value: definition.goalTemplate, placeholder: "No goal template")
             if let launchContext = definition.launchContext, !launchContext.isEmpty {
-                readOnlyFieldRow("Launch context", value: launchContext)
+                readOnlyMarkdownFieldRow("Launch context", value: launchContext)
                 readOnlyFieldRow("Context scope", value: definition.launchContextScope.displayName)
             } else {
                 readOnlyFieldRow("Launch context", value: "None")
@@ -554,7 +554,7 @@ struct LoopBankScreen: View {
                 VStack(alignment: .leading, spacing: 10) {
                     readOnlyFieldRow("Maker agent", value: definition.makerChecker.makerName, placeholder: "Not selected")
                     readOnlyFieldRow("Checker agent", value: definition.makerChecker.checkerName, placeholder: "Not selected")
-                    readOnlyFieldRow("Checker rubric", value: definition.makerChecker.checkerRubric)
+                    readOnlyMarkdownFieldRow("Checker rubric", value: definition.makerChecker.checkerRubric)
                     readOnlyFieldRow("Max review rounds", value: "\(definition.makerChecker.maxReviewRounds)", isLast: true)
                 }
             }
@@ -570,12 +570,12 @@ struct LoopBankScreen: View {
             AppCard(title: "Discovery / Triage") {
                 VStack(alignment: .leading, spacing: 10) {
                     readOnlyFieldRow("Triage agent", value: definition.discoveryTriage.agentName, placeholder: "Not selected")
-                    readOnlyFieldRow("Classification prompt", value: definition.discoveryTriage.classificationPrompt, isLast: true)
+                    readOnlyMarkdownFieldRow("Classification prompt", value: definition.discoveryTriage.classificationPrompt, isLast: true)
                 }
             }
         case .humanApproval:
             AppCard(title: "Human Approval") {
-                readOnlyFieldRow("Checkpoint prompt", value: definition.humanApproval.checkpointPrompt, isLast: true)
+                readOnlyMarkdownFieldRow("Checkpoint prompt", value: definition.humanApproval.checkpointPrompt, isLast: true)
             }
         case .singleAgent:
             AppCard(title: "Single Agent") {
@@ -794,10 +794,7 @@ struct LoopBankScreen: View {
         let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
         let isPlaceholder = trimmedValue.isEmpty
         VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .fontWidth(.expanded)
-                .foregroundStyle(AppTheme.mutedText)
+            readOnlyFieldLabel(title)
             Text(isPlaceholder ? (placeholder ?? "None") : value)
                 .font(AppTheme.Font.body)
                 .foregroundStyle(isPlaceholder ? AppTheme.mutedText : .primary)
@@ -808,6 +805,35 @@ struct LoopBankScreen: View {
         if !isLast {
             Divider()
         }
+    }
+
+    @ViewBuilder
+    private func readOnlyMarkdownFieldRow(_ title: String, value: String, placeholder: String? = nil, isLast: Bool = false) -> some View {
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isPlaceholder = trimmedValue.isEmpty
+        VStack(alignment: .leading, spacing: 4) {
+            readOnlyFieldLabel(title)
+            if isPlaceholder {
+                Text(placeholder ?? "None")
+                    .font(AppTheme.Font.body)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                MarkdownDocumentView(source: value, minimumHeight: 24)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        if !isLast {
+            Divider()
+        }
+    }
+
+    private func readOnlyFieldLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .fontWidth(.expanded)
+            .foregroundStyle(AppTheme.mutedText)
     }
 
     private func detailLabel(_ title: String, info: String? = nil, infoRows: [LoopInlineInfoButton.Row] = []) -> some View {
