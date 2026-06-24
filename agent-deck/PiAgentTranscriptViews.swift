@@ -1387,12 +1387,17 @@ struct PiAgentTranscriptThreadCard: View {
 extension PiAgentTranscriptEntry {
     var agentMemoryEvent: AgentMemoryTranscriptEvent? {
         guard let rawJSON,
-              let data = rawJSON.data(using: .utf8),
-              let event = try? transcriptJSONDecoder.decode(AgentMemoryTranscriptEvent.self, from: data),
-              event.type == AgentMemoryTranscriptEvent.rawType else {
+              rawJSON.contains(AgentMemoryTranscriptEvent.rawType) else {
             return nil
         }
-        return event
+        return JSONParseMemo.value("agentMemoryEvent\(JSONParseMemo.separator)\(rawJSON)") {
+            guard let data = rawJSON.data(using: .utf8),
+                  let event = try? transcriptJSONDecoder.decode(AgentMemoryTranscriptEvent.self, from: data),
+                  event.type == AgentMemoryTranscriptEvent.rawType else {
+                return nil
+            }
+            return event
+        }
     }
 }
 
