@@ -5,55 +5,105 @@ struct PiAgentLoopControlBar: View {
     let run: LoopRun
     let onOpenDetails: () -> Void
     let onStop: () -> Void
+    let onRetry: (() -> Void)?
+    let onSave: (() -> Void)?
     let onRevealArtifacts: (() -> Void)?
+    let onRevealWorktree: (() -> Void)?
+    let onApplyWorktree: (() -> Void)?
+    let onDiscardWorktree: (() -> Void)?
+    let onApproveHumanApproval: (() -> Void)?
+    let onRejectHumanApproval: (() -> Void)?
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Image(systemName: "infinity")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(AppTheme.brandAccent)
-                .frame(width: 28, height: 28)
-                .background(Circle().fill(AppTheme.brandAccent.opacity(0.14)))
+        AppRowCard {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: "infinity")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(AppTheme.brandAccent)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(AppTheme.brandAccent.opacity(0.14)))
 
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text("Loop running — use loop controls")
-                        .font(AppTheme.Font.body.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Text(run.status.displayName)
-                        .font(AppTheme.Font.caption.weight(.semibold))
-                        .foregroundStyle(run.isActive ? AppTheme.brandAccent : AppTheme.mutedText)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule(style: .continuous).fill((run.isActive ? AppTheme.brandAccent : AppTheme.mutedText).opacity(0.12)))
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(titleText)
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text(run.status.displayName)
+                            .font(AppTheme.Font.caption.weight(.semibold))
+                            .foregroundStyle(run.isActive ? AppTheme.brandAccent : AppTheme.mutedText)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule(style: .continuous).fill((run.isActive ? AppTheme.brandAccent : AppTheme.mutedText).opacity(0.12)))
+                    }
+                    Text(detailText)
+                        .font(AppTheme.Font.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .lineLimit(2)
                 }
-                Text(detailText)
-                    .font(AppTheme.Font.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-                    .lineLimit(2)
+
+                Spacer(minLength: 8)
+
+                actions
             }
+        }
+        .accessibilityElement(children: .combine)
+    }
 
-            Spacer(minLength: 8)
-
-            Button("Open Details", action: onOpenDetails)
-                .appSmallSecondaryButton()
-            if let onRevealArtifacts {
-                Button("Reveal Artifacts", action: onRevealArtifacts)
-                    .appSmallSecondaryButton()
+    @ViewBuilder
+    private var actions: some View {
+        HStack(spacing: 8) {
+            if canResolveHumanApproval {
+                Button("Approve", action: { onApproveHumanApproval?() })
+                    .appPrimaryButton()
+                    .controlSize(.small)
+                    .disabled(onApproveHumanApproval == nil)
+                Button("Reject", role: .destructive, action: { onRejectHumanApproval?() })
+                    .appDestructiveButton()
+                    .controlSize(.small)
+                    .disabled(onRejectHumanApproval == nil)
             }
             if run.isActive {
                 Button("Stop", role: .destructive, action: onStop)
                     .appDestructiveButton()
                     .controlSize(.small)
             }
+            Button("Details", action: onOpenDetails)
+                .appSmallSecondaryButton()
+            if hasMoreActions {
+                Menu("More") {
+                    if canRetry {
+                        Button("Retry Failed Iteration", action: { onRetry?() })
+                            .disabled(onRetry == nil)
+                    }
+                    if canSave {
+                        Button("Save Loop", action: { onSave?() })
+                            .disabled(onSave == nil)
+                    }
+                    if canRevealArtifacts {
+                        Button("Reveal Artifacts", action: { onRevealArtifacts?() })
+                            .disabled(onRevealArtifacts == nil)
+                    }
+                    if canRevealWorktree {
+                        Button("Reveal Worktree", action: { onRevealWorktree?() })
+                            .disabled(onRevealWorktree == nil)
+                    }
+                    if canApplyWorktree {
+                        Button("Apply Worktree", action: { onApplyWorktree?() })
+                            .disabled(onApplyWorktree == nil)
+                    }
+                    if canDiscardWorktree {
+                        Button("Discard Worktree", role: .destructive, action: { onDiscardWorktree?() })
+                            .disabled(onDiscardWorktree == nil)
+                    }
+                }
+                .menuStyle(.button)
+                .controlSize(.small)
+            }
         }
-        .padding(12)
-        .appContentSurface(cornerRadius: AppTheme.Chat.composerCornerRadius)
-        .overlay {
-            RoundedRectangle(cornerRadius: AppTheme.Chat.composerCornerRadius, style: .continuous)
-                .strokeBorder(AppTheme.brandAccent.opacity(0.22), lineWidth: 1)
-        }
-        .accessibilityElement(children: .combine)
+    }
+
+    private var titleText: String {
+        run.isActive ? "Loop running" : "Loop: \(run.structure.displayName)"
     }
 
     private var detailText: String {
@@ -61,9 +111,70 @@ struct PiAgentLoopControlBar: View {
         if let stopReason = run.stopReason, !run.isActive {
             parts.append("Stop reason: \(stopReason.displayName)")
         } else if let latest = run.iterations.last?.summary, !latest.isEmpty {
-            parts.append(latest)
+            parts.append(trimSummary(latest))
         }
         return parts.joined(separator: " · ")
+    }
+
+    private func trimSummary(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 140 else { return trimmed }
+        return String(trimmed.prefix(140)) + "…"
+    }
+
+    private var hasMoreActions: Bool {
+        canRetry || canSave || canRevealArtifacts || canRevealWorktree || canApplyWorktree || canDiscardWorktree
+    }
+
+    private var canRetry: Bool { !run.isActive && run.status == .failed }
+    private var canSave: Bool { !run.isActive }
+    private var canRevealArtifacts: Bool { run.artifactDirectoryPath != nil }
+
+    private var canRevealWorktree: Bool {
+        run.writeTarget == .newWorktree && hasWorktree && !worktreeAlreadyHandled
+    }
+
+    private var canApplyWorktree: Bool {
+        canOperateOnWorktree
+    }
+
+    private var canDiscardWorktree: Bool {
+        canOperateOnWorktree
+    }
+
+    private var canResolveHumanApproval: Bool {
+        run.structure == .humanApproval && run.status == .stopped && run.stopReason == .humanInputRequired
+    }
+
+    private var canOperateOnWorktree: Bool {
+        run.writeTarget == .newWorktree && !run.isActive && hasWorktree && !worktreeAlreadyHandled
+    }
+
+    private var hasWorktree: Bool {
+        guard let worktreeURL else { return false }
+        return FileManager.default.fileExists(atPath: worktreeURL.path)
+    }
+
+    private var worktreeAlreadyHandled: Bool {
+        run.worktreeState == .applied || run.worktreeState == .discarded || hasAppliedMarker || hasDiscardedMarker
+    }
+
+    private var worktreeURL: URL? {
+        run.artifactDirectoryPath.map { URL(fileURLWithPath: $0).appendingPathComponent("worktree", isDirectory: true) }
+    }
+
+    private var hasAppliedMarker: Bool {
+        guard let artifactDirectoryURL else { return false }
+        return FileManager.default.fileExists(atPath: artifactDirectoryURL.appendingPathComponent("worktree.applied").path)
+    }
+
+    private var hasDiscardedMarker: Bool {
+        guard let artifactDirectoryURL else { return false }
+        return FileManager.default.fileExists(atPath: artifactDirectoryURL.appendingPathComponent("worktree.discarded").path)
+    }
+
+    private var artifactDirectoryURL: URL? {
+        run.artifactDirectoryPath.map { URL(fileURLWithPath: $0) }
     }
 }
 
@@ -141,4 +252,3 @@ struct PiAgentLoopDetailsSheet: View {
         }
     }
 }
-

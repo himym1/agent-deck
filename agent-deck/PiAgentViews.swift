@@ -503,7 +503,6 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
             return isMeaningfulAssistantEntry(entry)
         case .status:
             return entry.isNativeSubagentCard
-                || entry.isLoopTranscriptCard
                 || entry.isLoopRecapEntry
                 || entry.agentMemoryEvent != nil
                 || entry.title == "Compaction"
@@ -4921,46 +4920,8 @@ struct PiAgentScreen: View {
                     view.configure(payload: payload, width: width)
                 })
             }
-            if let loopRun = LoopRunTranscriptCodec.decode(from: entry) {
-                let payload = NativeLoopRunPayload.make(
-                    run: loopRun,
-                    onStop: loopRun.isActive ? { [store] in _ = store.stopLoopRun(loopRun.id, sessionID: loopRun.sessionID) } : nil,
-                    onRetry: { [viewModel] in viewModel.retryLoopRun(loopRun) },
-                    onSave: { [viewModel, store] in
-                        do {
-                            _ = try viewModel.saveLoopDefinitionFromRun(loopRun)
-                            store.append(.init(sessionID: loopRun.sessionID, role: .status, title: "Loop Saved", text: "Saved loop to Loop Bank."))
-                        } catch {
-                            store.append(.init(sessionID: loopRun.sessionID, role: .error, title: "Loop Save Failed", text: error.localizedDescription))
-                        }
-                    },
-                    onRevealArtifacts: loopRun.artifactDirectoryPath.map { path in
-                        { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
-                    },
-                    onRevealWorktree: loopRun.artifactDirectoryPath.map { path in
-                        { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path).appendingPathComponent("worktree", isDirectory: true)]) }
-                    },
-                    onApplyWorktree: loopRun.writeTarget == .newWorktree && !loopRun.isActive ? { [viewModel] in viewModel.applyLoopWorktree(loopRun) } : nil,
-                    onDiscardWorktree: loopRun.writeTarget == .newWorktree && !loopRun.isActive ? { [viewModel] in
-                        let alert = NSAlert()
-                        alert.messageText = "Discard loop worktree?"
-                        alert.informativeText = "This removes the loop worktree. Loop artifacts are kept, but unapplied worktree changes will be lost."
-                        alert.alertStyle = .warning
-                        alert.addButton(withTitle: "Discard Worktree")
-                        alert.addButton(withTitle: "Cancel")
-                        guard alert.runModal() == .alertFirstButtonReturn else { return }
-                        viewModel.discardLoopWorktree(loopRun)
-                    } : nil,
-                    onApproveHumanApproval: loopRun.structure == .humanApproval && loopRun.stopReason == .humanInputRequired ? { [store] in
-                        _ = store.resolveHumanApprovalLoopRun(loopRun.id, sessionID: loopRun.sessionID, approved: true)
-                    } : nil,
-                    onRejectHumanApproval: loopRun.structure == .humanApproval && loopRun.stopReason == .humanInputRequired ? { [store] in
-                        _ = store.resolveHumanApprovalLoopRun(loopRun.id, sessionID: loopRun.sessionID, approved: false)
-                    } : nil
-                )
-                return .native(.of(PiAgentNativeLoopRunCardView.self) { view, width in
-                    view.configure(payload: payload, width: width)
-                })
+            if LoopRunTranscriptCodec.decode(from: entry) != nil {
+                return Self.nativeEmptyKind
             }
             if let memoryEvent = entry.agentMemoryEvent {
                 let payload = NativeMemoryCardPayload.make(event: memoryEvent)
@@ -6524,6 +6485,9 @@ private struct PiAgentComposerPanel: View {
 
     var body: some View {
         let activeLoopRun = store.selectedSession.flatMap { store.activeLoopRun(for: $0.id) }
+        let visibleLoopRun = store.selectedSession.flatMap { session in
+            activeLoopRun ?? store.loopRuns(for: session.id).last
+        }
         let isRunning = store.selectedSession?.status.isActive == true
         let isCompacting = store.selectedSession?.isCompacting == true
         let hasSelectedSession = store.selectedSession != nil
@@ -6556,47 +6520,53 @@ private struct PiAgentComposerPanel: View {
                 )
                 .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottom)))
             }
-            if let activeLoopRun {
+            if let visibleLoopRun {
                 PiAgentLoopControlBar(
-                    run: activeLoopRun,
-                    onOpenDetails: { loopDetailsRun = activeLoopRun },
-                    onStop: { _ = store.stopLoopRun(activeLoopRun.id, sessionID: activeLoopRun.sessionID) },
-                    onRevealArtifacts: revealArtifactsAction(for: activeLoopRun)
-                )
-            } else {
-                PiAgentComposerBox(
-                    text: $composerText,
-                    pasteAttachments: $composerPasteAttachments,
-                    nextPasteID: $nextComposerPasteID,
-                    images: $composerImages,
-                    files: $composerFiles,
-                    folders: $composerFolders,
-                    issueAttachment: $composerIssueAttachment,
-                    attachmentError: $composerAttachmentError,
-                    inputMode: $inputMode,
-                    isRunning: isRunning,
-                    isDisabled: isCompacting,
-                    placeholder: !hasSelectedSession ? "Start a new Pi Agent session…" : (isCompacting ? "Compacting context…" : (isRunning ? "Steer the current turn…" : "Ask Pi to implement, inspect, explain, or fix… Type / for skills, loops, and prompts.")),
-                    canSend: !isCompacting && store.selectedSession != nil && activeLoopRun == nil && (!composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composerImages.isEmpty || !composerFiles.isEmpty || !composerFolders.isEmpty || composerIssueAttachment != nil || slashSelection != nil),
-                    canCreateSession: !isCompacting && store.selectedSession == nil,
-                    createSessionProjects: piAgentNewSessionProjects,
-                    onFiles: addFileAttachments,
-                    onFolders: addFolderAttachments,
-                    viewModel: viewModel,
-                    footerSession: store.selectedSession,
-                    transcript: store.selectedTranscript,
-                    supportedThinkingLevels: store.selectedSession.map(supportedThinkingLevels(for:)) ?? [],
-                    metricsSession: runtimeFooterSession(isRunning: isRunning),
-                    slashSelection: slashSelection,
-                    onRemoveSlashSelection: { slashSelection = nil },
-                    onSend: hasSelectedSession ? sendComposerMessage : createSessionFromComposer,
-                    onStop: { viewModel.stopSelectedPiAgentSession() },
-                    onCreateSession: createSessionFromComposer,
-                    onCreateSessionForProject: createSessionFromComposer,
-                    onClear: clearComposerInput,
-                    suggestionKeyBridge: composerSuggestionKeyBridge
+                    run: visibleLoopRun,
+                    onOpenDetails: { loopDetailsRun = visibleLoopRun },
+                    onStop: { _ = store.stopLoopRun(visibleLoopRun.id, sessionID: visibleLoopRun.sessionID) },
+                    onRetry: { viewModel.retryLoopRun(visibleLoopRun) },
+                    onSave: saveLoopAction(for: visibleLoopRun),
+                    onRevealArtifacts: revealArtifactsAction(for: visibleLoopRun),
+                    onRevealWorktree: revealWorktreeAction(for: visibleLoopRun),
+                    onApplyWorktree: { viewModel.applyLoopWorktree(visibleLoopRun) },
+                    onDiscardWorktree: discardWorktreeAction(for: visibleLoopRun),
+                    onApproveHumanApproval: { _ = store.resolveHumanApprovalLoopRun(visibleLoopRun.id, sessionID: visibleLoopRun.sessionID, approved: true) },
+                    onRejectHumanApproval: { _ = store.resolveHumanApprovalLoopRun(visibleLoopRun.id, sessionID: visibleLoopRun.sessionID, approved: false) }
                 )
             }
+            PiAgentComposerBox(
+                text: $composerText,
+                pasteAttachments: $composerPasteAttachments,
+                nextPasteID: $nextComposerPasteID,
+                images: $composerImages,
+                files: $composerFiles,
+                folders: $composerFolders,
+                issueAttachment: $composerIssueAttachment,
+                attachmentError: $composerAttachmentError,
+                inputMode: $inputMode,
+                isRunning: isRunning,
+                isDisabled: isCompacting,
+                placeholder: !hasSelectedSession ? "Start a new Pi Agent session…" : (isCompacting ? "Compacting context…" : (isRunning ? "Steer the current turn…" : "Ask Pi to implement, inspect, explain, or fix… Type / for skills, loops, and prompts.")),
+                canSend: !isCompacting && store.selectedSession != nil && activeLoopRun == nil && (!composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composerImages.isEmpty || !composerFiles.isEmpty || !composerFolders.isEmpty || composerIssueAttachment != nil || slashSelection != nil),
+                canCreateSession: !isCompacting && store.selectedSession == nil,
+                createSessionProjects: piAgentNewSessionProjects,
+                onFiles: addFileAttachments,
+                onFolders: addFolderAttachments,
+                viewModel: viewModel,
+                footerSession: store.selectedSession,
+                transcript: store.selectedTranscript,
+                supportedThinkingLevels: store.selectedSession.map(supportedThinkingLevels(for:)) ?? [],
+                metricsSession: runtimeFooterSession(isRunning: isRunning),
+                slashSelection: slashSelection,
+                onRemoveSlashSelection: { slashSelection = nil },
+                onSend: hasSelectedSession ? sendComposerMessage : createSessionFromComposer,
+                onStop: { viewModel.stopSelectedPiAgentSession() },
+                onCreateSession: createSessionFromComposer,
+                onCreateSessionForProject: createSessionFromComposer,
+                onClear: clearComposerInput,
+                suggestionKeyBridge: composerSuggestionKeyBridge
+            )
         }
         .animation(.easeOut(duration: 0.12), value: hasComposerSuggestions)
         .sheet(item: $loopDetailsRun) { run in
@@ -6682,6 +6652,39 @@ private struct PiAgentComposerPanel: View {
     private func revealArtifactsAction(for run: LoopRun) -> (() -> Void)? {
         guard let path = run.artifactDirectoryPath else { return nil }
         return { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+    }
+
+    private func revealWorktreeAction(for run: LoopRun) -> (() -> Void)? {
+        guard let path = run.artifactDirectoryPath else { return nil }
+        return {
+            NSWorkspace.shared.activateFileViewerSelecting([
+                URL(fileURLWithPath: path).appendingPathComponent("worktree", isDirectory: true)
+            ])
+        }
+    }
+
+    private func saveLoopAction(for run: LoopRun) -> () -> Void {
+        { [viewModel, store] in
+            do {
+                _ = try viewModel.saveLoopDefinitionFromRun(run)
+                store.append(.init(sessionID: run.sessionID, role: .status, title: "Loop Saved", text: "Saved loop to Loop Bank."))
+            } catch {
+                store.append(.init(sessionID: run.sessionID, role: .error, title: "Loop Save Failed", text: error.localizedDescription))
+            }
+        }
+    }
+
+    private func discardWorktreeAction(for run: LoopRun) -> () -> Void {
+        { [viewModel] in
+            let alert = NSAlert()
+            alert.messageText = "Discard loop worktree?"
+            alert.informativeText = "This removes the loop worktree. Loop artifacts are kept, but unapplied worktree changes will be lost."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Discard Worktree")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            viewModel.discardLoopWorktree(run)
+        }
     }
 
     private var activeSuggestionToken: (token: String, range: Range<String.Index>)? {
