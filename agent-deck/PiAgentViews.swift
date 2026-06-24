@@ -627,11 +627,10 @@ private struct UserQuestionNavigationRail: View {
     let onSelect: (String) -> Void
 
     @State private var hoveredID: String?
-    @State private var isRailHovered = false
 
     private let expandAnimation = Animation.interpolatingSpring(mass: 0.75, stiffness: 310, damping: 30)
     private let railFadeAnimation = Animation.easeOut(duration: 0.14)
-    private let markHitWidth: CGFloat = 26
+    private let markHitWidth: CGFloat = 16
 
     private var expandedRowWidth: CGFloat {
         let desiredWidth = max(168, availableWidth * 0.22)
@@ -647,16 +646,9 @@ private struct UserQuestionNavigationRail: View {
         }
         .frame(width: expandedRowWidth, alignment: .trailing)
         .padding(.vertical, 8)
-        .padding(.horizontal, 3)
-        .opacity(isRailHovered ? 1 : 0.82)
+        .opacity(hoveredID == nil ? 0.78 : 1)
         .animation(expandAnimation, value: hoveredID)
-        .animation(railFadeAnimation, value: isRailHovered)
-        .onHover { hovering in
-            isRailHovered = hovering
-            if !hovering {
-                hoveredID = nil
-            }
-        }
+        .animation(railFadeAnimation, value: hoveredID == nil)
     }
 
     private func row(for item: UserQuestionNavigationRailItem) -> some View {
@@ -677,13 +669,13 @@ private struct UserQuestionNavigationRail: View {
                     .offset(x: isHovered ? 0 : 8)
                     .accessibilityHidden(!isHovered)
 
-                mark(isActive: isActive, isHovered: isHovered, isRailHovered: isRailHovered)
+                mark(isActive: isActive, isHovered: isHovered, isRailHovered: hoveredID != nil)
             }
             .padding(.vertical, isHovered ? 5 : 1)
             .padding(.leading, isHovered ? 11 : 0)
             .padding(.trailing, isHovered ? 7 : 0)
             .frame(width: isHovered ? expandedRowWidth : markHitWidth, alignment: .trailing)
-            .frame(minHeight: 20)
+            .frame(minHeight: isHovered ? 20 : 18)
             .background(rowBackground(isActive: isActive, isHovered: isHovered))
             .contentShape(Rectangle())
         }
@@ -702,7 +694,7 @@ private struct UserQuestionNavigationRail: View {
     private func mark(isActive: Bool, isHovered: Bool, isRailHovered: Bool) -> some View {
         Capsule(style: .continuous)
             .fill(markColor(isActive: isActive, isHovered: isHovered, isRailHovered: isRailHovered))
-            .frame(width: isActive ? 18 : (isHovered ? 14 : 10), height: isActive || isHovered ? 3 : 2)
+            .frame(width: isActive ? 14 : (isHovered ? 14 : 7), height: isActive || isHovered ? 3 : 2)
     }
 
     private func markColor(isActive: Bool, isHovered: Bool, isRailHovered: Bool) -> Color {
@@ -1524,7 +1516,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private func updateQuestionRail() {
             guard let scrollView, let tableView, let rail = questionRail else { return }
             let questionRows = currentQuestionRows()
-            let railWidth = min(248, max(168, scrollView.bounds.width * 0.22), max(96, scrollView.bounds.width - 112)) + 6
+            let railWidth = questionRailWidth(for: scrollView.bounds.width)
             let rowHeight: CGFloat = 22
             let rowSpacing: CGFloat = 6
             let verticalPadding: CGFloat = 16
@@ -1544,16 +1536,40 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             }
 
             rail.isHidden = false
-            let anchorY = scrollView.contentView.bounds.origin.y + scrollView.contentView.bounds.height * 0.2
-            let activeID = questionRows.last { row, _, _ in
-                tableView.rect(ofRow: row).minY <= anchorY
-            }?.id ?? questionRows.first?.id
+            let activeID = activeQuestionID(in: questionRows, scrollView: scrollView, tableView: tableView)
             let items = questionRows.map { _, id, title in
                 UserQuestionNavigationRailItem(id: id, title: title, isActive: id == activeID)
             }
             rail.rootView = UserQuestionNavigationRail(items: items, availableWidth: scrollView.bounds.width) { [weak self] id in
                 self?.scrollToUserQuestion(id: id)
             }
+        }
+
+        private func questionRailWidth(for availableWidth: CGFloat) -> CGFloat {
+            min(248, max(168, availableWidth * 0.22), max(96, availableWidth - 112))
+        }
+
+        private func questionRailLandingOffset(for visibleHeight: CGFloat) -> CGFloat {
+            min(96, max(24, visibleHeight * 0.18))
+        }
+
+        private func activeQuestionID(
+            in questionRows: [(row: Int, id: String, title: String)],
+            scrollView: NSScrollView,
+            tableView: NSTableView
+        ) -> String? {
+            guard !questionRows.isEmpty else { return nil }
+            let clipBounds = scrollView.contentView.bounds
+            let documentHeight = max(scrollView.documentView?.frame.height ?? tableView.bounds.height, clipBounds.height)
+            let maxY = max(0, documentHeight - clipBounds.height)
+            if maxY - clipBounds.origin.y < 2 {
+                return questionRows.last?.id
+            }
+
+            let anchorY = clipBounds.origin.y + questionRailLandingOffset(for: clipBounds.height)
+            return questionRows.last { row, _, _ in
+                tableView.rect(ofRow: row).minY <= anchorY + 1
+            }?.id ?? questionRows.first?.id
         }
 
         private func currentQuestionRows() -> [(row: Int, id: String, title: String)] {
@@ -1582,7 +1598,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             let clipView = scrollView.contentView
             let documentHeight = max(scrollView.documentView?.frame.height ?? tableView.bounds.height, clipView.bounds.height)
             let maxY = max(0, documentHeight - clipView.bounds.height)
-            let landingOffset = min(96, max(24, clipView.bounds.height * 0.18))
+            let landingOffset = questionRailLandingOffset(for: clipView.bounds.height)
             let targetY = min(max(0, rowRect.minY - landingOffset), maxY)
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.32
