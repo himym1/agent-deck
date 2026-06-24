@@ -1214,7 +1214,7 @@ final class PiAgentSessionStore {
             upsertLoopRun(run); return run
         }
 
-        let maxLoopIterations = min(run.maxIterations, run.makerChecker.maxReviewRounds)
+        let maxLoopIterations = run.maxIterations
         var priorReview = ""
         for iterationIndex in 1...maxLoopIterations {
             if let stoppedRun = stoppedLoopRun(run) { return stoppedRun }
@@ -1358,7 +1358,7 @@ final class PiAgentSessionStore {
         }
 
         let validationCommand = run.validationCommand
-        let maxLoopIterations = run.structure == .makerChecker ? min(run.maxIterations, run.makerChecker.maxReviewRounds) : run.maxIterations
+        let maxLoopIterations = run.maxIterations
         for iterationIndex in 1...maxLoopIterations {
             let iterationStartedAt = Date()
             var artifacts: [LoopArtifact] = []
@@ -2151,7 +2151,7 @@ final class PiAgentSessionStore {
         case .success:
             return "- No further loop move required unless the user asks for follow-up."
         case .maxIterationsReached:
-            return "- Escalate or revise strategy before another run; all configured review rounds were used."
+            return "- Escalate or revise strategy before another run; all configured iterations were used."
         case .validationUnavailable:
             return "- Provide or choose a validation command before retrying."
         case .validationFailedAfterFinalIteration:

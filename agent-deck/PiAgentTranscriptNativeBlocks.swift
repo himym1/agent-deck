@@ -1413,7 +1413,7 @@ struct NativeLoopRunPayload {
             lines.append("Stop reason: \(stopReason.displayName)")
         }
         if run.presentsGoalNotMetOutcome {
-            lines.append("Last checker: Reject — all review rounds rejected")
+            lines.append("Last checker: Reject — all iterations rejected")
         }
         return lines.joined(separator: "\n")
     }

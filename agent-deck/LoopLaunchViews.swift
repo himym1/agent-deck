@@ -562,15 +562,6 @@ struct LoopLaunchSheet: View {
                             .foregroundStyle(AppTheme.mutedText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    HStack(spacing: 8) {
-                        Text("Max review rounds")
-                            .font(AppTheme.Font.body)
-                        LoopNumericStepper(value: $draft.makerChecker.maxReviewRounds, range: 1...20)
-                        LoopInlineInfoButton(
-                            title: "Max review rounds",
-                            message: "Caps maker/checker retry cycles so a rejected result cannot loop indefinitely."
-                        )
-                    }
                 case .agentPipeline:
                     fieldGroup {
                         HStack(spacing: 6) {

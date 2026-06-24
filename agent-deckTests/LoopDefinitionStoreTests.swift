@@ -144,8 +144,7 @@ final class LoopDefinitionStoreTests: XCTestCase {
         let makerChecker = LoopMakerCheckerConfig(
             makerName: "Builder",
             checkerName: "Reviewer",
-            checkerRubric: "reject once then approve",
-            maxReviewRounds: 4
+            checkerRubric: "reject once then approve"
         )
 
         _ = try viewModel.saveLoopDefinitionFromDraft(

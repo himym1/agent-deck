@@ -106,15 +106,11 @@ nonisolated struct LoopMakerCheckerConfig: Codable, Equatable, Hashable, Sendabl
     var makerName: String
     var checkerName: String
     var checkerRubric: String
-    var maxReviewRounds: Int
 
-    static let defaultMaxReviewRounds = 3
-
-    init(makerName: String = "", checkerName: String = "", checkerRubric: String = "approve", maxReviewRounds: Int = Self.defaultMaxReviewRounds) {
+    init(makerName: String = "", checkerName: String = "", checkerRubric: String = "approve") {
         self.makerName = makerName.trimmingCharacters(in: .whitespacesAndNewlines)
         self.checkerName = checkerName.trimmingCharacters(in: .whitespacesAndNewlines)
         self.checkerRubric = checkerRubric
-        self.maxReviewRounds = max(1, maxReviewRounds)
     }
 }
 
@@ -628,7 +624,7 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
     }
 
     var effectiveIterationLimit: Int {
-        structure == .makerChecker ? min(maxIterations, makerChecker.maxReviewRounds) : maxIterations
+        maxIterations
     }
 
     var iterationProgressText: String {
@@ -636,10 +632,7 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
     }
 
     func iterationProgressText(_ iteration: Int) -> String {
-        guard structure == .makerChecker, effectiveIterationLimit != maxIterations else {
-            return "Iteration \(iteration)/\(maxIterations)"
-        }
-        return "Review round \(iteration)/\(effectiveIterationLimit) (loop max \(maxIterations))"
+        "Iteration \(iteration)/\(maxIterations)"
     }
 }
 
@@ -684,9 +677,7 @@ enum LoopIterationSeparatorCodec {
             sessionID: run.sessionID,
             role: .status,
             title: title,
-            text: run.structure == .makerChecker && run.effectiveIterationLimit != run.maxIterations
-                ? "Review round \(iterationIndex) of \(run.effectiveIterationLimit) (loop max \(run.maxIterations)) — \(run.structure.displayName)"
-                : "Iteration \(iterationIndex) of \(run.maxIterations) — \(run.structure.displayName)",
+            text: "Iteration \(iterationIndex) of \(run.maxIterations) — \(run.structure.displayName)",
             rawJSON: LoopRunRecapCodec.rawJSON(for: marker),
             timestamp: timestamp
         )
@@ -756,32 +747,21 @@ enum LoopRunRecapCodec {
     }
 
     static func finalText(for run: LoopRun, progressMarkdown: String? = nil) -> String {
-        let effectiveMaxIterations = run.effectiveIterationLimit
-        let iterationLine: String = {
-            guard run.structure == .makerChecker, effectiveMaxIterations != run.maxIterations else {
-                return "Iterations: \(run.iterations.count)/\(run.maxIterations)"
-            }
-            return "Iterations: \(run.iterations.count)/\(effectiveMaxIterations) review rounds (loop max \(run.maxIterations))"
-        }()
+        let iterationLine = "Iterations: \(run.iterations.count)/\(run.maxIterations)"
         var lines: [String] = [
             "∞ Loop final recap — \(run.displayStatusName)",
             "Structure: \(run.structure.displayName)",
             iterationLine
         ]
         if let stopReason = run.stopReason {
-            if run.structure == .makerChecker, stopReason == .maxIterationsReached, effectiveMaxIterations != run.maxIterations {
-                lines.append("Outcome: Review rounds exhausted")
-            } else {
-                lines.append("Outcome: \(stopReason.displayName)")
-            }
+            lines.append("Outcome: \(stopReason.displayName)")
         }
         if run.structure == .makerChecker {
             if let checkerResult = run.iterations.last?.checkerResult {
                 lines.append("Final checker result: \(checkerResult.displayName)")
             }
             if run.stopReason == .maxIterationsReached {
-                let capExplanation = effectiveMaxIterations == run.maxIterations ? "configured iterations" : "configured Maker + Checker review rounds"
-                lines.append("Maker + Checker used all \(capExplanation) without approval; treat this as goal not fully met, not an agent error.")
+                lines.append("Maker + Checker used all configured iterations without approval; treat this as goal not fully met, not an agent error.")
             } else if run.iterations.last?.checkerResult == .reject {
                 lines.append("Maker + Checker ended on a rejection.")
             }

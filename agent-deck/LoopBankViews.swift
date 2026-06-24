@@ -15,7 +15,6 @@ struct LoopDefinitionEditorDraft: Equatable {
     var makerName: String
     var checkerName: String
     var checkerRubric: String
-    var maxReviewRounds: Int
     var pipelineStageNames: [String]
     var parallelBranchesText: String
     var triageAgentName: String
@@ -43,7 +42,6 @@ struct LoopDefinitionEditorDraft: Equatable {
         makerName = makerChecker.makerName
         checkerName = makerChecker.checkerName
         checkerRubric = makerChecker.checkerRubric
-        maxReviewRounds = makerChecker.maxReviewRounds
         pipelineStageNames = definition?.pipeline.stageNames ?? LoopPipelineConfig().stageNames
         parallelBranchesText = (definition?.parallel.branchNames ?? LoopParallelConfig().branchNames).joined(separator: " | ")
         triageAgentName = definition?.discoveryTriage.agentName ?? LoopDiscoveryTriageConfig().agentName
@@ -87,8 +85,7 @@ struct LoopDefinitionEditorDraft: Equatable {
             makerChecker: LoopMakerCheckerConfig(
                 makerName: makerName,
                 checkerName: checkerName,
-                checkerRubric: checkerRubric,
-                maxReviewRounds: maxReviewRounds
+                checkerRubric: checkerRubric
             ),
             pipeline: LoopPipelineConfig(stageNames: pipelineStageNames),
             parallel: LoopParallelConfig(branchNames: splitList(parallelBranchesText)),
@@ -554,8 +551,7 @@ struct LoopBankScreen: View {
                 VStack(alignment: .leading, spacing: 10) {
                     readOnlyFieldRow("Maker agent", value: definition.makerChecker.makerName, placeholder: "Not selected")
                     readOnlyFieldRow("Checker agent", value: definition.makerChecker.checkerName, placeholder: "Not selected")
-                    readOnlyMarkdownFieldRow("Checker rubric", value: definition.makerChecker.checkerRubric)
-                    readOnlyFieldRow("Max review rounds", value: "\(definition.makerChecker.maxReviewRounds)", isLast: true)
+                    readOnlyMarkdownFieldRow("Checker rubric", value: definition.makerChecker.checkerRubric, isLast: true)
                 }
             }
         case .agentPipeline:
@@ -651,16 +647,13 @@ struct LoopBankScreen: View {
         case .makerChecker:
             AppCard(title: "Maker + Checker") {
                 VStack(alignment: .leading, spacing: 0) {
-                    detailRow("Maker agent", info: "The agent that produces the work for each review round.") {
+                    detailRow("Maker agent", info: "The agent that produces the work for each iteration.") {
                         LoopAgentNameMenu(selection: $editorDraft.makerName, availableAgents: availableLoopAgents, fallbackLabel: "Maker")
                     }
                     detailRow("Checker agent", info: "The agent that reviews the maker output and decides whether another round is needed.") {
                         LoopAgentNameMenu(selection: $editorDraft.checkerName, availableAgents: availableLoopAgents, fallbackLabel: "Checker")
                     }
                     detailEditor("Checker rubric", text: $editorDraft.checkerRubric, minHeight: 84, info: "Instructions for the checker. Keep the approval criteria concrete so the loop knows when to stop retrying.")
-                    detailRow("Max review rounds", info: "Limits maker/checker retries inside an iteration before the loop stops asking for another review pass.", showsDivider: false) {
-                        LoopNumericStepper(value: $editorDraft.maxReviewRounds, range: 1...20)
-                    }
                 }
             }
         case .agentPipeline:
@@ -720,7 +713,7 @@ struct LoopBankScreen: View {
     private var loopStructureInfoRows: [LoopInlineInfoButton.Row] {
         [
             .init("Single Agent", "Repeats one selected agent against the goal."),
-            .init("Maker + Checker", "A maker produces work, a checker reviews it, and review rounds can retry."),
+            .init("Maker + Checker", "A maker produces work, a checker reviews it, and iterations can retry."),
             .init("Agent Pipeline", "Records ordered stages such as Explorer → Implementer → Verifier."),
             .init("Parallel Agents", "Names independent branches or hypotheses in the same loop run."),
             .init("Discovery / Triage", "Collects findings and classifies them by severity or next action."),

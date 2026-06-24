@@ -121,7 +121,7 @@ final class LoopExecutionStoreTests: XCTestCase {
                 goal: "Bounded maker checker memory",
                 structure: .makerChecker,
                 validationCommand: "/usr/bin/true",
-                makerChecker: LoopMakerCheckerConfig(makerName: "Builder", checkerName: "Reviewer", checkerRubric: "approve", maxReviewRounds: 3)
+                makerChecker: LoopMakerCheckerConfig(makerName: "Builder", checkerName: "Reviewer", checkerRubric: "approve")
             )
         ) { _, role, task, _, _, _ in
             if role == "Reviewer" { checkerTask = task }
@@ -379,8 +379,9 @@ final class LoopExecutionStoreTests: XCTestCase {
             goal: "Build safely",
             structure: .makerChecker,
             writeTarget: .artifactMarkdown,
+            maxIterations: 2,
             validationCommand: "/usr/bin/true",
-            makerChecker: LoopMakerCheckerConfig(makerName: "Builder", checkerName: "Reviewer", checkerRubric: "approve", maxReviewRounds: 3)
+            makerChecker: LoopMakerCheckerConfig(makerName: "Builder", checkerName: "Reviewer", checkerRubric: "approve")
         )
 
         let maybeRun = await store.launchMakerCheckerLoop(session: session, draft: draft) { _, role, task, _, _, _ in
@@ -415,8 +416,9 @@ final class LoopExecutionStoreTests: XCTestCase {
             goal: "Build safely",
             structure: .makerChecker,
             writeTarget: .artifactMarkdown,
+            maxIterations: 2,
             validationCommand: "/usr/bin/true",
-            makerChecker: LoopMakerCheckerConfig(makerName: "Builder", checkerName: "Reviewer", checkerRubric: "approve", maxReviewRounds: 2)
+            makerChecker: LoopMakerCheckerConfig(makerName: "Builder", checkerName: "Reviewer", checkerRubric: "approve")
         )
 
         let maybeRun = await store.launchMakerCheckerLoop(session: session, draft: draft) { _, role, task, _, _, _ in
@@ -456,7 +458,7 @@ final class LoopExecutionStoreTests: XCTestCase {
             structure: .makerChecker,
             writeTarget: .artifactMarkdown,
             validationCommand: "/usr/bin/true",
-            makerChecker: LoopMakerCheckerConfig(makerName: "Builder", checkerName: "Reviewer", checkerRubric: "approve", maxReviewRounds: 2)
+            makerChecker: LoopMakerCheckerConfig(makerName: "Builder", checkerName: "Reviewer", checkerRubric: "approve")
         )
 
         let maybeRun = await store.launchMakerCheckerLoop(session: session, draft: draft) { _, role, task, _, _, _ in
@@ -481,7 +483,7 @@ final class LoopExecutionStoreTests: XCTestCase {
             structure: .makerChecker,
             writeTarget: .artifactMarkdown,
             validationCommand: "/usr/bin/true",
-            makerChecker: LoopMakerCheckerConfig(makerName: "Builder", checkerName: "Reviewer", checkerRubric: "approve", maxReviewRounds: 2)
+            makerChecker: LoopMakerCheckerConfig(makerName: "Builder", checkerName: "Reviewer", checkerRubric: "approve")
         )
 
         let maybeRun = await store.launchMakerCheckerLoop(session: session, draft: draft) { _, role, task, _, _, _ in

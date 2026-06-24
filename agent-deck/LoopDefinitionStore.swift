@@ -136,8 +136,7 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
         let makerChecker = LoopMakerCheckerConfig(
             makerName: fm["makerName"]?.nonEmpty ?? "",
             checkerName: fm["checkerName"]?.nonEmpty ?? "",
-            checkerRubric: fm["checkerRubric"]?.nonEmpty ?? "approve",
-            maxReviewRounds: Int(fm["maxReviewRounds"]?.nonEmpty ?? "") ?? LoopMakerCheckerConfig.defaultMaxReviewRounds
+            checkerRubric: fm["checkerRubric"]?.nonEmpty ?? "approve"
         )
         let pipeline = LoopPipelineConfig(stageNames: splitList(fm["pipelineStages"]))
         let parallel = LoopParallelConfig(branchNames: splitList(fm["parallelBranches"]))
@@ -194,7 +193,6 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
         if definition.structure == .makerChecker {
             lines.append("checkerName: \(oneLine(definition.makerChecker.checkerName))")
             lines.append("checkerRubric: \(oneLine(definition.makerChecker.checkerRubric))")
-            lines.append("maxReviewRounds: \(definition.makerChecker.maxReviewRounds)")
         }
         if definition.structure == .agentPipeline {
             lines.append("pipelineStages: \(oneLine(definition.pipeline.stageNames.joined(separator: " | ")))")

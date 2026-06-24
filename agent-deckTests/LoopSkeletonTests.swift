@@ -38,7 +38,7 @@ final class LoopSkeletonTests: XCTestCase {
             goal: "Fix until checker approves",
             structure: .makerChecker,
             maxIterations: 2,
-            makerChecker: LoopMakerCheckerConfig(makerName: "Maker", checkerName: "Checker", checkerRubric: "approve", maxReviewRounds: 2)
+            makerChecker: LoopMakerCheckerConfig(makerName: "Maker", checkerName: "Checker", checkerRubric: "approve")
         )
         var run = LoopRun(sessionID: UUID(), projectPath: nil, draft: draft)
         run.status = .failed
@@ -63,7 +63,7 @@ final class LoopSkeletonTests: XCTestCase {
         XCTAssertFalse(payload.statusText.contains("Status: Failed"))
         XCTAssertFalse(payload.canRetry)
         XCTAssertTrue(payload.statusText.contains("Stop reason: Max iterations reached"))
-        XCTAssertTrue(payload.statusText.contains("Last checker: Reject — all review rounds rejected"))
+        XCTAssertTrue(payload.statusText.contains("Last checker: Reject — all iterations rejected"))
     }
 
     func testLoopCardDetailsExposeLaunchContextButMainTranscriptStaysConcise() throws {
@@ -443,7 +443,7 @@ final class LoopSkeletonTests: XCTestCase {
         let run = try XCTUnwrap(store.launchSmokeLoop(
             sessionID: session.id,
             projectPath: session.projectPath,
-            draft: LoopDraft(goal: "Revise once", structure: .makerChecker, maxIterations: 3, makerChecker: LoopMakerCheckerConfig(checkerRubric: "reject once then approve", maxReviewRounds: 3))
+            draft: LoopDraft(goal: "Revise once", structure: .makerChecker, maxIterations: 3, makerChecker: LoopMakerCheckerConfig(checkerRubric: "reject once then approve"))
         ))
 
         XCTAssertEqual(run.status, .completed)
