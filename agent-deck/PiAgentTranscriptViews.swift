@@ -1215,7 +1215,7 @@ struct PiAgentTranscriptThreadCard: View {
                 PiAgentLoopRecapTranscriptCard(entry: entry, marker: recapMarker)
                     .id(entry.id)
             } else {
-                PiAgentStatusTranscriptRow(entry: LoopIterationSeparatorCodec.dividerEntry(from: entry, marker: recapMarker))
+                PiAgentStatusTranscriptRow(entry: entry)
                     .id(entry.id)
             }
         } else if let memoryEvent = entry.agentMemoryEvent {

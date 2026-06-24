@@ -688,12 +688,12 @@ enum LoopRunRecapCodec {
     }
 
     static func iterationText(for run: LoopRun, iteration: LoopIteration) -> String {
-        var parts: [String] = ["∞ Iteration \(iteration.index) recap — \(run.structure.displayName)", iteration.summary]
+        var parts: [String] = ["∞ Round \(iteration.index) recap — \(run.structure.displayName)", iteration.summary]
         if let checkerResult = iteration.checkerResult {
-            parts.append("Checker: \(checkerResult.displayName)")
+            parts.append("Checker outcome: \(checkerResult.displayName)")
         }
         if let validation = iteration.validationResult {
-            parts.append("Validation: \(validation.didPass ? "passed" : "failed")\(validation.exitCode.map { " (exit \($0))" } ?? "")")
+            parts.append("Validation: \(validation.didPass ? "passed" : "did not pass")\(validation.exitCode.map { " (exit \($0))" } ?? "")")
         }
         if !iteration.artifacts.isEmpty {
             parts.append("Artifacts: \(iteration.artifacts.map(\.filename).joined(separator: ", "))")

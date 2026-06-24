@@ -66,7 +66,7 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertFalse(tasks[1].contains("Secret launch notes"))
     }
 
-    func testLoopSeparatorsAndFinalRecapAreGeneratedAndDeduplicated() async throws {
+    func testLoopSeparatorsIterationRecapsAndFinalRecapAreGeneratedAndDeduplicated() async throws {
         let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
         let session = try makeSession(store: store)
         let draft = LoopDraft(
@@ -94,14 +94,17 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertEqual(separators.count, 1)
         XCTAssertEqual(separators.first?.1.kind, .iteration)
         XCTAssertTrue(separators.first?.0.text.contains("Iteration 1 of") == true)
-        XCTAssertEqual(recaps.count, 1)
-        XCTAssertEqual(recaps.first?.1.kind, .final)
+        XCTAssertEqual(recaps.count, 2)
+        XCTAssertEqual(recaps.filter { $0.1.kind == .iteration }.count, 1)
+        XCTAssertEqual(recaps.filter { $0.1.kind == .final }.count, 1)
+        XCTAssertTrue(recaps.contains { $0.0.text.contains("Round 1 recap") && $0.0.text.contains("Validation: passed") })
         XCTAssertTrue(recaps.contains { $0.0.text.contains("Loop final recap") && $0.0.text.contains("Stop reason: Success") })
 
         store.hydrateLoopRunsFromTranscript(sessionID: session.id)
         let afterHydrateRecaps = (store.transcriptsBySessionID[session.id] ?? []).compactMap(LoopRunRecapCodec.decode(from:))
         let afterHydrateSeparators = (store.transcriptsBySessionID[session.id] ?? []).compactMap(LoopIterationSeparatorCodec.decode(from:))
-        XCTAssertEqual(afterHydrateRecaps.count, 1)
+        XCTAssertEqual(afterHydrateRecaps.count, 2)
+        XCTAssertEqual(afterHydrateRecaps.filter { $0.runID == run.id && $0.kind == .iteration }.count, 1)
         XCTAssertEqual(afterHydrateRecaps.filter { $0.runID == run.id && $0.kind == .final }.count, 1)
         XCTAssertEqual(afterHydrateSeparators.filter { $0.runID == run.id && $0.kind == .iteration }.count, 1)
     }
@@ -315,6 +318,10 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertEqual(run.iterations.map(\.checkerResult), [.reject, .reject])
         XCTAssertTrue(LoopRunRecapCodec.finalText(for: run).contains("Loop final recap — Goal not met"))
         XCTAssertTrue(LoopRunRecapCodec.finalText(for: run).contains("Final checker result: Reject"))
+        let recapEntries = (store.transcriptsBySessionID[session.id] ?? []).filter { LoopRunRecapCodec.decode(from: $0) != nil }
+        XCTAssertEqual(recapEntries.filter { LoopRunRecapCodec.decode(from: $0)?.kind == .iteration }.count, 2)
+        XCTAssertTrue(recapEntries.contains { $0.text.contains("Round 2 recap") && $0.text.contains("Checker outcome: Reject") })
+        XCTAssertFalse(recapEntries.contains { $0.text.contains("Checker outcome: Failed") })
         XCTAssertTrue(responses.isEmpty)
     }
 

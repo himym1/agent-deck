@@ -2032,9 +2032,11 @@ final class PiAgentSessionStore {
             guard let marker = LoopIterationSeparatorCodec.decode(from: entry), marker.runID == run.id else { return nil }
             return (entry.id, marker)
         }
-        func existingID(for marker: LoopRunRecapMarker) -> UUID? {
+        func existingSeparatorID(for marker: LoopRunRecapMarker) -> UUID? {
             existingSeparators.first { $0.marker == marker }?.id
-                ?? existingRecaps.first { $0.marker == marker }?.id
+        }
+        func existingRecapID(for marker: LoopRunRecapMarker) -> UUID? {
+            existingRecaps.first { $0.marker == marker }?.id
         }
 
         if run.currentIteration > 0 {
@@ -2044,15 +2046,24 @@ final class PiAgentSessionStore {
                 let entry = LoopIterationSeparatorCodec.transcriptEntry(
                     for: run,
                     iterationIndex: iterationIndex,
-                    id: existingID(for: marker) ?? UUID(),
+                    id: existingSeparatorID(for: marker) ?? UUID(),
                     timestamp: timestamp
                 )
                 upsert(entry, persist: false)
             }
         }
+        for iteration in run.iterations where iteration.index > 0 && iteration.endedAt != nil {
+            let marker = LoopRunRecapCodec.marker(for: run, iterationIndex: iteration.index)
+            let entry = LoopRunRecapCodec.transcriptEntry(
+                for: run,
+                iteration: iteration,
+                id: existingRecapID(for: marker) ?? UUID()
+            )
+            upsert(entry, persist: false)
+        }
         if !run.isActive {
             let marker = LoopRunRecapCodec.finalMarker(for: run)
-            let entry = LoopRunRecapCodec.finalTranscriptEntry(for: run, id: existingID(for: marker) ?? UUID())
+            let entry = LoopRunRecapCodec.finalTranscriptEntry(for: run, id: existingRecapID(for: marker) ?? UUID())
             upsert(entry, persist: false)
         }
         persistTranscript(run.sessionID)

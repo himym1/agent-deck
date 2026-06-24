@@ -5003,9 +5003,8 @@ struct PiAgentScreen: View {
                         view.configure(payload: payload, width: width)
                     })
                 }
-                let dividerEntry = LoopIterationSeparatorCodec.dividerEntry(from: entry, marker: recapMarker)
-                let payload = NativeDividerPayload.make(for: dividerEntry)
-                return .native(.of(PiAgentNativeStatusDividerView.self) { view, width in
+                let payload = NativeStatusPayload.make(for: entry)
+                return .native(.of(PiAgentNativeStatusRowView.self) { view, width in
                     view.configure(payload: payload, width: width)
                 })
             }

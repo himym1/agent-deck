@@ -241,7 +241,7 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
         XCTAssertEqual(split.count, 3, "A visible thinking block must keep the diff cards separate.")
     }
 
-    func testLegacyIterationLoopRecapEntryBuildsDividerPayload() {
+    func testIterationLoopRecapEntryBuildsNeutralStatusPayload() {
         let sessionID = UUID()
         let runID = UUID()
         let marker = LoopRunRecapMarker(runID: runID, kind: .iteration, iterationIndex: 2)
@@ -250,9 +250,9 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
             role: .status,
             title: LoopRunRecapCodec.title,
             text: """
-            ∞ Iteration 2 recap — Maker + Checker
+            ∞ Round 2 recap — Maker + Checker
             Implemented the requested change and updated tests.
-            Checker: Approve
+            Checker outcome: Approve
             Validation: passed (exit 0)
             Changed files: agent-deck/PiAgentViews.swift
             """,
@@ -260,12 +260,12 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
         )
 
         XCTAssertEqual(LoopRunRecapCodec.decode(from: entry), marker)
-        let dividerEntry = LoopIterationSeparatorCodec.dividerEntry(from: entry, marker: marker)
-        let payload = NativeDividerPayload.make(for: dividerEntry)
-        XCTAssertEqual(dividerEntry.title, LoopIterationSeparatorCodec.title)
-        XCTAssertEqual(payload.icon, "infinity")
-        XCTAssertEqual(payload.detail, "Iteration 2")
-        XCTAssertFalse(payload.isSpinning)
+        let payload = NativeStatusPayload.make(for: entry)
+        XCTAssertEqual(payload.title, LoopRunRecapCodec.title)
+        XCTAssertEqual(payload.icon, "info.circle")
+        XCTAssertTrue(payload.detail.contains("Checker outcome: Approve"))
+        XCTAssertTrue(payload.detail.contains("Validation: passed"))
+        XCTAssertNil(payload.errorPopoverText)
     }
 
     func testFinalLoopRecapEntryBuildsDedicatedNativePayload() {
