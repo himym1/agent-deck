@@ -6511,32 +6511,34 @@ private struct PiAgentComposerPanel: View {
         let hasSelectedSession = store.selectedSession != nil
 
         VStack(spacing: 6) {
-            if hasFileSuggestions {
-                PiAgentCommandSuggestions(
-                    items: composerSuggestionItems,
-                    selectedIndex: composerSuggestionIndex,
-                    scrollTick: composerSuggestionScrollTick,
-                    onSelect: { item in insertComposerSuggestion(item.insertion) },
-                    onHover: { index in
-                        guard Date.now >= composerSuggestionHoverSuppressedUntil else { return }
-                        composerSuggestionIndex = index
-                    }
-                )
-                .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottom)))
-            } else if hasSlashSuggestions {
-                PiAgentSlashSuggestions(
-                    rows: slashSuggestionRows,
-                    highlightedSelectableIndex: slashState.highlightedIndex,
-                    scrollTick: slashState.scrollTick,
-                    title: slashPanelTitle,
-                    onSelect: { row in handleSlashRowSelect(row) },
-                    onHoverSelectable: { index in
-                        guard Date.now >= composerSuggestionHoverSuppressedUntil else { return }
-                        slashState.highlightedIndex = index
-                    },
-                    onBack: slashCanGoBack ? { popSlashScreen() } : nil
-                )
-                .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottom)))
+            if activeLoopRun == nil {
+                if hasFileSuggestions {
+                    PiAgentCommandSuggestions(
+                        items: composerSuggestionItems,
+                        selectedIndex: composerSuggestionIndex,
+                        scrollTick: composerSuggestionScrollTick,
+                        onSelect: { item in insertComposerSuggestion(item.insertion) },
+                        onHover: { index in
+                            guard Date.now >= composerSuggestionHoverSuppressedUntil else { return }
+                            composerSuggestionIndex = index
+                        }
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottom)))
+                } else if hasSlashSuggestions {
+                    PiAgentSlashSuggestions(
+                        rows: slashSuggestionRows,
+                        highlightedSelectableIndex: slashState.highlightedIndex,
+                        scrollTick: slashState.scrollTick,
+                        title: slashPanelTitle,
+                        onSelect: { row in handleSlashRowSelect(row) },
+                        onHoverSelectable: { index in
+                            guard Date.now >= composerSuggestionHoverSuppressedUntil else { return }
+                            slashState.highlightedIndex = index
+                        },
+                        onBack: slashCanGoBack ? { popSlashScreen() } : nil
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottom)))
+                }
             }
             if let visibleLoopRun {
                 PiAgentLoopControlBar(
@@ -6553,38 +6555,40 @@ private struct PiAgentComposerPanel: View {
                     onRejectHumanApproval: { _ = store.resolveHumanApprovalLoopRun(visibleLoopRun.id, sessionID: visibleLoopRun.sessionID, approved: false) }
                 )
             }
-            PiAgentComposerBox(
-                text: $composerText,
-                pasteAttachments: $composerPasteAttachments,
-                nextPasteID: $nextComposerPasteID,
-                images: $composerImages,
-                files: $composerFiles,
-                folders: $composerFolders,
-                issueAttachment: $composerIssueAttachment,
-                attachmentError: $composerAttachmentError,
-                inputMode: $inputMode,
-                isRunning: isRunning,
-                isDisabled: isCompacting,
-                placeholder: !hasSelectedSession ? "Start a new Pi Agent session…" : (isCompacting ? "Compacting context…" : (isRunning ? "Steer the current turn…" : "Ask Pi to implement, inspect, explain, or fix… Type / for skills, loops, and prompts.")),
-                canSend: !isCompacting && store.selectedSession != nil && activeLoopRun == nil && (!composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composerImages.isEmpty || !composerFiles.isEmpty || !composerFolders.isEmpty || composerIssueAttachment != nil || slashSelection != nil),
-                canCreateSession: !isCompacting && store.selectedSession == nil,
-                createSessionProjects: piAgentNewSessionProjects,
-                onFiles: addFileAttachments,
-                onFolders: addFolderAttachments,
-                viewModel: viewModel,
-                footerSession: store.selectedSession,
-                transcript: store.selectedTranscript,
-                supportedThinkingLevels: store.selectedSession.map(supportedThinkingLevels(for:)) ?? [],
-                metricsSession: runtimeFooterSession(isRunning: isRunning),
-                slashSelection: slashSelection,
-                onRemoveSlashSelection: { slashSelection = nil },
-                onSend: hasSelectedSession ? sendComposerMessage : createSessionFromComposer,
-                onStop: { viewModel.stopSelectedPiAgentSession() },
-                onCreateSession: createSessionFromComposer,
-                onCreateSessionForProject: createSessionFromComposer,
-                onClear: clearComposerInput,
-                suggestionKeyBridge: composerSuggestionKeyBridge
-            )
+            if activeLoopRun == nil {
+                PiAgentComposerBox(
+                    text: $composerText,
+                    pasteAttachments: $composerPasteAttachments,
+                    nextPasteID: $nextComposerPasteID,
+                    images: $composerImages,
+                    files: $composerFiles,
+                    folders: $composerFolders,
+                    issueAttachment: $composerIssueAttachment,
+                    attachmentError: $composerAttachmentError,
+                    inputMode: $inputMode,
+                    isRunning: isRunning,
+                    isDisabled: isCompacting,
+                    placeholder: !hasSelectedSession ? "Start a new Pi Agent session…" : (isCompacting ? "Compacting context…" : (isRunning ? "Steer the current turn…" : "Ask Pi to implement, inspect, explain, or fix… Type / for skills, loops, and prompts.")),
+                    canSend: !isCompacting && store.selectedSession != nil && activeLoopRun == nil && (!composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composerImages.isEmpty || !composerFiles.isEmpty || !composerFolders.isEmpty || composerIssueAttachment != nil || slashSelection != nil),
+                    canCreateSession: !isCompacting && store.selectedSession == nil,
+                    createSessionProjects: piAgentNewSessionProjects,
+                    onFiles: addFileAttachments,
+                    onFolders: addFolderAttachments,
+                    viewModel: viewModel,
+                    footerSession: store.selectedSession,
+                    transcript: store.selectedTranscript,
+                    supportedThinkingLevels: store.selectedSession.map(supportedThinkingLevels(for:)) ?? [],
+                    metricsSession: runtimeFooterSession(isRunning: isRunning),
+                    slashSelection: slashSelection,
+                    onRemoveSlashSelection: { slashSelection = nil },
+                    onSend: hasSelectedSession ? sendComposerMessage : createSessionFromComposer,
+                    onStop: { viewModel.stopSelectedPiAgentSession() },
+                    onCreateSession: createSessionFromComposer,
+                    onCreateSessionForProject: createSessionFromComposer,
+                    onClear: clearComposerInput,
+                    suggestionKeyBridge: composerSuggestionKeyBridge
+                )
+            }
         }
         .animation(.easeOut(duration: 0.12), value: hasComposerSuggestions)
         .sheet(item: $loopDetailsRun) { run in
