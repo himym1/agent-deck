@@ -702,6 +702,9 @@ enum LoopRunRecapCodec {
         if !iteration.artifacts.isEmpty {
             parts.append("Artifacts: \(iteration.artifacts.map(\.filename).joined(separator: ", "))")
         }
+        if run.artifactDirectoryPath != nil {
+            parts.append("Shared progress artifact: loop-progress.md")
+        }
         if !iteration.changedFiles.isEmpty {
             parts.append("Changed files: \(iteration.changedFiles.prefix(6).joined(separator: ", "))")
         }
@@ -733,6 +736,9 @@ enum LoopRunRecapCodec {
         let artifacts = run.iterations.flatMap(\.artifacts)
         if !artifacts.isEmpty {
             lines.append("Artifacts: \(artifacts.suffix(3).map(\.filename).joined(separator: ", "))")
+        }
+        if run.artifactDirectoryPath != nil {
+            lines.append("Shared progress artifact: loop-progress.md")
         }
         return lines.joined(separator: "\n")
     }

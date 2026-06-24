@@ -63,7 +63,116 @@ final class LoopExecutionStoreTests: XCTestCase {
 
         XCTAssertEqual(tasks.count, 2)
         XCTAssertTrue(tasks[0].contains("Launch context (first iteration only):\nSecret launch notes\nSecond line"))
-        XCTAssertFalse(tasks[1].contains("Secret launch notes"))
+        XCTAssertFalse(tasks[1].contains("Launch context (first iteration only):\nSecret launch notes"))
+    }
+
+    func testLoopProgressFileCreatedAndSeededWithAndWithoutLaunchContext() async throws {
+        let contextStore = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let contextSession = try makeSession(store: contextStore)
+        let maybeContextRun = await contextStore.launchSingleAgentLoop(
+            session: contextSession,
+            draft: LoopDraft(
+                goal: "Seed memory",
+                launchContext: "Investigate flaky save path\nAvoid stale cache assumption",
+                structure: .singleAgent,
+                validationCommand: "/usr/bin/true",
+                makerChecker: LoopMakerCheckerConfig(makerName: "Explorer")
+            )
+        ) { _, agentName, task, _, _, _ in
+            XCTAssertTrue(task.contains("Shared loop progress file:"))
+            XCTAssertTrue(task.contains("Agent Deck maintains `loop-progress.md`"))
+            XCTAssertTrue(task.contains("## Launch Context Notes"))
+            return Self.fakeRun(parentSessionID: contextSession.id, agentName: agentName, task: task, status: .completed, summary: "seeded")
+        }
+        let contextRun = try XCTUnwrap(maybeContextRun)
+        let contextProgress = try progressText(for: contextRun)
+        XCTAssertTrue(contextProgress.contains("## Goal\nSeed memory"))
+        XCTAssertTrue(contextProgress.contains("## Launch Context Notes"))
+        XCTAssertTrue(contextProgress.contains("Investigate flaky save path"))
+        XCTAssertTrue(contextProgress.contains("## Round Notes"))
+        XCTAssertTrue(contextProgress.contains("Round 1"))
+        let progressPath = URL(fileURLWithPath: try XCTUnwrap(contextRun.artifactDirectoryPath)).appendingPathComponent("loop-progress.md").path
+        XCTAssertFalse(path(progressPath, isUnder: try XCTUnwrap(contextSession.projectPath)))
+
+        let plainStore = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let plainSession = try makeSession(store: plainStore)
+        let maybePlainRun = await plainStore.launchSingleAgentLoop(
+            session: plainSession,
+            draft: LoopDraft(goal: "No context", structure: .singleAgent, validationCommand: "/usr/bin/true", makerChecker: LoopMakerCheckerConfig(makerName: "Explorer"))
+        ) { _, agentName, task, _, _, _ in
+            XCTAssertTrue(task.contains("Shared loop progress file:"))
+            XCTAssertFalse(task.contains("## Launch Context Notes"))
+            return Self.fakeRun(parentSessionID: plainSession.id, agentName: agentName, task: task, status: .completed, summary: "plain")
+        }
+        let plainRun = try XCTUnwrap(maybePlainRun)
+        let plainProgress = try progressText(for: plainRun)
+        XCTAssertFalse(plainProgress.contains("## Launch Context Notes"))
+    }
+
+    func testLoopProgressFileUpdatesAfterMakerCheckerVerdictAndStaysBounded() async throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = try makeSession(store: store)
+        let longMakerSummary = String(repeating: "Maker changed risky thing with extensive detail. ", count: 80)
+        var responses = [longMakerSummary, "REJECT\nMissing concrete validation evidence for the risky change.", "Maker added validation evidence.", "APPROVE\nEvidence now satisfies the rubric."]
+        var checkerTask = ""
+        let maybeRun = await store.launchMakerCheckerLoop(
+            session: session,
+            draft: LoopDraft(
+                goal: "Bounded maker checker memory",
+                structure: .makerChecker,
+                validationCommand: "/usr/bin/true",
+                makerChecker: LoopMakerCheckerConfig(makerName: "Builder", checkerName: "Reviewer", checkerRubric: "approve", maxReviewRounds: 3)
+            )
+        ) { _, role, task, _, _, _ in
+            if role == "Reviewer" { checkerTask = task }
+            return Self.fakeRun(parentSessionID: session.id, agentName: role, task: task, status: .completed, summary: responses.removeFirst())
+        }
+
+        let run = try XCTUnwrap(maybeRun)
+        let progress = try progressText(for: run)
+        XCTAssertTrue(checkerTask.contains("Shared loop progress file:"))
+        XCTAssertTrue(progress.contains("Checker outcome: Approve") || progress.contains("checker approved"))
+        XCTAssertTrue(progress.contains("Missing concrete validation evidence"))
+        XCTAssertTrue(progress.contains("Do not repeat Round 1 rejection cause"))
+        XCTAssertLessThan(progress.count, 6_000)
+        XCTAssertFalse(progress.contains(String(repeating: "Maker changed risky thing", count: 10)))
+    }
+
+    func testLoopProgressFileUpdatesForPipelineAndParallelPromptsMergeAfterGraph() async throws {
+        let pipelineStore = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let pipelineSession = try makeSession(store: pipelineStore)
+        var pipelineTasks: [String] = []
+        let maybePipelineRun = await pipelineStore.launchAgentPipelineLoop(
+            session: pipelineSession,
+            draft: LoopDraft(goal: "Pipeline memory", structure: .agentPipeline, validationCommand: "/usr/bin/true", pipeline: LoopPipelineConfig(stageNames: ["Analyze", "Implement"]))
+        ) { _, role, task, _, _, _ in
+            pipelineTasks.append(task)
+            return Self.fakeRun(parentSessionID: pipelineSession.id, agentName: role, task: task, status: .completed, summary: "\(role) summary")
+        }
+        let pipelineRun = try XCTUnwrap(maybePipelineRun)
+        XCTAssertEqual(pipelineTasks.count, 2)
+        XCTAssertTrue(pipelineTasks.allSatisfy { $0.contains("Shared loop progress file:") })
+        let pipelineProgress = try progressText(for: pipelineRun)
+        XCTAssertTrue(pipelineProgress.contains("Stage 1 — Analyze"))
+        XCTAssertTrue(pipelineProgress.contains("Stage 2 — Implement"))
+
+        let parallelStore = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let parallelSession = try makeSession(store: parallelStore)
+        var parallelTasks: [(String, String)] = []
+        let maybeParallelRun = await parallelStore.launchParallelAgentsLoop(
+            session: parallelSession,
+            draft: LoopDraft(goal: "Parallel memory", structure: .parallelAgents, validationCommand: "/usr/bin/true", parallel: LoopParallelConfig(branchNames: ["A", "B"]))
+        ) { _, tasks, _, _ in
+            parallelTasks = tasks
+            XCTAssertFalse(tasks.map(\.1).joined(separator: "\n").contains("A found one path"))
+            return Self.fakeRun(parentSessionID: parallelSession.id, agentName: "Parallel", task: "parallel", mode: .parallel, status: .completed, summary: "A found one path; B found another path.")
+        }
+        let parallelRun = try XCTUnwrap(maybeParallelRun)
+        XCTAssertEqual(parallelTasks.count, 2)
+        XCTAssertTrue(parallelTasks.allSatisfy { $0.1.contains("Shared loop progress file:") })
+        let parallelProgress = try progressText(for: parallelRun)
+        XCTAssertTrue(parallelProgress.contains("A found one path"))
+        XCTAssertTrue(parallelProgress.contains("artifacts parallel-summary.md"))
     }
 
     func testLoopSeparatorsIterationRecapsAndFinalRecapAreGeneratedAndDeduplicated() async throws {
@@ -258,6 +367,7 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertTrue(observedTask.contains("severity and owner"))
         XCTAssertTrue(observedTask.contains("performing discovery and triage"))
         XCTAssertTrue(observedTask.contains("Do not implement fixes unless the loop goal explicitly asks"))
+        XCTAssertTrue(observedTask.contains("Shared loop progress file:"))
     }
 
     func testMakerCheckerLoopRejectThenApproveAcrossIterations() async throws {
@@ -384,6 +494,19 @@ final class LoopExecutionStoreTests: XCTestCase {
     private func makeSession(store: PiAgentSessionStore) throws -> PiAgentSessionRecord {
         let projectURL = try PiTestSupport.temporaryProjectURL()
         return store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(url: projectURL), repository: nil)
+    }
+
+    private func progressText(for run: LoopRun) throws -> String {
+        let artifactDirectoryPath = try XCTUnwrap(run.artifactDirectoryPath)
+        let progressURL = URL(fileURLWithPath: artifactDirectoryPath, isDirectory: true).appendingPathComponent("loop-progress.md")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: progressURL.path))
+        return try String(contentsOf: progressURL, encoding: .utf8)
+    }
+
+    private func path(_ path: String, isUnder parentPath: String) -> Bool {
+        let child = URL(fileURLWithPath: path).standardizedFileURL.path
+        let parent = URL(fileURLWithPath: parentPath).standardizedFileURL.path
+        return child == parent || child.hasPrefix(parent + "/")
     }
 
     private static func fakeRun(parentSessionID: UUID, agentName: String, task: String, mode: PiSubagentRunMode = .single, status: PiSubagentRunStatus, summary: String? = nil, error: String? = nil) -> PiSubagentRunRecord {

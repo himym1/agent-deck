@@ -889,6 +889,7 @@ final class PiAgentSessionStore {
         do { try FileManager.default.createDirectory(at: artifactDirectory, withIntermediateDirectories: true) } catch {
             run.status = .failed; run.endedAt = Date(); run.stopReason = .toolFailed; upsertLoopRun(run); return nil
         }
+        writeLoopProgressFile(for: run)
         let executionContext: LoopExecutionContext
         do { executionContext = try prepareLoopExecutionContext(writeTarget: run.writeTarget, projectPath: session.projectPath, artifactDirectory: artifactDirectory) } catch let error as LoopExecutionPreparationError {
             run.status = .failed; run.endedAt = Date(); run.stopReason = error.stopReason; run.iterations.append(LoopIteration(index: 0, summary: error.localizedDescription)); upsertLoopRun(run); return run
@@ -951,6 +952,7 @@ final class PiAgentSessionStore {
             upsertLoopRun(run)
             return nil
         }
+        writeLoopProgressFile(for: run)
 
         let executionContext: LoopExecutionContext
         do {
@@ -1101,6 +1103,7 @@ final class PiAgentSessionStore {
         do { try FileManager.default.createDirectory(at: artifactDirectory, withIntermediateDirectories: true) } catch {
             run.status = .failed; run.endedAt = Date(); run.stopReason = .toolFailed; upsertLoopRun(run); return nil
         }
+        writeLoopProgressFile(for: run)
         let executionContext: LoopExecutionContext
         do { executionContext = try prepareLoopExecutionContext(writeTarget: run.writeTarget, projectPath: session.projectPath, artifactDirectory: artifactDirectory) } catch let error as LoopExecutionPreparationError {
             run.status = .failed; run.endedAt = Date(); run.stopReason = error.stopReason; run.iterations.append(LoopIteration(index: 0, summary: error.localizedDescription)); upsertLoopRun(run); return run
@@ -1145,6 +1148,7 @@ final class PiAgentSessionStore {
         do { try FileManager.default.createDirectory(at: artifactDirectory, withIntermediateDirectories: true) } catch {
             run.status = .failed; run.endedAt = Date(); run.stopReason = .toolFailed; upsertLoopRun(run); return nil
         }
+        writeLoopProgressFile(for: run)
         let executionContext: LoopExecutionContext
         do { executionContext = try prepareLoopExecutionContext(writeTarget: run.writeTarget, projectPath: session.projectPath, artifactDirectory: artifactDirectory) } catch let error as LoopExecutionPreparationError {
             run.status = .failed; run.endedAt = Date(); run.stopReason = error.stopReason; run.iterations.append(LoopIteration(index: 0, summary: error.localizedDescription)); upsertLoopRun(run); return run
@@ -1196,6 +1200,7 @@ final class PiAgentSessionStore {
         do { try FileManager.default.createDirectory(at: artifactDirectory, withIntermediateDirectories: true) } catch {
             run.status = .failed; run.endedAt = Date(); run.stopReason = .toolFailed; upsertLoopRun(run); return nil
         }
+        writeLoopProgressFile(for: run)
         let executionContext: LoopExecutionContext
         do {
             executionContext = try prepareLoopExecutionContext(writeTarget: run.writeTarget, projectPath: session.projectPath, artifactDirectory: artifactDirectory)
@@ -1296,6 +1301,7 @@ final class PiAgentSessionStore {
             upsertLoopRun(run)
             return nil
         }
+        writeLoopProgressFile(for: run)
 
         let executionContext: LoopExecutionContext
         do {
@@ -1615,6 +1621,7 @@ final class PiAgentSessionStore {
         if let launchContext = launchContextForPrompt(run: run, iterationIndex: iterationIndex) {
             lines.append("Launch context (\(run.launchContextScope.displayName.lowercased())):\n\(launchContext)")
         }
+        lines.append(sharedLoopProgressPromptSection(for: run))
         return lines
     }
 
@@ -1990,6 +1997,209 @@ final class PiAgentSessionStore {
         return text
     }
 
+    private static let loopProgressFilename = "loop-progress.md"
+    private static let loopProgressSummaryLimit = 420
+    private static let loopProgressLineLimit = 180
+    private static let loopProgressRoundNoteLimit = 6
+
+    private func loopProgressFileURL(for run: LoopRun) -> URL? {
+        guard let artifactDirectoryPath = run.artifactDirectoryPath else { return nil }
+        return URL(fileURLWithPath: artifactDirectoryPath, isDirectory: true)
+            .appendingPathComponent(Self.loopProgressFilename, isDirectory: false)
+    }
+
+    private func writeLoopProgressFile(for run: LoopRun) {
+        guard let fileURL = loopProgressFileURL(for: run) else { return }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: fileURL.deletingLastPathComponent().path, isDirectory: &isDirectory), isDirectory.boolValue else { return }
+        try? loopProgressMarkdown(for: run).write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+
+    private func sharedLoopProgressPromptSection(for run: LoopRun) -> String {
+        let progressText: String
+        if let fileURL = loopProgressFileURL(for: run),
+           let text = try? String(contentsOf: fileURL, encoding: .utf8),
+           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            progressText = text
+        } else {
+            progressText = loopProgressMarkdown(for: run)
+        }
+        return """
+        Shared loop progress file:
+        Agent Deck maintains `\(Self.loopProgressFilename)` in this loop's artifact directory as the shared short-term markdown memory for all loop agents. Do not edit that file directly. Read and use the full current contents below to build on prior evidence, avoid repeating failed approaches, and hand off concise findings in your final response so Agent Deck can refresh the file after this round.
+
+        ```markdown
+        \(progressText)
+        ```
+        """
+    }
+
+    private func loopProgressMarkdown(for run: LoopRun) -> String {
+        var sections: [(String, [String])] = []
+        sections.append(("Goal", [boundedLine(run.goal, fallback: "Not specified.")]))
+        if let launchContext = run.launchContext?.trimmingCharacters(in: .whitespacesAndNewlines), !launchContext.isEmpty {
+            sections.append(("Launch Context Notes", [boundedSummary(launchContext, fallback: "Custom launch context was provided.")]))
+        }
+        sections.append(("Current Understanding", [currentLoopUnderstanding(for: run)]))
+        sections.append(("What Worked", loopProgressWorkedLines(for: run)))
+        sections.append(("What Did Not Work", loopProgressDidNotWorkLines(for: run)))
+        sections.append(("Current Evidence", loopProgressEvidenceLines(for: run)))
+        sections.append(("Avoid Repeating", loopProgressAvoidRepeatingLines(for: run)))
+        sections.append(("Next Recommended Move", [loopProgressNextMove(for: run)]))
+        sections.append(("Round Notes", loopProgressRoundNotes(for: run)))
+
+        var lines: [String] = []
+        for (title, bodyLines) in sections {
+            lines.append("## \(title)")
+            let normalized = bodyLines.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            if normalized.isEmpty {
+                lines.append("- None yet.")
+            } else {
+                lines.append(contentsOf: normalized)
+            }
+            lines.append("")
+        }
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
+    }
+
+    private func currentLoopUnderstanding(for run: LoopRun) -> String {
+        if let last = run.iterations.last(where: { !$0.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+            return "- Latest: \(boundedSummary(last.summary))"
+        }
+        return "- Not established yet."
+    }
+
+    private func loopProgressWorkedLines(for run: LoopRun) -> [String] {
+        var lines: [String] = []
+        for iteration in run.iterations.suffix(Self.loopProgressRoundNoteLimit) {
+            if iteration.checkerResult == .approve {
+                lines.append("- Round \(iteration.index): checker approved.")
+            }
+            if iteration.validationResult?.didPass == true {
+                lines.append("- Round \(iteration.index): validation passed.")
+            }
+            if run.structure != .makerChecker && iteration.validationResult == nil && !iteration.summary.isEmpty && iteration.endedAt != nil {
+                lines.append("- Round \(iteration.index): \(boundedSummary(iteration.summary))")
+            }
+        }
+        return Array(lines.prefix(Self.loopProgressRoundNoteLimit))
+    }
+
+    private func loopProgressDidNotWorkLines(for run: LoopRun) -> [String] {
+        var lines: [String] = []
+        for iteration in run.iterations.suffix(Self.loopProgressRoundNoteLimit) {
+            if let checkerResult = iteration.checkerResult, checkerResult != .approve {
+                lines.append("- Round \(iteration.index): checker \(checkerResult.displayName.lowercased()) — \(boundedSummary(iteration.summary))")
+            }
+            if let validation = iteration.validationResult, !validation.didPass {
+                lines.append("- Round \(iteration.index): validation failed\(validation.exitCode.map { " (exit \($0))" } ?? "") — \(boundedSummary(validation.stderr.nonEmpty ?? validation.stdout.nonEmpty ?? iteration.summary))")
+            }
+        }
+        if !run.isActive, let stopReason = run.stopReason, stopReason != .success, stopReason != .maxIterationsReached {
+            lines.append("- Loop stopped: \(stopReason.displayName).")
+        }
+        return Array(lines.prefix(Self.loopProgressRoundNoteLimit))
+    }
+
+    private func loopProgressEvidenceLines(for run: LoopRun) -> [String] {
+        var lines: [String] = []
+        if let artifactDirectoryPath = run.artifactDirectoryPath {
+            lines.append("- Artifact directory: \(artifactDirectoryPath)")
+            lines.append("- Shared progress artifact: \(Self.loopProgressFilename)")
+        }
+        if let validation = run.iterations.last?.validationResult {
+            lines.append("- Latest validation: \(validation.didPass ? "passed" : "failed")\(validation.exitCode.map { " (exit \($0))" } ?? "") via `\(boundedLine(validation.command, fallback: "validation"))`.")
+        }
+        let artifacts = run.iterations.flatMap(\.artifacts).suffix(4).map(\.filename)
+        if !artifacts.isEmpty {
+            lines.append("- Recent artifacts: \(artifacts.joined(separator: ", ")).")
+        }
+        let changedFiles = run.iterations.flatMap(\.changedFiles).suffix(6)
+        if !changedFiles.isEmpty {
+            lines.append("- Changed files: \(changedFiles.joined(separator: ", ")).")
+        }
+        if let stopReason = run.stopReason {
+            lines.append("- Current loop outcome: \(run.displayStatusName), stop reason \(stopReason.displayName).")
+        }
+        return lines
+    }
+
+    private func loopProgressAvoidRepeatingLines(for run: LoopRun) -> [String] {
+        let rejected = run.iterations.filter { $0.checkerResult == .reject }.suffix(3)
+        var lines = rejected.map { "- Do not repeat Round \($0.index) rejection cause: \(boundedSummary($0.summary))" }
+        let failedValidation = run.iterations.filter { $0.validationResult?.didPass == false }.suffix(3)
+        lines.append(contentsOf: failedValidation.map { iteration in
+            let detail = iteration.validationResult?.stderr.nonEmpty ?? iteration.validationResult?.stdout.nonEmpty ?? iteration.summary
+            return "- Do not ignore failed validation from Round \(iteration.index): \(boundedSummary(detail))"
+        })
+        return Array(lines.prefix(Self.loopProgressRoundNoteLimit))
+    }
+
+    private func loopProgressNextMove(for run: LoopRun) -> String {
+        if run.isActive {
+            if let last = run.iterations.last, last.checkerResult == .reject {
+                return "- Address the latest checker rejection with the smallest targeted change and cite fresh evidence."
+            }
+            if run.iterations.last?.validationResult?.didPass == false {
+                return "- Fix the latest validation failure first, then rerun the configured validation."
+            }
+            return "- Continue the assigned loop step and produce concise evidence for Agent Deck to merge."
+        }
+        switch run.stopReason {
+        case .success:
+            return "- No further loop move required unless the user asks for follow-up."
+        case .maxIterationsReached:
+            return "- Escalate or revise strategy before another run; all configured review rounds were used."
+        case .validationUnavailable:
+            return "- Provide or choose a validation command before retrying."
+        case .validationFailedAfterFinalIteration:
+            return "- Inspect the last validation failure and retry with a narrower fix."
+        case .humanInputRequired:
+            return "- Wait for human approval or direction."
+        case .humanRejected:
+            return "- Do not continue without revised human direction."
+        case .agentFailed, .toolFailed, .appInterrupted, .userStopped, .unsafeWriteTarget, .none:
+            return "- Review the stop reason and decide whether a safe retry is appropriate."
+        }
+    }
+
+    private func loopProgressRoundNotes(for run: LoopRun) -> [String] {
+        let notes = run.iterations.suffix(Self.loopProgressRoundNoteLimit).map { iteration -> String in
+            var parts = ["- Round \(iteration.index): \(boundedSummary(iteration.summary, fallback: "No summary."))"]
+            if let checkerResult = iteration.checkerResult {
+                parts.append("checker \(checkerResult.displayName.lowercased())")
+            }
+            if let validation = iteration.validationResult {
+                parts.append("validation \(validation.didPass ? "passed" : "failed")\(validation.exitCode.map { " exit \($0)" } ?? "")")
+            }
+            if !iteration.changedFiles.isEmpty {
+                parts.append("changed \(iteration.changedFiles.prefix(4).joined(separator: ", "))")
+            }
+            if !iteration.artifacts.isEmpty {
+                parts.append("artifacts \(iteration.artifacts.prefix(3).map(\.filename).joined(separator: ", "))")
+            }
+            return parts.joined(separator: "; ")
+        }
+        return notes.isEmpty ? ["- No rounds completed yet."] : notes
+    }
+
+    private func boundedSummary(_ text: String, fallback: String = "None.") -> String {
+        let compact = text
+            .replacingOccurrences(of: "```", with: "'''")
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        guard !compact.isEmpty else { return fallback }
+        return String(compact.prefix(Self.loopProgressSummaryLimit)) + (compact.count > Self.loopProgressSummaryLimit ? "…" : "")
+    }
+
+    private func boundedLine(_ text: String, fallback: String) -> String {
+        let compact = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !compact.isEmpty else { return fallback }
+        return String(compact.prefix(Self.loopProgressLineLimit)) + (compact.count > Self.loopProgressLineLimit ? "…" : "")
+    }
+
     private func loopArtifactDirectoryURL(sessionID: UUID, runID: UUID) -> URL {
         fileURL.deletingLastPathComponent()
             .appendingPathComponent("loop-artifacts", isDirectory: true)
@@ -2008,6 +2218,7 @@ final class PiAgentSessionStore {
         onStopLoopRun?(runID, sessionID)
         runs[index] = run
         loopRunsBySessionID[sessionID] = runs
+        writeLoopProgressFile(for: run)
         upsert(LoopRunTranscriptCodec.transcriptEntry(for: run))
         syncLoopTranscriptMessagingEntries(for: run)
         return run
@@ -2033,6 +2244,7 @@ final class PiAgentSessionStore {
         ))
         runs[index] = run
         loopRunsBySessionID[sessionID] = runs
+        writeLoopProgressFile(for: run)
         upsert(LoopRunTranscriptCodec.transcriptEntry(for: run))
         syncLoopTranscriptMessagingEntries(for: run)
         return run
@@ -2042,6 +2254,7 @@ final class PiAgentSessionStore {
         guard var runs = loopRunsBySessionID[sessionID], let index = runs.firstIndex(where: { $0.id == runID }) else { return }
         runs[index].worktreeState = state
         loopRunsBySessionID[sessionID] = runs
+        writeLoopProgressFile(for: runs[index])
         upsert(LoopRunTranscriptCodec.transcriptEntry(for: runs[index]))
     }
 
@@ -2075,6 +2288,7 @@ final class PiAgentSessionStore {
             runs.append(run)
         }
         loopRunsBySessionID[run.sessionID] = runs
+        writeLoopProgressFile(for: run)
         upsert(LoopRunTranscriptCodec.transcriptEntry(for: run))
         syncLoopTranscriptMessagingEntries(for: run)
     }
