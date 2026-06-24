@@ -205,6 +205,7 @@ final class PiSubagentRunService {
                 task: trimmedTask,
                 status: .starting,
                 model: modelDisplayName,
+                thinking: agent.resolved.thinking,
                 expectedOutcome: expectedOutcome,
                 requestedOutputPath: requestedOutputPath,
                 allowOverwrite: allowOverwrite,
@@ -268,6 +269,7 @@ final class PiSubagentRunService {
                 task: trimmedTask,
                 status: .starting,
                 model: modelDisplayName,
+                thinking: agent.resolved.thinking,
                 expectedOutcome: expectedOutcome,
                 requestedOutputPath: requestedOutputPath,
                 allowOverwrite: allowOverwrite,
@@ -449,6 +451,7 @@ final class PiSubagentRunService {
                     }
                     if let thinkingLevel = resolvedThinkingLevel(from: data) {
                         run.thinking = thinkingLevel
+                        run.child?.thinking = thinkingLevel
                     }
                     run.child?.sessionFile = run.childPiSessionFile
                 }

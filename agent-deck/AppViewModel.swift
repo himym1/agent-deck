@@ -3548,7 +3548,7 @@ final class AppViewModel: NSObject {
             let expectedOutcome = forcedExpectedOutcome ?? (useWorktreeIsolation ? PiSubagentExpectedOutcome.editFilesInWorktree : (defaultOutcomeByAgent[item.0] ?? .reportOnly))
             return PiSubagentChildRecord(
                 id: UUID(), runID: runID, index: index, agentName: item.0, task: item.1,
-                status: .queued, model: nil,
+                status: .queued, model: nil, thinking: nil,
                 expectedOutcome: expectedOutcome, requestedOutputPath: nil, allowOverwrite: false,
                 currentTool: nil, inputTokens: nil, outputTokens: nil, totalTokens: nil, toolCount: nil, durationMs: nil,
                 artifactDirectory: nil, sessionFile: nil, outputPath: nil, worktreePath: nil, launchCommand: nil, executionRunID: nil,
@@ -3686,6 +3686,8 @@ final class AppViewModel: NSObject {
         updateNativeGraphChild(graphRunID, parentSessionID: parentSessionID, index: index) { child in
             child.status = childResult.status
             child.executionRunID = childResult.id
+            child.model = childResult.model ?? childResult.child?.model
+            child.thinking = childResult.thinking ?? childResult.child?.thinking
             child.artifactDirectory = childResult.artifactDirectory
             child.outputPath = childResult.outputPath
             child.worktreePath = childResult.worktreePath
