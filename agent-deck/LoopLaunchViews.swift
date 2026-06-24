@@ -275,8 +275,8 @@ struct LoopLaunchSheet: View {
                                         .font(AppTheme.Font.caption.weight(.semibold))
                                         .foregroundStyle(AppTheme.mutedText)
                                     LoopInlineInfoButton(
-                                        title: "Launch context",
-                                        message: "Optional extra context injected into child-agent loop prompts. By default it is included only for iteration 1; choose Every iteration when agents need it repeated."
+                                        title: "Launch context / arguments",
+                                        rows: launchContextInfoRows
                                     )
                                 }
                             } content: {
@@ -519,6 +519,14 @@ struct LoopLaunchSheet: View {
                     .stroke(.orange.opacity(0.20), lineWidth: 1)
             }
         }
+    }
+
+    private var launchContextInfoRows: [LoopInlineInfoButton.Row] {
+        [
+            .init("What it is", "Optional background or arguments added to child-agent launch prompts, kept separate from the loop goal."),
+            .init("Good uses", "Paste repro steps, observed hitches or hangs, logs, device state, or constraints such as report-only or avoid API changes."),
+            .init("Scope", "First iteration only seeds the loop once. Every iteration repeats this context in each prompt when constraints must stay visible.")
+        ]
     }
 
     private var structureFields: some View {

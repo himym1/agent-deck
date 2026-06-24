@@ -357,7 +357,7 @@ struct LoopBankScreen: View {
                 LoopNumericStepper(value: $editorDraft.maxIterations, range: 1...20)
             }
             detailEditor("Goal template", text: $editorDraft.goalTemplate, minHeight: 120, info: "The reusable instruction the loop runs against. Be explicit about the desired outcome, constraints, and what counts as done.")
-            detailEditor("Launch context (optional)", text: $editorDraft.launchContext, minHeight: 84, info: "Extra multiline context injected into child-agent launch prompts. It is stored separately from the goal template.")
+            detailEditor("Launch context (optional)", text: $editorDraft.launchContext, minHeight: 84, infoRows: loopLaunchContextInfoRows)
             if !editorDraft.launchContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 detailRow("Context scope", info: "First iteration only is the default. Every iteration repeats this context in each child-agent prompt.") {
                     Picker("Context scope", selection: $editorDraft.launchContextScope) {
@@ -703,6 +703,14 @@ struct LoopBankScreen: View {
         ]
     }
 
+    private var loopLaunchContextInfoRows: [LoopInlineInfoButton.Row] {
+        [
+            .init("What it is", "Optional background or arguments added to child-agent launch prompts, kept separate from the goal template."),
+            .init("Good uses", "Paste repro steps, observed hitches or hangs, logs, device state, or constraints such as report-only or avoid API changes."),
+            .init("Scope", "First iteration only seeds the loop once. Every iteration repeats this context in each prompt when constraints must stay visible.")
+        ]
+    }
+
     private var loopAvailabilityInfoRows: [LoopInlineInfoButton.Row] {
         [
             .init("All Projects/default", "Available as a default saved loop everywhere."),
@@ -731,9 +739,9 @@ struct LoopBankScreen: View {
         }
     }
 
-    private func detailEditor(_ title: String, text: Binding<String>, minHeight: CGFloat, monospaced: Bool = false, info: String? = nil) -> some View {
+    private func detailEditor(_ title: String, text: Binding<String>, minHeight: CGFloat, monospaced: Bool = false, info: String? = nil, infoRows: [LoopInlineInfoButton.Row] = []) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            detailLabel(title, info: info)
+            detailLabel(title, info: info, infoRows: infoRows)
             TextEditor(text: text)
                 .font(monospaced ? .body.monospaced() : AppTheme.Font.body)
                 .scrollContentBackground(.hidden)
