@@ -33,6 +33,37 @@ final class LoopSkeletonTests: XCTestCase {
         XCTAssertEqual(item.materialize(userText: "do not send"), "do not send")
     }
 
+    func testLoopCardPayloadShowsStopReasonAndCheckerRejectionOutcome() throws {
+        let draft = LoopDraft(
+            goal: "Fix until checker approves",
+            structure: .makerChecker,
+            maxIterations: 2,
+            makerChecker: LoopMakerCheckerConfig(makerName: "Maker", checkerName: "Checker", checkerRubric: "approve", maxReviewRounds: 2)
+        )
+        var run = LoopRun(sessionID: UUID(), projectPath: nil, draft: draft)
+        run.status = .failed
+        run.currentIteration = 2
+        run.endedAt = Date()
+        run.stopReason = .maxIterationsReached
+        run.iterations = [
+            LoopIteration(index: 1, checkerResult: .reject),
+            LoopIteration(index: 2, checkerResult: .reject)
+        ]
+
+        let payload = NativeLoopRunPayload.make(
+            run: run,
+            onStop: nil,
+            onRetry: nil,
+            onSave: nil,
+            onRevealArtifacts: nil,
+            onRevealWorktree: nil
+        )
+
+        XCTAssertTrue(payload.statusText.contains("Status: Failed"))
+        XCTAssertTrue(payload.statusText.contains("Stop reason: Max iterations reached"))
+        XCTAssertTrue(payload.statusText.contains("Last checker: Reject — all review rounds rejected"))
+    }
+
     func testSmokeLoopLaunchCompletesAndWritesFileBackedTranscriptCard() throws {
         let stateFile = PiTestSupport.temporaryStateFile()
         let projectURL = try PiTestSupport.temporaryProjectURL()

@@ -1153,6 +1153,7 @@ struct NativeLoopRunPayload {
 
     static func make(run: LoopRun, onStop: (() -> Void)?, onRetry: (() -> Void)?, onSave: (() -> Void)?, onRevealArtifacts: (() -> Void)?, onRevealWorktree: (() -> Void)?, onApplyWorktree: (() -> Void)? = nil, onDiscardWorktree: (() -> Void)? = nil, onApproveHumanApproval: (() -> Void)? = nil, onRejectHumanApproval: (() -> Void)? = nil) -> NativeLoopRunPayload {
         let details = loopRunDetailsText(for: run)
+        let statusText = visibleStatusText(for: run)
         let worktreeURL = run.artifactDirectoryPath.map { URL(fileURLWithPath: $0).appendingPathComponent("worktree", isDirectory: true) }
         let hasWorktree = worktreeURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
         let hasAppliedMarker = run.artifactDirectoryPath.map { FileManager.default.fileExists(atPath: URL(fileURLWithPath: $0).appendingPathComponent("worktree.applied").path) } ?? false
@@ -1162,7 +1163,7 @@ struct NativeLoopRunPayload {
         let canResolveHumanApproval = run.structure == .humanApproval && run.status == .stopped && run.stopReason == .humanInputRequired
         return NativeLoopRunPayload(
             title: run.status == .completed ? "Loop completed" : "Loop: \(run.structure.displayName)",
-            statusText: "Status: \(run.status.displayName)",
+            statusText: statusText,
             detailText: details,
             isActive: run.isActive,
             canRevealArtifacts: run.artifactDirectoryPath != nil,
@@ -1183,6 +1184,20 @@ struct NativeLoopRunPayload {
             onApproveHumanApproval: onApproveHumanApproval,
             onRejectHumanApproval: onRejectHumanApproval
         )
+    }
+
+    private static func visibleStatusText(for run: LoopRun) -> String {
+        var lines = ["Status: \(run.status.displayName)"]
+        if !run.isActive, let stopReason = run.stopReason {
+            lines.append("Stop reason: \(stopReason.displayName)")
+        }
+        if run.structure == .makerChecker,
+           run.status == .failed,
+           run.stopReason == .maxIterationsReached,
+           run.iterations.last?.checkerResult == .reject {
+            lines.append("Last checker: Reject — all review rounds rejected")
+        }
+        return lines.joined(separator: "\n")
     }
 }
 
@@ -1230,6 +1245,7 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
         statusField.translatesAutoresizingMaskIntoConstraints = false
         statusField.font = NativeTranscriptFont.caption(.semibold)
         statusField.textColor = AppTheme.ns(AppTheme.mutedText)
+        statusField.maximumNumberOfLines = 0
         detailField.translatesAutoresizingMaskIntoConstraints = false
         detailField.font = NativeTranscriptFont.caption()
         detailField.textColor = AppTheme.ns(AppTheme.mutedText)
@@ -1338,7 +1354,8 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
     func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat {
         let cardWidth = Self.cardWidth(for: rowWidth)
         let rowCount = packedActionRows(forCardWidth: cardWidth, visibleButtons: visibleActionButtons).count
-        return AppTheme.Chat.bubbleVPadding * 2 + 18 + 6 + 16 + 10 + CGFloat(max(1, rowCount)) * 26 + CGFloat(max(0, rowCount - 1)) * 6
+        let statusLineCount = CGFloat(max(1, payload?.statusText.split(separator: "\n", omittingEmptySubsequences: false).count ?? 1))
+        return AppTheme.Chat.bubbleVPadding * 2 + 18 + 6 + statusLineCount * 16 + 10 + CGFloat(max(1, rowCount)) * 26 + CGFloat(max(0, rowCount - 1)) * 6
     }
 
     private var actionButtons: [NSButton] {
