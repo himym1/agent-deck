@@ -51,61 +51,79 @@ struct PiAgentLoopControlBar: View {
 
     @ViewBuilder
     private var actions: some View {
-        HStack(spacing: 8) {
-            if canResolveHumanApproval {
-                Button("Approve", action: { onApproveHumanApproval?() })
-                    .appPrimaryButton()
-                    .controlSize(.small)
-                    .disabled(onApproveHumanApproval == nil)
-                Button("Reject", role: .destructive, action: { onRejectHumanApproval?() })
-                    .appDestructiveButton()
-                    .controlSize(.small)
-                    .disabled(onRejectHumanApproval == nil)
-            }
-            if run.isActive {
-                Button("Stop", role: .destructive, action: onStop)
-                    .appDestructiveButton()
-                    .controlSize(.small)
-            }
-            Button("Details", action: onOpenDetails)
-                .appSmallSecondaryButton()
-            if hasMoreActions {
-                Menu {
-                    if canRetry {
-                        Button("Retry Failed Iteration", action: { onRetry?() })
-                            .disabled(onRetry == nil)
+        HStack(spacing: 10) {
+            if canResolveHumanApproval || run.isActive {
+                HStack(spacing: 8) {
+                    if canResolveHumanApproval {
+                        Button("Approve", action: { onApproveHumanApproval?() })
+                            .appPrimaryButton()
+                            .controlSize(.small)
+                            .disabled(onApproveHumanApproval == nil)
+                        Button("Reject", role: .destructive, action: { onRejectHumanApproval?() })
+                            .appDestructiveButton()
+                            .controlSize(.small)
+                            .disabled(onRejectHumanApproval == nil)
                     }
-                    if canSave {
-                        Button("Save Loop", action: { onSave?() })
-                            .disabled(onSave == nil)
+                    if run.isActive {
+                        Button("Stop", role: .destructive, action: onStop)
+                            .appDestructiveButton()
+                            .controlSize(.small)
                     }
+                }
+            }
+
+            if canResolveHumanApproval || run.isActive {
+                actionDivider
+            }
+
+            HStack(spacing: 8) {
+                Button("Details", action: onOpenDetails)
+                    .appSmallSecondaryButton()
+                if canRetry {
+                    Button("Retry Failed Iteration", action: { onRetry?() })
+                        .appSmallSecondaryButton()
+                        .disabled(onRetry == nil)
+                }
+                if canSave {
+                    Button("Save Loop", action: { onSave?() })
+                        .appSmallSecondaryButton()
+                        .disabled(onSave == nil)
+                }
+            }
+
+            if canRevealArtifacts || canRevealWorktree || canApplyWorktree || canDiscardWorktree {
+                actionDivider
+                HStack(spacing: 8) {
                     if canRevealArtifacts {
                         Button("Reveal Artifacts", action: { onRevealArtifacts?() })
+                            .appSmallSecondaryButton()
                             .disabled(onRevealArtifacts == nil)
                     }
                     if canRevealWorktree {
                         Button("Reveal Worktree", action: { onRevealWorktree?() })
+                            .appSmallSecondaryButton()
                             .disabled(onRevealWorktree == nil)
                     }
                     if canApplyWorktree {
                         Button("Apply Worktree", action: { onApplyWorktree?() })
+                            .appSmallSecondaryButton()
                             .disabled(onApplyWorktree == nil)
                     }
                     if canDiscardWorktree {
                         Button("Discard Worktree", role: .destructive, action: { onDiscardWorktree?() })
+                            .appDestructiveButton()
+                            .controlSize(.small)
                             .disabled(onDiscardWorktree == nil)
                     }
-                } label: {
-                    HStack(spacing: 6) {
-                        Text("More")
-                        Image(systemName: "chevron.down")
-                            .imageScale(.small)
-                    }
                 }
-                .menuIndicator(.hidden)
-                .appSmallSecondaryButton()
             }
         }
+    }
+
+    private var actionDivider: some View {
+        Rectangle()
+            .fill(AppTheme.hairlineStroke)
+            .frame(width: 1, height: 20)
     }
 
     private var titleText: String {
@@ -126,10 +144,6 @@ struct PiAgentLoopControlBar: View {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count > 140 else { return trimmed }
         return String(trimmed.prefix(140)) + "…"
-    }
-
-    private var hasMoreActions: Bool {
-        canRetry || canSave || canRevealArtifacts || canRevealWorktree || canApplyWorktree || canDiscardWorktree
     }
 
     private var canRetry: Bool { !run.isActive && run.status == .failed && !run.presentsGoalNotMetOutcome }
