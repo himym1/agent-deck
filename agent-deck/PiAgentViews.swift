@@ -3847,6 +3847,7 @@ struct PiAgentScreen: View {
                     initialDraft: loopLaunchDraft,
                     sourceDefinition: loopLaunchDefinition,
                     availableAgents: viewModel.allDisplayAgents,
+                    projectAgents: viewModel.startupSnapshot(forProjectPath: session.projectPath).effectiveAgents,
                     onCancel: { isLoopLaunchSheetPresented = false },
                     onAssignMissingAgents: { names in
                         viewModel.assignAgentNames(names, toProjectPath: session.projectPath)
@@ -6537,6 +6538,7 @@ private struct PiAgentComposerPanel: View {
                     initialDraft: loopLaunchDraft,
                     sourceDefinition: loopLaunchDefinition,
                     availableAgents: viewModel.allDisplayAgents,
+                    projectAgents: viewModel.startupSnapshot(forProjectPath: session.projectPath).effectiveAgents,
                     onCancel: { isLoopLaunchSheetPresented = false },
                     onAssignMissingAgents: { names in
                         viewModel.assignAgentNames(names, toProjectPath: session.projectPath)

@@ -202,6 +202,7 @@ struct LoopBankScreen: View {
                     initialDraft: definition.makeDraft(),
                     sourceDefinition: definition,
                     availableAgents: viewModel.allDisplayAgents,
+                    projectAgents: viewModel.startupSnapshot(forProjectPath: session.projectPath).effectiveAgents,
                     onCancel: {
                         isLaunchSheetPresented = false
                         launchDefinition = nil

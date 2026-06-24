@@ -5,6 +5,7 @@ struct LoopLaunchSheet: View {
     let activeRun: LoopRun?
     let sourceDefinition: LoopDefinition?
     let allAgents: [EffectiveAgentRecord]
+    let projectAgents: [EffectiveAgentRecord]
     let availableAgents: [EffectiveAgentRecord]
     let onCancel: () -> Void
     let onAssignMissingAgents: ([String]) -> Void
@@ -25,6 +26,7 @@ struct LoopLaunchSheet: View {
         initialDraft: LoopDraft = LoopDraft(),
         sourceDefinition: LoopDefinition? = nil,
         availableAgents: [EffectiveAgentRecord] = [],
+        projectAgents: [EffectiveAgentRecord] = [],
         onCancel: @escaping () -> Void,
         onAssignMissingAgents: @escaping ([String]) -> Void = { _ in },
         onLaunch: @escaping (LoopLaunchRequest) -> Void
@@ -33,7 +35,8 @@ struct LoopLaunchSheet: View {
         self.activeRun = activeRun
         self.sourceDefinition = sourceDefinition
         self.allAgents = availableAgents.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        self.availableAgents = availableAgents.filter { $0.resolved.disabled != true }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        self.projectAgents = projectAgents.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        self.availableAgents = projectAgents.filter { $0.resolved.disabled != true }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         self.onCancel = onCancel
         self.onAssignMissingAgents = onAssignMissingAgents
         self.onLaunch = onLaunch
@@ -49,7 +52,7 @@ struct LoopLaunchSheet: View {
     private var canLaunch: Bool {
         let saveIsValid = !saveToLoopBank || !saveName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let writeTargetIsConfirmed = draft.writeTarget != .currentCheckout || confirmsCurrentCheckoutWrite
-        return !trimmedGoal.isEmpty && requiredAgentsAreSelected && unavailableRequiredAgentNames.isEmpty && saveIsValid && writeTargetIsConfirmed && (activeRun == nil || stopExistingActive)
+        return !trimmedGoal.isEmpty && requiredAgentsAreSelected && agentPreflightIssues.isEmpty && saveIsValid && writeTargetIsConfirmed && (activeRun == nil || stopExistingActive)
     }
 
     private var requiredAgentsAreSelected: Bool {
@@ -84,14 +87,64 @@ struct LoopLaunchSheet: View {
         }
     }
 
-    private var unavailableRequiredAgentNames: [String] {
-        let activeNames = Set(availableAgents.map(\.name))
+    private struct AgentPreflightIssue: Identifiable {
+        enum Kind {
+            case unassigned
+            case disabled
+            case missingDefinition
+
+            var title: String {
+                switch self {
+                case .unassigned: return "Not assigned to this project"
+                case .disabled: return "Disabled"
+                case .missingDefinition: return "Agent definition missing"
+                }
+            }
+
+            var remediation: String {
+                switch self {
+                case .unassigned:
+                    return "Can be fixed by assigning the existing agent to this project."
+                case .disabled:
+                    return "Enable this agent in Agents before launching. Agent Deck will not silently enable disabled agents."
+                case .missingDefinition:
+                    return "Create, import, or choose another agent. There is no agent file to assign."
+                }
+            }
+        }
+
+        let name: String
+        let kind: Kind
+        var id: String { "\(kind.title)::\(name)" }
+    }
+
+    private var agentPreflightIssues: [AgentPreflightIssue] {
+        let projectByName = Dictionary(grouping: projectAgents, by: \.name)
+        let allByName = Dictionary(grouping: allAgents, by: \.name)
         var seen = Set<String>()
         return requiredAgentNames
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-            .filter { !activeNames.contains($0) }
             .filter { seen.insert($0).inserted }
+            .compactMap { name in
+                if let projectMatches = projectByName[name], !projectMatches.isEmpty {
+                    if projectMatches.contains(where: { $0.resolved.disabled != true }) {
+                        return nil
+                    }
+                    return AgentPreflightIssue(name: name, kind: .disabled)
+                }
+                guard let globalMatches = allByName[name], !globalMatches.isEmpty else {
+                    return AgentPreflightIssue(name: name, kind: .missingDefinition)
+                }
+                if globalMatches.allSatisfy({ $0.resolved.disabled == true }) {
+                    return AgentPreflightIssue(name: name, kind: .disabled)
+                }
+                return AgentPreflightIssue(name: name, kind: .unassigned)
+            }
+    }
+
+    private var assignablePreflightAgentNames: [String] {
+        agentPreflightIssues.filter { $0.kind == .unassigned }.map(\.name)
     }
 
     private var canSaveToLoopBank: Bool {
@@ -332,34 +385,43 @@ struct LoopLaunchSheet: View {
 
     @ViewBuilder
     private var loopPreflightSection: some View {
-        if !unavailableRequiredAgentNames.isEmpty {
+        if !agentPreflightIssues.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                Label("This loop needs agents that are not available to this project.", systemImage: "person.crop.circle.badge.exclamationmark")
+                Label("Fix loop agent configuration before launch.", systemImage: "person.crop.circle.badge.exclamationmark")
                     .font(AppTheme.Font.body.weight(.semibold))
                     .foregroundStyle(.orange)
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(unavailableRequiredAgentNames, id: \.self) { name in
-                        Text("• \(name)")
-                            .font(AppTheme.Font.caption)
-                            .foregroundStyle(.primary)
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(agentPreflightIssues) { issue in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("• \(issue.name) — \(issue.kind.title)")
+                                .font(AppTheme.Font.caption.weight(.semibold))
+                                .foregroundStyle(.primary)
+                            Text(issue.kind.remediation)
+                                .font(AppTheme.Font.caption2)
+                                .foregroundStyle(AppTheme.mutedText)
+                        }
                     }
                 }
-                Text("Agent Deck will not guess replacements. Assign the missing agents, or choose different agents before launching.")
+                Text("Agent Deck will not guess replacements or silently enable disabled agents.")
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
                     Button {
-                        onAssignMissingAgents(unavailableRequiredAgentNames)
+                        onAssignMissingAgents(assignablePreflightAgentNames)
                     } label: {
-                        Label("Assign missing agents", systemImage: "plus.circle")
+                        Label("Assign fixable agents", systemImage: "plus.circle")
                     }
                     .appSecondaryButton()
-                    .disabled(session.projectPath.isEmpty)
-                    .help(session.projectPath.isEmpty ? "This session has no project path to assign agents to." : "Assign these agents to the current project")
+                    .disabled(session.projectPath.isEmpty || assignablePreflightAgentNames.isEmpty)
+                    .help(assignablePreflightAgentNames.isEmpty ? "No unassigned existing agents can be fixed automatically." : "Assign existing unassigned agents to the current project")
 
                     if session.projectPath.isEmpty {
                         Text("No project path available.")
+                            .font(AppTheme.Font.caption2)
+                            .foregroundStyle(AppTheme.mutedText)
+                    } else if assignablePreflightAgentNames.isEmpty {
+                        Text("Open Agents to enable/create the listed agents, or choose different agents.")
                             .font(AppTheme.Font.caption2)
                             .foregroundStyle(AppTheme.mutedText)
                     }
