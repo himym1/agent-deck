@@ -621,34 +621,59 @@ private struct UserQuestionNavigationRailItem: Identifiable, Equatable {
     let isActive: Bool
 }
 
+private enum TranscriptFloatingControlGeometry {
+    static let transcriptHorizontalPadding: CGFloat = 18
+    static let jumpToLatestTrailingPadding: CGFloat = 22
+    static let questionRailCollapsedWidth: CGFloat = 22
+    static let questionRailRowHeight: CGFloat = 22
+    static let questionRailRowSpacing: CGFloat = 6
+    static let questionRailVerticalPadding: CGFloat = 16
+    static let questionScrollTopPadding: CGFloat = 12
+
+    /// The rail is hosted inside the AppKit scroll view, while the scroll-to-bottom
+    /// FAB is hosted by the surrounding SwiftUI ZStack. Compensate for the transcript
+    /// SwiftUI horizontal padding so both trailing strokes land on the same screen x.
+    static var questionRailTrailingInsetInsideScrollView: CGFloat {
+        max(0, jumpToLatestTrailingPadding - transcriptHorizontalPadding)
+    }
+}
+
 private struct UserQuestionNavigationRail: View {
     let items: [UserQuestionNavigationRailItem]
     let availableWidth: CGFloat
+    let onExpandedChange: (Bool) -> Void
     let onSelect: (String) -> Void
 
     @State private var hoveredID: String?
 
     private let expandAnimation = Animation.interpolatingSpring(mass: 0.75, stiffness: 310, damping: 30)
     private let railFadeAnimation = Animation.easeOut(duration: 0.14)
-    private let markHitWidth: CGFloat = 16
+    private let markHitWidth: CGFloat = TranscriptFloatingControlGeometry.questionRailCollapsedWidth
 
     private var expandedRowWidth: CGFloat {
+        Self.expandedWidth(for: availableWidth)
+    }
+
+    static func expandedWidth(for availableWidth: CGFloat) -> CGFloat {
         let desiredWidth = max(168, availableWidth * 0.22)
         let availableEdgeWidth = max(96, availableWidth - 112)
         return min(248, desiredWidth, availableEdgeWidth)
     }
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 6) {
+        VStack(alignment: .trailing, spacing: TranscriptFloatingControlGeometry.questionRailRowSpacing) {
             ForEach(items) { item in
                 row(for: item)
             }
         }
-        .frame(width: expandedRowWidth, alignment: .trailing)
+        .frame(width: hoveredID == nil ? markHitWidth : expandedRowWidth, alignment: .trailing)
         .padding(.vertical, 8)
         .opacity(hoveredID == nil ? 0.78 : 1)
         .animation(expandAnimation, value: hoveredID)
         .animation(railFadeAnimation, value: hoveredID == nil)
+        .onChange(of: hoveredID) { _, newValue in
+            onExpandedChange(newValue != nil)
+        }
     }
 
     private func row(for item: UserQuestionNavigationRailItem) -> some View {
@@ -734,6 +759,7 @@ private struct UserQuestionNavigationRail: View {
 }
 
 private final class UserQuestionNavigationRailHostView: NSHostingView<UserQuestionNavigationRail> {
+    var isRailExpanded = false
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
@@ -789,7 +815,7 @@ private struct JumpToLatestOverlay: View {
         ZStack {
             if !pinnedState.isPinned {
                 JumpToLatestPill(action: onJump)
-                    .padding(.trailing, 22)
+                    .padding(.trailing, TranscriptFloatingControlGeometry.jumpToLatestTrailingPadding)
                     .padding(.bottom, 14)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -943,7 +969,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
 
-        let questionRail = UserQuestionNavigationRailHostView(rootView: UserQuestionNavigationRail(items: [], availableWidth: 0) { _ in })
+        let questionRail = UserQuestionNavigationRailHostView(rootView: UserQuestionNavigationRail(items: [], availableWidth: 0, onExpandedChange: { _ in }) { _ in })
         questionRail.translatesAutoresizingMaskIntoConstraints = true
         questionRail.autoresizingMask = [.minXMargin, .height]
         questionRail.setFrameSize(.zero)
@@ -1153,6 +1179,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             }
         }
         private var isProgrammaticScroll = false
+        private var forcedActiveQuestionID: String?
         // True between willStartLiveScroll / didEndLiveScroll — an authoritative
         // "user is driving the scroll" signal, but it only fires for trackpad
         // gestures and scroller-knob drags, not discrete mouse wheels.
@@ -1516,41 +1543,67 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private func updateQuestionRail() {
             guard let scrollView, let tableView, let rail = questionRail else { return }
             let questionRows = currentQuestionRows()
-            let railWidth = questionRailWidth(for: scrollView.bounds.width)
-            let rowHeight: CGFloat = 22
-            let rowSpacing: CGFloat = 6
-            let verticalPadding: CGFloat = 16
-            let desiredRailHeight = CGFloat(questionRows.count) * rowHeight + CGFloat(max(0, questionRows.count - 1)) * rowSpacing + verticalPadding
-            let railHeight = min(max(54, scrollView.bounds.height - 32), max(44, desiredRailHeight))
-            rail.frame = NSRect(
-                x: scrollView.bounds.width - railWidth - 22,
-                y: (scrollView.bounds.height - railHeight) / 2,
-                width: railWidth,
-                height: railHeight
-            )
+            updateQuestionRailFrame(for: scrollView, questionCount: questionRows.count)
 
             guard questionRows.count >= 2 else {
+                forcedActiveQuestionID = nil
                 rail.isHidden = true
-                rail.rootView = UserQuestionNavigationRail(items: [], availableWidth: scrollView.bounds.width) { _ in }
+                rail.isRailExpanded = false
+                rail.rootView = UserQuestionNavigationRail(items: [], availableWidth: scrollView.bounds.width, onExpandedChange: { _ in }) { _ in }
                 return
             }
 
             rail.isHidden = false
-            let activeID = activeQuestionID(in: questionRows, scrollView: scrollView, tableView: tableView)
+            let rowIDs = Set(questionRows.map { $0.id })
+            if let forcedActiveQuestionID, !rowIDs.contains(forcedActiveQuestionID) {
+                self.forcedActiveQuestionID = nil
+            }
+            let activeID = self.forcedActiveQuestionID ?? activeQuestionID(in: questionRows, scrollView: scrollView, tableView: tableView)
             let items = questionRows.map { _, id, title in
                 UserQuestionNavigationRailItem(id: id, title: title, isActive: id == activeID)
             }
-            rail.rootView = UserQuestionNavigationRail(items: items, availableWidth: scrollView.bounds.width) { [weak self] id in
+            rail.rootView = UserQuestionNavigationRail(
+                items: items,
+                availableWidth: scrollView.bounds.width,
+                onExpandedChange: { [weak self] expanded in
+                    self?.setQuestionRailExpanded(expanded)
+                }
+            ) { [weak self] id in
                 self?.scrollToUserQuestion(id: id)
             }
         }
 
-        private func questionRailWidth(for availableWidth: CGFloat) -> CGFloat {
-            min(248, max(168, availableWidth * 0.22), max(96, availableWidth - 112))
+        private func updateQuestionRailFrame(for scrollView: NSScrollView, questionCount: Int) {
+            guard let rail = questionRail else { return }
+            let railWidth = rail.isRailExpanded ? UserQuestionNavigationRail.expandedWidth(for: scrollView.bounds.width) : TranscriptFloatingControlGeometry.questionRailCollapsedWidth
+            let rowHeight = TranscriptFloatingControlGeometry.questionRailRowHeight
+            let rowSpacing = TranscriptFloatingControlGeometry.questionRailRowSpacing
+            let verticalPadding = TranscriptFloatingControlGeometry.questionRailVerticalPadding
+            let desiredRailHeight = CGFloat(questionCount) * rowHeight + CGFloat(max(0, questionCount - 1)) * rowSpacing + verticalPadding
+            let railHeight = min(max(54, scrollView.bounds.height - 32), max(44, desiredRailHeight))
+            let trailingInset = TranscriptFloatingControlGeometry.questionRailTrailingInsetInsideScrollView
+            rail.frame = NSRect(
+                x: scrollView.bounds.width - railWidth - trailingInset,
+                y: (scrollView.bounds.height - railHeight) / 2,
+                width: railWidth,
+                height: railHeight
+            )
+        }
+
+        private func setQuestionRailExpanded(_ expanded: Bool) {
+            guard let rail = questionRail, rail.isRailExpanded != expanded else { return }
+            rail.isRailExpanded = expanded
+            if let scrollView {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.16
+                    context.allowsImplicitAnimation = true
+                    updateQuestionRailFrame(for: scrollView, questionCount: currentQuestionRows().count)
+                }
+            }
         }
 
         private func questionRailLandingOffset(for visibleHeight: CGFloat) -> CGFloat {
-            min(96, max(24, visibleHeight * 0.18))
+            TranscriptFloatingControlGeometry.questionScrollTopPadding
         }
 
         private func activeQuestionID(
@@ -1567,9 +1620,12 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             }
 
             let anchorY = clipBounds.origin.y + questionRailLandingOffset(for: clipBounds.height)
-            return questionRows.last { row, _, _ in
-                tableView.rect(ofRow: row).minY <= anchorY + 1
-            }?.id ?? questionRows.first?.id
+            return questionRows.min { lhs, rhs in
+                let lhsDistance = abs(tableView.rect(ofRow: lhs.row).minY - anchorY)
+                let rhsDistance = abs(tableView.rect(ofRow: rhs.row).minY - anchorY)
+                if lhsDistance == rhsDistance { return lhs.row < rhs.row }
+                return lhsDistance < rhsDistance
+            }?.id
         }
 
         private func currentQuestionRows() -> [(row: Int, id: String, title: String)] {
@@ -1593,6 +1649,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             stopFollowGlide()
             isAutoFollowing = false
             publishPinnedState(false)
+            forcedActiveQuestionID = id
+            updateQuestionRail()
             isProgrammaticScroll = true
             let rowRect = tableView.rect(ofRow: row)
             let clipView = scrollView.contentView
@@ -1634,6 +1692,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     guard let self, let scrollView = self.scrollView else { return }
                     self.profiler.measureBoundsCallback {
                     if !self.isProgrammaticScroll {
+                        self.forcedActiveQuestionID = nil
                         // Authoritative user-scroll timestamp — covers mouse
                         // wheels and scroller drags that post no live-scroll
                         // notification at all.
@@ -4641,7 +4700,7 @@ struct PiAgentScreen: View {
             ZStack(alignment: .bottomTrailing) {
                 transcript
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.horizontal, 18)
+                    .padding(.horizontal, TranscriptFloatingControlGeometry.transcriptHorizontalPadding)
                     .transcriptEdgeFade()
 
                 // NOTE: the old opaque "settle cover" (spinner shown over the
