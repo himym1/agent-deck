@@ -642,6 +642,30 @@ private enum TranscriptFloatingControlGeometry {
     }
 }
 
+struct QuestionRailScrollLandingResolver {
+    let landingOffset: CGFloat
+    let visibleHeight: CGFloat
+    let tolerance: CGFloat
+    let maxCorrections: Int
+
+    init(landingOffset: CGFloat, visibleHeight: CGFloat, tolerance: CGFloat = 1, maxCorrections: Int = 6) {
+        self.landingOffset = landingOffset
+        self.visibleHeight = visibleHeight
+        self.tolerance = tolerance
+        self.maxCorrections = maxCorrections
+    }
+
+    func targetY(rowMinY: CGFloat, documentHeight: CGFloat) -> CGFloat {
+        let maxY = max(0, documentHeight - visibleHeight)
+        return min(max(0, rowMinY - landingOffset), maxY)
+    }
+
+    func needsCorrection(currentY: CGFloat, rowMinY: CGFloat, documentHeight: CGFloat) -> CGFloat? {
+        let nextY = targetY(rowMinY: rowMinY, documentHeight: documentHeight)
+        return abs(nextY - currentY) > tolerance ? nextY : nil
+    }
+}
+
 /// Observable rail data. Mutated by the transcript coordinator on scroll/apply;
 /// the hosted rail view is created ONCE and never replaced, so SwiftUI `@State`
 /// (hover) survives every scroll/update tick instead of being reset — replacing
@@ -1772,18 +1796,35 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             isProgrammaticScroll = true
             let clipView = scrollView.contentView
             let landingOffset = questionRailLandingOffset(for: clipView.bounds.height)
-            let documentHeight = max(scrollView.documentView?.frame.height ?? tableView.bounds.height, clipView.bounds.height)
-            let maxY = max(0, documentHeight - clipView.bounds.height)
+            let resolver = QuestionRailScrollLandingResolver(landingOffset: landingOffset, visibleHeight: clipView.bounds.height)
+            let targetY = resolver.targetY(
+                rowMinY: tableView.rect(ofRow: row).minY,
+                documentHeight: max(scrollView.documentView?.frame.height ?? tableView.bounds.height, clipView.bounds.height)
+            )
 
             // NSTableView measures row heights lazily as rows scroll into view, so
             // `rect(ofRow:)` for a far-offscreen target is computed from ESTIMATED
-            // heights — the first tap could land in the wrong spot, and the second
-            // tap worked because the first scroll had measured the intervening rows.
-            // Animate to the estimate first, then re-measure on completion and run a
-            // short corrective scroll if accumulated estimation error drifted it.
-            let targetY = min(max(0, tableView.rect(ofRow: row).minY - landingOffset), maxY)
+            // heights. A single correction was not enough when each landing revealed
+            // more real row heights; users had to click the same rail item again.
+            // Keep correcting until the measured row position stabilizes.
+            animateQuestionRailLanding(to: targetY, row: row, resolver: resolver, correction: 0, duration: 0.32)
+        }
+
+        private func animateQuestionRailLanding(
+            to targetY: CGFloat,
+            row: Int,
+            resolver: QuestionRailScrollLandingResolver,
+            correction: Int,
+            duration: TimeInterval
+        ) {
+            guard let scrollView, let tableView else {
+                isProgrammaticScroll = false
+                updateQuestionRail()
+                return
+            }
+            let clipView = scrollView.contentView
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.32
+                context.duration = duration
                 context.allowsImplicitAnimation = true
                 context.timingFunction = CAMediaTimingFunction(controlPoints: 0.20, 0.0, 0.0, 1.0)
                 clipView.animator().setBoundsOrigin(NSPoint(x: clipView.bounds.origin.x, y: targetY))
@@ -1795,33 +1836,19 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                         self.updateQuestionRail()
                         return
                     }
-                    let correctedDocHeight = max(scrollView.documentView?.frame.height ?? tableView.bounds.height, clipView.bounds.height)
-                    let correctedMaxY = max(0, correctedDocHeight - clipView.bounds.height)
-                    let correctedY = min(max(0, tableView.rect(ofRow: row).minY - landingOffset), correctedMaxY)
-                    let finalize = { [weak self, weak clipView, weak scrollView] in
-                        MainActor.assumeIsolated {
-                            if let scrollView, let clipView {
-                                scrollView.reflectScrolledClipView(clipView)
-                            }
-                            self?.isProgrammaticScroll = false
-                            self?.updateQuestionRail()
-                        }
+                    scrollView.reflectScrolledClipView(clipView)
+                    let documentHeight = max(scrollView.documentView?.frame.height ?? tableView.bounds.height, clipView.bounds.height)
+                    if correction < resolver.maxCorrections,
+                       let correctedY = resolver.needsCorrection(
+                           currentY: clipView.bounds.origin.y,
+                           rowMinY: tableView.rect(ofRow: row).minY,
+                           documentHeight: documentHeight
+                       ) {
+                        self.animateQuestionRailLanding(to: correctedY, row: row, resolver: resolver, correction: correction + 1, duration: 0.10)
+                        return
                     }
-                    if abs(correctedY - targetY) > 6 {
-                        // Keep the programmatic flag live through the correction so the
-                        // bounds observer doesn't misclassify it as a user scroll and
-                        // clear `forcedActiveQuestionID` mid-landing.
-                        NSAnimationContext.runAnimationGroup({ ctx in
-                            ctx.duration = 0.18
-                            ctx.allowsImplicitAnimation = true
-                            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.20, 0.0, 0.0, 1.0)
-                            clipView.animator().setBoundsOrigin(NSPoint(x: clipView.bounds.origin.x, y: correctedY))
-                        }, completionHandler: finalize)
-                    } else {
-                        scrollView.reflectScrolledClipView(clipView)
-                        self.isProgrammaticScroll = false
-                        self.updateQuestionRail()
-                    }
+                    self.isProgrammaticScroll = false
+                    self.updateQuestionRail()
                 }
             }
         }
