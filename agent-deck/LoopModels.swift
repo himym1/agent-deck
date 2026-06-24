@@ -688,8 +688,12 @@ enum LoopRunRecapCodec {
     }
 
     static func iterationText(for run: LoopRun, iteration: LoopIteration) -> String {
-        var parts: [String] = ["∞ Round \(iteration.index) recap — \(run.structure.displayName)", iteration.summary]
-        if let checkerResult = iteration.checkerResult {
+        var parts: [String] = ["∞ Round \(iteration.index) recap — \(run.structure.displayName)"]
+        if !iteration.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append(iteration.summary)
+        }
+        if let checkerResult = iteration.checkerResult,
+           !iteration.summary.localizedCaseInsensitiveContains("Checker outcome:") {
             parts.append("Checker outcome: \(checkerResult.displayName)")
         }
         if let validation = iteration.validationResult {

@@ -97,7 +97,7 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertEqual(recaps.count, 2)
         XCTAssertEqual(recaps.filter { $0.1.kind == .iteration }.count, 1)
         XCTAssertEqual(recaps.filter { $0.1.kind == .final }.count, 1)
-        XCTAssertTrue(recaps.contains { $0.0.text.contains("Round 1 recap") && $0.0.text.contains("Validation: passed") })
+        XCTAssertTrue(recaps.contains { $0.0.text.contains("Round 1 recap") && $0.0.text.contains("done") && $0.0.text.contains("Validation: passed") })
         XCTAssertTrue(recaps.contains { $0.0.text.contains("Loop final recap") && $0.0.text.contains("Stop reason: Success") })
 
         store.hydrateLoopRunsFromTranscript(sessionID: session.id)
@@ -263,7 +263,7 @@ final class LoopExecutionStoreTests: XCTestCase {
     func testMakerCheckerLoopRejectThenApproveAcrossIterations() async throws {
         let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
         let session = try makeSession(store: store)
-        var responses = ["Maker pass", "REJECT", "Maker revised", "APPROVE"]
+        var responses = ["Maker pass", "REJECT\nMissing required evidence for the implementation.", "Maker revised", "APPROVE\nEvidence now satisfies the rubric."]
         var observedTasks: [(role: String, task: String)] = []
         let draft = LoopDraft(
             goal: "Build safely",
@@ -289,6 +289,10 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertTrue(observedTasks[0].task.contains("implementing one maker pass"))
         XCTAssertTrue(observedTasks[1].task.contains("Agent Deck parses your first line"))
         XCTAssertTrue(observedTasks[1].task.contains("APPROVE, REJECT, ASK_HUMAN, or FAIL"))
+        XCTAssertTrue(observedTasks[1].task.contains("concise Markdown recap/rationale with concrete evidence"))
+        XCTAssertTrue(run.iterations[0].summary.contains("Checker outcome: Reject"))
+        XCTAssertTrue(run.iterations[0].summary.contains("Missing required evidence"))
+        XCTAssertFalse(run.iterations[0].summary.contains("REJECT\n"))
         XCTAssertTrue(observedTasks[2].task.contains("Previous checker review to address"))
         XCTAssertTrue(responses.isEmpty)
     }
@@ -296,7 +300,7 @@ final class LoopExecutionStoreTests: XCTestCase {
     func testMakerCheckerLoopMaxRejectsCompletesAsGoalNotMet() async throws {
         let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
         let session = try makeSession(store: store)
-        var responses = ["Maker pass", "REJECT", "Maker revised", "REJECT"]
+        var responses = ["Maker pass", "REJECT\nThe first pass still misses the safety requirement.", "Maker revised", "REJECT\nThe final pass still lacks approval evidence."]
         let draft = LoopDraft(
             goal: "Build safely",
             structure: .makerChecker,
@@ -320,8 +324,35 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertTrue(LoopRunRecapCodec.finalText(for: run).contains("Final checker result: Reject"))
         let recapEntries = (store.transcriptsBySessionID[session.id] ?? []).filter { LoopRunRecapCodec.decode(from: $0) != nil }
         XCTAssertEqual(recapEntries.filter { LoopRunRecapCodec.decode(from: $0)?.kind == .iteration }.count, 2)
-        XCTAssertTrue(recapEntries.contains { $0.text.contains("Round 2 recap") && $0.text.contains("Checker outcome: Reject") })
+        XCTAssertTrue(recapEntries.contains { $0.text.contains("Round 2 recap") && $0.text.contains("Checker outcome: Reject") && $0.text.contains("final pass still lacks approval evidence") })
         XCTAssertFalse(recapEntries.contains { $0.text.contains("Checker outcome: Failed") })
+        XCTAssertTrue(responses.isEmpty)
+    }
+
+    func testMakerCheckerLoopCheckerRunFailureIsAgentFailureNotRejection() async throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = try makeSession(store: store)
+        var responses = [(status: PiSubagentRunStatus, summary: String)]()
+        responses.append((.completed, "Maker pass"))
+        responses.append((.failed, "REJECT\nChecker process crashed before completing review."))
+        let draft = LoopDraft(
+            goal: "Build safely",
+            structure: .makerChecker,
+            writeTarget: .artifactMarkdown,
+            validationCommand: "/usr/bin/true",
+            makerChecker: LoopMakerCheckerConfig(makerName: "Builder", checkerName: "Reviewer", checkerRubric: "approve", maxReviewRounds: 2)
+        )
+
+        let maybeRun = await store.launchMakerCheckerLoop(session: session, draft: draft) { _, role, task, _, _, _ in
+            let response = responses.removeFirst()
+            return Self.fakeRun(parentSessionID: session.id, agentName: role, task: task, status: response.status, summary: response.summary)
+        }
+        let run = try XCTUnwrap(maybeRun)
+
+        XCTAssertEqual(run.status, .failed)
+        XCTAssertEqual(run.stopReason, .agentFailed)
+        XCTAssertNil(run.iterations.first?.checkerResult)
+        XCTAssertTrue(run.iterations[0].summary.contains("Checker stopped with failed"))
         XCTAssertTrue(responses.isEmpty)
     }
 

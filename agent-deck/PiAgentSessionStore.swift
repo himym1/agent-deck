@@ -908,7 +908,7 @@ final class PiAgentSessionStore {
             let validationResult = run.validationCommand.isEmpty ? nil : runValidationCommand(run.validationCommand, workingDirectory: executionContext.workingDirectory)
             let artifact = makeMarkdownArtifact(filename: iterationIndex == 1 ? "single-agent-summary.md" : "single-agent-summary-\(iterationIndex).md", markdown: singleAgentArtifactMarkdown(run: run, iterationIndex: iterationIndex, childRunID: childRun.id, summary: summary), artifactDirectory: artifactDirectory)
             let ended = Date()
-            run.iterations.append(LoopIteration(index: iterationIndex, startedAt: started, endedAt: ended, summary: "Single agent completed iteration \(iterationIndex).", artifacts: [artifact].compactMap { $0 }, validationResult: validationResult, timeline: timeline))
+            run.iterations.append(LoopIteration(index: iterationIndex, startedAt: started, endedAt: ended, summary: summary, artifacts: [artifact].compactMap { $0 }, validationResult: validationResult, timeline: timeline))
             if run.validationCommand.isEmpty { run.status = .failed; run.endedAt = ended; run.stopReason = .validationUnavailable; upsertLoopRun(run); return run }
             if validationResult?.didPass == true { run.status = .completed; run.endedAt = ended; run.stopReason = .success; upsertLoopRun(run); return run }
             upsertLoopRun(run)
@@ -1012,7 +1012,7 @@ final class PiAgentSessionStore {
                         index: iterationIndex,
                         startedAt: iterationStartedAt,
                         endedAt: endedAt,
-                        summary: "Pipeline stopped at stage \(stageIndex + 1) (\(stageName)).",
+                        summary: stageSummaries.joined(separator: "\n\n"),
                         artifacts: [artifact].compactMap { $0 },
                         validationResult: nil,
                         timeline: timeline
@@ -1044,7 +1044,7 @@ final class PiAgentSessionStore {
                 index: iterationIndex,
                 startedAt: iterationStartedAt,
                 endedAt: iterationEndedAt,
-                summary: "Pipeline completed stages: \(run.pipeline.stageNames.joined(separator: " → ")).",
+                summary: stageSummaries.joined(separator: "\n\n"),
                 artifacts: [artifact].compactMap { $0 },
                 validationResult: validationCommand.isEmpty ? nil : validationResult,
                 timeline: timeline
@@ -1109,7 +1109,7 @@ final class PiAgentSessionStore {
             let validationResult = run.validationCommand.isEmpty ? nil : runValidationCommand(run.validationCommand, workingDirectory: executionContext.workingDirectory)
             let ended = Date()
             let timeline = run.parallel.branchNames.enumerated().map { offset, branch in LoopTimelineEvent(step: .parallelBranch, roleName: branch, note: "Parallel graph run: \(graphRun.id.uuidString)", timestamp: started.addingTimeInterval(TimeInterval(offset))) }
-            run.iterations.append(LoopIteration(index: iterationIndex, startedAt: started, endedAt: ended, summary: graphRun.status == .completed ? "Parallel agents completed." : "Parallel agents stopped with \(graphRun.status.rawValue).", artifacts: [artifact].compactMap { $0 }, validationResult: validationResult, timeline: timeline))
+            run.iterations.append(LoopIteration(index: iterationIndex, startedAt: started, endedAt: ended, summary: summary, artifacts: [artifact].compactMap { $0 }, validationResult: validationResult, timeline: timeline))
             if graphRun.status != .completed { run.status = graphRun.status == .stopped ? .stopped : .failed; run.endedAt = ended; run.stopReason = graphRun.status == .stopped ? .userStopped : .agentFailed; upsertLoopRun(run); return run }
             if run.validationCommand.isEmpty { run.status = .failed; run.endedAt = ended; run.stopReason = .validationUnavailable; upsertLoopRun(run); return run }
             if validationResult?.didPass == true { run.status = .completed; run.endedAt = ended; run.stopReason = .success; upsertLoopRun(run); return run }
@@ -1153,7 +1153,7 @@ final class PiAgentSessionStore {
             let artifact = makeMarkdownArtifact(filename: iterationIndex == 1 ? "discovery-triage-summary.md" : "discovery-triage-summary-\(iterationIndex).md", markdown: discoveryTriageArtifactMarkdown(run: run, iterationIndex: iterationIndex, childRunID: childRun.id, summary: childSummary), artifactDirectory: artifactDirectory)
             let validationResult = run.validationCommand.isEmpty ? nil : runValidationCommand(run.validationCommand, workingDirectory: executionContext.workingDirectory)
             let ended = Date()
-            run.iterations.append(LoopIteration(index: iterationIndex, startedAt: started, endedAt: ended, summary: childRun.status == .completed ? "Discovery triage completed." : "Discovery triage stopped with \(childRun.status.rawValue).", artifacts: [artifact].compactMap { $0 }, validationResult: validationResult, timeline: [LoopTimelineEvent(step: .discoveryTriage, roleName: run.discoveryTriage.agentName, note: "Triage child run: \(childRun.id.uuidString)", timestamp: started)]))
+            run.iterations.append(LoopIteration(index: iterationIndex, startedAt: started, endedAt: ended, summary: childSummary, artifacts: [artifact].compactMap { $0 }, validationResult: validationResult, timeline: [LoopTimelineEvent(step: .discoveryTriage, roleName: run.discoveryTriage.agentName, note: "Triage child run: \(childRun.id.uuidString)", timestamp: started)]))
             if childRun.status != .completed {
                 run.status = childRun.status == .stopped ? .stopped : .failed; run.endedAt = ended; run.stopReason = childRun.status == .stopped ? .userStopped : .agentFailed; upsertLoopRun(run); return run
             }
@@ -1224,15 +1224,29 @@ final class PiAgentSessionStore {
                 run.status = .failed; run.endedAt = Date(); run.stopReason = .agentFailed; upsertLoopRun(run); return run
             }
             if let stoppedRun = stoppedLoopRun(run) { return stoppedRun }
-            let checkerText = checkerRun.summary?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let checkerResult = checkerResult(from: checkerText, fallbackRubric: run.makerChecker.checkerRubric)
-            let validationResult = run.validationCommand.isEmpty ? nil : runValidationCommand(run.validationCommand, workingDirectory: executionContext.workingDirectory)
+            let checkerText = checkerRun.summary?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? checkerRun.error?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? ""
             let ended = Date()
+            if checkerRun.status != .completed {
+                let timeline = [
+                    LoopTimelineEvent(step: .makerAct, roleName: run.makerChecker.makerName, note: "Maker child run: \(makerRun.id.uuidString)", timestamp: iterationStartedAt),
+                    LoopTimelineEvent(step: .checkerReview, roleName: run.makerChecker.checkerName, note: "Checker child run: \(checkerRun.id.uuidString) stopped with \(checkerRun.status.rawValue).", timestamp: ended)
+                ]
+                let statusSummary = checkerText.isEmpty ? "Checker stopped with \(checkerRun.status.rawValue)." : "Checker stopped with \(checkerRun.status.rawValue): \(checkerText)"
+                run.iterations.append(LoopIteration(index: iterationIndex, startedAt: iterationStartedAt, endedAt: ended, summary: statusSummary, timeline: timeline))
+                run.status = checkerRun.status == .stopped ? .stopped : .failed
+                run.endedAt = ended
+                run.stopReason = checkerRun.status == .stopped ? .userStopped : .agentFailed
+                upsertLoopRun(run)
+                return run
+            }
+            let checkerResult = checkerResult(from: checkerText, fallbackRubric: run.makerChecker.checkerRubric)
+            let iterationSummary = checkerIterationSummary(result: checkerResult, checkerText: checkerText)
+            let validationResult = run.validationCommand.isEmpty ? nil : runValidationCommand(run.validationCommand, workingDirectory: executionContext.workingDirectory)
             let timeline = [
                 LoopTimelineEvent(step: .makerAct, roleName: run.makerChecker.makerName, note: "Maker child run: \(makerRun.id.uuidString)", timestamp: iterationStartedAt),
                 LoopTimelineEvent(step: .checkerReview, roleName: run.makerChecker.checkerName, note: "Checker child run: \(checkerRun.id.uuidString) returned \(checkerResult.displayName).", timestamp: ended)
             ]
-            run.iterations.append(LoopIteration(index: iterationIndex, startedAt: iterationStartedAt, endedAt: ended, summary: "Checker returned \(checkerResult.displayName).", validationResult: validationResult, checkerResult: checkerResult, timeline: timeline))
+            run.iterations.append(LoopIteration(index: iterationIndex, startedAt: iterationStartedAt, endedAt: ended, summary: iterationSummary, validationResult: validationResult, checkerResult: checkerResult, timeline: timeline))
             priorReview = checkerText
             switch checkerResult {
             case .approve:
@@ -1766,16 +1780,48 @@ final class PiAgentSessionStore {
             "You are reviewing one completed loop iteration. Review only; do not edit project files.",
             "Review criteria: \(run.makerChecker.checkerRubric)",
             "Maker summary:\n\(makerSummary)",
-            "Agent Deck parses your first line to decide the next step. Start your final response with exactly one decision line: APPROVE, REJECT, ASK_HUMAN, or FAIL. Then briefly explain the decision with evidence."
+            "Agent Deck parses your first line to decide the next step. Start your final response with exactly one decision line: APPROVE, REJECT, ASK_HUMAN, or FAIL. Then provide a concise Markdown recap/rationale with concrete evidence: what changed, whether it meets the rubric, remaining risks, and the next action."
         ]).joined(separator: "\n\n")
     }
 
+    private func checkerIterationSummary(result: LoopCheckerResult, checkerText: String) -> String {
+        let rationale = checkerRationale(from: checkerText).nonEmpty ?? checkerText.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        var lines = ["Checker outcome: \(result.displayName)"]
+        if let rationale {
+            lines.append(rationale)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func checkerRationale(from text: String) -> String {
+        var lines = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .newlines)
+        while let first = lines.first, first.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.removeFirst()
+        }
+        guard let first = lines.first else { return "" }
+        let decision = first
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ":.-—– "))
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: " ", with: "_")
+        if ["approve", "reject", "ask_human", "fail"].contains(decision) {
+            lines.removeFirst()
+        }
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func checkerResult(from text: String, fallbackRubric: String) -> LoopCheckerResult {
-        let normalized = text.lowercased().replacingOccurrences(of: "-", with: "_")
-        if normalized.contains("ask_human") || normalized.contains("ask human") { return .askHuman }
-        if normalized.contains("fail") { return .fail }
-        if normalized.contains("reject") { return .reject }
-        if normalized.contains("approve") { return .approve }
+        let firstLine = text
+            .components(separatedBy: .newlines)
+            .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
+        let normalizedDecisionLine = firstLine.lowercased().replacingOccurrences(of: "-", with: "_")
+        if normalizedDecisionLine.contains("ask_human") || normalizedDecisionLine.contains("ask human") { return .askHuman }
+        if normalizedDecisionLine.contains("fail") { return .fail }
+        if normalizedDecisionLine.contains("reject") { return .reject }
+        if normalizedDecisionLine.contains("approve") { return .approve }
         return deterministicCheckerResult(rubric: fallbackRubric, validationResult: nil, iterationIndex: 1)
     }
 
