@@ -318,34 +318,20 @@ struct LoopBankScreen: View {
     }
 
     private func readOnlyDefinitionFields(for definition: LoopDefinition) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            detailRow("Name") {
-                readOnlyValue(definition.name.nonEmpty ?? "Untitled loop")
-            }
-            readOnlyDetailBlock("Description", value: definition.description, placeholder: "No description")
-            detailRow("Structure") {
-                readOnlyValue(definition.structure.displayName)
-            }
-            detailRow("Write target") {
-                readOnlyValue(definition.writeTarget.displayName)
-            }
-            detailRow("Max iterations") {
-                readOnlyValue("\(definition.maxIterations)")
-            }
-            readOnlyDetailBlock("Goal template", value: definition.goalTemplate, placeholder: "No goal template")
+        VStack(alignment: .leading, spacing: 10) {
+            readOnlyFieldRow("Name", value: definition.name, placeholder: "Untitled loop")
+            readOnlyFieldRow("Description", value: definition.description, placeholder: "No description")
+            readOnlyFieldRow("Structure", value: definition.structure.displayName)
+            readOnlyFieldRow("Write target", value: definition.writeTarget.displayName)
+            readOnlyFieldRow("Max iterations", value: "\(definition.maxIterations)")
+            readOnlyFieldRow("Goal template", value: definition.goalTemplate, placeholder: "No goal template")
             if let launchContext = definition.launchContext, !launchContext.isEmpty {
-                readOnlyDetailBlock("Launch context", value: launchContext)
-                detailRow("Context scope") {
-                    readOnlyValue(definition.launchContextScope.displayName)
-                }
+                readOnlyFieldRow("Launch context", value: launchContext)
+                readOnlyFieldRow("Context scope", value: definition.launchContextScope.displayName)
             } else {
-                detailRow("Launch context") {
-                    readOnlyValue("None")
-                }
+                readOnlyFieldRow("Launch context", value: "None")
             }
-            detailRow("Validation command", showsDivider: false) {
-                readOnlyValue(definition.validationCommand.nonEmpty ?? "None")
-            }
+            readOnlyFieldRow("Validation command", value: definition.validationCommand, placeholder: "None", isLast: true)
         }
     }
 
@@ -565,55 +551,95 @@ struct LoopBankScreen: View {
         switch definition.structure {
         case .makerChecker:
             AppCard(title: "Maker + Checker") {
-                VStack(alignment: .leading, spacing: 0) {
-                    detailRow("Maker agent") { readOnlyValue(definition.makerChecker.makerName.nonEmpty ?? "Not selected") }
-                    detailRow("Checker agent") { readOnlyValue(definition.makerChecker.checkerName.nonEmpty ?? "Not selected") }
-                    readOnlyDetailBlock("Checker rubric", value: definition.makerChecker.checkerRubric)
-                    detailRow("Max review rounds", showsDivider: false) { readOnlyValue("\(definition.makerChecker.maxReviewRounds)") }
+                VStack(alignment: .leading, spacing: 10) {
+                    readOnlyFieldRow("Maker agent", value: definition.makerChecker.makerName, placeholder: "Not selected")
+                    readOnlyFieldRow("Checker agent", value: definition.makerChecker.checkerName, placeholder: "Not selected")
+                    readOnlyFieldRow("Checker rubric", value: definition.makerChecker.checkerRubric)
+                    readOnlyFieldRow("Max review rounds", value: "\(definition.makerChecker.maxReviewRounds)", isLast: true)
                 }
             }
         case .agentPipeline:
             AppCard(title: "Agent Pipeline") {
-                VStack(alignment: .leading, spacing: 0) {
-                    detailRow("Stages", showsDivider: false) {
-                        readOnlyValue(definition.pipeline.stageNames.isEmpty ? "No stages" : definition.pipeline.stageNames.joined(separator: " → "))
-                    }
-                }
+                readOnlyFieldRow("Stages", value: definition.pipeline.stageNames.isEmpty ? "No stages" : definition.pipeline.stageNames.joined(separator: " → "), isLast: true)
             }
         case .parallelAgents:
             AppCard(title: "Parallel Agents") {
-                detailRow("Branches", showsDivider: false) {
-                    readOnlyValue(definition.parallel.branchNames.joined(separator: " | "))
-                }
+                readOnlyFieldRow("Branches", value: definition.parallel.branchNames.joined(separator: " | "), placeholder: "No branches", isLast: true)
             }
         case .discoveryTriage:
             AppCard(title: "Discovery / Triage") {
-                VStack(alignment: .leading, spacing: 0) {
-                    detailRow("Triage agent") { readOnlyValue(definition.discoveryTriage.agentName.nonEmpty ?? "Not selected") }
-                    readOnlyDetailBlock("Classification prompt", value: definition.discoveryTriage.classificationPrompt)
+                VStack(alignment: .leading, spacing: 10) {
+                    readOnlyFieldRow("Triage agent", value: definition.discoveryTriage.agentName, placeholder: "Not selected")
+                    readOnlyFieldRow("Classification prompt", value: definition.discoveryTriage.classificationPrompt, isLast: true)
                 }
             }
         case .humanApproval:
             AppCard(title: "Human Approval") {
-                readOnlyDetailBlock("Checkpoint prompt", value: definition.humanApproval.checkpointPrompt)
+                readOnlyFieldRow("Checkpoint prompt", value: definition.humanApproval.checkpointPrompt, isLast: true)
             }
         case .singleAgent:
             AppCard(title: "Single Agent") {
-                detailRow("Agent", showsDivider: false) {
-                    readOnlyValue(definition.makerChecker.makerName.nonEmpty ?? "Not selected")
-                }
+                readOnlyFieldRow("Agent", value: definition.makerChecker.makerName, placeholder: "Not selected", isLast: true)
             }
         }
     }
 
+    @ViewBuilder
     private func readOnlyAvailabilitySection(for definition: LoopDefinition) -> some View {
         AppCard(title: "Project Assignment") {
-            VStack(alignment: .leading, spacing: 0) {
-                detailRow("Availability") {
-                    readOnlyValue(availabilityLabel(for: definition))
+            if definition.source == .builtin {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Built-in loops are bundled with \(AppBrand.displayName). Duplicate this loop to create an editable user copy and assign it to projects.")
+                        .foregroundStyle(AppTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    readOnlyFieldRow("Availability", value: availabilityLabel(for: definition))
+                    readOnlyFieldRow("Projects", value: projectAssignmentSummary(for: definition), isLast: true)
                 }
-                detailRow("Projects", showsDivider: false) {
-                    readOnlyValue(projectAssignmentSummary(for: definition))
+            } else {
+                let isGlobal = definition.availability == .allProjects
+                let assignedProjectPaths = Set(definition.projectPaths)
+                let projects = availableProjectsForLoopAssignment
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Enable for every project at once, or pick specific projects below. Assignments are stored in the Loop Bank and do not move loop files.")
+                        .foregroundStyle(AppTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        AllProjectsAssignmentRow(
+                            isOn: Binding(
+                                get: { isGlobal },
+                                set: { enabled in
+                                    updateLoopAvailability(
+                                        definition,
+                                        availability: enabled ? .allProjects : .projectPaths,
+                                        projectPaths: []
+                                    )
+                                }
+                            ),
+                            subtitle: "Enable this loop for every project"
+                        )
+                        if !projects.isEmpty { Divider() }
+                        ForEach(projects) { project in
+                            ProjectAssignmentToggleRow(
+                                project: project,
+                                isOn: Binding(
+                                    get: { isGlobal ? true : assignedProjectPaths.contains(project.path) },
+                                    set: { enabled in
+                                        var paths = definition.projectPaths
+                                        if enabled {
+                                            if !paths.contains(project.path) { paths.append(project.path) }
+                                        } else {
+                                            paths.removeAll { $0 == project.path }
+                                        }
+                                        updateLoopAvailability(definition, availability: .projectPaths, projectPaths: paths)
+                                    }
+                                )
+                            )
+                            .opacity(isGlobal ? 0.4 : 1)
+                            .allowsHitTesting(!isGlobal)
+                            if project.id != projects.last?.id { Divider() }
+                        }
+                    }
                 }
             }
         }
@@ -763,32 +789,24 @@ struct LoopBankScreen: View {
         .padding(.vertical, 11)
     }
 
-    private func readOnlyValue(_ value: String) -> some View {
-        Text(value)
-            .font(AppTheme.Font.body)
-            .foregroundStyle(.primary)
-            .multilineTextAlignment(.trailing)
-            .textSelection(.enabled)
-    }
-
-    private func readOnlyDetailBlock(_ title: String, value: String, placeholder: String? = nil, showsDivider: Bool = true) -> some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                detailLabel(title)
-                Text(value.nonEmpty ?? placeholder ?? "None")
-                    .font(AppTheme.Font.body)
-                    .foregroundStyle(value.isEmpty ? AppTheme.mutedText : .primary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(AppTheme.textContentFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(AppTheme.contentStroke, lineWidth: 1)
-                    }
-            }
-            .padding(.vertical, 11)
-            if showsDivider { Divider() }
+    @ViewBuilder
+    private func readOnlyFieldRow(_ title: String, value: String, placeholder: String? = nil, isLast: Bool = false) -> some View {
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isPlaceholder = trimmedValue.isEmpty
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .fontWidth(.expanded)
+                .foregroundStyle(AppTheme.mutedText)
+            Text(isPlaceholder ? (placeholder ?? "None") : value)
+                .font(AppTheme.Font.body)
+                .foregroundStyle(isPlaceholder ? AppTheme.mutedText : .primary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        if !isLast {
+            Divider()
         }
     }
 
