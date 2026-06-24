@@ -1211,13 +1211,8 @@ struct PiAgentTranscriptThreadCard: View {
     @ViewBuilder
     private func statusRowView(_ entry: PiAgentTranscriptEntry) -> some View {
         if let recapMarker = LoopRunRecapCodec.decode(from: entry) {
-            if recapMarker.kind == .final {
-                PiAgentLoopRecapTranscriptCard(entry: entry, marker: recapMarker)
-                    .id(entry.id)
-            } else {
-                PiAgentStatusTranscriptRow(entry: entry)
-                    .id(entry.id)
-            }
+            PiAgentLoopRecapTranscriptCard(entry: entry, marker: recapMarker)
+                .id(entry.id)
         } else if let memoryEvent = entry.agentMemoryEvent {
             PiAgentMemoryActivityCard(event: memoryEvent)
                 .id(entry.id)

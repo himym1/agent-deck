@@ -4997,14 +4997,8 @@ struct PiAgentScreen: View {
             ))
         case .status(let entry):
             if let recapMarker = LoopRunRecapCodec.decode(from: entry) {
-                if recapMarker.kind == .final {
-                    let payload = NativeLoopRecapPayload.make(entry: entry, marker: recapMarker)
-                    return .native(.of(PiAgentNativeLoopRecapCardView.self) { view, width in
-                        view.configure(payload: payload, width: width)
-                    })
-                }
-                let payload = NativeStatusPayload.make(for: entry)
-                return .native(.of(PiAgentNativeStatusRowView.self) { view, width in
+                let payload = NativeLoopRecapPayload.make(entry: entry, marker: recapMarker)
+                return .native(.of(PiAgentNativeLoopRecapCardView.self) { view, width in
                     view.configure(payload: payload, width: width)
                 })
             }
