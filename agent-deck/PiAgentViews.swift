@@ -629,13 +629,14 @@ private struct UserQuestionNavigationRail: View {
     @State private var hoveredID: String?
     @State private var isRailHovered = false
 
-    private let expandAnimation = Animation.spring(response: 0.28, dampingFraction: 0.88)
-    private let railFadeAnimation = Animation.easeInOut(duration: 0.16)
+    private let expandAnimation = Animation.interpolatingSpring(mass: 0.75, stiffness: 310, damping: 30)
+    private let railFadeAnimation = Animation.easeOut(duration: 0.14)
+    private let markHitWidth: CGFloat = 26
 
     private var expandedRowWidth: CGFloat {
-        let desiredWidth = max(140, availableWidth * 0.30)
-        let availableEdgeWidth = max(96, availableWidth - 96)
-        return min(340, desiredWidth, availableEdgeWidth)
+        let desiredWidth = max(168, availableWidth * 0.22)
+        let availableEdgeWidth = max(96, availableWidth - 112)
+        return min(248, desiredWidth, availableEdgeWidth)
     }
 
     var body: some View {
@@ -645,10 +646,9 @@ private struct UserQuestionNavigationRail: View {
             }
         }
         .frame(width: expandedRowWidth, alignment: .trailing)
-        .padding(.vertical, 10)
-        .padding(.horizontal, 4)
-        .opacity(isRailHovered ? 1 : 0.84)
-        .glassEffect(.regular.tint(AppTheme.glassTint.opacity(isRailHovered ? 0.18 : 0.10)), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .padding(.vertical, 8)
+        .padding(.horizontal, 3)
+        .opacity(isRailHovered ? 1 : 0.82)
         .animation(expandAnimation, value: hoveredID)
         .animation(railFadeAnimation, value: isRailHovered)
         .onHover { hovering in
@@ -667,23 +667,23 @@ private struct UserQuestionNavigationRail: View {
             onSelect(item.id)
         } label: {
             HStack(spacing: 8) {
-                if isHovered {
-                    Text(displayText(for: item))
-                        .font(AppTheme.Font.caption.weight(.medium))
-                        .foregroundStyle(textColor(isActive: isActive, isHovered: isHovered))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
-                }
+                Text(displayText(for: item))
+                    .font(AppTheme.Font.caption.weight(.medium))
+                    .foregroundStyle(textColor(isActive: isActive, isHovered: isHovered))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .opacity(isHovered ? 1 : 0)
+                    .offset(x: isHovered ? 0 : 8)
+                    .accessibilityHidden(!isHovered)
 
                 mark(isActive: isActive, isHovered: isHovered, isRailHovered: isRailHovered)
             }
-            .padding(.vertical, isHovered ? 4 : 1)
-            .padding(.leading, isHovered ? 10 : 0)
-            .padding(.trailing, isHovered ? 6 : 0)
-            .frame(width: isHovered ? expandedRowWidth : 24, alignment: .trailing)
-            .frame(minHeight: 18)
+            .padding(.vertical, isHovered ? 5 : 1)
+            .padding(.leading, isHovered ? 11 : 0)
+            .padding(.trailing, isHovered ? 7 : 0)
+            .frame(width: isHovered ? expandedRowWidth : markHitWidth, alignment: .trailing)
+            .frame(minHeight: 20)
             .background(rowBackground(isActive: isActive, isHovered: isHovered))
             .contentShape(Rectangle())
         }
@@ -693,6 +693,8 @@ private struct UserQuestionNavigationRail: View {
         .onHover { hovering in
             if hovering {
                 hoveredID = item.id
+            } else if hoveredID == item.id {
+                hoveredID = nil
             }
         }
     }
@@ -715,18 +717,21 @@ private struct UserQuestionNavigationRail: View {
         return .secondary
     }
 
+    @ViewBuilder
     private func rowBackground(isActive: Bool, isHovered: Bool) -> some View {
-        let fill = isHovered
-            ? (isActive ? AppTheme.brandAccent.opacity(0.16) : Color.secondary.opacity(0.10))
-            : Color.clear
-
-        return RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .fill(fill)
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(isHovered ? Color.secondary.opacity(0.12) : Color.clear, lineWidth: 1)
-            )
-            .shadow(color: Color.black.opacity(isHovered ? 0.12 : 0), radius: isHovered ? 8 : 0, x: 0, y: isHovered ? 2 : 0)
+        if isHovered {
+            let fill = isActive ? AppTheme.brandAccent.opacity(0.16) : Color.secondary.opacity(0.10)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(fill)
+                .glassEffect(.regular.tint(AppTheme.glassTint.opacity(0.14)), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+                )
+                .shadow(color: Color.black.opacity(0.10), radius: 6, x: 0, y: 1)
+        } else {
+            Color.clear
+        }
     }
 
     private func displayText(for item: UserQuestionNavigationRailItem) -> String {
@@ -1519,10 +1524,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private func updateQuestionRail() {
             guard let scrollView, let tableView, let rail = questionRail else { return }
             let questionRows = currentQuestionRows()
-            let railWidth = min(340, max(140, scrollView.bounds.width * 0.30), max(96, scrollView.bounds.width - 96)) + 8
+            let railWidth = min(248, max(168, scrollView.bounds.width * 0.22), max(96, scrollView.bounds.width - 112)) + 6
             let rowHeight: CGFloat = 22
             let rowSpacing: CGFloat = 6
-            let verticalPadding: CGFloat = 20
+            let verticalPadding: CGFloat = 16
             let desiredRailHeight = CGFloat(questionRows.count) * rowHeight + CGFloat(max(0, questionRows.count - 1)) * rowSpacing + verticalPadding
             let railHeight = min(max(54, scrollView.bounds.height - 32), max(44, desiredRailHeight))
             rail.frame = NSRect(
@@ -1574,17 +1579,21 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             publishPinnedState(false)
             isProgrammaticScroll = true
             let rowRect = tableView.rect(ofRow: row)
-            let documentHeight = max(scrollView.documentView?.frame.height ?? tableView.bounds.height, scrollView.contentView.bounds.height)
-            let maxY = max(0, documentHeight - scrollView.contentView.bounds.height)
-            let targetY = min(max(0, rowRect.minY - 12), maxY)
+            let clipView = scrollView.contentView
+            let documentHeight = max(scrollView.documentView?.frame.height ?? tableView.bounds.height, clipView.bounds.height)
+            let maxY = max(0, documentHeight - clipView.bounds.height)
+            let landingOffset = min(96, max(24, clipView.bounds.height * 0.18))
+            let targetY = min(max(0, rowRect.minY - landingOffset), maxY)
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.22
+                context.duration = 0.32
                 context.allowsImplicitAnimation = true
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                scrollView.contentView.animator().setBoundsOrigin(NSPoint(x: scrollView.contentView.bounds.origin.x, y: targetY))
-                scrollView.reflectScrolledClipView(scrollView.contentView)
-            } completionHandler: { [weak self] in
+                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.20, 0.0, 0.0, 1.0)
+                clipView.animator().setBoundsOrigin(NSPoint(x: clipView.bounds.origin.x, y: targetY))
+            } completionHandler: { [weak self, weak scrollView, weak clipView] in
                 MainActor.assumeIsolated {
+                    if let scrollView, let clipView {
+                        scrollView.reflectScrolledClipView(clipView)
+                    }
                     guard let self else { return }
                     self.isProgrammaticScroll = false
                     self.updateQuestionRail()
