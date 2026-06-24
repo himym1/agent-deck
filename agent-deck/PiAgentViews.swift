@@ -504,6 +504,7 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
         case .status:
             return entry.isNativeSubagentCard
                 || entry.isLoopRecapEntry
+                || LoopIterationSeparatorCodec.decode(from: entry) != nil
                 || entry.agentMemoryEvent != nil
                 || entry.title == "Compaction"
                 || entry.title == "Retry"
@@ -4922,8 +4923,15 @@ struct PiAgentScreen: View {
             ))
         case .status(let entry):
             if let recapMarker = LoopRunRecapCodec.decode(from: entry) {
-                let payload = NativeLoopRecapPayload.make(entry: entry, marker: recapMarker)
-                return .native(.of(PiAgentNativeLoopRecapCardView.self) { view, width in
+                if recapMarker.kind == .final {
+                    let payload = NativeLoopRecapPayload.make(entry: entry, marker: recapMarker)
+                    return .native(.of(PiAgentNativeLoopRecapCardView.self) { view, width in
+                        view.configure(payload: payload, width: width)
+                    })
+                }
+                let dividerEntry = LoopIterationSeparatorCodec.dividerEntry(from: entry, marker: recapMarker)
+                let payload = NativeDividerPayload.make(for: dividerEntry)
+                return .native(.of(PiAgentNativeStatusDividerView.self) { view, width in
                     view.configure(payload: payload, width: width)
                 })
             }

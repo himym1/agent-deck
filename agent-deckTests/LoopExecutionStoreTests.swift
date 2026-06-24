@@ -66,7 +66,7 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertFalse(tasks[1].contains("Secret launch notes"))
     }
 
-    func testLoopRecapEntriesAreGeneratedAndDeduplicated() async throws {
+    func testLoopSeparatorsAndFinalRecapAreGeneratedAndDeduplicated() async throws {
         let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
         let session = try makeSession(store: store)
         let draft = LoopDraft(
@@ -82,19 +82,28 @@ final class LoopExecutionStoreTests: XCTestCase {
         }
         let run = try XCTUnwrap(maybeRun)
 
-        let recaps = (store.transcriptsBySessionID[session.id] ?? []).compactMap { entry -> (PiAgentTranscriptEntry, LoopRunRecapMarker)? in
+        let transcript = store.transcriptsBySessionID[session.id] ?? []
+        let separators = transcript.compactMap { entry -> (PiAgentTranscriptEntry, LoopRunRecapMarker)? in
+            guard let marker = LoopIterationSeparatorCodec.decode(from: entry) else { return nil }
+            return (entry, marker)
+        }
+        let recaps = transcript.compactMap { entry -> (PiAgentTranscriptEntry, LoopRunRecapMarker)? in
             guard let marker = LoopRunRecapCodec.decode(from: entry) else { return nil }
             return (entry, marker)
         }
-        XCTAssertEqual(recaps.count, 2)
-        XCTAssertEqual(Set(recaps.map { $0.1.kind }), [.iteration, .final])
-        XCTAssertTrue(recaps.contains { $0.0.text.contains("Iteration 1 recap") })
+        XCTAssertEqual(separators.count, 1)
+        XCTAssertEqual(separators.first?.1.kind, .iteration)
+        XCTAssertTrue(separators.first?.0.text.contains("Iteration 1 of") == true)
+        XCTAssertEqual(recaps.count, 1)
+        XCTAssertEqual(recaps.first?.1.kind, .final)
         XCTAssertTrue(recaps.contains { $0.0.text.contains("Loop final recap") && $0.0.text.contains("Stop reason: Success") })
 
         store.hydrateLoopRunsFromTranscript(sessionID: session.id)
-        let afterHydrate = (store.transcriptsBySessionID[session.id] ?? []).compactMap(LoopRunRecapCodec.decode(from:))
-        XCTAssertEqual(afterHydrate.count, 2)
-        XCTAssertEqual(afterHydrate.filter { $0.runID == run.id && $0.kind == .final }.count, 1)
+        let afterHydrateRecaps = (store.transcriptsBySessionID[session.id] ?? []).compactMap(LoopRunRecapCodec.decode(from:))
+        let afterHydrateSeparators = (store.transcriptsBySessionID[session.id] ?? []).compactMap(LoopIterationSeparatorCodec.decode(from:))
+        XCTAssertEqual(afterHydrateRecaps.count, 1)
+        XCTAssertEqual(afterHydrateRecaps.filter { $0.runID == run.id && $0.kind == .final }.count, 1)
+        XCTAssertEqual(afterHydrateSeparators.filter { $0.runID == run.id && $0.kind == .iteration }.count, 1)
     }
 
     func testSingleAgentLoopMapsChildFailureAndStop() async throws {
@@ -278,6 +287,59 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertTrue(observedTasks[1].task.contains("Agent Deck parses your first line"))
         XCTAssertTrue(observedTasks[1].task.contains("APPROVE, REJECT, ASK_HUMAN, or FAIL"))
         XCTAssertTrue(observedTasks[2].task.contains("Previous checker review to address"))
+        XCTAssertTrue(responses.isEmpty)
+    }
+
+    func testMakerCheckerLoopMaxRejectsCompletesAsGoalNotMet() async throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = try makeSession(store: store)
+        var responses = ["Maker pass", "REJECT", "Maker revised", "REJECT"]
+        let draft = LoopDraft(
+            goal: "Build safely",
+            structure: .makerChecker,
+            writeTarget: .artifactMarkdown,
+            validationCommand: "/usr/bin/true",
+            makerChecker: LoopMakerCheckerConfig(makerName: "Builder", checkerName: "Reviewer", checkerRubric: "approve", maxReviewRounds: 2)
+        )
+
+        let maybeRun = await store.launchMakerCheckerLoop(session: session, draft: draft) { _, role, task, _, _, _ in
+            let summary = responses.removeFirst()
+            return Self.fakeRun(parentSessionID: session.id, agentName: role, task: task, status: .completed, summary: summary)
+        }
+        let run = try XCTUnwrap(maybeRun)
+
+        XCTAssertEqual(run.status, .completed)
+        XCTAssertEqual(run.stopReason, .maxIterationsReached)
+        XCTAssertEqual(run.displayStatusName, "Goal not met")
+        XCTAssertEqual(run.currentIteration, 2)
+        XCTAssertEqual(run.iterations.map(\.checkerResult), [.reject, .reject])
+        XCTAssertTrue(LoopRunRecapCodec.finalText(for: run).contains("Loop final recap — Goal not met"))
+        XCTAssertTrue(LoopRunRecapCodec.finalText(for: run).contains("Final checker result: Reject"))
+        XCTAssertTrue(responses.isEmpty)
+    }
+
+    func testMakerCheckerLoopExplicitCheckerFailIsFailed() async throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = try makeSession(store: store)
+        var responses = ["Maker pass", "FAIL"]
+        let draft = LoopDraft(
+            goal: "Build safely",
+            structure: .makerChecker,
+            writeTarget: .artifactMarkdown,
+            validationCommand: "/usr/bin/true",
+            makerChecker: LoopMakerCheckerConfig(makerName: "Builder", checkerName: "Reviewer", checkerRubric: "approve", maxReviewRounds: 2)
+        )
+
+        let maybeRun = await store.launchMakerCheckerLoop(session: session, draft: draft) { _, role, task, _, _, _ in
+            let summary = responses.removeFirst()
+            return Self.fakeRun(parentSessionID: session.id, agentName: role, task: task, status: .completed, summary: summary)
+        }
+        let run = try XCTUnwrap(maybeRun)
+
+        XCTAssertEqual(run.status, .failed)
+        XCTAssertEqual(run.stopReason, .agentFailed)
+        XCTAssertEqual(run.iterations.map(\.checkerResult), [.fail])
+        XCTAssertFalse(run.presentsGoalNotMetOutcome)
         XCTAssertTrue(responses.isEmpty)
     }
 

@@ -987,7 +987,7 @@ extension NativeDividerPayload {
             .replacingOccurrences(of: "\n", with: " ")
         let isCompacting = normalized.localizedCaseInsensitiveContains("compacting")
             && !normalized.localizedCaseInsensitiveContains("compacted")
-        let icon = PiAgentGitEventKind.from(title: entry.title)?.icon ?? "arrow.triangle.2.circlepath"
+        let icon = entry.title == LoopIterationSeparatorCodec.title ? "infinity" : (PiAgentGitEventKind.from(title: entry.title)?.icon ?? "arrow.triangle.2.circlepath")
         return NativeDividerPayload(
             icon: icon,
             detail: normalized,
@@ -1246,7 +1246,7 @@ private func loopTimelineStepDisplayName(_ step: LoopTimelineStepKind) -> String
 private func loopRunDetailsText(for run: LoopRun) -> String {
     var sections: [String] = []
     var overview: [String] = [
-        "Status: \(run.status.displayName)",
+        "Status: \(run.displayStatusName)",
         "Structure: \(run.structure.displayName)",
         "Write target: \(run.writeTarget.displayName)",
         "Goal: \(run.goal)",
@@ -1346,7 +1346,7 @@ struct NativeLoopRunPayload {
         let canOperateOnWorktree = run.writeTarget == .newWorktree && !run.isActive && hasWorktree && !worktreeAlreadyHandled
         let canResolveHumanApproval = run.structure == .humanApproval && run.status == .stopped && run.stopReason == .humanInputRequired
         return NativeLoopRunPayload(
-            title: run.status == .completed ? "Loop completed" : "Loop: \(run.structure.displayName)",
+            title: run.presentsGoalNotMetOutcome ? "Loop goal not met" : (run.status == .completed ? "Loop completed" : "Loop: \(run.structure.displayName)"),
             statusText: statusText,
             detailText: details,
             isActive: run.isActive,
@@ -1356,7 +1356,7 @@ struct NativeLoopRunPayload {
             canDiscardWorktree: canOperateOnWorktree,
             canApproveHumanApproval: canResolveHumanApproval,
             canRejectHumanApproval: canResolveHumanApproval,
-            canRetry: !run.isActive && run.status == .failed,
+            canRetry: !run.isActive && run.status == .failed && !run.presentsGoalNotMetOutcome,
             canSave: !run.isActive,
             onStop: onStop,
             onRetry: onRetry,
@@ -1371,14 +1371,11 @@ struct NativeLoopRunPayload {
     }
 
     private static func visibleStatusText(for run: LoopRun) -> String {
-        var lines = ["Status: \(run.status.displayName)"]
+        var lines = ["Status: \(run.displayStatusName)"]
         if !run.isActive, let stopReason = run.stopReason {
             lines.append("Stop reason: \(stopReason.displayName)")
         }
-        if run.structure == .makerChecker,
-           run.status == .failed,
-           run.stopReason == .maxIterationsReached,
-           run.iterations.last?.checkerResult == .reject {
+        if run.presentsGoalNotMetOutcome {
             lines.append("Last checker: Reject — all review rounds rejected")
         }
         return lines.joined(separator: "\n")

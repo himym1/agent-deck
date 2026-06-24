@@ -8921,7 +8921,7 @@ final class AppViewModel: NSObject {
     }
 
     func retryLoopRun(_ run: LoopRun) {
-        guard !run.isActive, run.status == .failed else { return }
+        guard !run.isActive, run.status == .failed, !run.presentsGoalNotMetOutcome else { return }
         guard let session = piAgentSessionStore.sessions.first(where: { $0.id == run.sessionID }) else { return }
         let draft = loopDraft(from: run)
         Task { @MainActor in

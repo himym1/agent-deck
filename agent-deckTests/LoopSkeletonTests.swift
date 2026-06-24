@@ -59,7 +59,9 @@ final class LoopSkeletonTests: XCTestCase {
             onRevealWorktree: nil
         )
 
-        XCTAssertTrue(payload.statusText.contains("Status: Failed"))
+        XCTAssertTrue(payload.statusText.contains("Status: Goal not met"))
+        XCTAssertFalse(payload.statusText.contains("Status: Failed"))
+        XCTAssertFalse(payload.canRetry)
         XCTAssertTrue(payload.statusText.contains("Stop reason: Max iterations reached"))
         XCTAssertTrue(payload.statusText.contains("Last checker: Reject — all review rounds rejected"))
     }

@@ -1240,7 +1240,7 @@ final class PiAgentSessionStore {
                 run.status = .failed; run.endedAt = ended; run.stopReason = .agentFailed; upsertLoopRun(run); return run
             }
         }
-        run.status = .failed; run.endedAt = Date(); run.stopReason = .maxIterationsReached; upsertLoopRun(run); return run
+        run.status = .completed; run.endedAt = Date(); run.stopReason = .maxIterationsReached; upsertLoopRun(run); return run
     }
 
     @discardableResult
@@ -1562,7 +1562,7 @@ final class PiAgentSessionStore {
             upsertLoopRun(run)
         }
 
-        run.status = .failed
+        run.status = run.structure == .makerChecker ? .completed : .failed
         run.endedAt = Date()
         run.stopReason = run.structure == .makerChecker ? .maxIterationsReached : .validationFailedAfterFinalIteration
         upsertLoopRun(run)
@@ -1946,7 +1946,7 @@ final class PiAgentSessionStore {
         runs[index] = run
         loopRunsBySessionID[sessionID] = runs
         upsert(LoopRunTranscriptCodec.transcriptEntry(for: run))
-        syncLoopRecapEntries(for: run)
+        syncLoopTranscriptMessagingEntries(for: run)
         return run
     }
 
@@ -1971,7 +1971,7 @@ final class PiAgentSessionStore {
         runs[index] = run
         loopRunsBySessionID[sessionID] = runs
         upsert(LoopRunTranscriptCodec.transcriptEntry(for: run))
-        syncLoopRecapEntries(for: run)
+        syncLoopTranscriptMessagingEntries(for: run)
         return run
     }
 
@@ -2013,24 +2013,37 @@ final class PiAgentSessionStore {
         }
         loopRunsBySessionID[run.sessionID] = runs
         upsert(LoopRunTranscriptCodec.transcriptEntry(for: run))
-        syncLoopRecapEntries(for: run)
+        syncLoopTranscriptMessagingEntries(for: run)
     }
 
-    private func syncLoopRecapEntries(for run: LoopRun) {
+    private func syncLoopTranscriptMessagingEntries(for run: LoopRun) {
         loadTranscriptIfNeeded(run.sessionID)
         let entries = transcriptsBySessionID[run.sessionID] ?? []
         let existingRecaps: [(id: UUID, marker: LoopRunRecapMarker)] = entries.compactMap { entry in
             guard let marker = LoopRunRecapCodec.decode(from: entry), marker.runID == run.id else { return nil }
             return (entry.id, marker)
         }
+        let existingSeparators: [(id: UUID, marker: LoopRunRecapMarker)] = entries.compactMap { entry in
+            guard let marker = LoopIterationSeparatorCodec.decode(from: entry), marker.runID == run.id else { return nil }
+            return (entry.id, marker)
+        }
         func existingID(for marker: LoopRunRecapMarker) -> UUID? {
-            existingRecaps.first { $0.marker == marker }?.id
+            existingSeparators.first { $0.marker == marker }?.id
+                ?? existingRecaps.first { $0.marker == marker }?.id
         }
 
-        for iteration in run.iterations where iteration.endedAt != nil || !iteration.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let marker = LoopRunRecapCodec.marker(for: run, iterationIndex: iteration.index)
-            let entry = LoopRunRecapCodec.transcriptEntry(for: run, iteration: iteration, id: existingID(for: marker) ?? UUID())
-            upsert(entry, persist: false)
+        if run.currentIteration > 0 {
+            for iterationIndex in 1...run.currentIteration {
+                let marker = LoopRunRecapCodec.marker(for: run, iterationIndex: iterationIndex)
+                let timestamp = run.iterations.first(where: { $0.index == iterationIndex })?.startedAt ?? Date()
+                let entry = LoopIterationSeparatorCodec.transcriptEntry(
+                    for: run,
+                    iterationIndex: iterationIndex,
+                    id: existingID(for: marker) ?? UUID(),
+                    timestamp: timestamp
+                )
+                upsert(entry, persist: false)
+            }
         }
         if !run.isActive {
             let marker = LoopRunRecapCodec.finalMarker(for: run)

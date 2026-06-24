@@ -589,6 +589,16 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
     }
 
     var isActive: Bool { status.isActive }
+
+    var presentsGoalNotMetOutcome: Bool {
+        structure == .makerChecker &&
+        stopReason == .maxIterationsReached &&
+        iterations.last?.checkerResult == .reject
+    }
+
+    var displayStatusName: String {
+        presentsGoalNotMetOutcome ? "Goal not met" : status.displayName
+    }
 }
 
 extension PiAgentTranscriptEntry {
@@ -610,6 +620,45 @@ struct LoopRunRecapMarker: Codable, Equatable, Sendable {
     var runID: UUID
     var kind: LoopRunRecapKind
     var iterationIndex: Int?
+}
+
+enum LoopIterationSeparatorCodec {
+    static let title = "Loop Round"
+
+    static func decode(from entry: PiAgentTranscriptEntry) -> LoopRunRecapMarker? {
+        guard entry.role == .status,
+              entry.title == title,
+              let rawJSON = entry.rawJSON,
+              let data = rawJSON.data(using: .utf8),
+              let marker = try? JSONDecoder().decode(LoopRunRecapMarker.self, from: data),
+              marker.kind == .iteration else { return nil }
+        return marker
+    }
+
+    static func transcriptEntry(for run: LoopRun, iterationIndex: Int, id: UUID = UUID(), timestamp: Date = Date()) -> PiAgentTranscriptEntry {
+        let marker = LoopRunRecapCodec.marker(for: run, iterationIndex: iterationIndex)
+        return PiAgentTranscriptEntry(
+            id: id,
+            sessionID: run.sessionID,
+            role: .status,
+            title: title,
+            text: "Iteration \(iterationIndex) of \(run.maxIterations) — \(run.structure.displayName)",
+            rawJSON: LoopRunRecapCodec.rawJSON(for: marker),
+            timestamp: timestamp
+        )
+    }
+
+    static func dividerEntry(from legacyRecapEntry: PiAgentTranscriptEntry, marker: LoopRunRecapMarker) -> PiAgentTranscriptEntry {
+        PiAgentTranscriptEntry(
+            id: legacyRecapEntry.id,
+            sessionID: legacyRecapEntry.sessionID,
+            role: .status,
+            title: title,
+            text: marker.iterationIndex.map { "Iteration \($0)" } ?? "Loop iteration",
+            rawJSON: legacyRecapEntry.rawJSON,
+            timestamp: legacyRecapEntry.timestamp
+        )
+    }
 }
 
 enum LoopRunRecapCodec {
@@ -657,7 +706,7 @@ enum LoopRunRecapCodec {
 
     static func finalText(for run: LoopRun) -> String {
         var lines: [String] = [
-            "∞ Loop final recap — \(run.status.displayName)",
+            "∞ Loop final recap — \(run.displayStatusName)",
             "Structure: \(run.structure.displayName)",
             "Iterations: \(run.iterations.count)/\(run.maxIterations)"
         ]
@@ -729,7 +778,7 @@ enum LoopRunTranscriptCodec {
 
     static func transcriptText(for run: LoopRun) -> String {
         var lines: [String] = [
-            "∞ Loop \(run.status.displayName)",
+            "∞ Loop \(run.displayStatusName)",
             "Structure: \(run.structure.displayName)",
             "Write target: \(run.writeTarget.displayName)",
             "Goal: \(run.goal)",

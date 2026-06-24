@@ -28,7 +28,7 @@ struct PiAgentLoopControlBar: View {
                         Text(titleText)
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(.primary)
-                        Text(run.status.displayName)
+                        Text(run.displayStatusName)
                             .font(AppTheme.Font.caption.weight(.semibold))
                             .foregroundStyle(run.isActive ? AppTheme.brandAccent : AppTheme.mutedText)
                             .padding(.horizontal, 6)
@@ -126,7 +126,7 @@ struct PiAgentLoopControlBar: View {
         canRetry || canSave || canRevealArtifacts || canRevealWorktree || canApplyWorktree || canDiscardWorktree
     }
 
-    private var canRetry: Bool { !run.isActive && run.status == .failed }
+    private var canRetry: Bool { !run.isActive && run.status == .failed && !run.presentsGoalNotMetOutcome }
     private var canSave: Bool { !run.isActive }
     private var canRevealArtifacts: Bool { run.artifactDirectoryPath != nil }
 
@@ -189,7 +189,7 @@ struct PiAgentLoopDetailsSheet: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Loop Details")
                         .font(.title2.weight(.bold))
-                    Text("\(run.structure.displayName) · \(run.status.displayName) · Iteration \(run.currentIteration)/\(run.maxIterations)")
+                    Text("\(run.structure.displayName) · \(run.displayStatusName) · Iteration \(run.currentIteration)/\(run.maxIterations)")
                         .font(AppTheme.Font.footnote)
                         .foregroundStyle(AppTheme.mutedText)
                 }

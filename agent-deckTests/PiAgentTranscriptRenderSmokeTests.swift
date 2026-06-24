@@ -241,7 +241,7 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
         XCTAssertEqual(split.count, 3, "A visible thinking block must keep the diff cards separate.")
     }
 
-    func testLoopRecapEntryBuildsDedicatedNativePayload() {
+    func testLegacyIterationLoopRecapEntryBuildsDividerPayload() {
         let sessionID = UUID()
         let runID = UUID()
         let marker = LoopRunRecapMarker(runID: runID, kind: .iteration, iterationIndex: 2)
@@ -260,13 +260,12 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
         )
 
         XCTAssertEqual(LoopRunRecapCodec.decode(from: entry), marker)
-        let payload = NativeLoopRecapPayload.make(entry: entry, marker: marker)
-        XCTAssertEqual(payload.title, "Loop iteration recap")
-        XCTAssertEqual(payload.label, "Iteration 2")
-        XCTAssertEqual(payload.outcomeText, "Validation: passed (exit 0)")
-        XCTAssertEqual(payload.summaryText, "Implemented the requested change and updated tests.")
-        XCTAssertTrue(payload.detailsText.contains("Checker: Approve"))
-        XCTAssertTrue(payload.detailsText.contains("Changed files:"))
+        let dividerEntry = LoopIterationSeparatorCodec.dividerEntry(from: entry, marker: marker)
+        let payload = NativeDividerPayload.make(for: dividerEntry)
+        XCTAssertEqual(dividerEntry.title, LoopIterationSeparatorCodec.title)
+        XCTAssertEqual(payload.icon, "infinity")
+        XCTAssertEqual(payload.detail, "Iteration 2")
+        XCTAssertFalse(payload.isSpinning)
     }
 
     func testFinalLoopRecapEntryBuildsDedicatedNativePayload() {

@@ -1211,8 +1211,13 @@ struct PiAgentTranscriptThreadCard: View {
     @ViewBuilder
     private func statusRowView(_ entry: PiAgentTranscriptEntry) -> some View {
         if let recapMarker = LoopRunRecapCodec.decode(from: entry) {
-            PiAgentLoopRecapTranscriptCard(entry: entry, marker: recapMarker)
-                .id(entry.id)
+            if recapMarker.kind == .final {
+                PiAgentLoopRecapTranscriptCard(entry: entry, marker: recapMarker)
+                    .id(entry.id)
+            } else {
+                PiAgentStatusTranscriptRow(entry: LoopIterationSeparatorCodec.dividerEntry(from: entry, marker: recapMarker))
+                    .id(entry.id)
+            }
         } else if let memoryEvent = entry.agentMemoryEvent {
             PiAgentMemoryActivityCard(event: memoryEvent)
                 .id(entry.id)
@@ -2484,7 +2489,7 @@ struct PiAgentStatusTranscriptRow: View {
     }
 
     private var dividerIcon: String {
-        PiAgentGitEventKind.from(title: entry.title)?.icon ?? "arrow.triangle.2.circlepath"
+        entry.title == LoopIterationSeparatorCodec.title ? "infinity" : (PiAgentGitEventKind.from(title: entry.title)?.icon ?? "arrow.triangle.2.circlepath")
     }
 
     private var color: Color {
@@ -2702,7 +2707,7 @@ extension PiAgentTranscriptEntry {
     /// not be inset to the assistant bubble width.
     var isDividerStatus: Bool {
         guard role == .status else { return false }
-        if title == "Compaction" { return true }
+        if title == "Compaction" || title == LoopIterationSeparatorCodec.title { return true }
         return PiAgentGitEventKind.from(title: title) != nil
     }
 }
