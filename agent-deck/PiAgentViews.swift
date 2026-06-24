@@ -624,6 +624,7 @@ private struct UserQuestionNavigationRailItem: Equatable {
 
 private final class UserQuestionNavigationRailView: NSView {
     var onSelect: ((String) -> Void)?
+    static let restAlpha: CGFloat = 0.36
     private var items: [UserQuestionNavigationRailItem] = []
     private var hoveredID: String?
     private var trackingArea: NSTrackingArea?
@@ -657,7 +658,7 @@ private final class UserQuestionNavigationRailView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        alphaValue = 1
+        setResting(false)
         updateHover(with: event)
     }
 
@@ -667,7 +668,7 @@ private final class UserQuestionNavigationRailView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         hoveredID = nil
-        alphaValue = 0.62
+        setResting(true)
         needsDisplay = true
     }
 
@@ -686,15 +687,30 @@ private final class UserQuestionNavigationRailView: NSView {
     private func item(at point: NSPoint) -> UserQuestionNavigationRailItem? {
         items.first { item in
             let y = markY(for: item)
-            let expanded = item.id == hoveredID
-            let hitWidth: CGFloat = expanded ? min(bounds.width, 260) : 28
-            return point.x >= bounds.maxX - hitWidth && abs(point.y - y) <= 12
+            let markHitRect = NSRect(x: bounds.maxX - 28, y: y - 9, width: 28, height: 18)
+            if markHitRect.contains(point) { return true }
+            guard item.id == hoveredID else { return false }
+            return previewRect(for: item).insetBy(dx: -4, dy: -5).contains(point)
         }
     }
 
     private func markY(for item: UserQuestionNavigationRailItem) -> CGFloat {
-        let inset: CGFloat = 10
+        let inset: CGFloat = 9
         return inset + max(0, min(1, item.fraction)) * max(1, bounds.height - inset * 2)
+    }
+
+    private func previewRect(for item: UserQuestionNavigationRailItem) -> NSRect {
+        let y = markY(for: item)
+        let textWidth = min(max(104, bounds.width - 26), 220)
+        return NSRect(x: bounds.maxX - 22 - textWidth, y: y - 12, width: textWidth, height: 24)
+    }
+
+    private func setResting(_ resting: Bool) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.14
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            animator().alphaValue = resting ? Self.restAlpha : 1
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -702,20 +718,25 @@ private final class UserQuestionNavigationRailView: NSView {
         guard !items.isEmpty else { return }
         let accent = AppTheme.ns(AppTheme.brandAccent)
         let inactive = NSColor.secondaryLabelColor
+        let containerRect = NSRect(x: bounds.maxX - 20, y: 0, width: 16, height: bounds.height)
+        NSColor.windowBackgroundColor.withAlphaComponent(0.42).setFill()
+        NSBezierPath(roundedRect: containerRect, xRadius: 8, yRadius: 8).fill()
+        NSColor.separatorColor.withAlphaComponent(0.28).setStroke()
+        NSBezierPath(roundedRect: containerRect, xRadius: 8, yRadius: 8).stroke()
+
         for item in items {
             let y = markY(for: item)
             let hovered = item.id == hoveredID
             let active = item.isActive || hovered
-            let markRect = NSRect(x: bounds.maxX - 14, y: y - (active ? 4 : 3), width: active ? 10 : 8, height: active ? 8 : 6)
-            (active ? accent : inactive.withAlphaComponent(0.34)).setFill()
-            NSBezierPath(roundedRect: markRect, xRadius: 3, yRadius: 3).fill()
+            let markRect = NSRect(x: bounds.maxX - 15, y: y - (active ? 3 : 2.5), width: active ? 6 : 5, height: active ? 6 : 5)
+            (active ? accent.withAlphaComponent(0.9) : inactive.withAlphaComponent(0.46)).setFill()
+            NSBezierPath(roundedRect: markRect, xRadius: 2.5, yRadius: 2.5).fill()
 
             guard hovered else { continue }
-            let textWidth = min(max(96, bounds.width - 26), 240)
-            let bubbleRect = NSRect(x: bounds.maxX - 22 - textWidth, y: y - 13, width: textWidth, height: 26)
-            accent.withAlphaComponent(0.14).setFill()
+            let bubbleRect = previewRect(for: item)
+            NSColor.windowBackgroundColor.withAlphaComponent(0.82).setFill()
             NSBezierPath(roundedRect: bubbleRect, xRadius: 8, yRadius: 8).fill()
-            accent.withAlphaComponent(0.28).setStroke()
+            accent.withAlphaComponent(0.32).setStroke()
             NSBezierPath(roundedRect: bubbleRect, xRadius: 8, yRadius: 8).stroke()
 
             let paragraph = NSMutableParagraphStyle()
@@ -937,7 +958,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
 
         let questionRail = UserQuestionNavigationRailView(frame: .zero)
-        questionRail.alphaValue = 0.62
+        questionRail.alphaValue = UserQuestionNavigationRailView.restAlpha
         questionRail.autoresizingMask = [.minXMargin, .height]
         scrollView.addSubview(questionRail)
 
@@ -1510,19 +1531,17 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
         private func updateQuestionRail() {
             guard let scrollView, let tableView, let rail = questionRail else { return }
-            let railWidth = min(max(150, scrollView.bounds.width * 0.28), 280)
-            let railHeight = max(80, scrollView.bounds.height * 0.62)
+            let questionRows = currentQuestionRows()
+            let railWidth = min(max(132, scrollView.bounds.width * 0.24), 240)
+            let maxRailHeight = max(54, scrollView.bounds.height * 0.46)
+            let railHeight = min(maxRailHeight, max(44, CGFloat(max(0, questionRows.count - 1)) * 9 + 24))
             rail.frame = NSRect(
-                x: scrollView.bounds.width - railWidth - 14,
+                x: scrollView.bounds.width - railWidth - 12,
                 y: (scrollView.bounds.height - railHeight) / 2,
                 width: railWidth,
                 height: railHeight
             )
 
-            let questionRows = orderedIDs.enumerated().compactMap { index, id -> (row: Int, id: String, title: String)? in
-                guard let title = itemByID[id]?.questionNavigationTitle else { return nil }
-                return (index, id, title)
-            }
             guard questionRows.count >= 2 else {
                 rail.configure(items: [])
                 return
@@ -1539,8 +1558,24 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             })
         }
 
+        private func currentQuestionRows() -> [(row: Int, id: String, title: String)] {
+            guard let tableView, let dataSource else { return [] }
+            return (0 ..< tableView.numberOfRows).compactMap { row in
+                guard let id = dataSource.itemIdentifier(forRow: row),
+                      let title = itemByID[id]?.questionNavigationTitle else { return nil }
+                return (row, id, title)
+            }
+        }
+
+        private func tableRow(forItemID id: String) -> Int? {
+            guard let tableView, let dataSource else { return nil }
+            return (0 ..< tableView.numberOfRows).first { row in
+                dataSource.itemIdentifier(forRow: row) == id
+            }
+        }
+
         func scrollToUserQuestion(id: String) {
-            guard let scrollView, let tableView, let row = orderedIDs.firstIndex(of: id), row >= 0 else { return }
+            guard let scrollView, let tableView, let row = tableRow(forItemID: id), row >= 0 else { return }
             stopFollowGlide()
             isAutoFollowing = false
             publishPinnedState(false)
