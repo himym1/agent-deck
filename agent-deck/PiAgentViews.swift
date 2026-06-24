@@ -619,6 +619,10 @@ private struct UserQuestionNavigationRailItem: Identifiable, Equatable {
     let id: String
     let title: String
     let isActive: Bool
+    /// Vertical px offset from the rail's center, used only in sliding-window
+    /// mode (many questions). 0 = rail center; negative = older (up), positive
+    /// = newer (down), mirroring the transcript so marks track their messages.
+    var centerOffset: CGFloat = 0
 }
 
 private enum TranscriptFloatingControlGeometry {
@@ -646,6 +650,14 @@ private enum TranscriptFloatingControlGeometry {
 private final class QuestionRailModel: ObservableObject {
     @Published var items: [UserQuestionNavigationRailItem] = []
     @Published var availableWidth: CGFloat = 0
+    /// Host (visible) rail height in px. Used by the view to position marks in
+    /// sliding-window mode.
+    @Published var railHeight: CGFloat = 0
+    /// True when the questions no longer fit as an evenly-spaced stack — the view
+    /// then switches to a scroll-synced sliding window with edge fades. Stable
+    /// during a session (depends only on window height + question count), so it
+    /// never flips mid-scroll.
+    @Published var isSliding = false
 }
 
 private struct UserQuestionNavigationRail: View {
@@ -669,18 +681,18 @@ private struct UserQuestionNavigationRail: View {
     }
 
     var body: some View {
-        // Container is FIXED at the expanded width. Collapsed rows occupy only
-        // their trailing mark strip; the empty left region has no hit shape, so
-        // clicks pass straight through to the transcript. Only the hovered row
-        // grows left to reveal its preview. The AppKit host frame never changes
-        // on hover, so there is no host-resize <-> hover feedback loop to buzz.
-        VStack(alignment: .trailing, spacing: TranscriptFloatingControlGeometry.questionRailRowSpacing) {
-            ForEach(model.items) { item in
-                row(for: item)
+        // Two layouts share the same rows and hover/opacity behavior:
+        //  - stack (default): evenly-spaced marks, the look already approved.
+        //  - sliding: when questions don't fit, marks are positioned by their
+        //    real place in the transcript and slide as you scroll, fading at the
+        //    top/bottom edges via the same gradient the transcript uses.
+        Group {
+            if model.isSliding {
+                slidingBody
+            } else {
+                stackedBody
             }
         }
-        .frame(width: expandedRowWidth, alignment: .trailing)
-        .padding(.vertical, 8)
         .opacity(hoveredID == nil ? 0.72 : 1)
         .animation(expandAnimation, value: hoveredID)
         .animation(fadeAnimation, value: hoveredID == nil)
@@ -690,6 +702,37 @@ private struct UserQuestionNavigationRail: View {
             // entirely, so the expanded preview stays interactive while reading.
             if !hovering { hoveredID = nil }
         }
+    }
+
+    private var stackedBody: some View {
+        // Container is FIXED at the expanded width. Collapsed rows occupy only
+        // their trailing mark strip; the empty left region has no hit shape, so
+        // clicks pass straight through to the transcript. Only the hovered row
+        // grows left to reveal its preview.
+        VStack(alignment: .trailing, spacing: TranscriptFloatingControlGeometry.questionRailRowSpacing) {
+            ForEach(model.items) { item in
+                row(for: item)
+            }
+        }
+        .frame(width: expandedRowWidth, alignment: .trailing)
+        .padding(.vertical, 8)
+    }
+
+    private var slidingBody: some View {
+        // Marks are placed by `centerOffset` (px from rail center, mirroring the
+        // transcript). The container is the full rail height; marks beyond it are
+        // clipped by the host and softly faded at the edges. Position is NOT
+        // animated: it tracks the scroll 1:1 (many small updates per tick), so an
+        // explicit animation would lag; only hover changes animate.
+        ZStack(alignment: .trailing) {
+            ForEach(model.items) { item in
+                row(for: item)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .offset(y: item.centerOffset)
+            }
+        }
+        .frame(width: expandedRowWidth, height: max(1, model.railHeight), alignment: .trailing)
+        .transcriptEdgeFade(height: 22)
     }
 
     private func row(for item: UserQuestionNavigationRailItem) -> some View {
@@ -1573,12 +1616,13 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private func updateQuestionRail() {
             guard let scrollView, let tableView, questionRailModel != nil else { return }
             let questionRows = currentQuestionRows()
-            updateQuestionRailFrame(for: scrollView, questionCount: questionRows.count)
+            let railHeight = questionRailHeight(scrollView: scrollView, questionCount: questionRows.count)
+            updateQuestionRailFrame(for: scrollView, railHeight: railHeight)
 
             guard questionRows.count >= 2 else {
                 forcedActiveQuestionID = nil
                 questionRail?.isHidden = true
-                applyRailModel(items: [], width: scrollView.bounds.width)
+                applyRailModel(items: [], width: scrollView.bounds.width, railHeight: railHeight, isSliding: false)
                 return
             }
 
@@ -1588,10 +1632,51 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 self.forcedActiveQuestionID = nil
             }
             let activeID = self.forcedActiveQuestionID ?? activeQuestionID(in: questionRows, scrollView: scrollView, tableView: tableView)
-            let items = questionRows.map { _, id, title in
-                UserQuestionNavigationRailItem(id: id, title: title, isActive: id == activeID)
+
+            // Sliding window kicks in only when the even-spaced stack wouldn't fit.
+            // `isSliding` depends only on window height + question count, so it is
+            // stable across scrolling and never flips mid-scroll (no flicker).
+            let isSliding = evenStackedHeight(questionCount: questionRows.count) > railHeight
+
+            var items: [UserQuestionNavigationRailItem] = []
+            if isSliding {
+                let clipView = scrollView.contentView
+                let clipHeight = clipView.bounds.height
+                let viewportMid = clipView.bounds.origin.y + clipHeight / 2
+                // Map a document window of ±viewWindow px around the viewport
+                // center onto the rail. Questions within that band are visible;
+                // the rest are clipped + edge-faded. window >= ~1.5 viewports so
+                // a healthy span of nearby questions shows at once.
+                let viewWindow = max(clipHeight * 1.5, 560)
+                let scale = railHeight / (2 * viewWindow)
+                let halfRail = railHeight / 2
+                // Small overshoot so marks fully fade out before being clipped
+                // (hard cut would look jarring as they enter/exit).
+                let margin = TranscriptFloatingControlGeometry.questionRailRowHeight
+                for (row, id, title) in questionRows {
+                    let qY = tableView.rect(ofRow: row).midY
+                    let centerOffset = (qY - viewportMid) * scale
+                    guard abs(centerOffset) <= halfRail + margin else { continue }
+                    items.append(UserQuestionNavigationRailItem(id: id, title: title, isActive: id == activeID, centerOffset: centerOffset))
+                }
+            } else {
+                items = questionRows.map { _, id, title in
+                    UserQuestionNavigationRailItem(id: id, title: title, isActive: id == activeID)
+                }
             }
-            applyRailModel(items: items, width: scrollView.bounds.width)
+            applyRailModel(items: items, width: scrollView.bounds.width, railHeight: railHeight, isSliding: isSliding)
+        }
+
+        private func evenStackedHeight(questionCount: Int) -> CGFloat {
+            let rowHeight = TranscriptFloatingControlGeometry.questionRailRowHeight
+            let rowSpacing = TranscriptFloatingControlGeometry.questionRailRowSpacing
+            let verticalPadding = TranscriptFloatingControlGeometry.questionRailVerticalPadding
+            return CGFloat(questionCount) * rowHeight + CGFloat(max(0, questionCount - 1)) * rowSpacing + verticalPadding
+        }
+
+        private func questionRailHeight(scrollView: NSScrollView, questionCount: Int) -> CGFloat {
+            let desired = evenStackedHeight(questionCount: questionCount)
+            return min(max(54, scrollView.bounds.height - 32), max(44, desired))
         }
 
         /// Push rail data to the hosted view. `updateQuestionRail()` runs both on
@@ -1599,11 +1684,13 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// (NOT fine: SwiftUI holds its view-update lock there, and mutating the
         /// `ObservableObject` synchronously emits "Publishing changes from within
         /// view updates"). Defer to the next runloop when inside that pass.
-        private func applyRailModel(items: [UserQuestionNavigationRailItem], width: CGFloat) {
+        private func applyRailModel(items: [UserQuestionNavigationRailItem], width: CGFloat, railHeight: CGFloat, isSliding: Bool) {
             let perform = { [weak self] in
                 guard let self, let model = self.questionRailModel else { return }
                 model.items = items
                 model.availableWidth = width
+                model.railHeight = railHeight
+                model.isSliding = isSliding
             }
             if isInsideNSViewUpdate {
                 DispatchQueue.main.async(execute: perform)
@@ -1612,17 +1699,12 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             }
         }
 
-        private func updateQuestionRailFrame(for scrollView: NSScrollView, questionCount: Int) {
+        private func updateQuestionRailFrame(for scrollView: NSScrollView, railHeight: CGFloat) {
             guard let rail = questionRail else { return }
             // Host frame is FIXED at the expanded width (trailing-aligned to the
             // scroll-to-bottom FAB). It must NOT resize on hover — resizing the
             // host while the pointer is over it is what caused the hover loop.
             let railWidth = UserQuestionNavigationRail.expandedWidth(for: scrollView.bounds.width)
-            let rowHeight = TranscriptFloatingControlGeometry.questionRailRowHeight
-            let rowSpacing = TranscriptFloatingControlGeometry.questionRailRowSpacing
-            let verticalPadding = TranscriptFloatingControlGeometry.questionRailVerticalPadding
-            let desiredRailHeight = CGFloat(questionCount) * rowHeight + CGFloat(max(0, questionCount - 1)) * rowSpacing + verticalPadding
-            let railHeight = min(max(54, scrollView.bounds.height - 32), max(44, desiredRailHeight))
             let trailingInset = TranscriptFloatingControlGeometry.questionRailTrailingInsetInsideScrollView
             let newFrame = NSRect(
                 x: scrollView.bounds.width - railWidth - trailingInset,
@@ -1652,7 +1734,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 return questionRows.last?.id
             }
 
-            let anchorY = clipBounds.origin.y + questionRailLandingOffset(for: clipBounds.height)
+            // Anchor on the viewport CENTER (not the top): it matches the
+            // sliding-window position math so the active mark sits at rail center,
+            // and "active" reads as "the question you're currently reading".
+            let anchorY = clipBounds.origin.y + clipBounds.height / 2
             return questionRows.min { lhs, rhs in
                 let lhsDistance = abs(tableView.rect(ofRow: lhs.row).minY - anchorY)
                 let rhsDistance = abs(tableView.rect(ofRow: rhs.row).minY - anchorY)
