@@ -626,6 +626,21 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
     var displayStatusName: String {
         presentsGoalNotMetOutcome ? "Goal not met" : status.displayName
     }
+
+    var effectiveIterationLimit: Int {
+        structure == .makerChecker ? min(maxIterations, makerChecker.maxReviewRounds) : maxIterations
+    }
+
+    var iterationProgressText: String {
+        iterationProgressText(currentIteration)
+    }
+
+    func iterationProgressText(_ iteration: Int) -> String {
+        guard structure == .makerChecker, effectiveIterationLimit != maxIterations else {
+            return "Iteration \(iteration)/\(maxIterations)"
+        }
+        return "Review round \(iteration)/\(effectiveIterationLimit) (loop max \(maxIterations))"
+    }
 }
 
 extension PiAgentTranscriptEntry {
@@ -669,7 +684,9 @@ enum LoopIterationSeparatorCodec {
             sessionID: run.sessionID,
             role: .status,
             title: title,
-            text: "Iteration \(iterationIndex) of \(run.maxIterations) — \(run.structure.displayName)",
+            text: run.structure == .makerChecker && run.effectiveIterationLimit != run.maxIterations
+                ? "Review round \(iterationIndex) of \(run.effectiveIterationLimit) (loop max \(run.maxIterations)) — \(run.structure.displayName)"
+                : "Iteration \(iterationIndex) of \(run.maxIterations) — \(run.structure.displayName)",
             rawJSON: LoopRunRecapCodec.rawJSON(for: marker),
             timestamp: timestamp
         )
@@ -739,20 +756,32 @@ enum LoopRunRecapCodec {
     }
 
     static func finalText(for run: LoopRun, progressMarkdown: String? = nil) -> String {
+        let effectiveMaxIterations = run.effectiveIterationLimit
+        let iterationLine: String = {
+            guard run.structure == .makerChecker, effectiveMaxIterations != run.maxIterations else {
+                return "Iterations: \(run.iterations.count)/\(run.maxIterations)"
+            }
+            return "Iterations: \(run.iterations.count)/\(effectiveMaxIterations) review rounds (loop max \(run.maxIterations))"
+        }()
         var lines: [String] = [
             "∞ Loop final recap — \(run.displayStatusName)",
             "Structure: \(run.structure.displayName)",
-            "Iterations: \(run.iterations.count)/\(run.maxIterations)"
+            iterationLine
         ]
         if let stopReason = run.stopReason {
-            lines.append("Outcome: \(stopReason.displayName)")
+            if run.structure == .makerChecker, stopReason == .maxIterationsReached, effectiveMaxIterations != run.maxIterations {
+                lines.append("Outcome: Review rounds exhausted")
+            } else {
+                lines.append("Outcome: \(stopReason.displayName)")
+            }
         }
         if run.structure == .makerChecker {
             if let checkerResult = run.iterations.last?.checkerResult {
                 lines.append("Final checker result: \(checkerResult.displayName)")
             }
             if run.stopReason == .maxIterationsReached {
-                lines.append("Maker + Checker used the configured review rounds without approval; treat this as goal not fully met, not an agent error.")
+                let capExplanation = effectiveMaxIterations == run.maxIterations ? "configured iterations" : "configured Maker + Checker review rounds"
+                lines.append("Maker + Checker used all \(capExplanation) without approval; treat this as goal not fully met, not an agent error.")
             } else if run.iterations.last?.checkerResult == .reject {
                 lines.append("Maker + Checker ended on a rejection.")
             }
@@ -853,7 +882,7 @@ enum LoopRunTranscriptCodec {
             "Structure: \(run.structure.displayName)",
             "Write target: \(run.writeTarget.displayName)",
             "Goal: \(run.goal)",
-            "Iterations: \(run.currentIteration)/\(run.maxIterations)"
+            "Progress: \(run.iterationProgressText)"
         ]
         if run.launchContext?.isEmpty == false {
             lines.append("Launch context: present (\(run.launchContextScope.displayName.lowercased()))")

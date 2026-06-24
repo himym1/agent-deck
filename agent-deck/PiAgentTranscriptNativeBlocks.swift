@@ -1073,7 +1073,7 @@ struct NativeLoopRecapPayload {
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map(String.init)
         let bodyLines = Array(lines.dropFirst())
-        let metadataPrefixes = ["Checker:", "Validation:", "Artifacts:", "Changed files:", "Structure:", "Iterations:", "Stop reason:", "Final checker result:"]
+        let metadataPrefixes = ["Checker:", "Validation:", "Artifacts:", "Changed files:", "Structure:", "Iterations:", "Stop reason:", "Outcome:", "Final checker result:", "Latest validation:", "Shared progress artifact:"]
         let firstSummaryIndex = bodyLines.firstIndex { line in
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return false }
@@ -1110,6 +1110,7 @@ struct NativeLoopRecapPayload {
 
     private static func outcomeText(lines: [String], marker: LoopRunRecapMarker, headline: String?) -> String {
         if marker.kind == .final {
+            if let outcome = lines.first(where: { $0.hasPrefix("Outcome:") }) { return outcome }
             if let stopReason = lines.first(where: { $0.hasPrefix("Stop reason:") }) { return stopReason }
             if let headline, let status = headline.components(separatedBy: "—").last?.trimmingCharacters(in: .whitespacesAndNewlines), !status.isEmpty { return "Status: \(status)" }
             return "Status: Final"
@@ -1199,8 +1200,8 @@ final class PiAgentNativeLoopRecapCardView: PiAgentNativeCardRowView {
         labelField.stringValue = payload.label
         outcomeField.stringValue = payload.outcomeText
         timeLabel.stringValue = payload.timeText
-        summaryField.stringValue = payload.summaryText
-        detailsField.stringValue = payload.detailsText
+        summaryField.attributedStringValue = Self.inlineMarkdown(payload.summaryText, font: NativeTranscriptFont.callout(), color: .labelColor)
+        detailsField.attributedStringValue = Self.inlineMarkdown(payload.detailsText, font: NativeTranscriptFont.caption(), color: AppTheme.ns(AppTheme.mutedText))
         detailsField.isHidden = payload.detailsText.isEmpty
         applyCard(
             fill: payload.accent.withAlphaComponent(AppTheme.roleFillStrongOpacity),
@@ -1212,6 +1213,42 @@ final class PiAgentNativeLoopRecapCardView: PiAgentNativeCardRowView {
             copyText: payload.copyText,
             width: rowWidth
         )
+    }
+
+    private static func inlineMarkdown(_ source: String, font: NSFont, color: NSColor) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 1
+        let base: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color, .paragraphStyle: paragraph]
+        guard !source.isEmpty,
+              let attributed = try? AttributedString(
+                markdown: source,
+                options: AttributedString.MarkdownParsingOptions(
+                    interpretedSyntax: .inlineOnlyPreservingWhitespace,
+                    failurePolicy: .returnPartiallyParsedIfPossible
+                )
+              ) else {
+            return NSAttributedString(string: source, attributes: base)
+        }
+        let mutable = NSMutableAttributedString(attributedString: NSAttributedString(attributed))
+        let fullRange = NSRange(location: 0, length: mutable.length)
+        mutable.addAttribute(.foregroundColor, value: color, range: fullRange)
+        mutable.addAttribute(.paragraphStyle, value: paragraph, range: fullRange)
+        mutable.enumerateAttribute(.font, in: fullRange) { value, range, _ in
+            guard let current = value as? NSFont else {
+                mutable.addAttribute(.font, value: font, range: range)
+                return
+            }
+            let traits = NSFontManager.shared.traits(of: current)
+            var replacement = font
+            if traits.contains(.boldFontMask) {
+                replacement = NSFont.systemFont(ofSize: font.pointSize, weight: .semibold)
+            }
+            if traits.contains(.italicFontMask) {
+                replacement = NSFontManager.shared.convert(replacement, toHaveTrait: .italicFontMask)
+            }
+            mutable.addAttribute(.font, value: replacement, range: range)
+        }
+        return mutable
     }
 
     override func contentHeight(forInnerWidth innerWidth: CGFloat) -> CGFloat {
@@ -1250,7 +1287,7 @@ private func loopRunDetailsText(for run: LoopRun) -> String {
         "Structure: \(run.structure.displayName)",
         "Write target: \(run.writeTarget.displayName)",
         "Goal: \(run.goal)",
-        "Iterations: \(run.currentIteration)/\(run.maxIterations)"
+        "Progress: \(run.iterationProgressText)"
     ]
     if let stopReason = run.stopReason { overview.append("Stop reason: \(stopReason.displayName)") }
     if !run.validationCommand.isEmpty { overview.append("Validation command: \(run.validationCommand)") }

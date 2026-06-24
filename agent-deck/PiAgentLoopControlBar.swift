@@ -131,7 +131,7 @@ struct PiAgentLoopControlBar: View {
     }
 
     private var detailText: String {
-        var parts = [run.structure.displayName, "Iteration \(run.currentIteration)/\(run.maxIterations)"]
+        var parts = [run.structure.displayName, run.iterationProgressText]
         if let stopReason = run.stopReason, !run.isActive {
             parts.append("Stop reason: \(stopReason.displayName)")
         } else if let latest = run.iterations.last?.summary, !latest.isEmpty {
@@ -209,7 +209,7 @@ struct PiAgentLoopDetailsSheet: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Loop Details")
                         .font(.title2.weight(.bold))
-                    Text("\(run.structure.displayName) · \(run.displayStatusName) · Iteration \(run.currentIteration)/\(run.maxIterations)")
+                    Text("\(run.structure.displayName) · \(run.displayStatusName) · \(run.iterationProgressText)")
                         .font(AppTheme.Font.footnote)
                         .foregroundStyle(AppTheme.mutedText)
                 }
