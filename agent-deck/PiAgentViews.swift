@@ -1153,12 +1153,17 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 }
                 return
             }
-            // While streaming AND still pinned to the bottom, skip: new rows arrive
+            // While scrolling, keep speculative pre-warm completely off the path:
+            // an already-active profiler window covers both real gestures and the
+            // autonomous programmatic scroll bench, and any fresh cell build inside
+            // it shows up as scroll-vend/prewarm hitch stack contention. While
+            // streaming AND still pinned to the bottom, skip too: new rows arrive
             // every pulse and the visible streaming row owns the main thread, so a
             // heavy pre-warm build would hitch what the reader is watching. But once
             // the reader has scrolled UP to read history (auto-follow off), the
             // stream is off-screen — pre-warm the history they're scrolling toward so
-            // those rows are already built (no construction stutter) even mid-stream.
+            // those rows are already built (no construction stutter) once idle.
+            guard !profiler.isScrollWindowActive else { return }
             guard !profiler.isStreamingRecently || !isAutoFollowing else { return }
             // Build the work list: every row without a live cached cell, in document
             // order, capped to the cache limit (pre-warming past it would just evict
@@ -1193,7 +1198,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // follow glide own the main thread; width changes reconfigure visible
             // cells and can otherwise cascade into speculative offscreen work.)
             let widthSettlesIn = prewarmWidthChangeCooldown - (CACurrentMediaTime() - lastWidthChangeTime)
-            if isUserScrollingRecently || profiler.isStreamingRecently || widthSettlesIn > 0 {
+            if isUserScrollingRecently || profiler.isScrollWindowActive || profiler.isStreamingRecently || widthSettlesIn > 0 {
                 prewarmScheduled = true
                 let delay = max(0.2, widthSettlesIn)
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.prewarmStep() }

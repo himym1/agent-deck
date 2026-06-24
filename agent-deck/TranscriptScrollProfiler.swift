@@ -122,6 +122,9 @@ final class TranscriptScrollProfiler {
     /// Call once per `apply()` that carried a streaming update.
     func noteStreamingActivity() { lastStreamingActivity = CACurrentMediaTime() }
     var isStreamingRecently: Bool { CACurrentMediaTime() - lastStreamingActivity < 0.6 }
+    /// True while a transcript scroll gesture/bench window is active or waiting
+    /// for its idle flush. Used to keep speculative work off the scroll path.
+    var isScrollWindowActive: Bool { window != nil }
     /// Compact regime tag stamped on every line: `stream` / `static`, plus
     /// `+scroll` when a user scroll gesture is in flight (so "scrolling WHILE
     /// streaming" is distinct from either alone).
