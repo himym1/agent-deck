@@ -1203,11 +1203,11 @@ final class PiAgentNativeLoopRecapCardView: PiAgentNativeCardRowView {
         detailsField.stringValue = payload.detailsText
         detailsField.isHidden = payload.detailsText.isEmpty
         applyCard(
-            fill: payload.accent.withAlphaComponent(AppTheme.roleFillOpacity),
+            fill: payload.accent.withAlphaComponent(AppTheme.roleFillStrongOpacity),
             stroke: payload.accent.withAlphaComponent(AppTheme.roleStrokeOpacity),
-            cornerRadius: 14,
-            hPad: 12,
-            vPad: 10,
+            cornerRadius: AppTheme.Chat.bubbleCornerRadius,
+            hPad: AppTheme.Chat.bubbleHPadding,
+            vPad: AppTheme.Chat.bubbleVPadding,
             placement: .leftAtCap,
             copyText: payload.copyText,
             width: rowWidth

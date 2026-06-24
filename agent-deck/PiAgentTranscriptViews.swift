@@ -2288,6 +2288,8 @@ struct PiAgentLoopRecapTranscriptCard: View {
     let entry: PiAgentTranscriptEntry
     let marker: LoopRunRecapMarker
 
+    @Environment(\.transcriptContentWidth) private var transcriptContentWidth
+
     private var payload: NativeLoopRecapPayload {
         NativeLoopRecapPayload.make(entry: entry, marker: marker)
     }
@@ -2301,7 +2303,6 @@ struct PiAgentLoopRecapTranscriptCard: View {
                     .foregroundStyle(Color(nsColor: payload.accent))
                 Text(payload.title)
                     .font(AppTheme.Font.footnote.weight(.semibold))
-                Spacer(minLength: 8)
                 Text(payload.label)
                     .font(AppTheme.Font.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
@@ -2323,11 +2324,12 @@ struct PiAgentLoopRecapTranscriptCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.horizontal, AppTheme.Chat.cardHPadding)
-        .padding(.vertical, AppTheme.Chat.cardVPadding)
+        .padding(.horizontal, AppTheme.Chat.bubbleHPadding)
+        .padding(.vertical, AppTheme.Chat.bubbleVPadding)
+        .frame(maxWidth: PiAgentBubbleWidth.replyCap(for: transcriptContentWidth), alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous)
-                .fill(Color(nsColor: payload.accent).opacity(AppTheme.roleFillOpacity))
+            RoundedRectangle(cornerRadius: AppTheme.Chat.bubbleCornerRadius, style: .continuous)
+                .fill(Color(nsColor: payload.accent).opacity(AppTheme.roleFillStrongOpacity))
                 .stroke(Color(nsColor: payload.accent).opacity(AppTheme.roleStrokeOpacity), lineWidth: 1)
         )
     }
