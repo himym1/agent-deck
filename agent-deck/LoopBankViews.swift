@@ -265,9 +265,7 @@ struct LoopBankScreen: View {
 
     private var loopEditorPane: some View {
         AppPage(editorDraft.isNew ? "New Loop" : editorDraft.name.nonEmpty ?? "Loop", subtitle: detailSubtitle, constrainsContentToViewport: true) {
-            AppCard(title: "Definition", trailing: {
-                AppLabelTag(text: availabilityLabel(for: editorDraft), color: availabilityColor(for: editorDraft))
-            }) {
+            AppCard(title: "Definition") {
                 VStack(alignment: .leading, spacing: 0) {
                         if editorDraft.isBuiltin {
                             Text("Built-in templates are read-only. Duplicate to create an editable user copy.")
@@ -338,7 +336,7 @@ struct LoopBankScreen: View {
                 LoopNumericStepper(value: $editorDraft.maxIterations, range: 1...20)
             }
             detailEditor("Goal template", text: $editorDraft.goalTemplate, minHeight: 120, info: "The reusable instruction the loop runs against. Be explicit about the desired outcome, constraints, and what counts as done.")
-            detailRow("Validation command", info: "Optional shell command for checking the result. It runs from the project directory when available and is attached to the loop result.") {
+            detailRow("Validation command", info: "Optional shell command for checking the result. It runs from the project directory when available and is attached to the loop result.", showsDivider: false) {
                 AppTextField(text: $editorDraft.validationCommand, placeholder: "Optional shell command")
                     .frame(maxWidth: 360)
             }
@@ -346,51 +344,52 @@ struct LoopBankScreen: View {
     }
 
     private var availabilitySection: some View {
-        AppCard(title: "Availability") {
-            VStack(alignment: .leading, spacing: 0) {
-                detailRow("All Projects/default", info: "When enabled, this loop is available in every project.") {
-                    Toggle("All Projects/default", isOn: Binding(
-                        get: { editorDraft.availability == .allProjects },
-                        set: { enabled in
-                            if enabled { setAllProjectsAvailability() }
-                            else { setUnassignedAvailability() }
-                        }
-                    ))
-                    .labelsHidden()
-                    .appSwitch()
+        AppCard(title: "Project Assignment") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Enable for every project at once, or pick specific projects below. Assignments are stored in the Loop Bank and do not move loop files.")
+                    .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    AllProjectsAssignmentRow(
+                        isOn: Binding(
+                            get: { editorDraft.availability == .allProjects },
+                            set: { enabled in
+                                if enabled { setAllProjectsAvailability() }
+                                else { setUnassignedAvailability() }
+                            }
+                        ),
+                        subtitle: "Enable this loop for every project"
+                    )
+                    if !availableProjectsForLoopAssignment.isEmpty { Divider() }
+                    ForEach(availableProjectsForLoopAssignment) { project in
+                        ProjectAssignmentToggleRow(
+                            project: project,
+                            isOn: Binding(
+                                get: { editorDraft.availability == .allProjects ? true : editorDraft.projectPaths.contains(project.path) },
+                                set: { setLoopAssigned($0, toProjectPath: project.path) }
+                            )
+                        )
+                        .opacity(editorDraft.availability == .allProjects ? 0.4 : 1)
+                        .allowsHitTesting(editorDraft.availability != .allProjects)
+                        if project.id != availableProjectsForLoopAssignment.last?.id { Divider() }
+                    }
                 }
-                detailRow("Current setting") {
+                detailRow("Current setting", showsDivider: false) {
                     Text(availabilityLabel(for: editorDraft))
                 }
-                if !availableProjectsForLoopAssignment.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        detailLabel("Project assignments", info: "Assign this loop to one or more specific projects. Turning off All Projects/default uses these project assignments; no selected projects means Unassigned/catalog.")
-                        VStack(spacing: 0) {
-                            ForEach(availableProjectsForLoopAssignment, id: \.path) { project in
-                                loopProjectAssignmentRow(project)
-                            }
+                DisclosureGroup("Advanced project paths") {
+                    detailEditor("Paths", text: Binding(
+                        get: { editorDraft.projectPathsText },
+                        set: { value in
+                            editorDraft.projectPathsText = value
+                            editorDraft.availability = .projectPaths
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(AppTheme.contentStroke, lineWidth: 1)
-                        }
-                    }
-                    .padding(.vertical, 11)
-                    Divider()
+                    ), minHeight: 72, monospaced: true, info: "Optional: add absolute project paths that are not currently listed above. One path per line.")
+                        .disabled(editorDraft.availability == .allProjects)
+                    Text("All Projects/default overrides per-project assignment. With All Projects off, an empty project list keeps the loop unassigned in the catalog.")
+                        .font(AppTheme.Font.caption)
+                        .foregroundStyle(AppTheme.mutedText)
                 }
-                detailEditor("Advanced project paths", text: Binding(
-                    get: { editorDraft.projectPathsText },
-                    set: { value in
-                        editorDraft.projectPathsText = value
-                        editorDraft.availability = .projectPaths
-                    }
-                ), minHeight: 72, monospaced: true, info: "Optional: add absolute project paths that are not currently listed above. One path per line.")
-                    .disabled(editorDraft.availability == .allProjects)
-                Text("All Projects/default overrides per-project assignment. With All Projects off, an empty project list keeps the loop unassigned in the catalog.")
-                    .font(AppTheme.Font.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-                    .padding(.top, 8)
             }
         }
     }
@@ -412,42 +411,6 @@ struct LoopBankScreen: View {
 
     private var availableProjectsForLoopAssignment: [DiscoveredProject] {
         viewModel.enabledProjects.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-
-    private func loopProjectAssignmentRow(_ project: DiscoveredProject) -> some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(project.name)
-                    .font(AppTheme.Font.body.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(project.path)
-                    .font(AppTheme.Font.caption2.monospaced())
-                    .foregroundStyle(AppTheme.mutedText)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 12)
-            Toggle("Assigned", isOn: Binding(
-                get: { editorDraft.availability == .projectPaths && editorDraft.projectPaths.contains(project.path) },
-                set: { setLoopAssigned($0, toProjectPath: project.path) }
-            ))
-            .labelsHidden()
-            .appSwitch()
-            .disabled(editorDraft.availability == .allProjects)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(AppTheme.textContentFill.opacity(editorDraft.availability == .allProjects ? 0.35 : 1))
-        .contextMenu {
-            if editorDraft.availability == .allProjects {
-                Button("Use Project Assignments") { setUnassignedAvailability() }
-            }
-            Button(editorDraft.projectPaths.contains(project.path) ? "Remove from Project" : "Assign to Project") {
-                setLoopAssigned(!editorDraft.projectPaths.contains(project.path), toProjectPath: project.path)
-            }
-            Button("Make All Projects/default") { setAllProjectsAvailability() }
-            Button("Make Unassigned/catalog") { setUnassignedAvailability() }
-        }
     }
 
     private func setLoopAssigned(_ assigned: Bool, toProjectPath projectPath: String) {
@@ -577,7 +540,7 @@ struct LoopBankScreen: View {
                         LoopAgentNameMenu(selection: $editorDraft.checkerName, availableAgents: availableLoopAgents, fallbackLabel: "Checker")
                     }
                     detailEditor("Checker rubric", text: $editorDraft.checkerRubric, minHeight: 84, info: "Instructions for the checker. Keep the approval criteria concrete so the loop knows when to stop retrying.")
-                    detailRow("Max review rounds", info: "Limits maker/checker retries inside an iteration before the loop stops asking for another review pass.") {
+                    detailRow("Max review rounds", info: "Limits maker/checker retries inside an iteration before the loop stops asking for another review pass.", showsDivider: false) {
                         LoopNumericStepper(value: $editorDraft.maxReviewRounds, range: 1...20)
                     }
                 }
@@ -612,7 +575,7 @@ struct LoopBankScreen: View {
             }
         case .singleAgent:
             AppCard(title: "Single Agent") {
-                detailRow("Agent", info: "The agent that will run each iteration. Choose the role best matched to the goal, such as explorer, coder, or reviewer.") {
+                detailRow("Agent", info: "The agent that will run each iteration. Choose the role best matched to the goal, such as explorer, coder, or reviewer.", showsDivider: false) {
                     LoopAgentNameMenu(selection: $editorDraft.makerName, availableAgents: availableLoopAgents, fallbackLabel: "Agent")
                 }
             }
@@ -667,6 +630,7 @@ struct LoopBankScreen: View {
         _ title: String,
         info: String? = nil,
         infoRows: [LoopInlineInfoButton.Row] = [],
+        showsDivider: Bool = true,
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(spacing: 0) {
@@ -678,7 +642,7 @@ struct LoopBankScreen: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .padding(.vertical, 11)
-            Divider()
+            if showsDivider { Divider() }
         }
     }
 
