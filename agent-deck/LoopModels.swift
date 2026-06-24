@@ -141,7 +141,8 @@ nonisolated struct LoopDiscoveryTriageConfig: Codable, Equatable, Hashable, Send
 
     init(agentName: String = "", classificationPrompt: String = "Classify findings by severity and summarize recommended next action.") {
         self.agentName = agentName.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.classificationPrompt = classificationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Classify findings by severity and summarize recommended next action." : classificationPrompt
+        let trimmedPrompt = classificationPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.classificationPrompt = trimmedPrompt.isEmpty ? "Classify findings by severity and summarize recommended next action." : classificationPrompt
     }
 
     enum CodingKeys: String, CodingKey { case agentName, classificationPrompt }
@@ -235,7 +236,20 @@ nonisolated struct LoopDraft: Codable, Equatable, Sendable {
 
     static let defaultMaxIterations = 3
 
-    init(goal: String = "", launchContext: String? = nil, launchContextScope: LoopLaunchContextScope = .firstIterationOnly, structure: LoopStructureKind = .singleAgent, writeTarget: LoopWriteTarget = .artifactMarkdown, maxIterations: Int = Self.defaultMaxIterations, validationCommand: String = "", makerChecker: LoopMakerCheckerConfig = LoopMakerCheckerConfig(), pipeline: LoopPipelineConfig = LoopPipelineConfig(), parallel: LoopParallelConfig = LoopParallelConfig(), discoveryTriage: LoopDiscoveryTriageConfig = LoopDiscoveryTriageConfig(), humanApproval: LoopHumanApprovalConfig = LoopHumanApprovalConfig()) {
+    init(
+        goal: String = "",
+        launchContext: String? = nil,
+        launchContextScope: LoopLaunchContextScope = .firstIterationOnly,
+        structure: LoopStructureKind = .singleAgent,
+        writeTarget: LoopWriteTarget = .artifactMarkdown,
+        maxIterations: Int = Self.defaultMaxIterations,
+        validationCommand: String = "",
+        makerChecker: LoopMakerCheckerConfig = LoopMakerCheckerConfig(),
+        pipeline: LoopPipelineConfig = LoopPipelineConfig(),
+        parallel: LoopParallelConfig = LoopParallelConfig(),
+        discoveryTriage: LoopDiscoveryTriageConfig = LoopDiscoveryTriageConfig(),
+        humanApproval: LoopHumanApprovalConfig = LoopHumanApprovalConfig()
+    ) {
         self.goal = goal
         self.launchContext = launchContext?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
         self.launchContextScope = launchContextScope
@@ -471,7 +485,18 @@ nonisolated struct LoopIteration: Identifiable, Codable, Equatable, Sendable {
     var timeline: [LoopTimelineEvent]
     var changedFiles: [String]
 
-    init(id: UUID = UUID(), index: Int, startedAt: Date = Date(), endedAt: Date? = nil, summary: String = "", artifacts: [LoopArtifact] = [], validationResult: LoopValidationResult? = nil, checkerResult: LoopCheckerResult? = nil, timeline: [LoopTimelineEvent] = [], changedFiles: [String] = []) {
+    init(
+        id: UUID = UUID(),
+        index: Int,
+        startedAt: Date = Date(),
+        endedAt: Date? = nil,
+        summary: String = "",
+        artifacts: [LoopArtifact] = [],
+        validationResult: LoopValidationResult? = nil,
+        checkerResult: LoopCheckerResult? = nil,
+        timeline: [LoopTimelineEvent] = [],
+        changedFiles: [String] = []
+    ) {
         self.id = id
         self.index = index
         self.startedAt = startedAt
@@ -557,7 +582,9 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, sessionID, projectPath, goal, launchContext, launchContextScope, structure, status, writeTarget, currentIteration, maxIterations, validationCommand, makerChecker, pipeline, parallel, discoveryTriage, humanApproval, startedAt, endedAt, stopReason, iterations, artifactDirectoryPath, worktreeState, transcriptEntryID
+        case id, sessionID, projectPath, goal, launchContext, launchContextScope, structure, status, writeTarget, currentIteration
+        case maxIterations, validationCommand, makerChecker, pipeline, parallel, discoveryTriage, humanApproval
+        case startedAt, endedAt, stopReason, iterations, artifactDirectoryPath, worktreeState, transcriptEntryID
     }
 
     init(from decoder: Decoder) throws {
@@ -711,27 +738,32 @@ enum LoopRunRecapCodec {
         return parts.joined(separator: "\n")
     }
 
-    static func finalText(for run: LoopRun) -> String {
+    static func finalText(for run: LoopRun, progressMarkdown: String? = nil) -> String {
         var lines: [String] = [
             "∞ Loop final recap — \(run.displayStatusName)",
             "Structure: \(run.structure.displayName)",
             "Iterations: \(run.iterations.count)/\(run.maxIterations)"
         ]
         if let stopReason = run.stopReason {
-            lines.append("Stop reason: \(stopReason.displayName)")
+            lines.append("Outcome: \(stopReason.displayName)")
         }
         if run.structure == .makerChecker {
             if let checkerResult = run.iterations.last?.checkerResult {
                 lines.append("Final checker result: \(checkerResult.displayName)")
             }
             if run.stopReason == .maxIterationsReached {
-                lines.append("Maker + Checker stopped after the configured review rounds without approval.")
+                lines.append("Maker + Checker used the configured review rounds without approval; treat this as goal not fully met, not an agent error.")
             } else if run.iterations.last?.checkerResult == .reject {
                 lines.append("Maker + Checker ended on a rejection.")
             }
         }
         if let validation = run.iterations.last?.validationResult {
-            lines.append("Validation: \(validation.didPass ? "passed" : "failed")\(validation.exitCode.map { " (exit \($0))" } ?? "")")
+            lines.append("Latest validation: \(validation.didPass ? "passed" : "failed")\(validation.exitCode.map { " (exit \($0))" } ?? "")")
+        }
+        if let progressSummary = finalProgressSummary(from: progressMarkdown) {
+            lines.append("")
+            lines.append("Loop outcome summary:")
+            lines.append(contentsOf: progressSummary)
         }
         let artifacts = run.iterations.flatMap(\.artifacts)
         if !artifacts.isEmpty {
@@ -741,6 +773,35 @@ enum LoopRunRecapCodec {
             lines.append("Shared progress artifact: loop-progress.md")
         }
         return lines.joined(separator: "\n")
+    }
+
+    private static func finalProgressSummary(from markdown: String?) -> [String]? {
+        guard let markdown, !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let sections = markdownSections(markdown)
+        let wanted = ["Current Understanding", "What Worked", "What Did Not Work", "Current Evidence", "Avoid Repeating", "Next Recommended Move"]
+        var lines: [String] = []
+        for title in wanted {
+            guard let body = sections[title]?.filter({ !$0.contains("None yet") && !$0.contains("Not established yet") }), !body.isEmpty else { continue }
+            lines.append("\(title):")
+            lines.append(contentsOf: body.prefix(3))
+        }
+        return lines.isEmpty ? nil : Array(lines.prefix(18))
+    }
+
+    private static func markdownSections(_ markdown: String) -> [String: [String]] {
+        var result: [String: [String]] = [:]
+        var currentTitle: String?
+        for rawLine in markdown.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            if line.hasPrefix("## ") {
+                currentTitle = String(line.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if let currentTitle { result[currentTitle, default: []] = [] }
+            } else if let currentTitle {
+                result[currentTitle, default: []].append(line)
+            }
+        }
+        return result
     }
 
     static func transcriptEntry(for run: LoopRun, iteration: LoopIteration, id: UUID = UUID()) -> PiAgentTranscriptEntry {
@@ -756,14 +817,14 @@ enum LoopRunRecapCodec {
         )
     }
 
-    static func finalTranscriptEntry(for run: LoopRun, id: UUID = UUID()) -> PiAgentTranscriptEntry {
+    static func finalTranscriptEntry(for run: LoopRun, id: UUID = UUID(), progressMarkdown: String? = nil) -> PiAgentTranscriptEntry {
         let marker = finalMarker(for: run)
         return PiAgentTranscriptEntry(
             id: id,
             sessionID: run.sessionID,
             role: .status,
             title: title,
-            text: finalText(for: run),
+            text: finalText(for: run, progressMarkdown: progressMarkdown),
             rawJSON: rawJSON(for: marker),
             timestamp: run.endedAt ?? Date()
         )

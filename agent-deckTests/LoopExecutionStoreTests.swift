@@ -207,7 +207,7 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertEqual(recaps.filter { $0.1.kind == .iteration }.count, 1)
         XCTAssertEqual(recaps.filter { $0.1.kind == .final }.count, 1)
         XCTAssertTrue(recaps.contains { $0.0.text.contains("Round 1 recap") && $0.0.text.contains("done") && $0.0.text.contains("Validation: passed") })
-        XCTAssertTrue(recaps.contains { $0.0.text.contains("Loop final recap") && $0.0.text.contains("Stop reason: Success") })
+        XCTAssertTrue(recaps.contains { $0.0.text.contains("Loop final recap") && $0.0.text.contains("Outcome: Success") })
 
         store.hydrateLoopRunsFromTranscript(sessionID: session.id)
         let afterHydrateRecaps = (store.transcriptsBySessionID[session.id] ?? []).compactMap(LoopRunRecapCodec.decode(from:))
@@ -432,6 +432,12 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertEqual(run.iterations.map(\.checkerResult), [.reject, .reject])
         XCTAssertTrue(LoopRunRecapCodec.finalText(for: run).contains("Loop final recap — Goal not met"))
         XCTAssertTrue(LoopRunRecapCodec.finalText(for: run).contains("Final checker result: Reject"))
+        let finalText = try XCTUnwrap((store.transcriptsBySessionID[session.id] ?? []).first {
+            LoopRunRecapCodec.decode(from: $0)?.kind == .final
+        }?.text)
+        XCTAssertTrue(finalText.contains("Loop outcome summary:"))
+        XCTAssertTrue(finalText.contains("final pass still lacks approval evidence"))
+        XCTAssertTrue(finalText.contains("Next Recommended Move:"))
         let recapEntries = (store.transcriptsBySessionID[session.id] ?? []).filter { LoopRunRecapCodec.decode(from: $0) != nil }
         XCTAssertEqual(recapEntries.filter { LoopRunRecapCodec.decode(from: $0)?.kind == .iteration }.count, 2)
         XCTAssertTrue(recapEntries.contains { $0.text.contains("Round 2 recap") && $0.text.contains("Checker outcome: Reject") && $0.text.contains("final pass still lacks approval evidence") })
@@ -491,7 +497,10 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertTrue(responses.isEmpty)
     }
 
-    private func makeSession(store: PiAgentSessionStore) throws -> PiAgentSessionRecord {
+}
+
+private extension LoopExecutionStoreTests {
+    func makeSession(store: PiAgentSessionStore) throws -> PiAgentSessionRecord {
         let projectURL = try PiTestSupport.temporaryProjectURL()
         return store.createSession(kind: .project, title: "Loop", project: try PiTestSupport.makeProject(url: projectURL), repository: nil)
     }
@@ -509,7 +518,15 @@ final class LoopExecutionStoreTests: XCTestCase {
         return child == parent || child.hasPrefix(parent + "/")
     }
 
-    private static func fakeRun(parentSessionID: UUID, agentName: String, task: String, mode: PiSubagentRunMode = .single, status: PiSubagentRunStatus, summary: String? = nil, error: String? = nil) -> PiSubagentRunRecord {
+    static func fakeRun(
+        parentSessionID: UUID,
+        agentName: String,
+        task: String,
+        mode: PiSubagentRunMode = .single,
+        status: PiSubagentRunStatus,
+        summary: String? = nil,
+        error: String? = nil
+    ) -> PiSubagentRunRecord {
         let now = Date()
         return PiSubagentRunRecord(
             id: UUID(), parentSessionID: parentSessionID, mode: mode, status: status,

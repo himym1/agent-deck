@@ -2015,15 +2015,17 @@ final class PiAgentSessionStore {
         try? loopProgressMarkdown(for: run).write(to: fileURL, atomically: true, encoding: .utf8)
     }
 
-    private func sharedLoopProgressPromptSection(for run: LoopRun) -> String {
-        let progressText: String
+    private func loopProgressMarkdownForRecap(_ run: LoopRun) -> String {
         if let fileURL = loopProgressFileURL(for: run),
            let text = try? String(contentsOf: fileURL, encoding: .utf8),
            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            progressText = text
-        } else {
-            progressText = loopProgressMarkdown(for: run)
+            return text
         }
+        return loopProgressMarkdown(for: run)
+    }
+
+    private func sharedLoopProgressPromptSection(for run: LoopRun) -> String {
+        let progressText = loopProgressMarkdownForRecap(run)
         return """
         Shared loop progress file:
         Agent Deck maintains `\(Self.loopProgressFilename)` in this loop's artifact directory as the shared short-term markdown memory for all loop agents. Do not edit that file directly. Read and use the full current contents below to build on prior evidence, avoid repeating failed approaches, and hand off concise findings in your final response so Agent Deck can refresh the file after this round.
@@ -2335,7 +2337,11 @@ final class PiAgentSessionStore {
         }
         if !run.isActive {
             let marker = LoopRunRecapCodec.finalMarker(for: run)
-            let entry = LoopRunRecapCodec.finalTranscriptEntry(for: run, id: existingRecapID(for: marker) ?? UUID())
+            let entry = LoopRunRecapCodec.finalTranscriptEntry(
+                for: run,
+                id: existingRecapID(for: marker) ?? UUID(),
+                progressMarkdown: loopProgressMarkdownForRecap(run)
+            )
             upsert(entry, persist: false)
         }
         persistTranscript(run.sessionID)
