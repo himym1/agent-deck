@@ -230,9 +230,7 @@ struct LoopBankScreen: View {
 
     @ViewBuilder
     private var loopDetailPane: some View {
-        if isCreatingNewLoop {
-            emptyLoopDetailPane
-        } else if let definition = viewModel.selectedLoopDefinition {
+        if let definition = viewModel.selectedLoopDefinition {
             loopReadOnlyPane(for: definition)
         } else {
             emptyLoopDetailPane
@@ -614,12 +612,8 @@ struct LoopBankScreen: View {
                 detailRow("Availability") {
                     readOnlyValue(availabilityLabel(for: definition))
                 }
-                if definition.availability == .projectPaths, !definition.projectPaths.isEmpty {
-                    readOnlyDetailBlock("Projects", value: definition.projectPaths.joined(separator: "\n"), showsDivider: false)
-                } else {
-                    detailRow("Projects", showsDivider: false) {
-                        readOnlyValue(definition.availability == .allProjects ? "Every project" : "None")
-                    }
+                detailRow("Projects", showsDivider: false) {
+                    readOnlyValue(projectAssignmentSummary(for: definition))
                 }
             }
         }
@@ -965,12 +959,7 @@ struct LoopBankScreen: View {
         guard editorDraft.isNew else { return }
         viewModel.pendingNewLoopEditorDraft = nil
         isCreatingNewLoop = false
-        if let first = viewModel.loopDefinitions.first {
-            viewModel.selectedLoopDefinitionID = first.id
-            resetEditor(to: first)
-        } else {
-            resetEditor(to: nil)
-        }
+        resetEditor(to: viewModel.selectedLoopDefinition)
     }
 
     @discardableResult
@@ -1018,6 +1007,15 @@ struct LoopBankScreen: View {
                 return "Current Project"
             }
             return definition.projectPaths.count == 1 ? "1 Project" : "\(definition.projectPaths.count) Projects"
+        }
+    }
+
+    private func projectAssignmentSummary(for definition: LoopDefinition) -> String {
+        switch definition.availability {
+        case .allProjects:
+            return "Every project"
+        case .projectPaths:
+            return definition.projectPaths.isEmpty ? "None" : definition.projectPaths.joined(separator: ", ")
         }
     }
 

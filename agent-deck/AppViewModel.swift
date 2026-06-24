@@ -8883,7 +8883,6 @@ final class AppViewModel: NSObject {
     }
 
     func requestNewLoopDefinition() {
-        selectedLoopDefinitionID = nil
         newLoopRequestID = UUID()
     }
 
