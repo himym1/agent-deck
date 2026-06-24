@@ -624,10 +624,18 @@ private struct UserQuestionNavigationRailItem: Equatable {
 
 private final class UserQuestionNavigationRailView: NSView {
     var onSelect: ((String) -> Void)?
-    static let restAlpha: CGFloat = 0.36
+    static let restAlpha: CGFloat = 0.82
     private var items: [UserQuestionNavigationRailItem] = []
     private var hoveredID: String?
     private var trackingArea: NSTrackingArea?
+    private var isRailHovered = false
+
+    private let rowHeight: CGFloat = 22
+    private let rowSpacing: CGFloat = 6
+    private let verticalInset: CGFloat = 10
+    private let collapsedHitWidth: CGFloat = 44
+    private let markWidth: CGFloat = 14
+    private let activeMarkWidth: CGFloat = 20
 
     override var isFlipped: Bool { true }
 
@@ -645,7 +653,7 @@ private final class UserQuestionNavigationRailView: NSView {
         if let trackingArea { removeTrackingArea(trackingArea) }
         let area = NSTrackingArea(
             rect: bounds,
-            options: [.activeInKeyWindow, .mouseEnteredAndExited, .mouseMoved, .inVisibleRect],
+            options: [.activeInKeyWindow, .mouseEnteredAndExited, .mouseMoved, .cursorUpdate, .inVisibleRect],
             owner: self
         )
         addTrackingArea(area)
@@ -657,7 +665,12 @@ private final class UserQuestionNavigationRailView: NSView {
         item(at: point) == nil ? nil : self
     }
 
+    override func cursorUpdate(with event: NSEvent) {
+        NSCursor.pointingHand.set()
+    }
+
     override func mouseEntered(with event: NSEvent) {
+        isRailHovered = true
         setResting(false)
         updateHover(with: event)
     }
@@ -668,6 +681,7 @@ private final class UserQuestionNavigationRailView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         hoveredID = nil
+        isRailHovered = false
         setResting(true)
         needsDisplay = true
     }
@@ -686,29 +700,53 @@ private final class UserQuestionNavigationRailView: NSView {
 
     private func item(at point: NSPoint) -> UserQuestionNavigationRailItem? {
         items.first { item in
-            let y = markY(for: item)
-            let markHitRect = NSRect(x: bounds.maxX - 28, y: y - 9, width: 28, height: 18)
-            if markHitRect.contains(point) { return true }
-            guard item.id == hoveredID else { return false }
-            return previewRect(for: item).insetBy(dx: -4, dy: -5).contains(point)
+            hitRect(for: item).contains(point)
         }
     }
 
-    private func markY(for item: UserQuestionNavigationRailItem) -> CGFloat {
-        let inset: CGFloat = 9
-        return inset + max(0, min(1, item.fraction)) * max(1, bounds.height - inset * 2)
+    private func rowIndex(for item: UserQuestionNavigationRailItem) -> Int {
+        items.firstIndex(of: item) ?? 0
+    }
+
+    private func rowRect(for item: UserQuestionNavigationRailItem) -> NSRect {
+        let index = rowIndex(for: item)
+        let y = verticalInset + CGFloat(index) * (rowHeight + rowSpacing)
+        let hovered = item.id == hoveredID
+        let width = hovered ? bounds.width : collapsedHitWidth
+        return NSRect(x: bounds.maxX - width, y: y, width: width, height: rowHeight)
+    }
+
+    private func hitRect(for item: UserQuestionNavigationRailItem) -> NSRect {
+        rowRect(for: item).insetBy(dx: -2, dy: -3)
+    }
+
+    private func markRect(for item: UserQuestionNavigationRailItem) -> NSRect {
+        let row = rowRect(for: item)
+        let hovered = item.id == hoveredID
+        let active = item.isActive
+        let width = active ? activeMarkWidth : (hovered ? 16 : markWidth)
+        let height: CGFloat = active || hovered ? 3 : 2
+        return NSRect(x: bounds.maxX - 8 - width, y: row.midY - height / 2, width: width, height: height)
     }
 
     private func previewRect(for item: UserQuestionNavigationRailItem) -> NSRect {
-        let y = markY(for: item)
-        let textWidth = min(max(104, bounds.width - 26), 220)
-        return NSRect(x: bounds.maxX - 22 - textWidth, y: y - 12, width: textWidth, height: 24)
+        let row = rowRect(for: item)
+        let mark = markRect(for: item)
+        let trailingGap: CGFloat = 8
+        let leadingInset: CGFloat = 10
+        let maxX = mark.minX - trailingGap
+        return NSRect(
+            x: row.minX + leadingInset,
+            y: row.minY,
+            width: max(0, maxX - row.minX - leadingInset),
+            height: row.height
+        )
     }
 
     private func setResting(_ resting: Bool) {
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.14
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.duration = 0.16
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             animator().alphaValue = resting ? Self.restAlpha : 1
         }
     }
@@ -718,35 +756,42 @@ private final class UserQuestionNavigationRailView: NSView {
         guard !items.isEmpty else { return }
         let accent = AppTheme.ns(AppTheme.brandAccent)
         let inactive = NSColor.secondaryLabelColor
-        let containerRect = NSRect(x: bounds.maxX - 20, y: 0, width: 16, height: bounds.height)
-        NSColor.windowBackgroundColor.withAlphaComponent(0.42).setFill()
-        NSBezierPath(roundedRect: containerRect, xRadius: 8, yRadius: 8).fill()
-        NSColor.separatorColor.withAlphaComponent(0.28).setStroke()
-        NSBezierPath(roundedRect: containerRect, xRadius: 8, yRadius: 8).stroke()
+        let panelFill = NSColor.windowBackgroundColor.withAlphaComponent(isRailHovered ? 0.24 : 0.12)
+        let panelStroke = NSColor.separatorColor.withAlphaComponent(isRailHovered ? 0.20 : 0.10)
+        let capsuleRect = NSRect(x: bounds.maxX - 34, y: 2, width: 28, height: bounds.height - 4)
+        panelFill.setFill()
+        NSBezierPath(roundedRect: capsuleRect, xRadius: 11, yRadius: 11).fill()
+        panelStroke.setStroke()
+        NSBezierPath(roundedRect: capsuleRect, xRadius: 11, yRadius: 11).stroke()
 
         for item in items {
-            let y = markY(for: item)
             let hovered = item.id == hoveredID
-            let active = item.isActive || hovered
-            let markRect = NSRect(x: bounds.maxX - 15, y: y - (active ? 3 : 2.5), width: active ? 6 : 5, height: active ? 6 : 5)
-            (active ? accent.withAlphaComponent(0.9) : inactive.withAlphaComponent(0.46)).setFill()
-            NSBezierPath(roundedRect: markRect, xRadius: 2.5, yRadius: 2.5).fill()
+            let active = item.isActive
+            let row = rowRect(for: item)
+            if hovered {
+                let path = NSBezierPath(roundedRect: row, xRadius: 7, yRadius: 7)
+                (active ? accent.withAlphaComponent(0.16) : NSColor.windowBackgroundColor.withAlphaComponent(0.76)).setFill()
+                path.fill()
+                NSColor.separatorColor.withAlphaComponent(0.20).setStroke()
+                path.stroke()
+            }
+
+            let mark = markRect(for: item)
+            (active ? accent.withAlphaComponent(0.95) : (hovered ? NSColor.labelColor.withAlphaComponent(0.78) : inactive.withAlphaComponent(isRailHovered ? 0.62 : 0.48))).setFill()
+            NSBezierPath(roundedRect: mark, xRadius: mark.height / 2, yRadius: mark.height / 2).fill()
 
             guard hovered else { continue }
-            let bubbleRect = previewRect(for: item)
-            NSColor.windowBackgroundColor.withAlphaComponent(0.82).setFill()
-            NSBezierPath(roundedRect: bubbleRect, xRadius: 8, yRadius: 8).fill()
-            accent.withAlphaComponent(0.32).setStroke()
-            NSBezierPath(roundedRect: bubbleRect, xRadius: 8, yRadius: 8).stroke()
-
             let paragraph = NSMutableParagraphStyle()
             paragraph.lineBreakMode = .byTruncatingTail
+            paragraph.alignment = .right
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium),
-                .foregroundColor: accent,
+                .foregroundColor: active ? accent : NSColor.labelColor.withAlphaComponent(0.86),
                 .paragraphStyle: paragraph
             ]
-            (item.title as NSString).draw(in: bubbleRect.insetBy(dx: 9, dy: 6), withAttributes: attributes)
+            let title = item.title.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\n", with: " ")
+            let displayTitle = title.isEmpty ? "(empty message)" : title
+            (displayTitle as NSString).draw(in: previewRect(for: item).insetBy(dx: 0, dy: 4), withAttributes: attributes)
         }
     }
 }
@@ -1532,11 +1577,14 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private func updateQuestionRail() {
             guard let scrollView, let tableView, let rail = questionRail else { return }
             let questionRows = currentQuestionRows()
-            let railWidth = min(max(132, scrollView.bounds.width * 0.24), 240)
-            let maxRailHeight = max(54, scrollView.bounds.height * 0.46)
-            let railHeight = min(maxRailHeight, max(44, CGFloat(max(0, questionRows.count - 1)) * 9 + 24))
+            let railWidth = min(340, max(160, scrollView.bounds.width * 0.30), max(120, scrollView.bounds.width - 96))
+            let rowHeight: CGFloat = 22
+            let rowSpacing: CGFloat = 6
+            let verticalPadding: CGFloat = 20
+            let desiredRailHeight = CGFloat(questionRows.count) * rowHeight + CGFloat(max(0, questionRows.count - 1)) * rowSpacing + verticalPadding
+            let railHeight = min(max(54, scrollView.bounds.height - 32), max(44, desiredRailHeight))
             rail.frame = NSRect(
-                x: scrollView.bounds.width - railWidth - 12,
+                x: scrollView.bounds.width - railWidth - 18,
                 y: (scrollView.bounds.height - railHeight) / 2,
                 width: railWidth,
                 height: railHeight
@@ -1575,26 +1623,21 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         }
 
         func scrollToUserQuestion(id: String) {
-            guard let scrollView, let tableView, let row = tableRow(forItemID: id), row >= 0 else { return }
+            guard let scrollView, let tableView, let row = tableRow(forItemID: id), row >= 0, row < tableView.numberOfRows else { return }
             stopFollowGlide()
             isAutoFollowing = false
             publishPinnedState(false)
-            let clip = scrollView.contentView
-            let rowRect = tableView.rect(ofRow: row)
-            let maxY = max(0, tableView.bounds.height - clip.bounds.height)
-            let targetY = min(max(0, rowRect.minY - 18), maxY)
             isProgrammaticScroll = true
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.22
+                context.allowsImplicitAnimation = true
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                clip.animator().setBoundsOrigin(NSPoint(x: 0, y: targetY))
-            } completionHandler: { [weak self, weak scrollView] in
+                tableView.scrollRowToVisible(row)
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            } completionHandler: { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.isProgrammaticScroll = false
-                    if let scrollView {
-                        scrollView.reflectScrolledClipView(scrollView.contentView)
-                    }
                     self.updateQuestionRail()
                 }
             }
