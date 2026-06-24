@@ -389,6 +389,21 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
             humanApproval: humanApproval
         )
     }
+
+    func exactlyMatches(run: LoopRun) -> Bool {
+        run.goal == goalTemplate.trimmingCharacters(in: .whitespacesAndNewlines) &&
+        run.launchContext == launchContext?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty &&
+        run.launchContextScope == launchContextScope &&
+        run.structure == structure &&
+        run.writeTarget == writeTarget &&
+        run.maxIterations == maxIterations &&
+        run.validationCommand == validationCommand.trimmingCharacters(in: .whitespacesAndNewlines) &&
+        run.makerChecker == makerChecker &&
+        run.pipeline == pipeline &&
+        run.parallel == parallel &&
+        run.discoveryTriage == discoveryTriage &&
+        run.humanApproval == humanApproval
+    }
 }
 
 nonisolated struct LoopSaveRequest: Equatable, Sendable {

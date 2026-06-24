@@ -1082,6 +1082,15 @@ private func loopRunDetailsText(for run: LoopRun) -> String {
     if let directoryPath = run.artifactDirectoryPath { overview.append("Artifact directory: \(directoryPath)") }
     sections.append((["Overview"] + overview.map { "• \($0)" }).joined(separator: "\n"))
 
+    if let launchContext = run.launchContext?.trimmingCharacters(in: .whitespacesAndNewlines), !launchContext.isEmpty {
+        sections.append([
+            "Launch Context",
+            "• Scope: \(run.launchContextScope.displayName)",
+            "",
+            launchContext
+        ].joined(separator: "\n"))
+    }
+
     if run.iterations.isEmpty {
         sections.append("Iterations\n• No iterations recorded yet.")
     } else {

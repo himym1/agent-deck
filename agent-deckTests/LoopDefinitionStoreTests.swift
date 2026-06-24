@@ -242,6 +242,28 @@ final class LoopDefinitionStoreTests: XCTestCase {
         XCTAssertEqual(draft.launchContextScope, .everyIteration)
     }
 
+    func testLoopDefinitionExactRunMatchIncludesLaunchContextAndScope() {
+        let definition = LoopDefinition(
+            name: "Context Sensitive",
+            goalTemplate: "Same goal",
+            launchContext: "Use these notes",
+            launchContextScope: .everyIteration,
+            validationCommand: "swift test"
+        )
+        let matchingRun = LoopRun(sessionID: UUID(), projectPath: nil, draft: definition.makeDraft())
+        var differentContext = matchingRun
+        differentContext.launchContext = "Different notes"
+        var missingContext = matchingRun
+        missingContext.launchContext = nil
+        var differentScope = matchingRun
+        differentScope.launchContextScope = .firstIterationOnly
+
+        XCTAssertTrue(definition.exactlyMatches(run: matchingRun))
+        XCTAssertFalse(definition.exactlyMatches(run: differentContext))
+        XCTAssertFalse(definition.exactlyMatches(run: missingContext))
+        XCTAssertFalse(definition.exactlyMatches(run: differentScope))
+    }
+
     func testNoBuiltInTemplatesLoadIntoLoopBankAndSlashUniverse() throws {
         let directory = PiTestSupport.temporaryStateFile().deletingLastPathComponent().appendingPathComponent("loops", isDirectory: true)
         let viewModel = AppViewModel()

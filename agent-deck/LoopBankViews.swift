@@ -499,18 +499,7 @@ struct LoopBankScreen: View {
         guard !goal.isEmpty else { return nil }
         let runs = viewModel.piAgentSessionStore.sessions
             .flatMap { viewModel.piAgentSessionStore.loopRuns(for: $0.id) }
-            .filter { run in
-                run.goal == goal &&
-                run.structure == definition.structure &&
-                run.writeTarget == definition.writeTarget &&
-                run.maxIterations == definition.maxIterations &&
-                run.validationCommand == definition.validationCommand.trimmingCharacters(in: .whitespacesAndNewlines) &&
-                run.makerChecker == definition.makerChecker &&
-                run.pipeline == definition.pipeline &&
-                run.parallel == definition.parallel &&
-                run.discoveryTriage == definition.discoveryTriage &&
-                run.humanApproval == definition.humanApproval
-            }
+            .filter { definition.exactlyMatches(run: $0) }
         if let selectedProjectPath = viewModel.selectedProjectPath?.trimmingCharacters(in: .whitespacesAndNewlines), !selectedProjectPath.isEmpty,
            let projectRun = runs.filter({ $0.projectPath == selectedProjectPath }).max(by: { $0.startedAt < $1.startedAt }) {
             return projectRun
