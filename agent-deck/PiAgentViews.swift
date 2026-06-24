@@ -1110,9 +1110,14 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// rows instead. Kept well above the per-slice budget so a normal row is
         /// never blocked, but a pathological 20ms+ markdown stack is.
         private let prewarmPerRowCostCapMs: Double = 15.0
-        /// Kill switch for A/B: `defaults write streetcoding.agent-deck TranscriptPrewarmDisabled -bool YES`.
+        /// Speculative offscreen prewarm is disabled by default: hang samples showed
+        /// the first build of an offscreen native/markdown row can monopolize the
+        /// main thread before the slice budget can yield. Keep an opt-in defaults
+        /// flag for A/B without changing visible-row rendering.
+        /// Enable with: `defaults write streetcoding.agent-deck TranscriptPrewarmDisabled -bool NO`.
         private static let prewarmDisabled: Bool = {
-            UserDefaults.standard.bool(forKey: "TranscriptPrewarmDisabled")
+            guard let value = UserDefaults.standard.object(forKey: "TranscriptPrewarmDisabled") as? Bool else { return true }
+            return value
         }()
         /// Per-runloop-slice main-thread budget. Kept under half a 120Hz frame so a
         /// slice never itself drops a frame; construction is spread across ticks.
