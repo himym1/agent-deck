@@ -294,6 +294,21 @@ struct LoopBankScreen: View {
         }
     }
 
+    private var savedEditorDraft: LoopDefinitionEditorDraft {
+        LoopDefinitionEditorDraft(definition: viewModel.selectedLoopDefinition, currentProjectPath: viewModel.selectedProjectPath)
+    }
+
+    private var hasUnsavedEditorChanges: Bool {
+        if editorDraft.isNew {
+            return editorDraft != LoopDefinitionEditorDraft(currentProjectPath: viewModel.selectedProjectPath)
+        }
+        return editorDraft != savedEditorDraft
+    }
+
+    private var canSaveEditorDraft: Bool {
+        hasUnsavedEditorChanges && !editorDraft.trimmedName.isEmpty && !editorDraft.isBuiltin && requiredAgentsAreSelected
+    }
+
     private var definitionFields: some View {
         VStack(alignment: .leading, spacing: 0) {
             detailRow("Name", info: "Use a short action-oriented name. This is what appears in the Loop Bank and launch menus.") {
@@ -324,10 +339,8 @@ struct LoopBankScreen: View {
             }
             detailEditor("Goal template", text: $editorDraft.goalTemplate, minHeight: 120, info: "The reusable instruction the loop runs against. Be explicit about the desired outcome, constraints, and what counts as done.")
             detailRow("Validation command", info: "Optional shell command for checking the result. It runs from the project directory when available and is attached to the loop result.") {
-                TextField("", text: $editorDraft.validationCommand)
-                    .multilineTextAlignment(.trailing)
-                    .textFieldStyle(.plain)
-                    .foregroundStyle(.primary)
+                AppTextField(text: $editorDraft.validationCommand, placeholder: "Optional shell command")
+                    .frame(maxWidth: 360)
             }
         }
     }
@@ -335,24 +348,46 @@ struct LoopBankScreen: View {
     private var availabilitySection: some View {
         AppCard(title: "Availability") {
             VStack(alignment: .leading, spacing: 0) {
-                detailRow("Assignment", infoRows: loopAvailabilityInfoRows) {
-                    HStack(spacing: 8) {
-                        Button("All Projects/default") { setAllProjectsAvailability() }
-                            .buttonStyle(.bordered)
-                        if currentProjectPath != nil {
-                            Button("Current Project only") { setCurrentProjectAvailability() }
-                                .buttonStyle(.bordered)
+                detailRow("All Projects/default", info: "When enabled, this loop is available in every project.") {
+                    Toggle("All Projects/default", isOn: Binding(
+                        get: { editorDraft.availability == .allProjects },
+                        set: { enabled in
+                            if enabled { setAllProjectsAvailability() }
+                            else { setUnassignedAvailability() }
                         }
-                        Button("Unassigned/catalog") { setUnassignedAvailability() }
-                            .buttonStyle(.bordered)
-                    }
+                    ))
+                    .labelsHidden()
+                    .appSwitch()
                 }
                 detailRow("Current setting") {
                     Text(availabilityLabel(for: editorDraft))
                 }
-                detailEditor("Advanced project paths", text: $editorDraft.projectPathsText, minHeight: 72, monospaced: true, info: "Use this only when a loop should be assigned to specific absolute project paths. One path per line.")
+                if !availableProjectsForLoopAssignment.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        detailLabel("Project assignments", info: "Assign this loop to one or more specific projects. Turning off All Projects/default uses these project assignments; no selected projects means Unassigned/catalog.")
+                        VStack(spacing: 0) {
+                            ForEach(availableProjectsForLoopAssignment, id: \.path) { project in
+                                loopProjectAssignmentRow(project)
+                            }
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(AppTheme.contentStroke, lineWidth: 1)
+                        }
+                    }
+                    .padding(.vertical, 11)
+                    Divider()
+                }
+                detailEditor("Advanced project paths", text: Binding(
+                    get: { editorDraft.projectPathsText },
+                    set: { value in
+                        editorDraft.projectPathsText = value
+                        editorDraft.availability = .projectPaths
+                    }
+                ), minHeight: 72, monospaced: true, info: "Optional: add absolute project paths that are not currently listed above. One path per line.")
                     .disabled(editorDraft.availability == .allProjects)
-                Text("One absolute path per line. Editing the list uses project-specific assignment; an empty list keeps the loop unassigned in the catalog.")
+                Text("All Projects/default overrides per-project assignment. With All Projects off, an empty project list keeps the loop unassigned in the catalog.")
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .padding(.top, 8)
@@ -372,8 +407,58 @@ struct LoopBankScreen: View {
 
     private func setCurrentProjectAvailability() {
         guard let currentProjectPath else { return }
+        setLoopAssigned(true, toProjectPath: currentProjectPath)
+    }
+
+    private var availableProjectsForLoopAssignment: [DiscoveredProject] {
+        viewModel.enabledProjects.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func loopProjectAssignmentRow(_ project: DiscoveredProject) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(project.name)
+                    .font(AppTheme.Font.body.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(project.path)
+                    .font(AppTheme.Font.caption2.monospaced())
+                    .foregroundStyle(AppTheme.mutedText)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 12)
+            Toggle("Assigned", isOn: Binding(
+                get: { editorDraft.availability == .projectPaths && editorDraft.projectPaths.contains(project.path) },
+                set: { setLoopAssigned($0, toProjectPath: project.path) }
+            ))
+            .labelsHidden()
+            .appSwitch()
+            .disabled(editorDraft.availability == .allProjects)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(AppTheme.textContentFill.opacity(editorDraft.availability == .allProjects ? 0.35 : 1))
+        .contextMenu {
+            if editorDraft.availability == .allProjects {
+                Button("Use Project Assignments") { setUnassignedAvailability() }
+            }
+            Button(editorDraft.projectPaths.contains(project.path) ? "Remove from Project" : "Assign to Project") {
+                setLoopAssigned(!editorDraft.projectPaths.contains(project.path), toProjectPath: project.path)
+            }
+            Button("Make All Projects/default") { setAllProjectsAvailability() }
+            Button("Make Unassigned/catalog") { setUnassignedAvailability() }
+        }
+    }
+
+    private func setLoopAssigned(_ assigned: Bool, toProjectPath projectPath: String) {
+        var paths = editorDraft.projectPaths
+        if assigned {
+            if !paths.contains(projectPath) { paths.append(projectPath) }
+        } else {
+            paths.removeAll { $0 == projectPath }
+        }
         editorDraft.availability = .projectPaths
-        editorDraft.projectPathsText = currentProjectPath
+        editorDraft.projectPathsText = paths.joined(separator: "\n")
     }
 
     private func setUnassignedAvailability() {
@@ -465,13 +550,16 @@ struct LoopBankScreen: View {
                     if selected.source == .user {
                         Button("Delete", role: .destructive) { pendingDelete = selected }
                     }
+                } else if editorDraft.isNew {
+                    Button("Discard", role: .destructive) { discardNewLoopDraft() }
+                        .disabled(!hasUnsavedEditorChanges)
                 }
                 Spacer()
-                Button("Revert") { resetEditor(to: viewModel.selectedLoopDefinition) }
-                    .disabled(editorDraft.isNew && editorDraft.trimmedName.isEmpty && editorDraft.goalTemplate.isEmpty)
+                Button(editorDraft.isNew ? "Reset" : "Revert") { resetEditor(to: viewModel.selectedLoopDefinition) }
+                    .disabled(!hasUnsavedEditorChanges)
                 Button("Save") { save() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(editorDraft.trimmedName.isEmpty || editorDraft.isBuiltin || !requiredAgentsAreSelected)
+                    .disabled(!canSaveEditorDraft)
             }
         }
     }
@@ -586,7 +674,7 @@ struct LoopBankScreen: View {
                 detailLabel(title, info: info, infoRows: infoRows)
                 Spacer(minLength: AppTheme.contentSpacing)
                 content()
-                    .foregroundStyle(AppTheme.mutedText)
+                    .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .padding(.vertical, 11)
@@ -698,12 +786,45 @@ struct LoopBankScreen: View {
         )
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+        .contextMenu {
+            if definition.source == .user {
+                Button("Make All Projects/default") {
+                    updateLoopAvailability(definition, availability: .allProjects, projectPaths: [])
+                }
+                if let currentProjectPath {
+                    Button(definition.projectPaths.contains(currentProjectPath) ? "Remove Current Project" : "Assign to Current Project") {
+                        var paths = definition.projectPaths
+                        if paths.contains(currentProjectPath) { paths.removeAll { $0 == currentProjectPath } }
+                        else { paths.append(currentProjectPath) }
+                        updateLoopAvailability(definition, availability: .projectPaths, projectPaths: paths)
+                    }
+                }
+                Button("Disable / Move to Catalog") {
+                    updateLoopAvailability(definition, availability: .projectPaths, projectPaths: [])
+                }
+                Divider()
+                Button("Duplicate") { duplicate(definition) }
+                Button("Delete", role: .destructive) { pendingDelete = definition }
+            } else {
+                Button("Duplicate") { duplicate(definition) }
+            }
+        }
     }
 
     private func loopIsInactive(_ definition: LoopDefinition) -> Bool {
-        guard definition.source == .user, definition.availability == .projectPaths else { return false }
-        guard let selectedProjectPath = viewModel.selectedProjectPath else { return definition.projectPaths.isEmpty }
-        return !definition.projectPaths.contains(selectedProjectPath)
+        definition.source == .user && definition.availability == .projectPaths && definition.projectPaths.isEmpty
+    }
+
+    private func updateLoopAvailability(_ definition: LoopDefinition, availability: LoopDefinitionAvailability, projectPaths: [String]) {
+        var draft = LoopDefinitionEditorDraft(definition: definition, currentProjectPath: viewModel.selectedProjectPath)
+        draft.availability = availability
+        draft.projectPathsText = availability == .projectPaths ? projectPaths.joined(separator: "\n") : ""
+        do {
+            let saved = try viewModel.saveLoopDefinition(draft.makeDefinition())
+            if editorDraft.id == saved.id { resetEditor(to: saved) }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func createNewLoop() {
@@ -725,6 +846,18 @@ struct LoopBankScreen: View {
 
     private func resetEditor(to definition: LoopDefinition?) {
         editorDraft = LoopDefinitionEditorDraft(definition: definition, currentProjectPath: viewModel.selectedProjectPath)
+    }
+
+    private func discardNewLoopDraft() {
+        guard editorDraft.isNew else { return }
+        viewModel.pendingNewLoopEditorDraft = nil
+        isCreatingNewLoop = false
+        if let first = viewModel.loopDefinitions.first {
+            viewModel.selectedLoopDefinitionID = first.id
+            resetEditor(to: first)
+        } else {
+            resetEditor(to: nil)
+        }
     }
 
     private func save() {

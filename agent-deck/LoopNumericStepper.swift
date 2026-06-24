@@ -21,6 +21,7 @@ struct LoopNumericStepper: View {
                 .textFieldStyle(.plain)
                 .frame(width: 34)
                 .focused($isTextFieldFocused)
+                .foregroundStyle(.primary)
                 .onSubmit(commitText)
 
             Divider()
@@ -72,7 +73,8 @@ struct LoopNumericStepper: View {
                 .frame(width: 24, height: 13)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(AppTheme.mutedText)
+        .foregroundStyle(.primary)
+        .opacity((delta > 0 ? value >= range.upperBound : value <= range.lowerBound) ? 0.35 : 1)
         .disabled(delta > 0 ? value >= range.upperBound : value <= range.lowerBound)
     }
 
