@@ -1027,6 +1027,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             coordinator.benchSessionCount = benchSessionCount
             coordinator.onScrollingChange = onScrollingChange
             coordinator.updateColumnWidthIfNeeded()
+            coordinator.isInsideNSViewUpdate = true
+            defer { coordinator.isInsideNSViewUpdate = false }
             coordinator.apply(
                 items: items,
                 sessionID: sessionID,
@@ -1203,6 +1205,11 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         }
         private var isProgrammaticScroll = false
         private var forcedActiveQuestionID: String?
+        /// True only while SwiftUI's `NSViewRepresentable.updateNSView` is on the
+        /// stack. Mutating the rail's `ObservableObject` during that pass emits
+        /// "Publishing changes from within view updates is not allowed", so model
+        /// writes are deferred to the next runloop when this is set.
+        var isInsideNSViewUpdate = false
         // True between willStartLiveScroll / didEndLiveScroll — an authoritative
         // "user is driving the scroll" signal, but it only fires for trackpad
         // gestures and scroller-knob drags, not discrete mouse wheels.
@@ -1564,14 +1571,14 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         }
 
         private func updateQuestionRail() {
-            guard let scrollView, let tableView, let model = questionRailModel else { return }
+            guard let scrollView, let tableView, questionRailModel != nil else { return }
             let questionRows = currentQuestionRows()
             updateQuestionRailFrame(for: scrollView, questionCount: questionRows.count)
 
             guard questionRows.count >= 2 else {
                 forcedActiveQuestionID = nil
                 questionRail?.isHidden = true
-                model.items = []
+                applyRailModel(items: [], width: scrollView.bounds.width)
                 return
             }
 
@@ -1581,12 +1588,28 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 self.forcedActiveQuestionID = nil
             }
             let activeID = self.forcedActiveQuestionID ?? activeQuestionID(in: questionRows, scrollView: scrollView, tableView: tableView)
-            // Push data through the stable model — never replace the hosted view,
-            // so the rail's SwiftUI hover state survives every scroll/update tick.
-            model.items = questionRows.map { _, id, title in
+            let items = questionRows.map { _, id, title in
                 UserQuestionNavigationRailItem(id: id, title: title, isActive: id == activeID)
             }
-            model.availableWidth = scrollView.bounds.width
+            applyRailModel(items: items, width: scrollView.bounds.width)
+        }
+
+        /// Push rail data to the hosted view. `updateQuestionRail()` runs both on
+        /// scroll (synchronous is fine) and inside `updateNSView` -> `apply`
+        /// (NOT fine: SwiftUI holds its view-update lock there, and mutating the
+        /// `ObservableObject` synchronously emits "Publishing changes from within
+        /// view updates"). Defer to the next runloop when inside that pass.
+        private func applyRailModel(items: [UserQuestionNavigationRailItem], width: CGFloat) {
+            let perform = { [weak self] in
+                guard let self, let model = self.questionRailModel else { return }
+                model.items = items
+                model.availableWidth = width
+            }
+            if isInsideNSViewUpdate {
+                DispatchQueue.main.async(execute: perform)
+            } else {
+                perform()
+            }
         }
 
         private func updateQuestionRailFrame(for scrollView: NSScrollView, questionCount: Int) {
@@ -1662,25 +1685,58 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             forcedActiveQuestionID = id
             updateQuestionRail()
             isProgrammaticScroll = true
-            let rowRect = tableView.rect(ofRow: row)
             let clipView = scrollView.contentView
+            let landingOffset = questionRailLandingOffset(for: clipView.bounds.height)
             let documentHeight = max(scrollView.documentView?.frame.height ?? tableView.bounds.height, clipView.bounds.height)
             let maxY = max(0, documentHeight - clipView.bounds.height)
-            let landingOffset = questionRailLandingOffset(for: clipView.bounds.height)
-            let targetY = min(max(0, rowRect.minY - landingOffset), maxY)
+
+            // NSTableView measures row heights lazily as rows scroll into view, so
+            // `rect(ofRow:)` for a far-offscreen target is computed from ESTIMATED
+            // heights — the first tap could land in the wrong spot, and the second
+            // tap worked because the first scroll had measured the intervening rows.
+            // Animate to the estimate first, then re-measure on completion and run a
+            // short corrective scroll if accumulated estimation error drifted it.
+            let targetY = min(max(0, tableView.rect(ofRow: row).minY - landingOffset), maxY)
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.32
                 context.allowsImplicitAnimation = true
                 context.timingFunction = CAMediaTimingFunction(controlPoints: 0.20, 0.0, 0.0, 1.0)
                 clipView.animator().setBoundsOrigin(NSPoint(x: clipView.bounds.origin.x, y: targetY))
-            } completionHandler: { [weak self, weak scrollView, weak clipView] in
+            } completionHandler: { [weak self, weak scrollView, weak clipView, weak tableView] in
                 MainActor.assumeIsolated {
-                    if let scrollView, let clipView {
-                        scrollView.reflectScrolledClipView(clipView)
-                    }
                     guard let self else { return }
-                    self.isProgrammaticScroll = false
-                    self.updateQuestionRail()
+                    guard let tableView, let clipView, let scrollView else {
+                        self.isProgrammaticScroll = false
+                        self.updateQuestionRail()
+                        return
+                    }
+                    let correctedDocHeight = max(scrollView.documentView?.frame.height ?? tableView.bounds.height, clipView.bounds.height)
+                    let correctedMaxY = max(0, correctedDocHeight - clipView.bounds.height)
+                    let correctedY = min(max(0, tableView.rect(ofRow: row).minY - landingOffset), correctedMaxY)
+                    let finalize = { [weak self, weak clipView, weak scrollView] in
+                        MainActor.assumeIsolated {
+                            if let scrollView, let clipView {
+                                scrollView.reflectScrolledClipView(clipView)
+                            }
+                            self?.isProgrammaticScroll = false
+                            self?.updateQuestionRail()
+                        }
+                    }
+                    if abs(correctedY - targetY) > 6 {
+                        // Keep the programmatic flag live through the correction so the
+                        // bounds observer doesn't misclassify it as a user scroll and
+                        // clear `forcedActiveQuestionID` mid-landing.
+                        NSAnimationContext.runAnimationGroup({ ctx in
+                            ctx.duration = 0.18
+                            ctx.allowsImplicitAnimation = true
+                            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.20, 0.0, 0.0, 1.0)
+                            clipView.animator().setBoundsOrigin(NSPoint(x: clipView.bounds.origin.x, y: correctedY))
+                        }, completionHandler: finalize)
+                    } else {
+                        scrollView.reflectScrolledClipView(clipView)
+                        self.isProgrammaticScroll = false
+                        self.updateQuestionRail()
+                    }
                 }
             }
         }
