@@ -1133,8 +1133,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private let prewarmMaxEstimatedHeight: CGFloat = 420
 
         private func isPrewarmEligible(_ item: PiAgentAppKitTranscriptItem) -> Bool {
-            guard case .native(let spec) = item.kind,
-                  spec.typeID == ObjectIdentifier(PiAgentNativeBubbleView.self) else { return false }
+            guard case .native = item.kind else { return false }
             return item.estimatedHeight(contentWidth) <= prewarmMaxEstimatedHeight
         }
 
@@ -1162,12 +1161,20 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // the reader has scrolled UP to read history (auto-follow off), the
             // stream is off-screen — pre-warm the history they're scrolling toward so
             // those rows are already built (no construction stutter) once idle.
-            guard !profiler.isScrollWindowActive else { return }
-            guard !profiler.isStreamingRecently || !isAutoFollowing else { return }
+            if profiler.isScrollWindowActive || (profiler.isStreamingRecently && isAutoFollowing) {
+                guard !prewarmScheduled else { return }
+                prewarmScheduled = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                    guard let self else { return }
+                    self.prewarmScheduled = false
+                    self.schedulePrewarm()
+                }
+                return
+            }
             // Build the work list: every row without a live cached cell, in document
             // order, capped to the cache limit (pre-warming past it would just evict
-            // what we built). Skip while streaming — new content is arriving and the
-            // visible path takes priority.
+            // what we built). Streaming/following and active-scroll periods defer
+            // above so the visible path takes priority.
             let pending = orderedIDs.filter { id in
                 guard cellCache[id] == nil, !prewarmBlockedIDs.contains(id) else { return false }
                 guard let item = itemByID[id] else { return false }
