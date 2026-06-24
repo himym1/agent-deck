@@ -4915,6 +4915,12 @@ struct PiAgentScreen: View {
                 isUserHugged: true
             ))
         case .status(let entry):
+            if let recapMarker = LoopRunRecapCodec.decode(from: entry) {
+                let payload = NativeLoopRecapPayload.make(entry: entry, marker: recapMarker)
+                return .native(.of(PiAgentNativeLoopRecapCardView.self) { view, width in
+                    view.configure(payload: payload, width: width)
+                })
+            }
             if let loopRun = LoopRunTranscriptCodec.decode(from: entry) {
                 let payload = NativeLoopRunPayload.make(
                     run: loopRun,

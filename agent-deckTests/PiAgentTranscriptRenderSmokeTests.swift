@@ -241,6 +241,57 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
         XCTAssertEqual(split.count, 3, "A visible thinking block must keep the diff cards separate.")
     }
 
+    func testLoopRecapEntryBuildsDedicatedNativePayload() {
+        let sessionID = UUID()
+        let runID = UUID()
+        let marker = LoopRunRecapMarker(runID: runID, kind: .iteration, iterationIndex: 2)
+        let entry = PiAgentTranscriptEntry(
+            sessionID: sessionID,
+            role: .status,
+            title: LoopRunRecapCodec.title,
+            text: """
+            ∞ Iteration 2 recap — Maker + Checker
+            Implemented the requested change and updated tests.
+            Checker: Approve
+            Validation: passed (exit 0)
+            Changed files: agent-deck/PiAgentViews.swift
+            """,
+            rawJSON: LoopRunRecapCodec.rawJSON(for: marker)
+        )
+
+        XCTAssertEqual(LoopRunRecapCodec.decode(from: entry), marker)
+        let payload = NativeLoopRecapPayload.make(entry: entry, marker: marker)
+        XCTAssertEqual(payload.title, "Loop iteration recap")
+        XCTAssertEqual(payload.label, "Iteration 2")
+        XCTAssertEqual(payload.outcomeText, "Validation: passed (exit 0)")
+        XCTAssertEqual(payload.summaryText, "Implemented the requested change and updated tests.")
+        XCTAssertTrue(payload.detailsText.contains("Checker: Approve"))
+        XCTAssertTrue(payload.detailsText.contains("Changed files:"))
+    }
+
+    func testFinalLoopRecapEntryBuildsDedicatedNativePayload() {
+        let marker = LoopRunRecapMarker(runID: UUID(), kind: .final, iterationIndex: nil)
+        let entry = PiAgentTranscriptEntry(
+            sessionID: UUID(),
+            role: .status,
+            title: LoopRunRecapCodec.title,
+            text: """
+            ∞ Loop final recap — Completed
+            Structure: Single Agent
+            Iterations: 1/3
+            Stop reason: Success
+            Validation: passed (exit 0)
+            """,
+            rawJSON: LoopRunRecapCodec.rawJSON(for: marker)
+        )
+
+        let payload = NativeLoopRecapPayload.make(entry: entry, marker: marker)
+        XCTAssertEqual(payload.title, "Final loop recap")
+        XCTAssertEqual(payload.label, "Final recap")
+        XCTAssertEqual(payload.outcomeText, "Stop reason: Success")
+        XCTAssertTrue(payload.detailsText.contains("Validation: passed"))
+    }
+
     func testMCPProxyEntriesParseIntoDedicatedCardAndRecapNotGenericToolCalls() {
         let sessionID = UUID()
 

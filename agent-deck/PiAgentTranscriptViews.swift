@@ -1210,7 +1210,10 @@ struct PiAgentTranscriptThreadCard: View {
 
     @ViewBuilder
     private func statusRowView(_ entry: PiAgentTranscriptEntry) -> some View {
-        if let memoryEvent = entry.agentMemoryEvent {
+        if let recapMarker = LoopRunRecapCodec.decode(from: entry) {
+            PiAgentLoopRecapTranscriptCard(entry: entry, marker: recapMarker)
+                .id(entry.id)
+        } else if let memoryEvent = entry.agentMemoryEvent {
             PiAgentMemoryActivityCard(event: memoryEvent)
                 .id(entry.id)
         } else if let runID = entry.nativeSubagentRunID, let run = nativeSubagentRunsByID[runID] {
@@ -2278,6 +2281,55 @@ struct PiAgentActivityDetailView: View {
         case "subagent": return "person.2.wave.2"
         default: return "wrench.and.screwdriver"
         }
+    }
+}
+
+struct PiAgentLoopRecapTranscriptCard: View {
+    let entry: PiAgentTranscriptEntry
+    let marker: LoopRunRecapMarker
+
+    private var payload: NativeLoopRecapPayload {
+        NativeLoopRecapPayload.make(entry: entry, marker: marker)
+    }
+
+    var body: some View {
+        let payload = payload
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .center, spacing: 8) {
+                Image(systemName: payload.icon)
+                    .font(AppTheme.Font.footnote.weight(.semibold))
+                    .foregroundStyle(Color(nsColor: payload.accent))
+                Text(payload.title)
+                    .font(AppTheme.Font.footnote.weight(.semibold))
+                Spacer(minLength: 8)
+                Text(payload.label)
+                    .font(AppTheme.Font.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.mutedText)
+                Text(payload.timeText)
+                    .font(AppTheme.Font.caption2)
+                    .foregroundStyle(AppTheme.mutedText)
+            }
+            Text(payload.outcomeText)
+                .font(AppTheme.Font.caption.weight(.medium))
+                .foregroundStyle(AppTheme.mutedText)
+            Text(payload.summaryText)
+                .font(AppTheme.Font.callout)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !payload.detailsText.isEmpty {
+                Text(payload.detailsText)
+                    .font(AppTheme.Font.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, AppTheme.Chat.cardHPadding)
+        .padding(.vertical, AppTheme.Chat.cardVPadding)
+        .background(
+            RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous)
+                .fill(Color(nsColor: payload.accent).opacity(AppTheme.roleFillOpacity))
+                .stroke(Color(nsColor: payload.accent).opacity(AppTheme.roleStrokeOpacity), lineWidth: 1)
+        )
     }
 }
 
