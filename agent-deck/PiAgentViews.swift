@@ -1132,6 +1132,14 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             UserDefaults.standard.bool(forKey: "TranscriptPrewarmMeasureHeightsEnabled")
         }()
         private let prewarmWidthChangeCooldown: CFTimeInterval = 0.35
+        /// Prewarm is speculative, so it stays farther behind user/display work than
+        /// normal scroll handling. The regular user-scroll grace protects visible
+        /// behaviors; this longer prewarm-only grace keeps idle cell construction out
+        /// of the post-gesture layout/display tail that still showed up in hitch
+        /// samples as `prewarmStep → configure → installNativeRow`.
+        private let prewarmUserScrollGraceWindow: CFTimeInterval = 0.9
+        private let prewarmRetryDelay: CFTimeInterval = 0.25
+        private let prewarmInterSliceDelay: CFTimeInterval = 0.05
         private let prewarmMaxEstimatedHeight: CGFloat = 420
 
         private func isPrewarmEligible(_ item: PiAgentAppKitTranscriptItem) -> Bool {
@@ -1205,10 +1213,17 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // settling width change — retry shortly. (Streaming re-tiles + the
             // follow glide own the main thread; width changes reconfigure visible
             // cells and can otherwise cascade into speculative offscreen work.)
-            let widthSettlesIn = prewarmWidthChangeCooldown - (CACurrentMediaTime() - lastWidthChangeTime)
-            if isUserScrollingRecently || profiler.isScrollWindowActive || profiler.isStreamingRecently || widthSettlesIn > 0 {
+            let now = CACurrentMediaTime()
+            let widthSettlesIn = prewarmWidthChangeCooldown - (now - lastWidthChangeTime)
+            let prewarmScrollGraceActive = isLiveScrolling || now - lastUserScrollTime < prewarmUserScrollGraceWindow
+            let displayOrLayoutWorkPending = pendingHeightWork != nil
+                || pendingScrollWork != nil
+                || pendingSettleScrollWork != nil
+                || pendingGlideLandingSettleWork != nil
+                || pendingRemeasureWork != nil
+            if prewarmScrollGraceActive || profiler.isScrollWindowActive || profiler.isStreamingRecently || widthSettlesIn > 0 || displayOrLayoutWorkPending {
                 prewarmScheduled = true
-                let delay = max(0.2, widthSettlesIn)
+                let delay = max(prewarmRetryDelay, widthSettlesIn)
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.prewarmStep() }
                 return
             }
@@ -1265,8 +1280,11 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 #endif
             } else {
                 prewarmScheduled = true
-                // Yield a full runloop turn between slices so the UI stays live.
-                DispatchQueue.main.async { [weak self] in self?.prewarmStep() }
+                // Yield beyond one runloop turn between slices. A zero-delay async
+                // chain can still monopolize the main actor during AppKit's post-
+                // scroll display/layout tail; a short idle gap keeps speculative
+                // construction from piling onto the same frame.
+                DispatchQueue.main.asyncAfter(deadline: .now() + prewarmInterSliceDelay) { [weak self] in self?.prewarmStep() }
             }
         }
 
