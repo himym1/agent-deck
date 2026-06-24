@@ -975,6 +975,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private var pendingScrollWork: DispatchWorkItem?
         private var pendingSettleScrollWork: DispatchWorkItem?
         private var pendingGlideLandingSettleWork: DispatchWorkItem?
+        private var pendingSessionSwitchSettleWork: DispatchWorkItem?
+        private var sessionSwitchSettleGeneration = 0
         private var pendingRemeasureWork: DispatchWorkItem?
         private var pendingRemeasureIDs = Set<String>()
         private var pendingScrollSettle = false
@@ -1496,6 +1498,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             pendingScrollWork?.cancel()
             pendingSettleScrollWork?.cancel()
             pendingGlideLandingSettleWork?.cancel()
+            pendingSessionSwitchSettleWork?.cancel()
             pendingRemeasureWork?.cancel()
             pendingRemeasureIDs.removeAll()
             pendingWidthWork?.cancel()
@@ -1599,6 +1602,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     pendingRemeasureWork?.cancel()
                     pendingRemeasureWork = nil
                     pendingRemeasureIDs.removeAll()
+                    pendingSessionSwitchSettleWork?.cancel()
+                    pendingSessionSwitchSettleWork = nil
+                    sessionSwitchSettleGeneration &+= 1
                     // A new session's rows may have completely different
                     // construction costs; clear the block list so rows that
                     // were too expensive in the previous session get a fresh
@@ -2400,40 +2406,61 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             noteHeightsChanged(forIDs: ids)
         }
 
-        /// A session switch pins to a bottom computed from ESTIMATE heights; the
-        /// visible cells then measure asynchronously and every correction
-        /// re-tiles and re-snaps the bottom over the next frames — the "new
-        /// transcript settles into place" jumpiness. Measure the rows that
-        /// landed in the viewport NOW and re-pin in the same pass, so the first
-        /// painted frame is already at final heights (the later async reports
-        /// match and no-op). Two passes because the first re-tile changes which
-        /// rows are visible at the bottom.
-        private func settleVisibleRowsAfterSessionSwitch() {
-            guard let tableView, let scrollView else { return }
-            for _ in 0 ..< 2 {
-                // Force the table to vend cells for the freshly-scrolled-to rect
-                // before measuring; rows without live cells are skipped otherwise.
-                tableView.layoutSubtreeIfNeeded()
+        /// A session switch pins to a bottom computed from estimate heights. The
+        /// old path immediately forced table layout, measured every newly visible
+        /// row, re-tiled them, then forced another bottom layout in the same main-
+        /// thread turn. Cold-start samples showed that synchronous settle as the
+        /// session-switch hang signature (`layoutSubtreeIfNeeded` +
+        /// `noteHeightOfRowsWithIndexesChanged` + anchor/bottom restore). Keep the
+        /// same eventual geometry, but slice the visible-row settle over run-loop
+        /// turns: one already-vended row per turn, then a cheap bottom re-pin that
+        /// does not force a full document layout. Cells that are not live yet settle
+        /// through their normal async height report path.
+        private func scheduleVisibleRowsSettleAfterSessionSwitch() {
+            pendingSessionSwitchSettleWork?.cancel()
+            let generation = sessionSwitchSettleGeneration
+            scheduleVisibleRowsSettleAfterSessionSwitch(generation: generation, remainingPasses: 8, delay: 0)
+        }
+
+        private func scheduleVisibleRowsSettleAfterSessionSwitch(
+            generation: Int,
+            remainingPasses: Int,
+            delay: TimeInterval
+        ) {
+            guard remainingPasses > 0 else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, generation == self.sessionSwitchSettleGeneration else { return }
+                self.pendingSessionSwitchSettleWork = nil
+                guard let tableView = self.tableView, let scrollView = self.scrollView else { return }
                 let visible = tableView.rows(in: tableView.visibleRect)
                 guard visible.length > 0 else { return }
                 var ids = Set<String>()
-                for row in visible.location ..< visible.location + visible.length where row < orderedIDs.count {
-                    let id = orderedIDs[row]
-                    // Skip rows whose height is already measured for this width (the
-                    // idle pre-warm measures every cell). Re-measuring them forces a
-                    // full layout pass per heavy markdown cell — the dominant cost of
-                    // re-opening a long session whose cells are already cached. A
-                    // cached height is authoritative, so the first frame stays exact.
-                    if measuredHeightByID[id]?[widthBucket] == nil { ids.insert(id) }
+                for row in visible.location ..< visible.location + visible.length where row < self.orderedIDs.count {
+                    let id = self.orderedIDs[row]
+                    if self.measuredHeightByID[id]?[self.widthBucket] == nil {
+                        ids.insert(id)
+                    }
                 }
-                // All visible heights known (pre-warmed revisit) — already settled.
                 guard !ids.isEmpty else { return }
-                let retileIDs = measureChangedCellsSynchronously(ids)
-                guard !retileIDs.isEmpty else { return }
-                flushPendingHeightWorkSynchronously()
-                noteHeightsChanged(forIDs: retileIDs)
-                performScrollToBottom(scrollView, animated: false)
+                let retileIDs = self.measureChangedCellsSynchronously(
+                    ids,
+                    budgetMs: 4,
+                    maxRows: 1,
+                    deferUnmeasured: true
+                )
+                if !retileIDs.isEmpty {
+                    self.flushPendingHeightWorkSynchronously()
+                    self.noteHeightsChanged(forIDs: retileIDs)
+                    self.performScrollToBottom(scrollView, animated: false, forceLayout: false)
+                }
+                self.scheduleVisibleRowsSettleAfterSessionSwitch(
+                    generation: generation,
+                    remainingPasses: remainingPasses - 1,
+                    delay: self.heightReportInterval
+                )
             }
+            pendingSessionSwitchSettleWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
         }
 
         private func captureScrollAnchor() -> ScrollAnchor? {
@@ -2490,7 +2517,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 pendingGlideLandingSettleWork = nil
                 pendingScrollSettle = false
                 performScrollToBottom(scrollView, animated: false)
-                settleVisibleRowsAfterSessionSwitch()
+                scheduleVisibleRowsSettleAfterSessionSwitch()
             } else if explicitScroll {
                 // User-requested jumps (send, jump-to-latest) re-arm follow intent.
                 isAutoFollowing = true
