@@ -1382,7 +1382,7 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
     }
 
     private static func cardWidth(for rowWidth: CGFloat) -> CGFloat {
-        min(max(rowWidth * 0.78, min(rowWidth, 240)), rowWidth)
+        max(1, rowWidth)
     }
 
     @objc private func openDetails() {

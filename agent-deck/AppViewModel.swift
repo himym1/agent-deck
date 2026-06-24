@@ -3346,6 +3346,7 @@ final class AppViewModel: NSObject {
 
     @discardableResult
     func launchLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+        prepareSessionForLoopLaunch(session: session, draft: draft)
         switch draft.structure {
         case .singleAgent:
             return await launchSingleAgentLoop(session: session, draft: draft, stopExistingActive: stopExistingActive)
@@ -3360,6 +3361,16 @@ final class AppViewModel: NSObject {
         case .humanApproval:
             return piAgentSessionStore.launchSmokeLoop(sessionID: session.id, projectPath: session.projectPath, draft: draft, stopExistingActive: stopExistingActive)
         }
+    }
+
+    private func prepareSessionForLoopLaunch(session: PiAgentSessionRecord, draft: LoopDraft) {
+        piAgentSessionStore.updateSession(session.id, bumpUpdatedAt: false) { record in
+            // A loop uses its own configured child agents; the composer-time Deck
+            // agent picker should not continue to advertise a draft-only launch
+            // selection once the loop has started.
+            record.agentSelection = nil
+        }
+        schedulePiAgentTitleGenerationIfNeeded(for: session, firstMessage: draft.goal)
     }
 
     @discardableResult
@@ -3778,7 +3789,6 @@ final class AppViewModel: NSObject {
     /// the (mcpEnabled, project) key changes. No-op otherwise so file-watch refreshes
     /// don't churn server processes. Pass `forced: true` after the user edits config.
     func refreshMCPConfigurationIfNeeded(projectURL: URL?, forced: Bool = false) {
-        configureMCPBrandIcon()
         let enabled = appSettings.mcpEnabled
         let key = "\(enabled)#\(projectURL?.path ?? "")"
         if !forced, key == mcpLastRefreshKey { return }
@@ -3846,6 +3856,7 @@ final class AppViewModel: NSObject {
     /// Runs the OAuth Connect flow for a remote server (opens the browser). Returns an
     /// error message on failure, or nil on success.
     func connectMCPServer(_ entry: MCPServerEntry) async -> String? {
+        configureMCPBrandIcon()
         guard let url = entry.config.url, !url.isEmpty else { return "This server has no URL to connect to." }
         do {
             try await MCPOAuthService.shared.connect(serverName: entry.name, serverURLString: url)
@@ -3868,7 +3879,8 @@ final class AppViewModel: NSObject {
     }
 
     /// Renders the app icon to a small base64 PNG once, so the OAuth loopback success
-    /// page can show the brand mark. Cheap + idempotent (runs on the main actor).
+    /// page can show the brand mark. Idempotent; run lazily only when OAuth is starting
+    /// so startup/file-watch refreshes don't spend main-thread time encoding the icon.
     private func configureMCPBrandIcon() {
         guard MCPLoopbackServer.brandIconDataURI == nil else { return }
         guard let icon = NSApp.applicationIconImage ?? NSImage(named: NSImage.applicationIconName) else { return }

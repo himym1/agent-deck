@@ -4259,7 +4259,8 @@ struct PiAgentScreen: View {
                 // renders dimmed with its switch so agents can be turned back
                 // on right here instead of from the Agents screen.
                 if let session = store.selectedSession,
-                   session.status == .draft {
+                   session.status == .draft,
+                   store.activeLoopRun(for: session.id) == nil {
                     PiAgentSessionSubagentPickerCard(viewModel: viewModel, session: session)
                         .id(session.id)
                 }
