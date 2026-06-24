@@ -42,6 +42,30 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertTrue(observedTask.contains("You are completing one implementation/review pass"))
     }
 
+    func testLaunchContextInjectionRespectsScope() async throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = try makeSession(store: store)
+        var tasks: [String] = []
+        let draft = LoopDraft(
+            goal: "Use context",
+            launchContext: "Secret launch notes\nSecond line",
+            launchContextScope: .firstIterationOnly,
+            structure: .singleAgent,
+            maxIterations: 2,
+            validationCommand: "/usr/bin/false",
+            makerChecker: LoopMakerCheckerConfig(makerName: "Explorer")
+        )
+
+        _ = await store.launchSingleAgentLoop(session: session, draft: draft) { _, agentName, task, _, _, _ in
+            tasks.append(task)
+            return Self.fakeRun(parentSessionID: session.id, agentName: agentName, task: task, status: .completed, summary: "done")
+        }
+
+        XCTAssertEqual(tasks.count, 2)
+        XCTAssertTrue(tasks[0].contains("Launch context (first iteration only):\nSecret launch notes\nSecond line"))
+        XCTAssertFalse(tasks[1].contains("Secret launch notes"))
+    }
+
     func testLoopRecapEntriesAreGeneratedAndDeduplicated() async throws {
         let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
         let session = try makeSession(store: store)

@@ -32,6 +32,25 @@ final class LoopDefinitionStoreTests: XCTestCase {
         XCTAssertEqual(loaded.projectPaths, ["/tmp/project-a"])
     }
 
+    func testLaunchContextRoundTripsWithMultilineSafeEncoding() throws {
+        let directory = PiTestSupport.temporaryStateFile().deletingLastPathComponent().appendingPathComponent("loops", isDirectory: true)
+        let store = LoopDefinitionStore(directoryURL: directory)
+        let context = "Line one\nLine two with --- and | delimiters\nLine three"
+
+        _ = try store.saveUserDefinition(LoopDefinition(
+            name: "Context Loop",
+            goalTemplate: "Goal",
+            launchContext: context,
+            launchContextScope: .everyIteration
+        ))
+
+        let loaded = try XCTUnwrap(store.loadUserDefinitions().first)
+        XCTAssertEqual(loaded.launchContext, context)
+        XCTAssertEqual(loaded.launchContextScope, .everyIteration)
+        XCTAssertEqual(loaded.makeDraft().launchContext, context)
+        XCTAssertEqual(loaded.makeDraft().launchContextScope, .everyIteration)
+    }
+
     func testProjectPathsWithFrontmatterDelimitersRoundTrip() throws {
         let directory = PiTestSupport.temporaryStateFile().deletingLastPathComponent().appendingPathComponent("loops", isDirectory: true)
         let store = LoopDefinitionStore(directoryURL: directory)
@@ -207,6 +226,8 @@ final class LoopDefinitionStoreTests: XCTestCase {
         let definition = LoopDefinition(
             name: "Reusable",
             goalTemplate: "Use this saved goal",
+            launchContext: "Keep this context",
+            launchContextScope: .everyIteration,
             maxIterations: 7,
             validationCommand: "swift test"
         )
@@ -217,6 +238,8 @@ final class LoopDefinitionStoreTests: XCTestCase {
         XCTAssertEqual(draft.writeTarget, .artifactMarkdown)
         XCTAssertEqual(draft.maxIterations, 7)
         XCTAssertEqual(draft.validationCommand, "swift test")
+        XCTAssertEqual(draft.launchContext, "Keep this context")
+        XCTAssertEqual(draft.launchContextScope, .everyIteration)
     }
 
     func testNoBuiltInTemplatesLoadIntoLoopBankAndSlashUniverse() throws {

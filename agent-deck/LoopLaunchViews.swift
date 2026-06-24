@@ -181,6 +181,13 @@ struct LoopLaunchSheet: View {
         )
     }
 
+    private var launchContextBinding: Binding<String> {
+        Binding(
+            get: { draft.launchContext ?? "" },
+            set: { draft.launchContext = $0.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty }
+        )
+    }
+
     private var title: String {
         sourceDefinition?.name ?? "Create Loop"
     }
@@ -260,6 +267,38 @@ struct LoopLaunchSheet: View {
                                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                                             .stroke(AppTheme.contentStroke, lineWidth: 1)
                                     }
+                            }
+
+                            fieldGroup {
+                                HStack(spacing: 6) {
+                                    Text("Launch context")
+                                        .font(AppTheme.Font.caption.weight(.semibold))
+                                        .foregroundStyle(AppTheme.mutedText)
+                                    LoopInlineInfoButton(
+                                        title: "Launch context",
+                                        message: "Optional extra context injected into child-agent loop prompts. By default it is included only for iteration 1; choose Every iteration when agents need it repeated."
+                                    )
+                                }
+                            } content: {
+                                TextEditor(text: launchContextBinding)
+                                    .font(AppTheme.Font.body)
+                                    .scrollContentBackground(.hidden)
+                                    .padding(8)
+                                    .frame(minHeight: 76)
+                                    .background(AppTheme.textContentFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .stroke(AppTheme.contentStroke, lineWidth: 1)
+                                    }
+                                if draft.launchContext?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                                    Picker("Context scope", selection: $draft.launchContextScope) {
+                                        ForEach(LoopLaunchContextScope.allCases) { scope in
+                                            Text(scope.displayName).tag(scope)
+                                        }
+                                    }
+                                    .labelsHidden()
+                                    .appMenuPicker()
+                                }
                             }
 
                             HStack(spacing: 8) {

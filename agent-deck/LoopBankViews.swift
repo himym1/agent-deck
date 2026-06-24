@@ -6,6 +6,8 @@ struct LoopDefinitionEditorDraft: Equatable {
     var name: String
     var description: String
     var goalTemplate: String
+    var launchContext: String
+    var launchContextScope: LoopLaunchContextScope
     var structure: LoopStructureKind
     var writeTarget: LoopWriteTarget
     var maxIterations: Int
@@ -31,6 +33,8 @@ struct LoopDefinitionEditorDraft: Equatable {
         name = definition?.name ?? ""
         description = definition?.description ?? ""
         goalTemplate = definition?.goalTemplate ?? ""
+        launchContext = definition?.launchContext ?? ""
+        launchContextScope = definition?.launchContextScope ?? .firstIterationOnly
         structure = definition?.structure ?? .singleAgent
         writeTarget = definition?.writeTarget ?? .artifactMarkdown
         maxIterations = definition?.maxIterations ?? LoopDraft.defaultMaxIterations
@@ -74,6 +78,8 @@ struct LoopDefinitionEditorDraft: Equatable {
             name: name,
             description: description,
             goalTemplate: goalTemplate,
+            launchContext: launchContext,
+            launchContextScope: launchContextScope,
             structure: structure,
             writeTarget: writeTarget,
             maxIterations: maxIterations,
@@ -351,6 +357,17 @@ struct LoopBankScreen: View {
                 LoopNumericStepper(value: $editorDraft.maxIterations, range: 1...20)
             }
             detailEditor("Goal template", text: $editorDraft.goalTemplate, minHeight: 120, info: "The reusable instruction the loop runs against. Be explicit about the desired outcome, constraints, and what counts as done.")
+            detailEditor("Launch context (optional)", text: $editorDraft.launchContext, minHeight: 84, info: "Extra multiline context injected into child-agent launch prompts. It is stored separately from the goal template.")
+            if !editorDraft.launchContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                detailRow("Context scope", info: "First iteration only is the default. Every iteration repeats this context in each child-agent prompt.") {
+                    Picker("Context scope", selection: $editorDraft.launchContextScope) {
+                        ForEach(LoopLaunchContextScope.allCases) { scope in
+                            Text(scope.displayName).tag(scope)
+                        }
+                    }
+                    .labelsHidden()
+                }
+            }
             detailRow("Validation command (optional)", info: "Agent Deck can run one shell command after each loop iteration, from the project directory when available. Its output is attached as evidence. Leave empty to skip automatic validation.", showsDivider: false) {
                 AppTextField(text: $editorDraft.validationCommand, placeholder: "Optional, e.g. swift test")
                     .frame(maxWidth: 360)

@@ -1575,12 +1575,26 @@ final class PiAgentSessionStore {
     }
 
     private func loopRuntimeContext(run: LoopRun, iterationIndex: Int) -> [String] {
-        [
+        var lines = [
             "Agent Deck is running this loop. Agent Deck controls iteration count, retries, stopping, artifacts, and validation. Do not run your own open-ended loop; complete only this assigned step.",
             "Loop goal: \(run.goal)",
             "Iteration: \(iterationIndex) of \(run.maxIterations)",
             "Write target: \(run.writeTarget.displayName)"
         ]
+        if let launchContext = launchContextForPrompt(run: run, iterationIndex: iterationIndex) {
+            lines.append("Launch context (\(run.launchContextScope.displayName.lowercased())):\n\(launchContext)")
+        }
+        return lines
+    }
+
+    private func launchContextForPrompt(run: LoopRun, iterationIndex: Int) -> String? {
+        guard let launchContext = run.launchContext?.trimmingCharacters(in: .whitespacesAndNewlines), !launchContext.isEmpty else { return nil }
+        switch run.launchContextScope {
+        case .firstIterationOnly:
+            return iterationIndex == 1 ? launchContext : nil
+        case .everyIteration:
+            return launchContext
+        }
     }
 
     private func pipelineStageTask(run: LoopRun, iterationIndex: Int, stageIndex: Int, stageName: String, previousStageSummaries: [String]) -> String {

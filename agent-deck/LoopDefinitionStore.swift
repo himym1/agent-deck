@@ -57,6 +57,7 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
         saved.name = name
         saved.description = definition.description.trimmingCharacters(in: .whitespacesAndNewlines)
         saved.goalTemplate = definition.goalTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
+        saved.launchContext = definition.launchContext?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
         saved.projectPaths = definition.availability == .projectPaths ? sanitizedProjectPaths(definition.projectPaths) : []
         let targetURL: URL
         if let existingPath = saved.filePath, !existingPath.isEmpty {
@@ -130,6 +131,8 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
         let writeTarget = LoopWriteTarget(rawValue: fm["writeTarget"]?.nonEmpty ?? "") ?? .artifactMarkdown
         let maxIterations = Int(fm["maxIterations"]?.nonEmpty ?? "") ?? LoopDraft.defaultMaxIterations
         let validationCommand = fm["validationCommand"]?.nonEmpty ?? ""
+        let launchContext = decodeString(json: fm["launchContextJSON"]) ?? fm["launchContext"]?.nonEmpty
+        let launchContextScope = LoopLaunchContextScope(rawValue: fm["launchContextScope"]?.nonEmpty ?? "") ?? .firstIterationOnly
         let makerChecker = LoopMakerCheckerConfig(
             makerName: fm["makerName"]?.nonEmpty ?? "",
             checkerName: fm["checkerName"]?.nonEmpty ?? "",
@@ -150,6 +153,8 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
             name: name,
             description: description,
             goalTemplate: document.body,
+            launchContext: launchContext,
+            launchContextScope: launchContextScope,
             structure: structure,
             writeTarget: writeTarget,
             maxIterations: max(1, maxIterations),
@@ -178,6 +183,10 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
         lines.append("maxIterations: \(definition.maxIterations)")
         if !definition.validationCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             lines.append("validationCommand: \(oneLine(definition.validationCommand))")
+        }
+        if let launchContext = definition.launchContext?.trimmingCharacters(in: .whitespacesAndNewlines), !launchContext.isEmpty {
+            lines.append("launchContextScope: \(definition.launchContextScope.rawValue)")
+            lines.append("launchContextJSON: \(jsonString(launchContext))")
         }
         if definition.structure == .singleAgent || definition.structure == .makerChecker {
             lines.append("makerName: \(oneLine(definition.makerChecker.makerName))")
@@ -255,9 +264,22 @@ nonisolated final class LoopDefinitionStore: @unchecked Sendable {
         return values
     }
 
+    private static func decodeString(json: String?) -> String? {
+        guard let json = json?.nonEmpty,
+              let data = json.data(using: .utf8),
+              let value = try? JSONDecoder().decode(String.self, from: data) else { return nil }
+        return value
+    }
+
     private static func jsonString(_ values: [String]) -> String {
         guard let data = try? JSONEncoder().encode(values),
               let string = String(data: data, encoding: .utf8) else { return "[]" }
+        return string
+    }
+
+    private static func jsonString(_ value: String) -> String {
+        guard let data = try? JSONEncoder().encode(value),
+              let string = String(data: data, encoding: .utf8) else { return "\"\"" }
         return string
     }
 

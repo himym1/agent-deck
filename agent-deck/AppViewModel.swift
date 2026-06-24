@@ -8931,6 +8931,8 @@ final class AppViewModel: NSObject {
     private func loopDraft(from run: LoopRun) -> LoopDraft {
         LoopDraft(
             goal: run.goal,
+            launchContext: run.launchContext,
+            launchContextScope: run.launchContextScope,
             structure: run.structure,
             writeTarget: run.writeTarget,
             maxIterations: run.maxIterations,
@@ -8956,6 +8958,8 @@ final class AppViewModel: NSObject {
             name: request.name,
             description: request.description,
             goalTemplate: draft.goal,
+            launchContext: draft.launchContext,
+            launchContextScope: draft.launchContextScope,
             structure: draft.structure,
             writeTarget: draft.writeTarget,
             maxIterations: draft.maxIterations,
