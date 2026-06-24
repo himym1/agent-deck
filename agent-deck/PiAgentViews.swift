@@ -638,20 +638,28 @@ private enum TranscriptFloatingControlGeometry {
     }
 }
 
+/// Observable rail data. Mutated by the transcript coordinator on scroll/apply;
+/// the hosted rail view is created ONCE and never replaced, so SwiftUI `@State`
+/// (hover) survives every scroll/update tick instead of being reset — replacing
+/// the hosted view every scroll tick was the root cause of the hover buzz.
+@MainActor
+private final class QuestionRailModel: ObservableObject {
+    @Published var items: [UserQuestionNavigationRailItem] = []
+    @Published var availableWidth: CGFloat = 0
+}
+
 private struct UserQuestionNavigationRail: View {
-    let items: [UserQuestionNavigationRailItem]
-    let availableWidth: CGFloat
-    let onExpandedChange: (Bool) -> Void
+    @ObservedObject var model: QuestionRailModel
     let onSelect: (String) -> Void
 
     @State private var hoveredID: String?
 
-    private let expandAnimation = Animation.interpolatingSpring(mass: 0.75, stiffness: 310, damping: 30)
-    private let railFadeAnimation = Animation.easeOut(duration: 0.14)
-    private let markHitWidth: CGFloat = TranscriptFloatingControlGeometry.questionRailCollapsedWidth
+    private let expandAnimation = Animation.interpolatingSpring(mass: 0.75, stiffness: 320, damping: 30)
+    private let fadeAnimation = Animation.easeOut(duration: 0.14)
+    private let collapsedMarkWidth = TranscriptFloatingControlGeometry.questionRailCollapsedWidth
 
     private var expandedRowWidth: CGFloat {
-        Self.expandedWidth(for: availableWidth)
+        Self.expandedWidth(for: model.availableWidth)
     }
 
     static func expandedWidth(for availableWidth: CGFloat) -> CGFloat {
@@ -661,18 +669,26 @@ private struct UserQuestionNavigationRail: View {
     }
 
     var body: some View {
+        // Container is FIXED at the expanded width. Collapsed rows occupy only
+        // their trailing mark strip; the empty left region has no hit shape, so
+        // clicks pass straight through to the transcript. Only the hovered row
+        // grows left to reveal its preview. The AppKit host frame never changes
+        // on hover, so there is no host-resize <-> hover feedback loop to buzz.
         VStack(alignment: .trailing, spacing: TranscriptFloatingControlGeometry.questionRailRowSpacing) {
-            ForEach(items) { item in
+            ForEach(model.items) { item in
                 row(for: item)
             }
         }
-        .frame(width: hoveredID == nil ? markHitWidth : expandedRowWidth, alignment: .trailing)
+        .frame(width: expandedRowWidth, alignment: .trailing)
         .padding(.vertical, 8)
-        .opacity(hoveredID == nil ? 0.78 : 1)
+        .opacity(hoveredID == nil ? 0.72 : 1)
         .animation(expandAnimation, value: hoveredID)
-        .animation(railFadeAnimation, value: hoveredID == nil)
-        .onChange(of: hoveredID) { _, newValue in
-            onExpandedChange(newValue != nil)
+        .animation(fadeAnimation, value: hoveredID == nil)
+        .onHover { hovering in
+            // Nothing reacts until a mark is actually under the pointer. We only
+            // use the container hover to clear when the pointer leaves the rail
+            // entirely, so the expanded preview stays interactive while reading.
+            if !hovering { hoveredID = nil }
         }
     }
 
@@ -696,11 +712,12 @@ private struct UserQuestionNavigationRail: View {
 
                 mark(isActive: isActive, isHovered: isHovered, isRailHovered: hoveredID != nil)
             }
-            .padding(.vertical, isHovered ? 5 : 1)
+            // Constant height: hover changes width/color only, never the row's
+            // vertical metrics, so neighboring marks never shift under the pointer.
+            .frame(width: isHovered ? expandedRowWidth : collapsedMarkWidth, alignment: .trailing)
+            .frame(height: TranscriptFloatingControlGeometry.questionRailRowHeight)
             .padding(.leading, isHovered ? 11 : 0)
             .padding(.trailing, isHovered ? 7 : 0)
-            .frame(width: isHovered ? expandedRowWidth : markHitWidth, alignment: .trailing)
-            .frame(minHeight: isHovered ? 20 : 18)
             .background(rowBackground(isActive: isActive, isHovered: isHovered))
             .contentShape(Rectangle())
         }
@@ -708,11 +725,7 @@ private struct UserQuestionNavigationRail: View {
         .accessibilityLabel(displayText(for: item))
         .accessibilityHint("Scroll to this question")
         .onHover { hovering in
-            if hovering {
-                hoveredID = item.id
-            } else if hoveredID == item.id {
-                hoveredID = nil
-            }
+            if hovering { hoveredID = item.id }
         }
     }
 
@@ -759,7 +772,6 @@ private struct UserQuestionNavigationRail: View {
 }
 
 private final class UserQuestionNavigationRailHostView: NSHostingView<UserQuestionNavigationRail> {
-    var isRailExpanded = false
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
@@ -969,15 +981,25 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
 
-        let questionRail = UserQuestionNavigationRailHostView(rootView: UserQuestionNavigationRail(items: [], availableWidth: 0, onExpandedChange: { _ in }) { _ in })
+        let coordinator = context.coordinator
+        let questionRailModel = QuestionRailModel()
+        let questionRail = UserQuestionNavigationRailHostView(
+            rootView: UserQuestionNavigationRail(model: questionRailModel) { [weak coordinator] id in
+                coordinator?.scrollToUserQuestion(id: id)
+            }
+        )
         questionRail.translatesAutoresizingMaskIntoConstraints = true
         questionRail.autoresizingMask = [.minXMargin, .height]
         questionRail.setFrameSize(.zero)
+        // The rail floats over the transcript. Its frame is fixed at the expanded
+        // width; transparent regions pass clicks through to the transcript because
+        // the SwiftUI content has no hit shape there.
         scrollView.addSubview(questionRail)
 
         context.coordinator.scrollView = scrollView
         context.coordinator.tableView = tableView
         context.coordinator.questionRail = questionRail
+        context.coordinator.questionRailModel = questionRailModel
         context.coordinator.onBenchAdvanceSession = onBenchAdvanceSession
         context.coordinator.benchSessionCount = benchSessionCount
         context.coordinator.onScrollingChange = onScrollingChange
@@ -1027,6 +1049,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         weak var scrollView: NSScrollView?
         weak var tableView: NSTableView?
         weak var questionRail: UserQuestionNavigationRailHostView?
+        var questionRailModel: QuestionRailModel?
         private var dataSource: NSTableViewDiffableDataSource<PiAgentTranscriptTableSection, String>?
 
         // Render-product cache: one persistent cell per item id, returned to the
@@ -1541,65 +1564,52 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         }
 
         private func updateQuestionRail() {
-            guard let scrollView, let tableView, let rail = questionRail else { return }
+            guard let scrollView, let tableView, let model = questionRailModel else { return }
             let questionRows = currentQuestionRows()
             updateQuestionRailFrame(for: scrollView, questionCount: questionRows.count)
 
             guard questionRows.count >= 2 else {
                 forcedActiveQuestionID = nil
-                rail.isHidden = true
-                rail.isRailExpanded = false
-                rail.rootView = UserQuestionNavigationRail(items: [], availableWidth: scrollView.bounds.width, onExpandedChange: { _ in }) { _ in }
+                questionRail?.isHidden = true
+                model.items = []
                 return
             }
 
-            rail.isHidden = false
+            questionRail?.isHidden = false
             let rowIDs = Set(questionRows.map { $0.id })
             if let forcedActiveQuestionID, !rowIDs.contains(forcedActiveQuestionID) {
                 self.forcedActiveQuestionID = nil
             }
             let activeID = self.forcedActiveQuestionID ?? activeQuestionID(in: questionRows, scrollView: scrollView, tableView: tableView)
-            let items = questionRows.map { _, id, title in
+            // Push data through the stable model — never replace the hosted view,
+            // so the rail's SwiftUI hover state survives every scroll/update tick.
+            model.items = questionRows.map { _, id, title in
                 UserQuestionNavigationRailItem(id: id, title: title, isActive: id == activeID)
             }
-            rail.rootView = UserQuestionNavigationRail(
-                items: items,
-                availableWidth: scrollView.bounds.width,
-                onExpandedChange: { [weak self] expanded in
-                    self?.setQuestionRailExpanded(expanded)
-                }
-            ) { [weak self] id in
-                self?.scrollToUserQuestion(id: id)
-            }
+            model.availableWidth = scrollView.bounds.width
         }
 
         private func updateQuestionRailFrame(for scrollView: NSScrollView, questionCount: Int) {
             guard let rail = questionRail else { return }
-            let railWidth = rail.isRailExpanded ? UserQuestionNavigationRail.expandedWidth(for: scrollView.bounds.width) : TranscriptFloatingControlGeometry.questionRailCollapsedWidth
+            // Host frame is FIXED at the expanded width (trailing-aligned to the
+            // scroll-to-bottom FAB). It must NOT resize on hover — resizing the
+            // host while the pointer is over it is what caused the hover loop.
+            let railWidth = UserQuestionNavigationRail.expandedWidth(for: scrollView.bounds.width)
             let rowHeight = TranscriptFloatingControlGeometry.questionRailRowHeight
             let rowSpacing = TranscriptFloatingControlGeometry.questionRailRowSpacing
             let verticalPadding = TranscriptFloatingControlGeometry.questionRailVerticalPadding
             let desiredRailHeight = CGFloat(questionCount) * rowHeight + CGFloat(max(0, questionCount - 1)) * rowSpacing + verticalPadding
             let railHeight = min(max(54, scrollView.bounds.height - 32), max(44, desiredRailHeight))
             let trailingInset = TranscriptFloatingControlGeometry.questionRailTrailingInsetInsideScrollView
-            rail.frame = NSRect(
+            let newFrame = NSRect(
                 x: scrollView.bounds.width - railWidth - trailingInset,
                 y: (scrollView.bounds.height - railHeight) / 2,
                 width: railWidth,
                 height: railHeight
             )
-        }
-
-        private func setQuestionRailExpanded(_ expanded: Bool) {
-            guard let rail = questionRail, rail.isRailExpanded != expanded else { return }
-            rail.isRailExpanded = expanded
-            if let scrollView {
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0.16
-                    context.allowsImplicitAnimation = true
-                    updateQuestionRailFrame(for: scrollView, questionCount: currentQuestionRows().count)
-                }
-            }
+            // Skip the assign when unchanged: re-setting the frame every scroll
+            // tick would force an NSHostingView re-layout and can stutter hover.
+            if rail.frame != newFrame { rail.frame = newFrame }
         }
 
         private func questionRailLandingOffset(for visibleHeight: CGFloat) -> CGFloat {
