@@ -9,6 +9,7 @@ struct LoopLaunchSheet: View {
     let availableAgents: [EffectiveAgentRecord]
     let onCancel: () -> Void
     let onAssignMissingAgents: ([String]) -> Void
+    let onEnableDeckAgents: () -> Void
     let onLaunch: (LoopLaunchRequest) -> Void
 
     @State private var draft: LoopDraft
@@ -29,6 +30,7 @@ struct LoopLaunchSheet: View {
         projectAgents: [EffectiveAgentRecord] = [],
         onCancel: @escaping () -> Void,
         onAssignMissingAgents: @escaping ([String]) -> Void = { _ in },
+        onEnableDeckAgents: @escaping () -> Void = {},
         onLaunch: @escaping (LoopLaunchRequest) -> Void
     ) {
         self.session = session
@@ -39,6 +41,7 @@ struct LoopLaunchSheet: View {
         self.availableAgents = projectAgents.filter { $0.resolved.disabled != true }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         self.onCancel = onCancel
         self.onAssignMissingAgents = onAssignMissingAgents
+        self.onEnableDeckAgents = onEnableDeckAgents
         self.onLaunch = onLaunch
         _draft = State(initialValue: initialDraft)
         _saveName = State(initialValue: sourceDefinition?.name ?? "")
@@ -52,7 +55,20 @@ struct LoopLaunchSheet: View {
     private var canLaunch: Bool {
         let saveIsValid = !saveToLoopBank || !saveName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let writeTargetIsConfirmed = draft.writeTarget != .currentCheckout || confirmsCurrentCheckoutWrite
-        return !trimmedGoal.isEmpty && requiredAgentsAreSelected && agentPreflightIssues.isEmpty && saveIsValid && writeTargetIsConfirmed && (activeRun == nil || stopExistingActive)
+        return !trimmedGoal.isEmpty && requiredAgentsAreSelected && deckAgentsPreflightIsSatisfied && agentPreflightIssues.isEmpty && saveIsValid && writeTargetIsConfirmed && (activeRun == nil || stopExistingActive)
+    }
+
+    private var deckAgentsPreflightIsSatisfied: Bool {
+        !loopRequiresDeckAgents || session.subagentsEnabled
+    }
+
+    private var loopRequiresDeckAgents: Bool {
+        switch draft.structure {
+        case .humanApproval:
+            return false
+        case .singleAgent, .makerChecker, .agentPipeline, .parallelAgents, .discoveryTriage:
+            return true
+        }
     }
 
     private var requiredAgentsAreSelected: Bool {
@@ -181,6 +197,7 @@ struct LoopLaunchSheet: View {
                         activeLoopWarning(activeRun)
                     }
 
+                    deckAgentsPreflightSection
                     loopPreflightSection
 
                     AppCard(title: "Loop") {
@@ -380,6 +397,34 @@ struct LoopLaunchSheet: View {
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(.orange.opacity(0.20), lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
+    private var deckAgentsPreflightSection: some View {
+        if loopRequiresDeckAgents && !session.subagentsEnabled {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Deck agents are disabled for this session.", systemImage: "paperplane.circle")
+                    .font(AppTheme.Font.body.weight(.semibold))
+                    .foregroundStyle(.orange)
+                Text("This loop launches child Deck agents. Enable Deck agents for this session before launching.")
+                    .font(AppTheme.Font.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    onEnableDeckAgents()
+                } label: {
+                    Label("Enable Deck agents", systemImage: "checkmark.circle")
+                }
+                .appSecondaryButton()
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(.orange.opacity(0.20), lineWidth: 1)
+            }
         }
     }
 

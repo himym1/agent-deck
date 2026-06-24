@@ -210,6 +210,9 @@ struct LoopBankScreen: View {
                     onAssignMissingAgents: { names in
                         viewModel.assignAgentNames(names, toProjectPath: session.projectPath)
                     },
+                    onEnableDeckAgents: {
+                        viewModel.setSubagentsEnabled(true, forSessionID: session.id)
+                    },
                     onLaunch: { request in
                         launch(definition, in: session, request: request)
                     }

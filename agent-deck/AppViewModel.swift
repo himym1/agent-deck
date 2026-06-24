@@ -6531,7 +6531,11 @@ final class AppViewModel: NSObject {
 
     func setSubagentsEnabledForSelectedSession(_ isEnabled: Bool) {
         guard let session = piAgentSessionStore.selectedSession else { return }
-        piAgentSessionStore.updateSession(session.id, bumpUpdatedAt: false) { session in
+        setSubagentsEnabled(isEnabled, forSessionID: session.id)
+    }
+
+    func setSubagentsEnabled(_ isEnabled: Bool, forSessionID sessionID: UUID) {
+        piAgentSessionStore.updateSession(sessionID, bumpUpdatedAt: false) { session in
             session.subagentsEnabled = isEnabled
         }
     }
