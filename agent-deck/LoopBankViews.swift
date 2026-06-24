@@ -104,14 +104,22 @@ struct LoopDefinitionEditorDraft: Equatable {
     }
 }
 
+private enum LoopEditTab: String, CaseIterable, Identifiable {
+    case definition = "Definition"
+    case structure = "Structure"
+    case assignment = "Assignment"
+
+    var id: String { rawValue }
+}
+
 struct LoopBankScreen: View {
     var viewModel: AppViewModel
     @Binding var searchText: String
     @State private var editorDraft = LoopDefinitionEditorDraft()
     @State private var errorMessage: String?
     @State private var pendingDelete: LoopDefinition?
-    @State private var launchDefinition: LoopDefinition?
-    @State private var isLaunchSheetPresented = false
+    @State private var isEditorSheetPresented = false
+    @State private var selectedEditTab: LoopEditTab = .definition
     @State private var isCreatingNewLoop = false
     @State private var isDiscardNewLoopDraftAlertPresented = false
 
@@ -133,6 +141,8 @@ struct LoopBankScreen: View {
                 isCreatingNewLoop = true
                 viewModel.selectedLoopDefinitionID = nil
                 editorDraft = pendingDraft
+                selectedEditTab = .definition
+                isEditorSheetPresented = true
             } else {
                 if viewModel.selectedLoopDefinitionID == nil, let first = viewModel.loopDefinitions.first {
                     viewModel.selectedLoopDefinitionID = first.id
@@ -193,31 +203,8 @@ struct LoopBankScreen: View {
         } message: { definition in
             Text("Delete \"\(definition.name)\" from the user Loop Bank? Built-in loop resources are never edited.")
         }
-        .sheet(isPresented: $isLaunchSheetPresented) {
-            if let session = viewModel.piAgentSessionStore.selectedSession,
-               let definition = launchDefinition {
-                LoopLaunchSheet(
-                    session: session,
-                    activeRun: viewModel.piAgentSessionStore.activeLoopRun(for: session.id),
-                    initialDraft: definition.makeDraft(),
-                    sourceDefinition: definition,
-                    availableAgents: viewModel.allDisplayAgents,
-                    projectAgents: viewModel.startupSnapshot(forProjectPath: session.projectPath).effectiveAgents,
-                    onCancel: {
-                        isLaunchSheetPresented = false
-                        launchDefinition = nil
-                    },
-                    onAssignMissingAgents: { names in
-                        viewModel.assignAgentNames(names, toProjectPath: session.projectPath)
-                    },
-                    onEnableDeckAgents: {
-                        viewModel.setSubagentsEnabled(true, forSessionID: session.id)
-                    },
-                    onLaunch: { request in
-                        launch(definition, in: session, request: request)
-                    }
-                )
-            }
+        .sheet(isPresented: $isEditorSheetPresented) {
+            loopEditSheet
         }
     }
 
@@ -265,31 +252,59 @@ struct LoopBankScreen: View {
 
     private var loopEditorPane: some View {
         AppPage(editorDraft.isNew ? "New Loop" : editorDraft.name.nonEmpty ?? "Loop", subtitle: detailSubtitle, constrainsContentToViewport: true) {
-            AppCard(title: "Definition") {
+            AppCard(title: "Definition", trailing: { loopDetailActions }) {
                 VStack(alignment: .leading, spacing: 0) {
-                        if editorDraft.isBuiltin {
-                            Text("Built-in templates are read-only. Duplicate to create an editable user copy.")
-                                .font(AppTheme.Font.caption)
-                                .foregroundStyle(AppTheme.mutedText)
-                                .padding(.bottom, 12)
-                            Divider()
-                        }
+                    if editorDraft.isBuiltin {
+                        Text("Built-in templates are read-only. Duplicate to create an editable user copy.")
+                            .font(AppTheme.Font.caption)
+                            .foregroundStyle(AppTheme.mutedText)
+                            .padding(.bottom, 12)
+                        Divider()
+                    }
 
-                        definitionFields
+                    definitionFields
                 }
-                .disabled(editorDraft.isBuiltin)
+                .disabled(true)
             }
 
             loopStructureSection
-                .disabled(editorDraft.isBuiltin)
+                .disabled(true)
 
             availabilitySection
-                .disabled(editorDraft.isBuiltin)
+                .disabled(true)
 
             lastRunSection
-
-            loopActionsCard
         }
+    }
+
+    @ViewBuilder
+    private var loopDetailActions: some View {
+        HStack(spacing: 8) {
+            if let selected = viewModel.selectedLoopDefinition, !editorDraft.isNew {
+                Button("Duplicate") { duplicate(selected) }
+                    .appSmallSecondaryButton()
+                if selected.source == .user {
+                    Button("Delete", role: .destructive) { pendingDelete = selected }
+                        .appSmallSecondaryButton()
+                    sectionEditButton
+                }
+            } else if editorDraft.isNew {
+                sectionEditButton
+            }
+        }
+    }
+
+    private var sectionEditButton: some View {
+        Button {
+            selectedEditTab = .definition
+            isEditorSheetPresented = true
+        } label: {
+            Label("Edit", systemImage: "square.and.pencil")
+                .font(.caption.weight(.semibold))
+                .labelStyle(.titleAndIcon)
+        }
+        .appSmallSecondaryButton()
+        .help("Edit loop")
     }
 
     private var savedEditorDraft: LoopDefinitionEditorDraft {
@@ -486,29 +501,98 @@ struct LoopBankScreen: View {
         return runs.max { $0.startedAt < $1.startedAt }
     }
 
-    private var loopActionsCard: some View {
-        AppCard {
-            HStack {
-                if let selected = viewModel.selectedLoopDefinition, !editorDraft.isNew {
-                    Button("Launch") { presentLaunch(selected) }
-                        .disabled(viewModel.piAgentSessionStore.selectedSession == nil || !selected.isAvailable(in: viewModel.piAgentSessionStore.selectedSession?.projectPath))
-                        .help(launchHelp(for: selected))
-                    Button("Duplicate") { duplicate(selected) }
-                    if selected.source == .user {
-                        Button("Delete", role: .destructive) { pendingDelete = selected }
-                    }
-                } else if editorDraft.isNew {
-                    Button("Discard", role: .destructive) { discardNewLoopDraft() }
-                        .disabled(!hasUnsavedEditorChanges)
+    private var loopEditSheet: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(editorDraft.isNew ? "New Loop" : "Edit Loop")
+                        .font(.headline.weight(.semibold))
+                    Text(editorDraft.name.nonEmpty ?? "Untitled loop")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
-                Spacer()
-                Button(editorDraft.isNew ? "Reset" : "Revert") { resetEditor(to: viewModel.selectedLoopDefinition) }
-                    .disabled(!hasUnsavedEditorChanges)
-                Button("Save") { save() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!canSaveEditorDraft)
+                Spacer(minLength: 0)
             }
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
+            .padding(.bottom, 14)
+
+            Divider()
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(LoopEditTab.allCases) { tab in
+                        Button {
+                            selectedEditTab = tab
+                        } label: {
+                            Text(tab.rawValue)
+                                .font(.subheadline.weight(.semibold))
+                                .fontWidth(.expanded)
+                                .foregroundStyle(.primary)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(selectedEditTab == tab ? AppTheme.selectionFill : AppTheme.contentSubtleFill)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 10)
+            }
+
+            Divider()
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
+                    switch selectedEditTab {
+                    case .definition:
+                        AppCard(title: "Definition") { definitionFields }
+                    case .structure:
+                        loopStructureSection
+                    case .assignment:
+                        availabilitySection
+                    }
+                }
+                .padding(24)
+            }
+
+            Divider()
+
+            HStack(spacing: 12) {
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 0)
+                Button("Discard") {
+                    if editorDraft.isNew {
+                        discardNewLoopDraft()
+                    } else {
+                        resetEditor(to: viewModel.selectedLoopDefinition)
+                    }
+                    isEditorSheetPresented = false
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Button("Save") {
+                    if save() {
+                        isEditorSheetPresented = false
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.glassProminent)
+                .tint(AppTheme.brandAccent)
+                .disabled(!canSaveEditorDraft)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
         }
+        .frame(width: 700, height: 640)
     }
 
     @ViewBuilder
@@ -790,6 +874,8 @@ struct LoopBankScreen: View {
             viewModel.pendingNewLoopEditorDraft = nil
         }
         editorDraft = viewModel.pendingNewLoopEditorDraft ?? LoopDefinitionEditorDraft(currentProjectPath: viewModel.selectedProjectPath)
+        selectedEditTab = .definition
+        isEditorSheetPresented = true
     }
 
     private func resetEditor(to definition: LoopDefinition?) {
@@ -808,15 +894,18 @@ struct LoopBankScreen: View {
         }
     }
 
-    private func save() {
-        guard !editorDraft.isBuiltin else { return }
+    @discardableResult
+    private func save() -> Bool {
+        guard !editorDraft.isBuiltin else { return false }
         do {
             let saved = try viewModel.saveLoopDefinition(editorDraft.makeDefinition())
             isCreatingNewLoop = false
             viewModel.pendingNewLoopEditorDraft = nil
             resetEditor(to: saved)
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
 
@@ -835,58 +924,6 @@ struct LoopBankScreen: View {
             pendingDelete = nil
         } catch {
             errorMessage = error.localizedDescription
-        }
-    }
-
-    private func presentLaunch(_ definition: LoopDefinition) {
-        guard let session = viewModel.piAgentSessionStore.selectedSession else {
-            errorMessage = "Select a Pi session before launching a saved loop."
-            return
-        }
-        guard definition.isAvailable(in: session.projectPath) else {
-            errorMessage = "This loop is not available for the selected session project. Assign it to the project or duplicate it before launching."
-            return
-        }
-        launchDefinition = definition
-        isLaunchSheetPresented = true
-    }
-
-    private func launchHelp(for definition: LoopDefinition) -> String {
-        guard let session = viewModel.piAgentSessionStore.selectedSession else {
-            return "Select a Pi session before launching a saved loop."
-        }
-        guard definition.isAvailable(in: session.projectPath) else {
-            return "This loop is not available for the selected session project."
-        }
-        return "Launch this saved loop in the selected Pi session."
-    }
-
-    private func launch(_ definition: LoopDefinition, in session: PiAgentSessionRecord, request: LoopLaunchRequest) {
-        let store = viewModel.piAgentSessionStore
-        if store.activeLoopRun(for: session.id) != nil && !request.stopExistingActive {
-            store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "This transcript already has an active loop."))
-            return
-        }
-        if let saveRequest = request.saveRequest {
-            do {
-                try viewModel.saveLoopDefinitionFromDraft(request.draft, request: saveRequest)
-            } catch {
-                store.append(.init(sessionID: session.id, role: .error, title: "Loop Save Failed", text: error.localizedDescription))
-                return
-            }
-        }
-        Task { @MainActor in
-            isLaunchSheetPresented = false
-            launchDefinition = nil
-            let launched = await viewModel.launchLoop(
-                session: session,
-                draft: request.draft,
-                stopExistingActive: request.stopExistingActive
-            )
-            guard launched != nil else {
-                store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "\"\(definition.name)\" could not be started."))
-                return
-            }
         }
     }
 
