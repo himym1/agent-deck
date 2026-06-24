@@ -4046,7 +4046,7 @@ struct PiAgentScreen: View {
         .sheet(item: selectedSubagentTranscriptBinding) { run in
             PiNativeSubagentTranscriptSheet(
                 run: run,
-                entries: store.cachedSubagentTranscript(for: run.id),
+                store: store,
                 visibility: viewModel.appSettings.piAgentTranscriptVisibility
             )
             .onAppear {

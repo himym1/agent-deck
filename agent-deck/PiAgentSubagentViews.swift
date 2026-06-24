@@ -1016,12 +1016,13 @@ struct PiNativeSubagentGraphSheet: View {
 
 struct PiNativeSubagentTranscriptSheet: View {
     let run: PiSubagentRunRecord
-    let entries: [PiAgentTranscriptEntry]
+    let store: PiAgentSessionStore
     let visibility: PiAgentTranscriptVisibilitySettings
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
 
     var body: some View {
+        let transcriptState = currentTranscriptState
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -1046,17 +1047,17 @@ struct PiNativeSubagentTranscriptSheet: View {
 
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    if filteredTranscriptEntries.isEmpty {
-                        Text("No matching transcript entries.")
-                            .foregroundStyle(AppTheme.mutedText)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
-                            .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.Chat.panelCornerRadius, style: .continuous))
-                    } else {
-                        ForEach(filteredTranscriptEntries) { entry in
-                            transcriptEntryView(entry)
-                                .id(entry.id)
-                        }
+                    if transcriptState.isLoading {
+                        transcriptStatusView("Loading transcript…")
+                    }
+                    ForEach(transcriptState.entries) { entry in
+                        transcriptEntryView(entry)
+                            .id(entry.id)
+                    }
+                    if !transcriptState.isLoading, transcriptState.entries.isEmpty {
+                        transcriptStatusView("No matching transcript entries.")
+                    } else if !transcriptState.isLoading, !transcriptState.hasTranscriptEntries, query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        transcriptStatusView("No transcript entries yet.")
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1066,8 +1067,21 @@ struct PiNativeSubagentTranscriptSheet: View {
         .frame(width: 820, height: 620)
     }
 
-    private var filteredTranscriptEntries: [PiAgentTranscriptEntry] {
-        let displayEntries = [taskEntry] + entries.filter { entry in
+    private var currentTranscriptState: (entries: [PiAgentTranscriptEntry], hasTranscriptEntries: Bool, isLoading: Bool) {
+        let entries = store.cachedSubagentTranscript(for: run.id)
+        let hasCachedTranscript = store.hasCachedSubagentTranscript(for: run.id)
+        let isLoading = store.isSubagentTranscriptLoadPending(for: run.id)
+            || (!hasCachedTranscript && store.hasPersistedSubagentTranscript(for: run.id))
+        let displayEntries = [taskEntry] + visibleTranscriptEntries(from: entries)
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let filteredEntries = needle.isEmpty
+            ? displayEntries
+            : displayEntries.filter { "\($0.title)\n\($0.text)".lowercased().contains(needle) }
+        return (filteredEntries, !entries.isEmpty, isLoading)
+    }
+
+    private func visibleTranscriptEntries(from entries: [PiAgentTranscriptEntry]) -> [PiAgentTranscriptEntry] {
+        entries.filter { entry in
             switch entry.role {
             case .tool:
                 // Non-web tool calls are no longer surfaced in transcripts (recapped
@@ -1082,9 +1096,6 @@ struct PiNativeSubagentTranscriptSheet: View {
             case .user: return false
             }
         }
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !needle.isEmpty else { return displayEntries }
-        return displayEntries.filter { "\($0.title)\n\($0.text)".lowercased().contains(needle) }
     }
 
     private var taskEntry: PiAgentTranscriptEntry {
@@ -1108,6 +1119,14 @@ struct PiNativeSubagentTranscriptSheet: View {
         default:
             return false
         }
+    }
+
+    private func transcriptStatusView(_ text: String) -> some View {
+        Text(text)
+            .foregroundStyle(AppTheme.mutedText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.Chat.panelCornerRadius, style: .continuous))
     }
 
     @ViewBuilder

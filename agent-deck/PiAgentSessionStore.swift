@@ -650,6 +650,18 @@ final class PiAgentSessionStore {
         subagentTranscriptsByRunID[runID] ?? []
     }
 
+    func hasCachedSubagentTranscript(for runID: UUID) -> Bool {
+        subagentTranscriptsByRunID[runID] != nil
+    }
+
+    func hasPersistedSubagentTranscript(for runID: UUID) -> Bool {
+        persistedSubagentTranscriptRunIDs.contains(runID)
+    }
+
+    func isSubagentTranscriptLoadPending(for runID: UUID) -> Bool {
+        subagentTranscriptLoadTasksByRunID[runID] != nil
+    }
+
     func transcript(for sessionID: UUID) -> [PiAgentTranscriptEntry] {
         loadTranscriptIfNeeded(sessionID)
         markTranscriptSessionUsed(sessionID)
