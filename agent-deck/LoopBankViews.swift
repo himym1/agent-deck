@@ -691,7 +691,6 @@ struct LoopBankScreen: View {
         LoopListRow(
             definition: definition,
             tint: availabilityColor(for: definition),
-            availabilityText: availabilityLabel(for: definition),
             isMuted: loopIsInactive(definition)
         )
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -852,7 +851,6 @@ struct LoopBankScreen: View {
 private struct LoopListRow: View {
     let definition: LoopDefinition
     let tint: Color
-    let availabilityText: String
     let isMuted: Bool
 
     var body: some View {
@@ -879,12 +877,6 @@ private struct LoopListRow: View {
                     .font(.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .lineLimit(2)
-
-                HStack(spacing: 6) {
-                    AppLabelTag(text: definition.structure.displayName, color: .secondary)
-                    AppLabelTag(text: definition.writeTarget.displayName, color: .secondary)
-                    AppLabelTag(text: availabilityText, color: tint)
-                }
             }
 
             Spacer(minLength: 0)
