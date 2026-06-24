@@ -56,8 +56,10 @@ final class AgentMemoryStore: ObservableObject {
     /// margin) because the centered-score scale varies per query; calibration showed a
     /// fixed margin over-includes on low-scoring queries.
     nonisolated static let keepScoreRatio: Float = 0.6
-    /// A centered score at or above this is a match on its own, no lexical support
-    /// needed (keeps paraphrase recall working). Below it, the score alone cannot
+    /// A centered score at or above this is a strong match that still needs a loose
+    /// `strongMinTermOverlap` discriminative-term corroboration (keeps paraphrase
+    /// recall working while stopping the unreliable in-domain cosine from
+    /// qualifying a memory on a lone common word alone). Below it, the score alone cannot
     /// distinguish a weak real match from the best irrelevant memory — centered
     /// scores are zero-sum across the set (the centered vectors sum to zero), so
     /// SOME memory always scores positive no matter the query. Calibration: real
@@ -69,12 +71,35 @@ final class AgentMemoryStore: ObservableObject {
     /// match shared 2+ ("skill"+"project", "tables"+"markdown"+"render"); every
     /// junk top-1 shared at most 1 (overlap judged on title/summary/tags only).
     nonisolated static let minQueryTermOverlap = 2
-    /// Ranking-time bonus per shared informative term (capped below). The embedder
+    /// Minimum discriminative term overlap required on the embedder "strong" path
+    /// (`rawScore >= strongTopSimilarity`). A strong embedding match must still share
+    /// at least one corpus-discriminative term, otherwise a lone common word (e.g.
+    /// "loop") is enough for the unreliable in-domain cosine to flood recall. Real
+    /// strong matches in the June 2026 transcript audit shared 1+ discriminative
+    /// terms, so this floor cuts pure-embedder noise without losing real matches.
+    nonisolated static let strongMinTermOverlap = 1
+    /// Corpus-IDF self-tuning: a shared informative term only counts toward the
+    /// lexical gate/ranking when it is rare enough to be discriminative. A term is
+    /// treated as background (non-discriminative) when it appears in at least
+    /// `discriminativeMinDocCount` memories AND in more than
+    /// `discriminativeMaxDocFraction` of the active corpus. This auto-stops the
+    /// dominant-theme vocabulary ("loop", "session", "transcript", "row", "prompt")
+    /// that the static `overlapStopwords` list can't anticipate. The min-doc floor is
+    /// the small-corpus guard: a term must be genuinely pervasive to count as
+    /// background, so topical clusters in a small corpus stay discriminative — e.g.
+    /// "composer" in 4/11 memories or "skill" in 3/11 still qualify the dictation and
+    /// skill-warning memories (those would wrongly abstain at a lower floor), while
+    /// every term stays discriminative in a 1–2 memory corpus so single-memory recall
+    /// still qualifies lexically as before. Calibrated June 2026 against the real
+    /// 36-memory agent-deck corpus + the 11-memory realistic-eval corpus: excludes the
+    /// loop/session/transcript flood, keeps every real hit.
+    nonisolated static let discriminativeMinDocCount = 5
+    nonisolated static let discriminativeMaxDocFraction = 0.20
+    /// Ranking-time bonus per shared discriminative term (capped below). The embedder
     /// alone mis-ranks weak-but-real matches: in the realistic eval AppEmptyState
     /// scored -0.026 against an "add an empty placeholder state" prompt while an
     /// unrelated memory scored 0.349. Lexical evidence is the corrective signal, so
-    /// the ranking/floor score is `centered + bonus·min(overlap, cap)` while the
-    /// strong-qualification check stays on the raw centered score.
+    /// the ranking/floor score is `centered + bonus·min(discOverlap, cap)`.
     nonisolated static let overlapBonusWeight: Float = 0.12
     nonisolated static let overlapBonusCap = 4
     /// Cap on body characters fed to the embedder, on top of title + summary. Enough
@@ -264,9 +289,16 @@ final class AgentMemoryStore: ObservableObject {
         // curated fields always carry the topic. This also means the gate never
         // reads bodies off disk.
         let queryTerms = Self.informativeTerms(in: trimmedQuery)
+        // Corpus document frequency per informative term, used to down-weight the
+        // dominant-theme vocabulary (see `discriminativeMinDocCount`). Computed over
+        // the same injectable set being ranked, so it adapts to whatever the project
+        // actually stores rather than a hardcoded stopword list.
+        let docFrequency = Self.documentFrequency(in: injectable)
+        let corpusSize = injectable.count
         let overlapByID = Dictionary(uniqueKeysWithValues: injectable.map { record -> (String, Int) in
             let gateText = "\(record.title)\n\(record.summary)\n\(record.tags.joined(separator: " "))"
-            return (record.id, queryTerms.intersection(Self.informativeTerms(in: gateText)).count)
+            let shared = queryTerms.intersection(Self.informativeTerms(in: gateText))
+            return (record.id, Self.discriminativeOverlapCount(shared: shared, docFrequency: docFrequency, corpusSize: corpusSize))
         })
 
         // Ranking and the floor use a hybrid score: centered cosine plus a capped
@@ -301,8 +333,15 @@ final class AgentMemoryStore: ObservableObject {
         // "strong", so a lone memory must qualify lexically.
         let centered = result.vectors.count >= 2
         let qualified = ranked.filter { entry in
-            if centered && entry.rawScore >= Self.strongTopSimilarity { return true }
-            return (overlapByID[entry.record.id] ?? 0) >= Self.minQueryTermOverlap
+            let overlap = overlapByID[entry.record.id] ?? 0
+            // Strong embedder match still needs ≥1 discriminative shared term, so the
+            // unreliable in-domain cosine can't qualify a memory on a lone common
+            // word (see `strongMinTermOverlap`). Below that, the lexical weak path is
+            // the only route in.
+            if centered && entry.rawScore >= Self.strongTopSimilarity {
+                return overlap >= Self.strongMinTermOverlap
+            }
+            return overlap >= Self.minQueryTermOverlap
         }
         let breakdown = ranked.map { entry in
             let mark = qualified.contains(where: { $0.record.id == entry.record.id }) ? "+" : "-"
@@ -530,6 +569,41 @@ final class AgentMemoryStore: ObservableObject {
             terms.insert(term)
         }
         return terms
+    }
+
+    /// Document frequency of each informative term across the curated gate text
+    /// (title + summary + tags) of the given records. Used by recall to detect
+    /// corpus-wide background vocabulary that the static `overlapStopwords` list
+    /// can't anticipate, so it can be excluded from the lexical gate.
+    nonisolated static func documentFrequency(in records: [AgentMemoryRecord]) -> [String: Int] {
+        var df: [String: Int] = [:]
+        for record in records {
+            let gateText = "\(record.title)\n\(record.summary)\n\(record.tags.joined(separator: " "))"
+            for term in informativeTerms(in: gateText) {
+                df[term, default: 0] += 1
+            }
+        }
+        return df
+    }
+
+    /// How many of the given shared terms are corpus-discriminative, i.e. NOT
+    /// dominant-theme background vocabulary. A term is background when it appears in
+    /// at least `discriminativeMinDocCount` memories and in more than
+    /// `discriminativeMaxDocFraction` of the corpus. The min-doc floor keeps every
+    /// shared term discriminative in small corpora (so single-memory recall still
+    /// qualifies lexically as before).
+    nonisolated static func discriminativeOverlapCount(
+        shared: Set<String>,
+        docFrequency: [String: Int],
+        corpusSize: Int
+    ) -> Int {
+        guard corpusSize > 0 else { return shared.count }
+        return shared.reduce(into: 0) { count, term in
+            let docCount = docFrequency[term] ?? 0
+            let isBackground = docCount >= Self.discriminativeMinDocCount
+                && Double(docCount) / Double(corpusSize) > Self.discriminativeMaxDocFraction
+            if !isBackground { count += 1 }
+        }
     }
 
     /// Renders the fenced `<memory-context>` block for a set of records. Shared by

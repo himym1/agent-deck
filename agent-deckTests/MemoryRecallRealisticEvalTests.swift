@@ -334,4 +334,310 @@ final class MemoryRecallRealisticEvalTests: XCTestCase {
         XCTAssertTrue(capped.contains("…and 3 more"), "overflow is stated, never silently truncated")
         XCTAssertEqual(capped.components(separatedBy: "\n").count, 4, "header + 2 entries + overflow line")
     }
+
+    // MARK: Real loop-dominant corpus (replica of the production agent-deck store)
+
+    /// A replica of the actual agent-deck project memory store as of late June 2026:
+    /// 36 active memories where ~28% are loop-themed, so "loop"/"session"/"card"/
+    /// "row" dominate the corpus. This is the workload that motivated corpus-IDF
+    /// gating + the embedder strong-path term floor: without them, any query
+    /// mentioning "loop" flooded recall with the same generic loop cluster. Bodies
+    /// are set to the summary (the lexical gate only reads title/summary/tags, so
+    /// document frequencies — the thing under test — are identical to production).
+    private static let realCorpus: [RealMemo] = [
+        RealMemo(key: "agentdeckfreezefix", kind: .context,
+                 title: "Agent Deck freeze fixes: prewarm blocklist/settle skip, streaming file-watch gate, async FSEvents, coalesced transcript settle",
+                 summary: "Agent Deck UI hangs and hitches from transcript streaming and app activation are mitigated by async FSEvents watch rebuilds, coalesced watched-file refresh, and coalesced transcript scroll-to-bottom layout settles.",
+                 body: "Agent Deck UI hangs and hitches from transcript streaming and app activation are mitigated by async FSEvents watch rebuilds, coalesced watched-file refresh, and coalesced transcript scroll-to-bottom layout settles.",
+                 tags: ["performance", "hangs", "transcript", "fsevents", "file-watch"]),
+        RealMemo(key: "agentdetailviewsta", kind: .context,
+                 title: "Agent detail view state loss on project assignment — root cause and fix",
+                 summary: "When assigning an agent to a project via the detail view toggle, the view completely refreshes and loses all local @State because EffectiveAgentRecord.id changes and reconcileSnapshotsFromPreferences did not preserve selectedAgentID.",
+                 body: "When assigning an agent to a project via the detail view toggle, the view completely refreshes and loses all local @State because EffectiveAgentRecord.id changes and reconcileSnapshotsFromPreferences did not preserve selectedAgentID.",
+                 tags: ["agents", "view-state", "selection", "EffectiveAgentRecord", "id-stability", "bug"]),
+        RealMemo(key: "agentsskillsprompt", kind: .context,
+                 title: "Agents/Skills/Prompts/MCP resource views are global; dimming means unassigned nowhere",
+                 summary: "Agents, Skills, Prompts, and MCP management views use global resource-list semantics: rows dim only when the resource is neither All Projects/default nor assigned to any project.",
+                 body: "Agents, Skills, Prompts, and MCP management views use global resource-list semantics: rows dim only when the resource is neither All Projects/default nor assigned to any project.",
+                 tags: ["agents", "skills", "prompts", "mcp", "ui", "dimming"]),
+        RealMemo(key: "askusersessionlist", kind: .context,
+                 title: "Ask User session list badge should mirror bell attention styling with different symbol",
+                 summary: "Ask User waiting state in session lists should use the same badge approach as the requires-attention bell, but with a distinct Ask User symbol.",
+                 body: "Ask User waiting state in session lists should use the same badge approach as the requires-attention bell, but with a distinct Ask User symbol.",
+                 tags: ["ask-user", "session-list", "ui", "badge"]),
+        RealMemo(key: "autonomousoffscree", kind: .context,
+                 title: "Autonomous offscreen perf harness + perf-fix loop for Agent Deck",
+                 summary: "Agent Deck Perf Hunt loop should run AutoPerf without live Agent Deck safety prompts or extra justification text.",
+                 body: "Agent Deck Perf Hunt loop should run AutoPerf without live Agent Deck safety prompts or extra justification text.",
+                 tags: ["loops", "autoperf", "performance"]),
+        RealMemo(key: "builtinloopsaredis", kind: .context,
+                 title: "Built-in loops are disabled for now",
+                 summary: "When working on Agent Deck Loop Bank after June 23 2026, do not assume bundled built-in loop templates exist; the user asked to wipe the current built-in loops completely for now.",
+                 body: "When working on Agent Deck Loop Bank after June 23 2026, do not assume bundled built-in loop templates exist; the user asked to wipe the current built-in loops completely for now.",
+                 tags: ["loops", "loop-bank", "builtins"]),
+        RealMemo(key: "builtinsubagentpro", kind: .context,
+                 title: "Builtin subagent project override must merge global model override",
+                 summary: "Builtin subagent model settings can be lost when a project agentOverride shadows a global agentOverride instead of merging fields, and thinking false must mean explicit off.",
+                 body: "Builtin subagent model settings can be lost when a project agentOverride shadows a global agentOverride instead of merging fields, and thinking false must mean explicit off.",
+                 tags: ["subagents", "models", "thinking", "agent-overrides", "resolver"]),
+        RealMemo(key: "chainsremovedcompl", kind: .context,
+                 title: "Chains removed completely from Agent Deck",
+                 summary: "When working on Agent Deck resources, do not reintroduce Chains, .chain.md handling, managed_chain docs, or chain retirement diagnostics.",
+                 body: "When working on Agent Deck resources, do not reintroduce Chains, .chain.md handling, managed_chain docs, or chain retirement diagnostics.",
+                 tags: ["chains", "loops", "scanner", "docs"]),
+        RealMemo(key: "codexusagelimitbur", kind: .context,
+                 title: "Codex usage-limit burst collapsed to one hourglass card; paired Model Error entries dropped",
+                 summary: "Pi emits paired (Model Error, Retry) entries per failed attempt; the thread-builder collapses a quota/retry burst into one card via retryInfo.errorPayload matching.",
+                 body: "Pi emits paired (Model Error, Retry) entries per failed attempt; the thread-builder collapses a quota/retry burst into one card via retryInfo.errorPayload matching.",
+                 tags: ["transcript", "retry-card", "quota-limit", "codex", "thread-builder", "dedup", "native-cards"]),
+        RealMemo(key: "composerlongpasted", kind: .context,
+                 title: "Composer long paste draft must persist markers not expanded text",
+                 summary: "Composer long paste placeholders like [paste #N ...] must be saved in session drafts as marker text plus payloads, not expanded text, or session switching expands huge drafts and hangs.",
+                 body: "Composer long paste placeholders like [paste #N ...] must be saved in session drafts as marker text plus payloads, not expanded text, or session switching expands huge drafts and hangs.",
+                 tags: ["composer", "paste", "drafts", "performance", "session-switch"]),
+        RealMemo(key: "composerslashselec", kind: .context,
+                 title: "Composer slash-selection leaks across session switches",
+                 summary: "Unsent slash-selected skill in composer persists when switching Pi sessions because composer drafts do not include slashSelection.",
+                 body: "Unsent slash-selected skill in composer persists when switching Pi sessions because composer drafts do not include slashSelection.",
+                 tags: ["composer", "slash-selection", "skill", "session-switch", "state-leak"]),
+        RealMemo(key: "contextmenubuildcl", kind: .context,
+                 title: "ContextMenu build closure runs during SwiftUI layout per visible row — no FS calls inside",
+                 summary: "SwiftUI .contextMenu builder is re-evaluated during layout for every visible row via accessibility attachment, so filesystem/stat calls inside it stall scrolling.",
+                 body: "SwiftUI .contextMenu builder is re-evaluated during layout for every visible row via accessibility attachment, so filesystem/stat calls inside it stall scrolling.",
+                 tags: ["performance", "SwiftUI", "contextMenu", "skills", "lstat", "scrolling"]),
+        RealMemo(key: "deckagentspickerca", kind: .context,
+                 title: "Deck agents picker card rows are project-assigned only; unassigned agents via Add agents only",
+                 summary: "New-session Deck agents picker should show only project assigned/default agents as main rows, with unassigned extra agents managed via Add agents.",
+                 body: "New-session Deck agents picker should show only project assigned/default agents as main rows, with unassigned extra agents managed via Add agents.",
+                 tags: ["agents", "composer", "session-picker", "project-assignment"]),
+        RealMemo(key: "expandedsidebaruse", kind: .context,
+                 title: "Expanded sidebar uses exact-updatedAt sort + this-run touches + hybrid freeze; keyboard nav on visible rows only",
+                 summary: "Expanded/full coding-agent sidebar orders sessions by exact updatedAt desc, keeps day-granular ordering for the collapsed strip, surfaces this-run-touched sessions, freezes visible row order, and navigates keyboard only through visible rows.",
+                 body: "Expanded/full coding-agent sidebar orders sessions by exact updatedAt desc, keeps day-granular ordering for the collapsed strip, surfaces this-run-touched sessions, freezes visible row order, and navigates keyboard only through visible rows.",
+                 tags: ["coding-agent-sidebar", "session-ordering", "preview", "keyboard-navigation", "PiAgentSessionGrouping", "PiAgentSessionStore", "CodingAgentExpandedPanel"]),
+        RealMemo(key: "grillingquestionss", kind: .context,
+                 title: "Grilling questions should include assistant recommendation",
+                 summary: "When grilling or refining plans with the user, always make clear which option is the most sensible according to the assistant.",
+                 body: "When grilling or refining plans with the user, always make clear which option is the most sensible according to the assistant.",
+                 tags: ["planning", "questions", "user-preference"]),
+        RealMemo(key: "hidecomposersubage", kind: .context,
+                 title: "Hide composer subagent picker during loop launch",
+                 summary: "When a loop launch flow is active in Agent Deck, hide the normal composer subagent picker because loops use their own configured agents.",
+                 body: "When a loop launch flow is active in Agent Deck, hide the normal composer subagent picker because loops use their own configured agents.",
+                 tags: ["loops", "composer", "subagents", "ui"]),
+        RealMemo(key: "hidescrollindicato", kind: .context,
+                 title: "Hide scroll indicators in Agent Deck UI",
+                 summary: "Agent Deck project UI should hide scroll view indicators unless explicitly requested otherwise.",
+                 body: "Agent Deck project UI should hide scroll view indicators unless explicitly requested otherwise.",
+                 tags: ["ui", "scrollview", "style"]),
+        RealMemo(key: "loopagentfieldsdef", kind: .context,
+                 title: "Loop agent fields default blank and require explicit selection",
+                 summary: "When creating Agent Deck loops, agent fields should not auto-fill placeholder agents like Maker; structures that need agents require explicit selection.",
+                 body: "When creating Agent Deck loops, agent fields should not auto-fill placeholder agents like Maker; structures that need agents require explicit selection.",
+                 tags: ["loops", "loop-bank", "agents"]),
+        RealMemo(key: "looplaunchcontexta", kind: .context,
+                 title: "Loop launch context arguments field with first-iteration scope default",
+                 summary: "When working on Agent Deck loops, launch context/arguments are a generic per-run input field that defaults to first iteration only and can opt into every iteration.",
+                 body: "When working on Agent Deck loops, launch context/arguments are a generic per-run input field that defaults to first iteration only and can opt into every iteration.",
+                 tags: ["loops", "launch-context", "prompting"]),
+        RealMemo(key: "loopsubagenttransc", kind: .context,
+                 title: "Loop subagent transcript sheet must observe async transcript loads",
+                 summary: "Loop subagent transcript sheets showed only the prompt because they snapshotted cached transcript entries before async persisted transcript loading completed.",
+                 body: "Loop subagent transcript sheets showed only the prompt because they snapshotted cached transcript entries before async persisted transcript loading completed.",
+                 tags: ["loops", "subagents", "transcript", "ui"]),
+        RealMemo(key: "looptranscriptcard", kind: .context,
+                 title: "Loop transcript cards removed; loop status bar owns loop controls",
+                 summary: "Agent Deck loop runs should not show the top transcript LoopRun card; all loop status/actions live in the persistent composer-area loop status bar.",
+                 body: "Agent Deck loop runs should not show the top transcript LoopRun card; all loop status/actions live in the persistent composer-area loop status bar.",
+                 tags: ["loops", "ui", "composer", "transcript"]),
+        RealMemo(key: "loopplanworkconsid", kind: .context,
+                 title: "Loop-plan work considered complete; Desktop analysis cleared",
+                 summary: "When asked about Agent Deck loop-plan completion after June 23 2026, treat the loop-plan work as complete by user decision and do not continue the old checklist unless new requirements are given.",
+                 body: "When asked about Agent Deck loop-plan completion after June 23 2026, treat the loop-plan work as complete by user decision and do not continue the old checklist unless new requirements are given.",
+                 tags: ["loops", "completion", "desktop-analysis"]),
+        RealMemo(key: "loopsuseinfinitysy", kind: .context,
+                 title: "Loops use infinity symbol in session row status cluster",
+                 summary: "Agent Deck loops should use the SF Symbol infinity placed before commit and push icons in the session row lower-right cluster.",
+                 body: "Agent Deck loops should use the SF Symbol infinity placed before commit and push icons in the session row lower-right cluster.",
+                 tags: ["loops", "ui", "sf-symbol", "session-list"]),
+        RealMemo(key: "loopsusesharedshor", kind: .context,
+                 title: "Loops use shared short loop-progress.md memory",
+                 summary: "Agent Deck loops use a bounded per-run loop-progress.md file injected into every loop child prompt so rounds build on prior attempts without re-injecting large context.",
+                 body: "Agent Deck loops use a bounded per-run loop-progress.md file injected into every loop child prompt so rounds build on prior attempts without re-injecting large context.",
+                 tags: ["loops", "memory", "progress", "recaps"]),
+        RealMemo(key: "nativesubagentagen", kind: .context,
+                 title: "Native subagent agent thinking applies when model is default/inherited",
+                 summary: "Native subagent frontmatter thinking with default model should override parent thinking when launching child Pi sessions.",
+                 body: "Native subagent frontmatter thinking with default model should override parent thinking when launching child Pi sessions.",
+                 tags: ["subagents", "model-thinking", "launch-planner"]),
+        RealMemo(key: "nativetranscriptro", kind: .context,
+                 title: "Native transcript rows need initial settle and question chip height before first paint",
+                 summary: "Native user question header/card alignment on first send with attachments is fixed by initial settle plus setting chip row height during configure before first paint.",
+                 body: "Native user question header/card alignment on first send with attachments is fixed by initial settle plus setting chip row height during configure before first paint.",
+                 tags: ["transcript", "native-rows", "layout", "first-paint", "question-card"]),
+        RealMemo(key: "parallelgraphchild", kind: .context,
+                 title: "Parallel graph child model fields are copied into summary cards",
+                 summary: "Parallel agents cards show the same model/thinking identifier style as single-agent cards by copying child model and thinking into graph child records.",
+                 body: "Parallel agents cards show the same model/thinking identifier style as single-agent cards by copying child model and thinking into graph child records.",
+                 tags: ["parallel-agents", "model-chip", "subagents", "swiftui"]),
+        RealMemo(key: "pibuiltinbasesyste", kind: .context,
+                 title: "Pi built-in base system prompt location and Agent Deck preview extraction",
+                 summary: "Where Pi's built-in base system prompt lives and how Agent Deck extracts it for the System Prompt preview when no SYSTEM.md exists.",
+                 body: "Where Pi's built-in base system prompt lives and how Agent Deck extracts it for the System Prompt preview when no SYSTEM.md exists.",
+                 tags: ["system-prompt", "pi", "preview"]),
+        RealMemo(key: "pitranscriptcardsc", kind: .context,
+                 title: "Pi transcript cards cropped until session switch due stale row heights",
+                 summary: "Pi coding-agent transcript cards or bubbles cropped until switching sessions are caused by stale NSTableView row height estimates/caches; fix with narrow debounced visible-row remeasure outside AppKit layout.",
+                 body: "Pi coding-agent transcript cards or bubbles cropped until switching sessions are caused by stale NSTableView row height estimates/caches; fix with narrow debounced visible-row remeasure outside AppKit layout.",
+                 tags: ["pi-transcript", "layout", "nstableview", "height-cache", "cropping", "performance"]),
+        RealMemo(key: "selectionreconcile", kind: .context,
+                 title: "Selection reconciler must not coerce by selectedProjectPath after unscoping + delete must select next visible neighbor",
+                 summary: "After the PiAgent session list was unscoped to global, the selection reconciler must validate by existence not selectedProjectPath, and post-delete selection uses nextSelectionAfterDeletion from the visible grouped list.",
+                 body: "After the PiAgent session list was unscoped to global, the selection reconciler must validate by existence not selectedProjectPath, and post-delete selection uses nextSelectionAfterDeletion from the visible grouped list.",
+                 tags: ["pi-agent", "session-selection", "unscoping", "regression"]),
+        RealMemo(key: "sessionlistorderin", kind: .context,
+                 title: "Session list ordering: expanded sidebar exact sort uses freeze; compact/store keep stable comparator",
+                 summary: "Expanded coding-agent sidebar session ordering uses exact updatedAt with a hybrid freeze, while compact/store ordering keep day-granular stability.",
+                 body: "Expanded coding-agent sidebar session ordering uses exact updatedAt with a hybrid freeze, while compact/store ordering keep day-granular stability.",
+                 tags: ["session-ordering", "coding-agent-sidebar", "swiftui", "anti-jump"]),
+        RealMemo(key: "sidebarexpansiontr", kind: .context,
+                 title: "Sidebar expansion transcript hangs from offscreen prewarm height measurement",
+                 summary: "Sidebar expansion transcript hangs can be caused by PiAgent transcript prewarm forcing offscreen height measurement after width changes.",
+                 body: "Sidebar expansion transcript hangs can be caused by PiAgent transcript prewarm forcing offscreen height measurement after width changes.",
+                 tags: ["PiAgent", "performance", "sidebar", "transcript", "prewarm"]),
+        RealMemo(key: "subagentconsoleout", kind: .context,
+                 title: "Subagent console output emitters and AGENTDECK_RPC_LOG flag",
+                 summary: "Where Agent Deck subagent runs print to console and what flag controls it.",
+                 body: "Where Agent Deck subagent runs print to console and what flag controls it.",
+                 tags: ["subagent", "logging", "rpc", "pi-subagent-run-service", "pi-agent-runner-service", "rpc-debug-log", "nslog"]),
+        RealMemo(key: "systempromptuishou", kind: .context,
+                 title: "System Prompt UI should avoid ambiguous Available labels and ragged inline row status",
+                 summary: "For Agent Deck resource rows, avoid ambiguous labels like Available and ragged inline status text next to titles; use meaningful wording and aligned design-system typography.",
+                 body: "For Agent Deck resource rows, avoid ambiguous labels like Available and ragged inline status text next to titles; use meaningful wording and aligned design-system typography.",
+                 tags: ["ui", "design-system", "system-prompt", "status-labels"]),
+        RealMemo(key: "systempromptscreen", kind: .context,
+                 title: "System Prompt screen redesigned: master-detail list + inline editor",
+                 summary: "System Instructions screen redesigned as a SplitView master-detail (file list + inline editor), always-enabled, shared toolbar project picker.",
+                 body: "System Instructions screen redesigned as a SplitView master-detail (file list + inline editor), always-enabled, shared toolbar project picker.",
+                 tags: ["system-prompt", "instructions", "refactor", "master-detail", "ui", "toolbar", "splitview"]),
+        RealMemo(key: "transcriptcardicon", kind: .context,
+                 title: "Transcript card icon + header font canonical spec — retry/error cards aligned",
+                 summary: "Pi transcript retry and error cards must use the shared 16pt headerIcon slot and the canonical header font, not bespoke 18pt/14pt or callout/caption fonts.",
+                 body: "Pi transcript retry and error cards must use the shared 16pt headerIcon slot and the canonical header font, not bespoke 18pt/14pt or callout/caption fonts.",
+                 tags: ["transcript", "native-cards", "swiftui", "design-system", "retry-card", "error-card", "icons", "typography"]),
+    ]
+
+    // MARK: Recall eval against the real loop-dominant corpus
+
+    /// Drives the production `retrieve` against the real agent-deck corpus (28%
+    /// loop-themed) using the actual opening prompts of 9 production sessions,
+    /// hand-labeled. This is the workload that corpus-IDF gating + the strong-path
+    /// term floor were tuned against, so it pins the two properties that matter:
+    ///
+    ///  - real hits survive (parallel-card, infinity-symbol, redundant-loop-card
+    ///    each share ≥2 discriminative terms and must still be injected), and
+    ///  - the loop flood is excluded on noise prompts whose discriminative overlap
+    ///    with the generic loop cluster is zero (embedder-independent).
+    ///
+    /// Skips when the on-device embedding model is unavailable (offline CI).
+    func testRealLoopDominantSessionRecall() async throws {
+        defer { try? report.joined(separator: "\n").write(toFile: "/tmp/recall_real_sessions_eval.txt", atomically: true, encoding: .utf8) }
+        try await ensureEmbedderReady()
+        let projectPath = "/tmp/agent-deck-real-eval"
+        let store = AgentMemoryStore(rootURL: try temporaryDirectory())
+        let keysByID = try populate(store, memos: Self.realCorpus, projectPath: projectPath)
+
+        struct SessionQuery {
+            let label: String
+            let text: String
+            /// Corpus keys that count as relevant; empty = recall should abstain.
+            let relevant: Set<String>
+            /// Corpus keys that must NOT be injected. Chosen to share ZERO
+            /// discriminative terms with the prompt, so their exclusion is
+            /// embedder-independent (a regression here means gating broke).
+            let forbidden: Set<String>
+        }
+
+        let queries: [SessionQuery] = [
+            SessionQuery(label: "parallel-card-model",
+                         text: "in the parallel agents card I do not see the model in the same way I can see it for the single agent. confirm and fix it. use the exact same style",
+                         relevant: ["parallelgraphchild"], forbidden: []),
+            SessionQuery(label: "infinity-session-row",
+                         text: "the infinity symbol that appears in the session list row when a loop is running, can you understand how it works? I saw it but then it disappeared",
+                         relevant: ["loopsuseinfinitysy"], forbidden: []),
+            SessionQuery(label: "remove-redundant-loop-card",
+                         text: "when running a loop that top card is redundant considering we have the bottom bit in the composer, can we remove the card altogether",
+                         relevant: ["looptranscriptcard"], forbidden: []),
+            SessionQuery(label: "remove-loop-confirmation",
+                         text: "in my only loop I want to remove the part in the loop that makes the LLM ask me that confirmation as I run loops from my main app so that's not an issue anymore",
+                         relevant: [],
+                         forbidden: ["loopplanworkconsid", "builtinloopsaredis", "hidecomposersubage", "loopsuseinfinitysy"]),
+            SessionQuery(label: "loops-edit-button",
+                         text: "in the loops view edit should be done exactly like in agents view where there is an edit button at the top that opens a sheet, use the exact same logic and style",
+                         relevant: [],
+                         forbidden: ["loopplanworkconsid", "builtinloopsaredis", "hidecomposersubage"]),
+            SessionQuery(label: "chat-steering-logic",
+                         text: "can you describe how the steering is currently done for messages sent in the chat UI whilst the LLM is replying? how does the user understand if the steering has been sent or still queued?",
+                         relevant: [], forbidden: []),
+            SessionQuery(label: "understand-loops-framework",
+                         text: "I want you to understand deeply how our loops system and framework works. once ready tell me yes",
+                         relevant: [], forbidden: []),
+            SessionQuery(label: "minimap-nav-indicator",
+                         text: "add a smooth notion/substack-like indicator that animates to select messages sent by the user and scroll to them, so the user understands where it is in the conversation",
+                         relevant: [], forbidden: []),
+            SessionQuery(label: "clarify-memory-recall",
+                         text: "does memory recalled mean the memory gets injected, or just evaluated for it but not necessarily injected?",
+                         relevant: [], forbidden: []),
+        ]
+
+        var hitQueries = 0, hitRecalled = 0
+        var abstainQueries = 0, abstainCorrect = 0
+        var injectedTotal = 0, injectedRelevant = 0
+        var forbiddenViolations: [String] = []
+
+        emit("\n=========== REAL LOOP-DOMINANT SESSION RECALL ===========")
+        emit("corpus: \(Self.realCorpus.count) memories (replica of the real agent-deck store); \(queries.count) real session prompts\n")
+
+        for query in queries {
+            let retrieval = await store.retrieve(projectPath: projectPath, query: query.text)
+            let keys = (retrieval?.records ?? []).compactMap { keysByID[$0.id] }
+            let isHitCase = !query.relevant.isEmpty
+            let hit = keys.contains { query.relevant.contains($0) }
+            if isHitCase {
+                hitQueries += 1
+                if hit { hitRecalled += 1 }
+            } else {
+                abstainQueries += 1
+                if keys.isEmpty { abstainCorrect += 1 }
+            }
+            injectedTotal += keys.count
+            injectedRelevant += keys.filter { query.relevant.contains($0) }.count
+            let viol = keys.filter { query.forbidden.contains($0) }
+            if !viol.isEmpty { forbiddenViolations.append("\(query.label): injected forbidden \(viol)") }
+            let want = isHitCase ? query.relevant.sorted().joined(separator: "|") : "abstain"
+            let got = keys.isEmpty ? "abstain" : keys.joined(separator: ", ")
+            let ok = (isHitCase ? hit : keys.isEmpty) && viol.isEmpty
+            emit("\(ok ? "PASS" : "MISS") [\(query.label)] want=[\(want)] got=[\(got)]")
+            if !ok, let breakdown = store.lastScoreBreakdown {
+                emit("      scores: \(breakdown)")
+            }
+        }
+
+        let hitRate = Double(hitRecalled) / Double(max(hitQueries, 1))
+        let abstainRate = Double(abstainCorrect) / Double(max(abstainQueries, 1))
+        let precision = injectedTotal == 0 ? 1.0 : Double(injectedRelevant) / Double(injectedTotal)
+        emit("\nhit rate     \(hitRecalled)/\(hitQueries) = \(String(format: "%.2f", hitRate))")
+        emit("abstain rate \(abstainCorrect)/\(abstainQueries) = \(String(format: "%.2f", abstainRate))")
+        emit("precision    \(injectedRelevant)/\(injectedTotal) = \(String(format: "%.2f", precision))")
+
+        // Embedder-independent: the loop flood must not leak into prompts that share
+        // no discriminative term with it. A failure here means the gating regressed.
+        XCTAssertTrue(forbiddenViolations.isEmpty,
+                      "loop flood leaked into recall: \(forbiddenViolations.joined(separator: "; "))")
+        // Real hits must survive the tighter gating (floor leaves room for one
+        // embedder-hostile miss without flaking).
+        XCTAssertGreaterThanOrEqual(hitRate, 0.66, "real-hit recall regressed")
+        // Most noise prompts should now abstain instead of flooding.
+        XCTAssertGreaterThanOrEqual(abstainRate, 0.50, "noise abstain rate regressed")
+    }
 }
