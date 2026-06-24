@@ -36,14 +36,15 @@ struct PiAgentLoopControlBar: View {
             Spacer(minLength: 8)
 
             Button("Open Details", action: onOpenDetails)
-                .buttonStyle(.bordered)
+                .appSmallSecondaryButton()
             if let onRevealArtifacts {
                 Button("Reveal Artifacts", action: onRevealArtifacts)
-                    .buttonStyle(.bordered)
+                    .appSmallSecondaryButton()
             }
             if run.isActive {
                 Button("Stop", role: .destructive, action: onStop)
-                    .buttonStyle(.borderedProminent)
+                    .appDestructiveButton()
+                    .controlSize(.small)
             }
         }
         .padding(12)
