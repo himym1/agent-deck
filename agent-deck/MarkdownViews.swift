@@ -419,18 +419,11 @@ final class MarkdownSourceApplier {
             return
         }
 
-        // First appearance of a large uncached block: parse synchronously so the
-        // row never flashes blank. Only an already-displayed block growing during
-        // streaming takes the async path below.
-        guard view.hasDocument else {
-            parseTask?.cancel()
-            pendingSource = nil
-            view.configure(document: MarkdownRenderCache.document(for: displaySource))
-            return
-        }
-
-        // Large, uncached source on an already-displayed block: parse off the main
-        // thread, keeping the prior document on screen until the parse lands.
+        // Large, uncached source: keep first paint cheap and parse off-main.
+        // If the view already has content (streaming growth), it stays on screen;
+        // if this is first appearance, the container remains empty until the
+        // cached document is applied below. This avoids a main-thread markdown
+        // rebuild/measurement hitch when a large transcript row first appears.
         if pendingSource == displaySource { return }
         pendingSource = displaySource
         parseTask?.cancel()
@@ -451,9 +444,28 @@ final class NativeMarkdownTextContainer: NSView {
     private let stackView = NSStackView()
     private var lastDocument: CachedMarkdownDocument?
     private var lastStyleRevision = -1
-    /// Whether a document has ever been applied. Lets the representable parse
-    /// the first appearance synchronously (no blank flash) and reserve the
-    /// off-main path for an already-displayed block growing during streaming.
+#if DEBUG
+    /// Summary of the most recent `configure(document:)` on ANY container, read
+    /// synchronously by the cell-vend profiler right after it triggers a build so
+    /// the hitch line can say WHY the row was costly (a full teardown+rebuild of N
+    /// block views vs a cheap in-place reconcile). MainActor + synchronous, so the
+    /// value belongs to the container the vend just configured. DEBUG attribution
+    /// only — never read for behaviour, compiled out of release.
+    static var lastConfigureWasRebuild = false
+    static var lastConfigureBlockCount = 0
+    /// Bumped each time a real markdown (re)build runs. The cell-vend profiler
+    /// compares it before/after `spec.configure` to know whether the cost it just
+    /// timed was a markdown build at all (vs a non-markdown row like a tool group),
+    /// so it never mislabels with a stale rebuild/block-count from an earlier vend.
+    static var configureSeq = 0
+    /// Instance-level mirror for unit tests: the static `lastConfigureWasRebuild`
+    /// is shared across every container in the process, so observing it in tests
+    /// that share the app host is unreliable. This property belongs to one
+    /// container and is set only by that container's `configure` calls.
+    var lastConfigureWasRebuildInstance = false
+#endif
+    /// Whether a document has ever been applied. Large uncached first paint can
+    /// intentionally leave this false while `MarkdownSourceApplier` parses off-main.
     var hasDocument: Bool { lastDocument != nil }
     private var widthConstraint: NSLayoutConstraint?
     private var pendingHeightMeasurement = false
@@ -540,20 +552,55 @@ final class NativeMarkdownTextContainer: NSView {
         // height each pass — the visible streaming "wobble".
         let viewOffset = document.frontmatter == nil ? 0 : 1
         if !styleChanged, let previous,
-           previous.frontmatter == document.frontmatter,
-           stackView.arrangedSubviews.count == viewOffset + previous.blocks.count {
+           previous.frontmatter == document.frontmatter {
+            // Reconcile in place even if the arranged-subview count has drifted
+            // from `previous.blocks.count`. `reconcileBlocks` handles insert/remove
+            // to restore the invariant, and keeping `lastFullLayoutWidth` intact
+            // avoids the cold double-pass that produces visible streaming wobble.
+            // A view-count drift is logged as a warning so we can still hunt the
+            // root cause, but it no longer forces a full rebuild.
+            let expectedViews = viewOffset + previous.blocks.count
+            let viewCountMismatch = stackView.arrangedSubviews.count != expectedViews
+#if DEBUG
+            if viewCountMismatch {
+                Self.logIncrementalWarning("reconcile despite viewCount:\(stackView.arrangedSubviews.count)!=\(expectedViews)")
+                TranscriptStreamWobbleProbe.recordDocPath(.reconcile, bailReason: "viewCount:\(stackView.arrangedSubviews.count)!=\(expectedViews)")
+            } else {
+                TranscriptStreamWobbleProbe.recordDocPath(.reconcile)
+            }
+            Self.lastConfigureWasRebuild = false
+            self.lastConfigureWasRebuildInstance = false
+            Self.lastConfigureBlockCount = document.blocks.count
+            Self.configureSeq &+= 1
+#endif
             reconcileBlocks(old: previous.blocks, new: document.blocks, frontOffset: viewOffset)
             scheduleHeightMeasurement()
             return
         }
         // Only the genuinely unexpected case is worth a diagnostic: we had a
         // previous document at the same style revision (so a reconcile *should*
-        // have been possible) but the frontmatter or arranged-view invariant
-        // didn't hold. A `styleChanged` rebuild (theme/highlight toggle) and a
-        // first build (fresh recycled container) are expected and stay silent.
+        // have been possible) but the frontmatter didn't match. A `styleChanged`
+        // rebuild (theme/highlight toggle) and a first build (fresh recycled
+        // container) are expected and stay silent.
         if !styleChanged, previous != nil {
-            Self.logIncrementalBail("frontmatterOrViewCount")
+            Self.logIncrementalBail("frontmatter")
         }
+#if DEBUG
+        if !styleChanged, previous != nil {
+            // A bail-to-rebuild mid-stream resets lastFullLayoutWidth → forces the
+            // cold double-pass for the next measures. This is the measure-side
+            // wobble's root trigger, so name it on the wobble line too.
+            TranscriptStreamWobbleProbe.recordDocPath(.rebuild, bailReason: "frontmatter")
+        } else if styleChanged {
+            TranscriptStreamWobbleProbe.recordDocPath(.styleRebuild)
+        } else {
+            TranscriptStreamWobbleProbe.recordDocPath(.firstBuild)
+        }
+        Self.lastConfigureWasRebuild = true
+        self.lastConfigureWasRebuildInstance = true
+        Self.lastConfigureBlockCount = document.blocks.count
+        Self.configureSeq &+= 1
+#endif
         rebuild(from: styleChanged ? nil : previous, to: document)
         scheduleHeightMeasurement()
     }
@@ -563,8 +610,12 @@ final class NativeMarkdownTextContainer: NSView {
     private static func logIncrementalBail(_ reason: String) {
         incrementalLog.error("markdown rebuild (incremental bail): \(reason, privacy: .public)")
     }
+    private static func logIncrementalWarning(_ reason: String) {
+        incrementalLog.warning("markdown reconcile (view-count drift): \(reason, privacy: .public)")
+    }
 #else
     private static func logIncrementalBail(_ reason: String) {}
+    private static func logIncrementalWarning(_ reason: String) {}
 #endif
 
     // Two block kinds have the "same shape" if their layout chrome (paddedBlock, listRow
@@ -709,6 +760,9 @@ final class NativeMarkdownTextContainer: NSView {
         // from the runloop-scoped cache; a fresh pass (after layout settles, or
         // a scroll-back) finds the cache cleared and re-measures.
         if let heightCache, abs(heightCache.width - width) < 0.5 {
+#if DEBUG
+            TranscriptStreamWobbleProbe.recordMeasure(path: .cacheHit, width: width, height: heightCache.height)
+#endif
             return heightCache.height
         }
         configureWidthConstraint(to: width)
@@ -721,6 +775,9 @@ final class NativeMarkdownTextContainer: NSView {
             stackView.layoutSubtreeIfNeeded()
             let height = ceil(stackView.fittingSize.height)
             heightCache = (width, height)
+#if DEBUG
+            TranscriptStreamWobbleProbe.recordMeasure(path: .cheapSingle, width: width, height: height)
+#endif
             return height
         }
         // Width changed (or first measure after a rebuild). A text view's
@@ -731,11 +788,20 @@ final class NativeMarkdownTextContainer: NSView {
         // each block its real width; we then invalidate the per-block intrinsics and
         // lay out again so they re-wrap at that width before we read the fitting size.
         stackView.layoutSubtreeIfNeeded()
+#if DEBUG
+        let pass1 = ceil(stackView.fittingSize.height)
+#endif
         invalidateBlockIntrinsics(in: stackView)
         stackView.layoutSubtreeIfNeeded()
         let height = ceil(stackView.fittingSize.height)
         heightCache = (width, height)
         lastFullLayoutWidth = width
+#if DEBUG
+        // pass1 vs height (pass2) diverging means the measure disagreed with itself
+        // within one tick — the purest measure-side wobble fingerprint.
+        TranscriptStreamWobbleProbe.recordMeasure(path: .coldDouble, width: width, height: height,
+                                                  coldPass1: pass1, coldPass2: height)
+#endif
         return height
     }
 

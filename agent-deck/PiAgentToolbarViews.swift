@@ -287,6 +287,7 @@ struct PiAgentTranscriptDisplayOptionsPopover: View {
         .init(title: "Final system prompt", subtitle: "Show Pi's captured final system prompt card", systemImage: "doc.text", keyPath: \.showFinalSystemPrompt),
         .init(title: "Diffs", subtitle: "Show compact file changes in chat", systemImage: "plusminus", keyPath: \.showDiffs),
         .init(title: "Memory", subtitle: "Show memory recall cards in the transcript", systemImage: "brain", keyPath: \.showMemoryCards),
+        .init(title: "MCP", subtitle: "Show MCP tool call cards in the transcript", systemImage: "powerplug", keyPath: \.showMCPCards),
     ]
 
     var body: some View {

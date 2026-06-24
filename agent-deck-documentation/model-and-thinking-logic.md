@@ -44,6 +44,19 @@ thinking = normalizedThinkingLevel(thinkingLevel)
 
 The resolved values are passed to `PiRPCClient`, which appends `--provider`, `--model`, and `--thinking` to the Pi process arguments when non-empty.
 
+## Native subagent model and thinking values
+
+Native subagents can set `model` and `thinking` independently in agent frontmatter. For builtin agents, global and project settings overrides are merged field-by-field before launch: project-set fields win, and omitted project fields inherit global override values.
+
+Resolution order for child launches:
+
+1. If the agent sets `model`, use that model.
+2. Otherwise inherit the parent session's selected/reported model.
+3. If the agent sets `thinking`, use that thinking level even when the model is inherited.
+4. Otherwise inherit the parent session thinking level.
+
+Native subagents usually encode the resolved thinking level as a `:<thinking>` suffix on the child `--model` argument, including `:off` when the agent is explicitly configured with Thinking Off.
+
 ## Default model and thinking values
 
 `AppViewModel` reads Pi runtime defaults from:
@@ -153,8 +166,9 @@ Session-title generation also uses launch-time model configuration. It passes mo
 | `AppViewModel.swift` | Chooses/cycles models and thinking levels; reads Pi defaults; validates supported levels. |
 | `PiAgentRunnerService.swift` | Stores changes, decides whether to relaunch now or later, builds launch configuration. |
 | `PiRPCClient.swift` | Converts launch configuration into Pi CLI arguments. |
+| `PiSubagentLaunchPlanner.swift` | Resolves native subagent model/thinking, including agent thinking with inherited model. |
 | `PiAgentSessionListViews.swift` / `PiAgentViews.swift` | UI surfaces for model/thinking controls and session state. |
-| `PiAgentBridgeSmokeTests.swift` | Smoke tests ensuring launch arguments are used and mutation RPCs are not sent. |
+| `PiAgentBridgeSmokeTests.swift` / `PiSubagentRuntimeSmokeTests.swift` | Smoke tests ensuring launch arguments are used and mutation RPCs are not sent. |
 
 ## Behavior summary
 

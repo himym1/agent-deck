@@ -82,8 +82,8 @@ struct AgentsScreen: View {
                         agent: agent,
                         sourceColor: agentSourceColor(
                             for: agent,
-                            libraryBackedNames: Set(viewModel.snapshot.libraryAgents.map(\.name)),
-                            isInProjectContext: viewModel.selectedProjectPath != nil
+                            libraryBackedNames: Set(viewModel.globalCatalogSnapshot.libraryAgents.map(\.name)),
+                            isInProjectContext: false
                         ),
                         globalDisableBuiltinsActive: viewModel.userDisableBuiltins,
                         onSetBuiltinDisabled: { scope, isDisabled in
@@ -98,7 +98,7 @@ struct AgentsScreen: View {
                         onSetBuiltinDisabledInProject: { project, isDisabled in
                             viewModel.setBuiltinDisabled(isDisabled, for: agent, scope: .project, explicitProjectRoot: project.path)
                         },
-                        managedAgent: libraryManagedAgentRecord(for: agent, libraryAgents: viewModel.snapshot.libraryAgents),
+                        managedAgent: libraryManagedAgentRecord(for: agent, libraryAgents: viewModel.globalCatalogSnapshot.libraryAgents),
                         isAgentGlobal: { record in viewModel.agentIsEnabledGlobally(record) },
                         assignedAgentProjects: { record in viewModel.assignedProjects(for: record) },
                         skillVisibilityIssues: { viewModel.explicitSkillVisibilityIssues(for: $0) },
@@ -134,7 +134,7 @@ struct AgentsScreen: View {
         .appDebugLayout("Agents.rootHStack", logger: Self.layoutLog)
         .onAppear {
             #if DEBUG
-            Self.layoutLog.debug("Agents.state event=appear selected=\(viewModel.selectedAgent?.name ?? "nil", privacy: .public) project=\(viewModel.selectedDiscoveredProject?.name ?? "nil", privacy: .public)")
+            Self.layoutLog.debug("Agents.state event=appear selected=\(viewModel.selectedAgent?.name ?? "nil", privacy: .public)")
             #endif
         }
         .sheet(item: $agentBeingEdited) { presentation in
@@ -150,6 +150,7 @@ struct AgentsScreen: View {
                 availableTools: viewModel.availableToolNames(for: availableTarget),
                 availableSkills: viewModel.availableSkillNames(for: availableTarget),
                 availableExtensions: viewModel.availableExtensionNames(for: availableTarget),
+                availableMcpServers: viewModel.availableMCPServerNames,
                 initialTab: presentation.initialTab,
                 makeDraft: { scope in viewModel.makeAgentDraft(for: agent, preferredOverrideScope: scope ?? .global) },
                 onSave: { draft in try viewModel.saveAgentDraft(draft, for: agent) }
@@ -594,9 +595,6 @@ private struct AgentLibraryPane: View {
             cachedLayout = recomputeLayout()
             scheduleSelectionSynchronization()
         }
-        .onChange(of: viewModel.selectedDiscoveredProject) { _, _ in
-            cachedLayout = recomputeLayout()
-        }
         .onChange(of: viewModel.selectedAgentFilter) { _, _ in
             cachedLayout = recomputeLayout()
             scheduleSelectionSynchronization()
@@ -647,69 +645,47 @@ private struct AgentLibraryPane: View {
             }
         }
 
-        if viewModel.selectedDiscoveredProject != nil {
-            let active = activeCustomAgents
-            mark(active, inactive: false)
-            sections.append(AppListSection(
-                id: "active",
-                title: "Active",
-                items: active,
-                emptyMessage: "No custom agents are active for this project."
-            ))
-
-            if !catalogAgents.isEmpty {
-                mark(catalogAgents, inactive: true)
-                sections.append(AppListSection(
-                    id: "catalog",
-                    title: "Catalog Agents",
-                    info: "Catalog agents are discovered files that are not assigned to this project yet.",
-                    items: catalogAgents
-                ))
+        // Resource catalog is always global — Agents/Skills/Prompts views are
+        // decoupled from `selectedProjectPath`. Project assignment is managed in
+        // each agent's detail card (All Projects + per-project toggles), like MCP.
+        let global = globalCustomAgents
+        for item in global {
+            inactiveByID[item.id] = isCatalogOnly(item)
+            if !viewModel.warnings(for: item).isEmpty
+                || !viewModel.explicitSkillVisibilityIssues(for: item).isEmpty {
+                warningIDs.insert(item.id)
             }
+        }
+        sections.append(AppListSection(
+            id: "global",
+            title: "Global Agents",
+            info: "Custom agents available everywhere. Assign one to specific projects from its detail card.",
+            items: global,
+            emptyMessage: "No global custom agents."
+        ))
 
-            if !libraryAgents.isEmpty {
-                mark(libraryAgents, inactive: true)
-                sections.append(AppListSection(
-                    id: "library",
-                    title: "Library Agents",
-                    info: "Library agents are centrally stored and only become active when assigned to this project or enabled globally.",
-                    items: libraryAgents
-                ))
-            }
-        } else {
-            let global = globalCustomAgents
-            for item in global {
-                inactiveByID[item.id] = isCatalogOnly(item)
+        if !catalogAgents.isEmpty {
+            for item in catalogAgents {
+                inactiveByID[item.id] = !agentIsAssignedSomewhere(item)
                 if !viewModel.warnings(for: item).isEmpty
                     || !viewModel.explicitSkillVisibilityIssues(for: item).isEmpty {
                     warningIDs.insert(item.id)
                 }
             }
             sections.append(AppListSection(
-                id: "global",
-                title: "Global Agents",
-                info: "Select a project to see exactly which custom agents are active there and to manage project assignment.",
-                items: global,
-                emptyMessage: "No global custom agents."
+                id: "catalog",
+                title: "Catalog Agents",
+                items: catalogAgents
             ))
+        }
 
-            if !catalogAgents.isEmpty {
-                mark(catalogAgents, inactive: true)
-                sections.append(AppListSection(
-                    id: "catalog",
-                    title: "Catalog Agents",
-                    items: catalogAgents
-                ))
-            }
-
-            if !libraryAgents.isEmpty {
-                mark(libraryAgents, inactive: false)
-                sections.append(AppListSection(
-                    id: "library",
-                    title: "Library Agents",
-                    items: libraryAgents
-                ))
-            }
+        if !libraryAgents.isEmpty {
+            mark(libraryAgents, inactive: false)
+            sections.append(AppListSection(
+                id: "library",
+                title: "Library Agents",
+                items: libraryAgents
+            ))
         }
 
         mark(builtinAgents, inactive: false)
@@ -722,12 +698,6 @@ private struct AgentLibraryPane: View {
         ))
 
         return (sections, inactiveByID, warningIDs)
-    }
-
-    private var activeCustomAgents: [EffectiveAgentRecord] {
-        filteredAgents.filter { agent in
-            !isCatalogOnly(agent) && agent.resolutionKind != .library && !(agent.builtin != nil && agent.globalCustom == nil && agent.projectCustom == nil)
-        }
     }
 
     private var globalCustomAgents: [EffectiveAgentRecord] {
@@ -744,7 +714,7 @@ private struct AgentLibraryPane: View {
 
     private var libraryAgents: [EffectiveAgentRecord] {
         let candidates = filteredAgents.filter { agent in
-            if viewModel.selectedDiscoveredProject == nil, agent.winningRecord?.source.kind == .library { return true }
+            if agent.winningRecord?.source.kind == .library { return true }
             return agent.resolutionKind == .library
         }
         return preferredAgentsByName(candidates) { records in
@@ -760,7 +730,7 @@ private struct AgentLibraryPane: View {
     }
 
     private var libraryBackedActiveAgentNames: Set<String> {
-        Set(viewModel.snapshot.libraryAgents.map(\.name))
+        Set(viewModel.globalCatalogSnapshot.libraryAgents.map(\.name))
     }
 
     private var builtinAgents: [EffectiveAgentRecord] {
@@ -842,6 +812,10 @@ private struct AgentLibraryPane: View {
             warningPopoverAgentID: $warningPopoverAgentID,
             onEdit: { onEditAgent(agent) }
         )
+        // Fill the row and give it a hit-testable shape so a right-click anywhere on the
+        // row (not just on the name text) opens the context menu.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .contextMenu {
             Button {
                 openFile(filePath)
@@ -934,10 +908,8 @@ private struct AgentLibraryPane: View {
         if agent.id.hasPrefix("catalog::") { return "Catalog" }
         if agent.resolved.disabled == true { return "Disabled" }
         if libraryBackedActiveAgentNames.contains(agent.name) {
-            if viewModel.selectedProjectPath != nil, agent.resolutionKind != .library { return "Active" }
             return "Library"
         }
-        if viewModel.selectedProjectPath != nil, agent.resolutionKind != .library { return "Active" }
         return agent.resolutionKind.rawValue
     }
 
@@ -949,13 +921,21 @@ private struct AgentLibraryPane: View {
         agentSourceColor(
             for: agent,
             libraryBackedNames: libraryBackedActiveAgentNames,
-            isInProjectContext: viewModel.selectedProjectPath != nil
+            isInProjectContext: false
         )
+    }
+
+    private func agentIsAssignedSomewhere(_ agent: EffectiveAgentRecord) -> Bool {
+        guard let record = libraryManagedAgentRecord(
+            for: agent,
+            libraryAgents: viewModel.globalCatalogSnapshot.libraryAgents
+        ) else { return false }
+        return viewModel.agentIsEnabledGlobally(record) || !viewModel.assignedProjects(for: record).isEmpty
     }
 
     private func agentIsUnusedLibraryAgent(_ agent: EffectiveAgentRecord) -> Bool {
         guard agent.resolutionKind == .library,
-              let record = viewModel.snapshot.libraryAgents.first(where: { $0.name == agent.name }) else {
+              let record = viewModel.globalCatalogSnapshot.libraryAgents.first(where: { $0.name == agent.name }) else {
             return false
         }
         return !viewModel.agentIsEnabledGlobally(record) && viewModel.assignedProjects(for: record).isEmpty
@@ -1097,7 +1077,12 @@ private struct AgentDetailView: View {
                 }
             )
         }
-        .onChange(of: agent.id) { _, _ in
+        .onChange(of: agent.name) { oldName, newName in
+            // Reset transient local state only when the logical agent
+            // identity (name) changes — not when its EffectiveAgentRecord.id
+            // changes due to project assignment / catalog → effective
+            // transition, which would otherwise tear down @State.
+            guard oldName != newName else { return }
             cancelAgentRename()
             renameErrorMessage = nil
             avatarMessage = nil
@@ -1797,7 +1782,7 @@ fileprivate enum AgentEditTab: String, CaseIterable, Identifiable {
     case config = "Configuration"
     case prompt = "Prompt"
     case tools = "Tools"
-    case skills = "Skills"
+    case skills = "Skills & MCP"
     var id: String { rawValue }
 }
 
@@ -1813,6 +1798,7 @@ private struct AgentEditSheet: View {
     let availableTools: [String]
     let availableSkills: [String]
     let availableExtensions: [String]
+    let availableMcpServers: [String]
     let initialTab: AgentEditTab
     let makeDraft: (AgentEditingTarget.OverrideScope?) -> AgentEditorDraft?
     let onSave: (AgentEditorDraft) throws -> Void
@@ -1831,6 +1817,7 @@ private struct AgentEditSheet: View {
         availableTools: [String],
         availableSkills: [String],
         availableExtensions: [String],
+        availableMcpServers: [String] = [],
         initialTab: AgentEditTab = .config,
         makeDraft: @escaping (AgentEditingTarget.OverrideScope?) -> AgentEditorDraft?,
         onSave: @escaping (AgentEditorDraft) throws -> Void
@@ -1840,6 +1827,7 @@ private struct AgentEditSheet: View {
         self.availableTools = availableTools
         self.availableSkills = availableSkills
         self.availableExtensions = availableExtensions
+        self.availableMcpServers = availableMcpServers
         self.initialTab = initialTab
         self.makeDraft = makeDraft
         self.onSave = onSave
@@ -1995,7 +1983,7 @@ private struct AgentEditSheet: View {
                         }
                         .appMenuPicker()
                         .frame(maxWidth: 180, alignment: .leading)
-                        Text("Only values supported by the selected model are shown.")
+                        Text(selectedModel == nil ? "Applies while using Pi's default model when supported." : "Only values supported by the selected model are shown.")
                             .font(.caption)
                             .foregroundStyle(AppTheme.mutedText)
                     }
@@ -2247,6 +2235,34 @@ private struct AgentEditSheet: View {
                 }
             }
 
+            AppCard(title: "MCP servers") {
+                VStack(alignment: .leading, spacing: 18) {
+                    editSection {
+                        configRow("Available") {
+                            if availableMcpServers.isEmpty {
+                                Text("No MCP servers are configured. Add them in Runtime → MCP.")
+                                    .font(.caption)
+                                    .foregroundStyle(AppTheme.mutedText)
+                            } else {
+                                Menu("Choose MCP server") {
+                                    ForEach(selectableMcpServers, id: \.self) { server in
+                                        Button(server) { addMcpServer(server) }
+                                    }
+                                }
+                            }
+                        }
+
+                        configRow("Assigned") {
+                            tokenList(draft?.config.mcpServers ?? [], remove: removeMcpServer)
+                        }
+                    }
+                    Text("When this agent runs as a Deck agent, it can call tools from the MCP servers assigned here through the `mcp` proxy tool. Requires MCP enabled in Runtime → MCP.")
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             AppCard(title: "How Skills Work") {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("• Assigned skills are attached to this agent through Pi's native `--skill` support.")
@@ -2256,6 +2272,23 @@ private struct AgentEditSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+
+    private var selectableMcpServers: [String] {
+        availableMcpServers.filter { !(draft?.config.mcpServers?.contains($0) ?? false) }
+    }
+
+    private func addMcpServer(_ server: String) {
+        guard draft?.config.mcpServers?.contains(server) != true else { return }
+        var current = draft?.config.mcpServers ?? []
+        current.append(server)
+        draft?.config.mcpServers = current
+    }
+
+    private func removeMcpServer(_ server: String) {
+        guard var current = draft?.config.mcpServers else { return }
+        current.removeAll { $0 == server }
+        draft?.config.mcpServers = current.isEmpty ? nil : current
     }
 
     // MARK: Layout Helpers
@@ -2420,13 +2453,17 @@ private struct AgentEditSheet: View {
 
     private var modelSummary: String {
         if let model = selectedModel {
-            return "\(model.identifier) · ctx \(model.contextWindow) · out \(model.maxOutput)"
+            return "\(model.identifier) · ctx \(model.contextWindow) · out \(model.maxOutput ?? "—")"
         }
         return "Uses Pi's default model resolution."
     }
 
     private var availableThinkingLevels: [String] {
-        selectedModel?.supportedThinkingLevels ?? []
+        if let selectedModel {
+            return selectedModel.supportedThinkingLevels.isEmpty ? ["off"] : selectedModel.supportedThinkingLevels
+        }
+        let discovered = Array(Set(availableModels.flatMap(\.supportedThinkingLevels))).sorted { thinkingSortIndex($0) < thinkingSortIndex($1) }
+        return discovered.isEmpty ? ["off", "minimal", "low", "medium", "high", "xhigh"] : discovered
     }
 
     private var selectedToolValues: [String] {
@@ -2493,6 +2530,10 @@ private struct AgentEditSheet: View {
         guard !availableThinkingLevels.contains(current) else { return }
         let fallback = availableThinkingLevels.first ?? "off"
         draft?.config.thinking = fallback == "off" ? nil : fallback
+    }
+
+    private func thinkingSortIndex(_ level: String) -> Int {
+        ["off", "minimal", "low", "medium", "high", "xhigh"].firstIndex(of: level) ?? Int.max
     }
 
     private func addFallbackModel(_ model: String) {

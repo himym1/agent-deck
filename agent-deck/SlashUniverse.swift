@@ -4,7 +4,7 @@ import Foundation
 /// panel open, then filtered/grouped purely in memory. No filesystem hits or
 /// observable reads happen while the user is navigating the menu.
 nonisolated enum SlashItemKind: String, Hashable, Sendable {
-    case skill, prompt, command
+    case skill, prompt, command, loop
 }
 
 nonisolated struct SlashItem: Identifiable, Hashable, Sendable {
@@ -20,6 +20,8 @@ nonisolated struct SlashItem: Identifiable, Hashable, Sendable {
         case skill(name: String, body: String)
         case prompt(name: String, body: String)
         case command(slashName: String, commandID: String)
+        case loopCreateNew
+        case loopDefinition(LoopDefinition)
     }
 }
 
@@ -30,20 +32,22 @@ nonisolated struct SlashUniverse: Hashable, Sendable {
     let skills: [SlashItem]
     let prompts: [SlashItem]
     let commands: [SlashItem]
+    let loops: [SlashItem]
 
-    static let empty = SlashUniverse(skills: [], prompts: [], commands: [])
+    static let empty = SlashUniverse(skills: [], prompts: [], commands: [], loops: [])
 
-    var isEmpty: Bool { skills.isEmpty && prompts.isEmpty && commands.isEmpty }
+    var isEmpty: Bool { skills.isEmpty && prompts.isEmpty && commands.isEmpty && loops.isEmpty }
 
     func items(in kind: SlashItemKind) -> [SlashItem] {
         switch kind {
         case .skill: return skills
         case .prompt: return prompts
         case .command: return commands
+        case .loop: return loops
         }
     }
 
-    var allItems: [SlashItem] { skills + prompts + commands }
+    var allItems: [SlashItem] { skills + prompts + commands + loops }
 }
 
 extension SlashItem {
@@ -67,6 +71,8 @@ extension SlashItem {
             return trimmed.isEmpty ? trimmedBody : "\(trimmedBody)\n\n\(trimmed)"
         case .prompt:
             return trimmed
+        case .loopCreateNew, .loopDefinition:
+            return trimmed
         }
     }
 
@@ -75,6 +81,11 @@ extension SlashItem {
         if displayName.lowercased().contains(lowercasedQuery) { return true }
         if let description, description.lowercased().contains(lowercasedQuery) { return true }
         if case .command(let slashName, _) = payload, slashName.lowercased().contains(lowercasedQuery) { return true }
+        if case .loopCreateNew = payload, "loops".contains(lowercasedQuery) { return true }
+        if case .loopDefinition(let definition) = payload {
+            if definition.name.lowercased().contains(lowercasedQuery) { return true }
+            if definition.goalTemplate.lowercased().contains(lowercasedQuery) { return true }
+        }
         return false
     }
 }
@@ -128,7 +139,8 @@ enum SlashSuggestionRowBuilder {
                 return [
                     SlashSuggestionRow(id: "cat:command", kind: .category(.command)),
                     SlashSuggestionRow(id: "cat:prompt", kind: .category(.prompt)),
-                    SlashSuggestionRow(id: "cat:skill", kind: .category(.skill))
+                    SlashSuggestionRow(id: "cat:skill", kind: .category(.skill)),
+                    SlashSuggestionRow(id: "cat:loop", kind: .category(.loop))
                 ]
             }
             return globalSearchRows(universe: universe, query: lowered)
@@ -145,7 +157,7 @@ enum SlashSuggestionRowBuilder {
 
     private static func globalSearchRows(universe: SlashUniverse, query lowered: String) -> [SlashSuggestionRow] {
         var rows: [SlashSuggestionRow] = []
-        for kind in [SlashItemKind.command, .prompt, .skill] {
+        for kind in [SlashItemKind.command, .prompt, .skill, .loop] {
             let matched = universe.items(in: kind).filter { $0.matches(query: lowered) }
             guard !matched.isEmpty else { continue }
             rows.append(SlashSuggestionRow(id: "global-head:\(kind.rawValue)", kind: .header(headerLabel(for: kind))))
@@ -190,6 +202,7 @@ enum SlashSuggestionRowBuilder {
         case .command: return "Commands"
         case .prompt: return "Prompts"
         case .skill: return "Skills"
+        case .loop: return "Loops"
         }
     }
 }

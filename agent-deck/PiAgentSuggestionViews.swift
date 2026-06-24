@@ -399,16 +399,18 @@ struct PiAgentSlashSuggestions: View {
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(highlighted ? AppTheme.brandAccent : AppTheme.mutedText)
                     .frame(width: 16)
-                Text(item.displayName)
-                    .font(AppTheme.Font.callout.monospaced())
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let description = item.description {
-                    Text(description)
-                        .font(AppTheme.Font.caption)
-                        .foregroundStyle(AppTheme.mutedText)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(item.displayName)
+                        .font(AppTheme.Font.callout.monospaced())
                         .lineLimit(1)
-                        .truncationMode(.tail)
+                        .truncationMode(.middle)
+                    if let description = item.description {
+                        Text(description)
+                            .font(AppTheme.Font.caption)
+                            .foregroundStyle(AppTheme.mutedText)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
                 }
                 Spacer(minLength: 6)
                 if let scope = item.scopeLabel {
@@ -440,6 +442,7 @@ struct PiAgentSlashSuggestions: View {
         case .command: return "terminal"
         case .prompt: return AppSymbols.promptTemplate
         case .skill: return "sparkles"
+        case .loop: return "infinity"
         }
     }
 
@@ -448,6 +451,7 @@ struct PiAgentSlashSuggestions: View {
         case .command: return "Commands"
         case .prompt: return "Prompts"
         case .skill: return "Skills"
+        case .loop: return "Loops"
         }
     }
 }
@@ -484,6 +488,7 @@ struct PiAgentSlashSelectionChip: View {
         case .command: return "terminal"
         case .prompt: return AppSymbols.promptTemplate
         case .skill: return "sparkles"
+        case .loop: return "infinity"
         }
     }
 
@@ -495,6 +500,10 @@ struct PiAgentSlashSelectionChip: View {
             return name
         case .skill(let name, _):
             return name
+        case .loopCreateNew:
+            return "Create New Loop"
+        case .loopDefinition(let definition):
+            return definition.name
         }
     }
 }
@@ -543,6 +552,7 @@ struct PiAgentUIRequestInlineNotice: View {
             }
             Spacer(minLength: 0)
             Button("Cancel", action: onCancel)
+                .appSecondaryButton()
             Button("Respond…", action: onRespond)
                 .appPrimaryButton()
         }
@@ -558,62 +568,49 @@ struct PiAgentUIRequestInlineNotice: View {
 }
 
 struct PiAgentUIRequestSheet: View {
-    let request: PiAgentUIRequest
-    let onSubmitValue: (String) -> Void
-    let onSubmitFreeform: (String, String) -> Void
-    let onConfirm: (Bool) -> Void
-    let onCancel: () -> Void
-
-    var body: some View {
-        PiAgentUIRequestCard(
-            request: request,
-            onSubmitValue: onSubmitValue,
-            onSubmitFreeform: onSubmitFreeform,
-            onConfirm: onConfirm,
-            onCancel: onCancel
-        )
-        .padding(22)
-        .frame(minWidth: 560, idealWidth: 680, maxWidth: 760, alignment: .topLeading)
-        .appGlassPanel(cornerRadius: AppTheme.Chat.glassPanelCornerRadius)
-        .presentationSizing(.fitted)
-        .presentationBackground(.clear)
-    }
-}
-
-struct PiAgentUIRequestCard: View {
     private let freeformSentinel = "✏️ Type custom response..."
+    private let sheetWidth: CGFloat = 820
+    private let sheetHeight: CGFloat = 600
 
     let request: PiAgentUIRequest
     let onSubmitValue: (String) -> Void
     let onSubmitFreeform: (String, String) -> Void
     let onConfirm: (Bool) -> Void
     let onCancel: () -> Void
+    var initiallyComposingFreeform = false
 
     @State private var draft = ""
-    @State private var isComposingFreeform = false
+    @State private var isComposingFreeform: Bool
     @State private var selectedOptions: Set<String> = []
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            header
+    init(
+        request: PiAgentUIRequest,
+        onSubmitValue: @escaping (String) -> Void,
+        onSubmitFreeform: @escaping (String, String) -> Void,
+        onConfirm: @escaping (Bool) -> Void,
+        onCancel: @escaping () -> Void,
+        initiallyComposingFreeform: Bool = false
+    ) {
+        self.request = request
+        self.onSubmitValue = onSubmitValue
+        self.onSubmitFreeform = onSubmitFreeform
+        self.onConfirm = onConfirm
+        self.onCancel = onCancel
+        self.initiallyComposingFreeform = initiallyComposingFreeform
+        _isComposingFreeform = State(initialValue: initiallyComposingFreeform)
+    }
 
-            switch request.method {
-            case .select:
-                selectOptions
-            case .multiSelect:
-                multiSelectOptions
-            case .confirm:
-                HStack(spacing: 10) {
-                    Spacer()
-                    Button("Cancel", action: onCancel)
-                    Button("No") { onConfirm(false) }
-                    Button("Yes") { onConfirm(true) }
-                        .appPrimaryButton()
-                }
-            case .input, .editor:
-                textInput(submitTitle: "Submit", cancelTitle: "Cancel", cancelAction: onCancel) { submitTextInput() }
-            }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider()
+            bodyContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            Divider()
+            footer
         }
+        .frame(width: sheetWidth, height: sheetHeight, alignment: .topLeading)
+        .presentationSizing(.fitted)
         .onAppear {
             if draft.isEmpty, let prefill = request.prefill {
                 draft = prefill
@@ -621,282 +618,275 @@ struct PiAgentUIRequestCard: View {
         }
         .onChange(of: request.id) { _, _ in
             draft = request.prefill ?? ""
-            isComposingFreeform = false
+            isComposingFreeform = initiallyComposingFreeform
             selectedOptions = []
         }
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             Image(systemName: "questionmark.bubble.fill")
-                .foregroundStyle(AppTheme.brandAccent)
                 .font(AppTheme.Font.headline)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(request.title)
-                    .font(AppTheme.Font.headline)
-                    .fontWidth(.expanded)
-                if let message = request.message, !message.isEmpty, message != request.title {
-                    Text(message)
-                        .foregroundStyle(AppTheme.mutedText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                .foregroundStyle(AppTheme.brandAccent)
+                .frame(width: 22, alignment: .center)
+
+            Text("Ask User")
+                .font(AppTheme.Font.headline)
+                .fontWidth(.expanded)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var bodyContent: some View {
+        if isComposingFreeform {
+            VStack(alignment: .leading, spacing: 16) {
+                promptBlock
+                freeformEditor
+                    .layoutPriority(1)
             }
-            Spacer(minLength: 0)
+            .padding(22)
+        } else {
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 16) {
+                    promptBlock
+                    switch request.method {
+                    case .select:
+                        selectOptions
+                    case .multiSelect:
+                        multiSelectOptions
+                    case .confirm:
+                        confirmBody
+                    case .input, .editor:
+                        textInput
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(22)
+            }
+            .scrollIndicators(.hidden)
         }
     }
 
+    private var promptBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(request.title)
+                .font(AppTheme.Font.title.weight(.semibold))
+                .fontWidth(.expanded)
+                .fixedSize(horizontal: false, vertical: true)
+            if let message = request.message, !message.isEmpty, message != request.title {
+                Text(message)
+                    .font(AppTheme.Font.subheadline)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var confirmBody: some View {
+        Text("Choose whether Pi should continue with this request.")
+            .foregroundStyle(AppTheme.mutedText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
     private var selectOptions: some View {
-        Group {
-            if request.options.isEmpty {
-                emptyOptions
-            } else if request.responseFormat == .nativeAsk {
-                nativeAskChoiceOptions(allowsMultiple: false)
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(request.options, id: \.self) { option in
-                        if option == freeformSentinel {
-                            freeformPill(label: option)
-                        } else {
-                            Button {
-                                onSubmitValue(option)
-                            } label: {
-                                HStack {
-                                    Text(option)
-                                        .fontWeight(.semibold)
-                                    Spacer()
-                                    Image(systemName: "arrow.right.circle.fill")
-                                        .foregroundStyle(AppTheme.brandAccent)
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
-                                .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-
-                    HStack(spacing: 10) {
-                        Spacer()
-                        Button("Cancel", action: onCancel)
-                        if isComposingFreeform {
-                            Button("Submit") { onSubmitFreeform(freeformSentinel, draft) }
-                                .appPrimaryButton()
-                                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        }
-                    }
-                    .padding(.top, 4)
-                }
-            }
+        if request.options.isEmpty {
+            emptyOptions
+        } else {
+            optionRows(allowsMultiple: false)
         }
     }
 
-    private func freeformPill(label: String) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                isComposingFreeform.toggle()
-                if !isComposingFreeform { draft = "" }
-            } label: {
-                HStack {
-                    Text(label)
-                        .fontWeight(.semibold)
-                    Spacer()
-                    Image(systemName: isComposingFreeform ? "checkmark.circle.fill" : "square.and.pencil")
-                        .foregroundStyle(AppTheme.brandAccent)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if isComposingFreeform {
-                Divider()
-                    .padding(.horizontal, 12)
-                TextField("Custom response", text: $draft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...4)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .onSubmit {
-                        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !trimmed.isEmpty {
-                            onSubmitFreeform(freeformSentinel, draft)
-                        }
-                    }
-            }
-        }
-        .background(
-            isComposingFreeform ? AppTheme.brandAccent.opacity(0.12) : AppTheme.contentSubtleFill,
-            in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous)
-        )
-    }
-
+    @ViewBuilder
     private var multiSelectOptions: some View {
-        Group {
-            if request.responseFormat == .nativeAsk {
-                nativeAskChoiceOptions(allowsMultiple: true)
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(request.options, id: \.self) { option in
-                        Button {
-                            if selectedOptions.contains(option) {
-                                selectedOptions.remove(option)
-                            } else {
-                                selectedOptions.insert(option)
-                            }
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: selectedOptions.contains(option) ? "checkmark.square.fill" : "square")
-                                    .foregroundStyle(selectedOptions.contains(option) ? AppTheme.brandAccent : AppTheme.mutedText)
-                                Text(option)
-                                    .fontWeight(.semibold)
-                                Spacer()
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    HStack(spacing: 10) {
-                        Spacer()
-                        Button("Cancel", action: onCancel)
-                        Button("Submit") { onSubmitValue(request.options.filter { selectedOptions.contains($0) }.joined(separator: ", ")) }
-                            .appPrimaryButton()
-                            .disabled(selectedOptions.isEmpty)
-                    }
-                    .padding(.top, 4)
-                }
-            }
+        if request.options.isEmpty {
+            emptyOptions
+        } else {
+            optionRows(allowsMultiple: true)
         }
     }
 
-    private func nativeAskChoiceOptions(allowsMultiple: Bool) -> some View {
+    private func optionRows(allowsMultiple: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(request.options, id: \.self) { option in
-                Button {
-                    if allowsMultiple {
-                        if selectedOptions.contains(option) {
-                            selectedOptions.remove(option)
-                        } else {
-                            selectedOptions.insert(option)
-                        }
-                    } else {
-                        selectedOptions = [option]
-                    }
-                    isComposingFreeform = false
-                    draft = ""
-                } label: {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: selectionIcon(for: option, allowsMultiple: allowsMultiple))
-                            .foregroundStyle(selectedOptions.contains(option) ? AppTheme.brandAccent : AppTheme.mutedText)
-                            .frame(width: 18)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(option)
-                                .fontWeight(.semibold)
-                            if let description = request.optionDescriptions[option], !description.isEmpty {
-                                Text(description)
-                                    .font(AppTheme.Font.caption)
-                                    .foregroundStyle(AppTheme.mutedText)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
+                if option == freeformSentinel {
+                    freeformOptionRow(label: option)
+                } else {
+                    optionRow(option, allowsMultiple: allowsMultiple)
                 }
-                .buttonStyle(.plain)
             }
 
-            if request.allowsFreeform {
-                VStack(alignment: .leading, spacing: 0) {
-                    Button {
-                        selectedOptions = []
-                        isComposingFreeform.toggle()
-                        if !isComposingFreeform { draft = "" }
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: isComposingFreeform ? "checkmark.circle.fill" : "square.and.pencil")
-                                .foregroundStyle(isComposingFreeform ? AppTheme.brandAccent : AppTheme.mutedText)
-                                .frame(width: 18)
-                            Text("Type custom response")
-                                .fontWeight(.semibold)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-                    if isComposingFreeform {
-                        Divider()
-                            .padding(.horizontal, 12)
-                        TextField("Custom response", text: $draft, axis: .vertical)
-                            .textFieldStyle(.plain)
-                            .lineLimit(1...4)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .onSubmit {
-                                let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                                if !trimmed.isEmpty {
-                                    onSubmitValue(request.nativeAskFreeformResponseValue(trimmed))
-                                }
-                            }
-                    }
-                }
-                .background(
-                    isComposingFreeform ? AppTheme.brandAccent.opacity(0.12) : AppTheme.contentSubtleFill,
-                    in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous)
-                )
+            if request.responseFormat == .nativeAsk, request.allowsFreeform {
+                freeformOptionRow(label: "Type custom response")
             }
-
-            HStack(spacing: 10) {
-                Spacer()
-                Button("Cancel", action: onCancel)
-                Button("Submit") {
-                    if isComposingFreeform {
-                        onSubmitValue(request.nativeAskFreeformResponseValue(draft))
-                    } else {
-                        submitNativeAskSelection()
-                    }
-                }
-                .appPrimaryButton()
-                .disabled(nativeAskSubmitDisabled)
-            }
-            .padding(.top, 4)
         }
     }
 
-    private func textInput(submitTitle: String, cancelTitle: String, cancelAction: @escaping () -> Void, submitAction: @escaping () -> Void) -> some View {
-        let trimmedDraft = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let canSubmit = !trimmedDraft.isEmpty || request.allowsEmptyInputResponse
-
-        return VStack(alignment: .leading, spacing: 8) {
-            AppTextField(
-                text: $draft,
-                placeholder: request.placeholder ?? "Response",
-                axis: request.method == .editor ? .vertical : .horizontal,
-                onSubmit: { if canSubmit { submitAction() } }
-            )
-            .lineLimit(request.method == .editor ? 4...10 : 1...3)
-            HStack(spacing: 10) {
-                Spacer()
-                Button(cancelTitle, action: cancelAction)
-                Button(submitTitle, action: submitAction)
-                    .appPrimaryButton()
-                    .disabled(!canSubmit)
+    private func optionRow(_ option: String, allowsMultiple: Bool) -> some View {
+        Button {
+            if allowsMultiple {
+                if selectedOptions.contains(option) {
+                    selectedOptions.remove(option)
+                } else {
+                    selectedOptions.insert(option)
+                }
+            } else {
+                selectedOptions = [option]
             }
-            .padding(.top, 4)
+            draft = ""
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: selectionIcon(for: option, allowsMultiple: allowsMultiple))
+                    .font(AppTheme.Font.caption.weight(.semibold))
+                    .foregroundStyle(selectedOptions.contains(option) ? AppTheme.brandAccent : AppTheme.mutedText)
+                    .frame(width: 18, height: 20, alignment: .center)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(option)
+                        .fontWeight(.semibold)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let description = request.optionDescriptions[option], !description.isEmpty {
+                        Text(description)
+                            .font(AppTheme.Font.caption)
+                            .foregroundStyle(AppTheme.mutedText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous)
+                    .strokeBorder(selectedOptions.contains(option) ? AppTheme.brandAccent.opacity(0.55) : AppTheme.contentStroke, lineWidth: selectedOptions.contains(option) ? 1 : 0.5)
+            )
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+    }
+
+    private func freeformOptionRow(label: String) -> some View {
+        Button {
+            selectedOptions = []
+            isComposingFreeform = true
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: "square.and.pencil")
+                    .font(AppTheme.Font.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.mutedText)
+                    .frame(width: 18, alignment: .center)
+                Text(label)
+                    .fontWeight(.semibold)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous)
+                    .strokeBorder(AppTheme.contentStroke, lineWidth: 0.5)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var textInput: some View {
+        AppTextField(
+            text: $draft,
+            placeholder: request.placeholder ?? "Response",
+            axis: request.method == .editor ? .vertical : .horizontal,
+            onSubmit: { if canSubmit { submitCurrent() } }
+        )
+        .lineLimit(request.method == .editor ? 4...10 : 1...3)
+    }
+
+    private var freeformEditor: some View {
+        ZStack(alignment: .topLeading) {
+            TextEditor(text: $draft)
+                .font(.system(.body, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .scrollIndicators(.hidden)
+                .padding(14)
+            if draft.isEmpty {
+                Text("Type your custom response…")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(AppTheme.mutedText.opacity(0.6))
+                    .padding(14)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous)
+                .strokeBorder(AppTheme.contentStroke, lineWidth: 0.5)
+        )
     }
 
     private var emptyOptions: some View {
         Text("Pi requested a selection, but no options were provided.")
             .foregroundStyle(AppTheme.mutedText)
+    }
+
+    private var footer: some View {
+        HStack(spacing: 10) {
+            if isComposingFreeform {
+                Button("Back") { isComposingFreeform = false }
+                    .appSecondaryButton()
+                Spacer(minLength: 0)
+                Button("Cancel", action: onCancel)
+                    .appSecondaryButton()
+                Button("Submit") { submitFreeform() }
+                    .appPrimaryButton()
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canSubmitFreeform)
+            } else if request.method == .confirm {
+                Spacer(minLength: 0)
+                Button("No") { onConfirm(false) }
+                    .appSecondaryButton()
+                Button("Yes") { onConfirm(true) }
+                    .appPrimaryButton()
+                    .keyboardShortcut(.defaultAction)
+                Button("Cancel", action: onCancel)
+                    .appSecondaryButton()
+            } else {
+                Spacer(minLength: 0)
+                Button("Cancel", action: onCancel)
+                    .appSecondaryButton()
+                Button("Submit") { submitCurrent() }
+                    .appPrimaryButton()
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canSubmit)
+            }
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private var canSubmit: Bool {
+        switch request.method {
+        case .select, .multiSelect:
+            return !selectedOptions.isEmpty
+        case .input, .editor:
+            let trimmedDraft = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !trimmedDraft.isEmpty || request.allowsEmptyInputResponse
+        case .confirm:
+            return true
+        }
+    }
+
+    private var canSubmitFreeform: Bool {
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func selectionIcon(for option: String, allowsMultiple: Bool) -> String {
@@ -906,11 +896,29 @@ struct PiAgentUIRequestCard: View {
         return selectedOptions.contains(option) ? "largecircle.fill.circle" : "circle"
     }
 
-    private var nativeAskSubmitDisabled: Bool {
-        if isComposingFreeform {
-            return draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private func submitCurrent() {
+        switch request.method {
+        case .select, .multiSelect:
+            if request.responseFormat == .nativeAsk {
+                submitNativeAskSelection()
+            } else {
+                let orderedSelections = request.options.filter { selectedOptions.contains($0) }
+                onSubmitValue(orderedSelections.joined(separator: ", "))
+            }
+        case .input, .editor:
+            submitTextInput()
+        case .confirm:
+            break
         }
-        return selectedOptions.isEmpty
+    }
+
+    private func submitFreeform() {
+        guard canSubmitFreeform else { return }
+        if request.responseFormat == .nativeAsk {
+            onSubmitValue(request.nativeAskFreeformResponseValue(draft))
+        } else {
+            onSubmitFreeform(freeformSentinel, draft)
+        }
     }
 
     private func submitTextInput() {

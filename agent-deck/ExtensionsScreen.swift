@@ -82,7 +82,8 @@ struct ExtensionsScreen: View {
             memoryEnabled: viewModel.appSettings.agentMemoryEnabled,
             exaConfigured: exaConfigured,
             fallbackWebFetchAvailable: webFetchInstalled,
-            subagentsActive: viewModel.appSettings.nativeSubagentsEnabledForNewSessions
+            subagentsActive: viewModel.appSettings.nativeSubagentsEnabledForNewSessions,
+            mcpActive: viewModel.appSettings.mcpEnabled
         ).map(\.id))
     }
 

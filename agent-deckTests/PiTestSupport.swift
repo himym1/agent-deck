@@ -147,7 +147,8 @@ enum PiTestSupport {
         let executable = directory.appendingPathComponent("pi")
         let eventFiles = try events.enumerated().map { index, event -> URL in
             let eventFile = directory.appendingPathComponent("event-\(index).json")
-            let data = try JSONSerialization.data(withJSONObject: event, options: [.sortedKeys])
+            var data = try JSONSerialization.data(withJSONObject: event, options: [.sortedKeys])
+            data.append(0x0A) // trailing newline so `cat` emits a complete line to the pipe
             try data.write(to: eventFile)
             return eventFile
         }
@@ -155,10 +156,8 @@ enum PiTestSupport {
         let script = """
         #!/bin/sh
         sleep 0.2
-        \(eventFiles.map { "cat \(shellSingleQuoted($0.path)); printf '\\n'" }.joined(separator: "\n"))
-        while IFS= read -r line; do
-          printf '%s\\n' "$line" >> \(shellSingleQuoted(stdinLog.path))
-        done
+        \(eventFiles.map { "cat \(shellSingleQuoted($0.path))" }.joined(separator: "\n"))
+        cat > \(shellSingleQuoted(stdinLog.path))
         """
         try script.write(to: executable, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)

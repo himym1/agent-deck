@@ -163,7 +163,6 @@ nonisolated struct PiScanner: @unchecked Sendable {
         return urls
             .filter { url in
                 url.pathExtension == "md" &&
-                !url.lastPathComponent.hasSuffix(".chain.md") &&
                 url.lastPathComponent != "SKILL.md" &&
                 !url.pathComponents.contains("skills")
             }
@@ -181,7 +180,7 @@ nonisolated struct PiScanner: @unchecked Sendable {
                     filePath: url.path,
                     rawFrontmatter: document.frontmatter,
                     promptBody: document.body,
-                    parsed: AgentConfig(name: name, description: config.description, whenToUse: config.whenToUse, model: config.model, fallbackModels: config.fallbackModels, thinking: config.thinking, systemPromptMode: config.systemPromptMode, inheritSkills: config.inheritSkills, disabled: config.disabled, tools: config.tools, mcpDirectTools: config.mcpDirectTools, extensions: config.extensions, skills: config.skills, output: config.output, defaultExpectedOutcome: config.defaultExpectedOutcome, defaultReads: config.defaultReads, defaultProgress: config.defaultProgress, interactive: config.interactive, maxSubagentDepth: config.maxSubagentDepth, systemPrompt: config.systemPrompt, unknownFields: config.unknownFields)
+                    parsed: AgentConfig(name: name, description: config.description, whenToUse: config.whenToUse, model: config.model, fallbackModels: config.fallbackModels, thinking: config.thinking, systemPromptMode: config.systemPromptMode, inheritSkills: config.inheritSkills, disabled: config.disabled, tools: config.tools, mcpDirectTools: config.mcpDirectTools, mcpServers: config.mcpServers, extensions: config.extensions, skills: config.skills, output: config.output, defaultExpectedOutcome: config.defaultExpectedOutcome, defaultReads: config.defaultReads, defaultProgress: config.defaultProgress, interactive: config.interactive, maxSubagentDepth: config.maxSubagentDepth, systemPrompt: config.systemPrompt, unknownFields: config.unknownFields)
                 )
             }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -804,6 +803,10 @@ nonisolated struct PiScanner: @unchecked Sendable {
             guard var resolved = winner?.parsed else { return nil }
             if winner?.source.kind == .builtin {
                 if let projectOverride {
+                    // Project overrides should refine global builtin overrides field-by-field.
+                    // Keep the existing disabled precedence: a project override does not
+                    // inherit global disabled state unless it explicitly sets `disabled`.
+                    resolved = applyOverride(userOverride, to: resolved, includeDisabled: false)
                     resolved = applyOverride(projectOverride, to: resolved)
                 } else if projectDisableBuiltins == true {
                     resolved.disabled = true
@@ -839,7 +842,7 @@ nonisolated struct PiScanner: @unchecked Sendable {
         }
     }
 
-    private func applyOverride(_ override: BuiltinOverrideRecord?, to config: AgentConfig) -> AgentConfig {
+    private func applyOverride(_ override: BuiltinOverrideRecord?, to config: AgentConfig, includeDisabled: Bool = true) -> AgentConfig {
         guard let override else { return config }
         var result = config
 
@@ -853,7 +856,7 @@ nonisolated struct PiScanner: @unchecked Sendable {
                 else if rawValue.boolValue == false { result.model = nil }
             case "thinking":
                 if let value = rawValue.stringValue { result.thinking = value }
-                else if rawValue.boolValue == false { result.thinking = nil }
+                else if rawValue.boolValue == false { result.thinking = "off" }
             case "systemPromptMode":
                 if let value = rawValue.stringValue { result.systemPromptMode = value }
             case "inheritProjectContext", "defaultContext":
@@ -861,7 +864,7 @@ nonisolated struct PiScanner: @unchecked Sendable {
             case "inheritSkills":
                 if let value = rawValue.boolValue { result.inheritSkills = value }
             case "disabled":
-                if let value = rawValue.boolValue { result.disabled = value }
+                if includeDisabled, let value = rawValue.boolValue { result.disabled = value }
             case "skills":
                 if rawValue.boolValue == false { result.skills = [] }
                 else if let values = splitJSONArray(rawValue) { result.skills = values }
@@ -944,7 +947,7 @@ nonisolated struct PiScanner: @unchecked Sendable {
 
         for directory in agentDirectories {
             guard let urls = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { continue }
-            for url in urls where url.pathExtension == "md" && !url.lastPathComponent.hasSuffix(".chain.md") {
+            for url in urls where url.pathExtension == "md" {
                 guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
                 let document = parseMarkdownDocument(text)
                 if !text.hasPrefix("---") {
@@ -1000,6 +1003,7 @@ nonisolated struct PiScanner: @unchecked Sendable {
             disabled: parseBool(pop("disabled")),
             tools: frontmatter.keys.contains("tools") ? splitToolList(rawTools).tools : nil,
             mcpDirectTools: frontmatter.keys.contains("tools") ? splitToolList(rawTools).mcpDirectTools : nil,
+            mcpServers: frontmatter.keys.contains("mcpServers") ? optionalList(pop("mcpServers")) : nil,
             extensions: frontmatter.keys.contains("extensions") ? splitList(pop("extensions")) : nil,
             skills: optionalList(skillValue) ?? [],
             output: pop("output"),
@@ -1037,15 +1041,59 @@ nonisolated struct PiScanner: @unchecked Sendable {
         let bodyStart = normalized.index(range.lowerBound, offsetBy: 4)
         let body = String(normalized[bodyStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
 
+        let rawLines = frontmatterBlock.components(separatedBy: "\n")
         var frontmatter: [String: String] = [:]
-        for rawLine in frontmatterBlock.split(separator: "\n", omittingEmptySubsequences: false) {
-            guard let separator = rawLine.firstIndex(of: ":") else { continue }
+        var i = 0
+        while i < rawLines.count {
+            let rawLine = rawLines[i]
+            guard let separator = rawLine.firstIndex(of: ":") else {
+                i += 1
+                continue
+            }
             let key = String(rawLine[..<separator]).trimmingCharacters(in: .whitespaces)
             var value = String(rawLine[rawLine.index(after: separator)...]).trimmingCharacters(in: .whitespaces)
             if (value.hasPrefix("\"") && value.hasSuffix("\"")) || (value.hasPrefix("'") && value.hasSuffix("'")) {
                 value = String(value.dropFirst().dropLast())
             }
-            if !key.isEmpty { frontmatter[key] = value }
+            guard !key.isEmpty else { i += 1; continue }
+
+            if SkillFrontmatter.isBlockScalarIndicator(value) {
+                // Consume subsequent indented lines as the block-scalar value.
+                i += 1
+                let keyLineIndent = rawLine.prefix(while: { $0 == " " || $0 == "\t" }).count
+                var blockLines: [String] = []
+                while i < rawLines.count {
+                    let nextRaw = rawLines[i]
+                    let nextTrimmed = nextRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if nextTrimmed.isEmpty || nextTrimmed.hasPrefix("#") {
+                        blockLines.append(nextTrimmed)
+                        i += 1
+                        continue
+                    }
+                    let nextIndent = nextRaw.prefix(while: { $0 == " " || $0 == "\t" }).count
+                    if nextIndent > keyLineIndent {
+                        blockLines.append(nextTrimmed)
+                        i += 1
+                    } else {
+                        break
+                    }
+                }
+                let joined: String
+                if value.hasPrefix("|") {
+                    joined = blockLines.joined(separator: "\n")
+                } else {
+                    joined = blockLines
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty }
+                        .joined(separator: " ")
+                }
+                if !joined.isEmpty {
+                    frontmatter[key] = joined
+                }
+            } else {
+                frontmatter[key] = value
+                i += 1
+            }
         }
         return (frontmatter, body)
     }

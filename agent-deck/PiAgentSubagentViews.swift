@@ -6,6 +6,11 @@ import UniformTypeIdentifiers
 /// computed properties don't allocate a fresh decoder on every `body` eval.
 private let subagentJSONDecoder = JSONDecoder()
 
+fileprivate struct PiSubagentInjectedMemory: Identifiable, Hashable {
+    var id: String
+    var title: String
+}
+
 struct PiAgentFileAttachment: Identifiable, Hashable {
     let id = UUID()
     let url: URL
@@ -69,6 +74,7 @@ struct PiSubagentSupervisorRequestCard: View {
                 HStack {
                     Spacer()
                     Button("Cancel", action: onCancel)
+                        .appSecondaryButton()
                     Button("Send Response") { onRespond(responsePayload) }
                         .appPrimaryButton()
                         .disabled(!canRespond)
@@ -153,6 +159,7 @@ struct PiNativeSubagentRunCard: View {
     @ObservedObject var imageStore: AgentImageStore
     @State private var isDetailsPresented = false
     @State private var promptPopover: PromptPopover?
+    @State private var memoryPopover: MemoryPopover?
     @State private var displayedStatus: PiSubagentRunStatus?
     @State private var statusLingerTask: Task<Void, Never>?
     /// Cached `fileExists` for the run's final-system-prompt artifact and
@@ -167,6 +174,12 @@ struct PiNativeSubagentRunCard: View {
         let id = UUID()
         var title: String
         var text: String
+    }
+
+    private struct MemoryPopover: Identifiable {
+        let id = UUID()
+        var title: String
+        var memories: [PiSubagentInjectedMemory]
     }
 
     var body: some View {
@@ -193,6 +206,9 @@ struct PiNativeSubagentRunCard: View {
         }
         .popover(item: $promptPopover, arrowEdge: .bottom) { prompt in
             PiAgentPromptAuditPopover(title: prompt.title, text: prompt.text)
+        }
+        .popover(item: $memoryPopover, arrowEdge: .bottom) { popover in
+            PiSubagentInjectedMemoryPopover(title: popover.title, memories: popover.memories)
         }
         .onAppear { displayedStatus = run.status }
         .onChange(of: run.status) { oldStatus, newStatus in
@@ -267,6 +283,16 @@ struct PiNativeSubagentRunCard: View {
             Button("Graph", action: onOpenGraph)
                 .appSecondaryButton()
                 .controlSize(.small)
+        }
+        if !rootInjectedMemories.isEmpty {
+            Button {
+                memoryPopover = .init(title: "Injected Memories", memories: rootInjectedMemories)
+            } label: {
+                Label("Memory", systemImage: "brain")
+            }
+            .appSecondaryButton()
+            .controlSize(.small)
+            .help("Show memories injected into this Deck agent")
         }
         Button("System Prompt") {
             promptPopover = .init(
@@ -513,6 +539,19 @@ struct PiNativeSubagentRunCard: View {
     @ViewBuilder
     private func parallelChildActions(_ child: PiSubagentChildRecord) -> some View {
         HStack(spacing: 8) {
+            let memories = injectedMemories(for: child)
+            if !memories.isEmpty {
+                Button {
+                    memoryPopover = .init(title: "Injected Memories · \(child.agentName)", memories: memories)
+                } label: {
+                    Label("Memory", systemImage: "brain")
+                }
+                .appSecondaryButton()
+                .controlSize(.small)
+                .fixedSize(horizontal: true, vertical: false)
+                .help("Show memories injected into this Deck agent")
+            }
+
             Button("System Prompt") {
                 promptPopover = .init(
                     title: "Final Runtime System Prompt",
@@ -567,6 +606,23 @@ struct PiNativeSubagentRunCard: View {
         }
         guard child.artifactDirectory?.isEmpty == false else { return false }
         return FileManager.default.fileExists(atPath: childArtifactURL(child, named: fileName).path)
+    }
+
+    private var rootInjectedMemories: [PiSubagentInjectedMemory] {
+        injectedMemories(ids: run.injectedMemoryIDs ?? run.child?.injectedMemoryIDs, titles: run.injectedMemoryTitles ?? run.child?.injectedMemoryTitles)
+    }
+
+    private func injectedMemories(for child: PiSubagentChildRecord) -> [PiSubagentInjectedMemory] {
+        injectedMemories(ids: child.injectedMemoryIDs, titles: child.injectedMemoryTitles)
+    }
+
+    private func injectedMemories(ids: [String]?, titles: [String]?) -> [PiSubagentInjectedMemory] {
+        let ids = ids ?? []
+        guard !ids.isEmpty else { return [] }
+        return ids.enumerated().map { index, id in
+            let title = titles?.indices.contains(index) == true ? (titles?[index] ?? "") : ""
+            return PiSubagentInjectedMemory(id: id, title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? id : title)
+        }
     }
 
     private func childCompactMetadata(_ child: PiSubagentChildRecord) -> [CompactMetadataItem] {
@@ -668,6 +724,47 @@ struct PiNativeSubagentRunCard: View {
     }
 
     private var statusColor: Color { effectiveStatus.themedColor }
+}
+
+private struct PiSubagentInjectedMemoryPopover: View {
+    let title: String
+    let memories: [PiSubagentInjectedMemory]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(title, systemImage: "brain")
+                .font(AppTheme.Font.headline)
+                .foregroundStyle(AppTheme.brandAccent)
+
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(memories) { memory in
+                    Button {
+                        NotificationCenter.default.post(
+                            name: .agentDeckOpenMemoryRequested,
+                            object: nil,
+                            userInfo: ["id": memory.id]
+                        )
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(memory.title.isEmpty ? "Untitled Memory" : memory.title)
+                                .font(AppTheme.Font.caption.weight(.medium))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Image(systemName: "chevron.right")
+                                .font(AppTheme.Font.caption2.weight(.semibold))
+                                .foregroundStyle(AppTheme.mutedText)
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(memory.id)
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: 360, alignment: .leading)
+    }
 }
 
 /// Task preview shared by the single-run and parallel-child subagent cards.

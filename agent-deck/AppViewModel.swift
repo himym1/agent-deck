@@ -25,18 +25,20 @@ private final class NativeParallelGraphScheduler {
     let tasks: [(agentName: String, task: String)]
     let concurrency: Int
     let useWorktreeIsolation: Bool
+    let forcedExpectedOutcome: PiSubagentExpectedOutcome?
     let completion: ((PiSubagentRunRecord) -> Void)?
     var nextIndex = 0
     var active = 0
     var completed = 0
     var failed = false
 
-    init(parentSession: PiAgentSessionRecord, graphRunID: UUID, tasks: [(agentName: String, task: String)], concurrency: Int, useWorktreeIsolation: Bool, completion: ((PiSubagentRunRecord) -> Void)?) {
+    init(parentSession: PiAgentSessionRecord, graphRunID: UUID, tasks: [(agentName: String, task: String)], concurrency: Int, useWorktreeIsolation: Bool, forcedExpectedOutcome: PiSubagentExpectedOutcome? = nil, completion: ((PiSubagentRunRecord) -> Void)?) {
         self.parentSession = parentSession
         self.graphRunID = graphRunID
         self.tasks = tasks
         self.concurrency = concurrency
         self.useWorktreeIsolation = useWorktreeIsolation
+        self.forcedExpectedOutcome = forcedExpectedOutcome
         self.completion = completion
     }
 }
@@ -190,6 +192,12 @@ final class AppViewModel: NSObject {
     var githubIsRefreshingEverything = false
     var githubLastError: String?
     var githubLastStatusCheckAt: Date?
+    var loopDefinitions: [LoopDefinition] = []
+    var selectedLoopDefinitionID: LoopDefinition.ID?
+    var newLoopRequestID = UUID()
+    var pendingNewLoopEditorDraft: LoopDefinitionEditorDraft?
+    @ObservationIgnored private var loopDefinitionStore = LoopDefinitionStore()
+
     var appSettings: AppSettings = AppSettings() {
         didSet {
             rebuildAutomationModelCaches()
@@ -249,6 +257,15 @@ final class AppViewModel: NSObject {
 
     var automationAvailableModels: [AvailableModel] { cachedAutomationAvailableModels }
     var showPiAgentAttentionOnly = false
+    /// Per-project "Show more/less" state for the All-Projects grouped session
+    /// list, keyed by section id (project path, or the catch-all "Other").
+    /// Shared on the view model so all mounted session lists (sidebar panel,
+    /// Pi Agent screen column) stay consistent and so ⌘]/⌘[ and ↑/↓ can
+    /// auto-reveal a hidden target.
+    var expandedProjects: Set<String> = []
+    /// Per-project disclosure-collapse state for the grouped list (a collapsed
+    /// group renders only its header).
+    var collapsedProjects: Set<String> = []
     private(set) var piAgentTitleGeneratingSessionIDs: Set<UUID> = []
     private(set) var piAgentPendingComposerText: String?
     private(set) var piAgentPendingIssueAttachment: PiAgentIssueAttachment?
@@ -276,6 +293,7 @@ final class AppViewModel: NSObject {
     private let sessionWorktreeService = PiAgentSessionWorktreeService()
     @ObservationIgnored private lazy var piAgentRunner = PiAgentRunnerService(store: piAgentSessionStore)
     @ObservationIgnored private lazy var nativeSubagentRunner = PiSubagentRunService(store: piAgentSessionStore)
+    @ObservationIgnored private var activePipelineChildRunByLoopID: [UUID: UUID] = [:]
     /// Memoizes `selectableAgentUniverse(forProjectPath:)` so the subagent
     /// picker (and `catalogAgents(for:)` / `sessionHasSelectableAgents`) read
     /// a precomputed list instead of rebuilding it on every body evaluation.
@@ -283,14 +301,27 @@ final class AppViewModel: NSObject {
     @ObservationIgnored private var agentUniverseCacheByProjectPath: [String: [EffectiveAgentRecord]] = [:]
     private let piSessionTitleGenerator = PiSessionTitleGenerationService()
     let projectServerService = ProjectServerService()
+    /// App-shared MCP server connections. Survives across sessions; torn down at quit.
+    let mcpConnectionManager = MCPConnectionManager()
+    /// Cached catalog of all configured MCP tools, refreshed off-main. Read synchronously
+    /// by the launch-time catalog provider, so it must never be recomputed in a view body.
+    @ObservationIgnored private var mcpCatalogSnapshot: [MCPCatalogEntry] = []
+    @ObservationIgnored private var mcpConfiguredServerNames: Set<String> = []
+    @ObservationIgnored private var mcpLastRefreshKey: String?
     private var globalSnapshot: ScanSnapshot = .empty {
         didSet { clearAgentUniverseCache() }
     }
+    /// Always-global resource catalog snapshot, independent of `selectedProjectPath`.
+    /// The Agents/Skills/Prompts management views read this so their listing is
+    /// global — project selection only drives Issues, Memory, GitHub, and
+    /// new-session context, never the resource catalog presentation.
+    var globalCatalogSnapshot: ScanSnapshot { globalSnapshot }
     private var gitHubSession: GitHubSession?
     private(set) var projectRootURL: URL?
     private var autoRefreshCancellable: AnyCancellable?
     private var watchFingerprintTask: Task<Void, Never>?
     private var watchEventDebounceTask: Task<Void, Never>?
+    private var deferredWatchRefreshTask: Task<Void, Never>?
     private var fileWatchEventMonitor: FileWatchEventMonitor?
     private var lastWatchFingerprint: String = ""
     private var watchedURLsForAutoRefresh: [URL] = []
@@ -306,6 +337,7 @@ final class AppViewModel: NSObject {
     private let githubDiffCacheLimit = 64
     private let repositoryChangesCacheLifetime: TimeInterval = 5
     private let watchEventDebounceNanoseconds: UInt64 = 1_000_000_000
+    private let watchRefreshQuietNanoseconds: UInt64 = 1_200_000_000
     private let fallbackAutoRefreshInterval: TimeInterval = 300
     private var nativeParallelSchedulersByID: [UUID: NativeParallelGraphScheduler] = [:]
     private let lastSelectedProjectDefaultsKey = "lastSelectedProjectPath"
@@ -331,6 +363,7 @@ final class AppViewModel: NSObject {
         super.init()
 
         appSettings = appSettingsController.settings
+        reloadLoopDefinitions()
         ThemeManager.shared.apply(appSettingsController.resolvedActiveTheme)
         ThemeManager.shared.setMarkdownHighlightingEnabled(appSettingsController.settings.piAgentMarkdownHighlightingEnabled)
         #if DEBUG
@@ -344,6 +377,10 @@ final class AppViewModel: NSObject {
             projectRootURL = URL(fileURLWithPath: selectedProjectPath, isDirectory: true).standardizedFileURL
         }
         piAgentSessionStore.newSessionSubagentsEnabled = appSettings.nativeSubagentsEnabledForNewSessions
+        piAgentSessionStore.onStopLoopRun = { [weak self] runID, sessionID in
+            guard let self, let childRunID = self.activePipelineChildRunByLoopID.removeValue(forKey: runID) else { return }
+            self.stopNativeSubagent(runID: childRunID, parentSessionID: sessionID)
+        }
         piAgentSessionStore.onLoadApplied = { [weak self] in
             self?.pruneNeverStartedDraftSessions()
         }
@@ -391,6 +428,13 @@ final class AppViewModel: NSObject {
         piAgentRunner.nativeSubagentCatalogProvider = { [weak self] session in
             self?.nativeSubagentCatalogPrompt(for: session)
         }
+        piAgentRunner.mcpCatalogProvider = { [weak self] session in
+            await self?.mcpCatalogPrompt(for: session)
+        }
+        piAgentRunner.onMCPBridgeRequest = { [weak self] sessionID, request, completion in
+            guard let self else { completion("\(AppBrand.displayName)'s MCP bridge is not available."); return }
+            self.handleMCPBridge(sessionID: sessionID, request: request, completion: completion)
+        }
         piAgentRunner.parentSkillArgumentsProvider = { [weak self] projectURL in
             try self?.parentSkillArguments(for: projectURL) ?? []
         }
@@ -416,7 +460,13 @@ final class AppViewModel: NSObject {
             await self?.handleParentMemorySearch(sessionID: sessionID, request: request) ?? "\(AppBrand.displayName) memory is not available."
         }
         nativeSubagentRunner.childMemoryArgumentsProvider = { [weak self] parentSession, agent, task in
-            await self?.childMemoryArguments(for: parentSession, agent: agent, task: task) ?? []
+            await self?.childMemoryLaunchContext(for: parentSession, agent: agent, task: task) ?? .empty
+        }
+        nativeSubagentRunner.childMCPArgumentsProvider = { [weak self] parentSession, agent in
+            await self?.childMCPArguments(for: parentSession, agent: agent) ?? []
+        }
+        nativeSubagentRunner.onMCPBridgeRequest = { [weak self] parentSessionID, _, agentName, request in
+            await self?.handleSubagentMCPBridge(parentSessionID: parentSessionID, agentName: agentName, request: request) ?? "\(AppBrand.displayName)'s MCP bridge is not available."
         }
         nativeSubagentRunner.onMemoryWrite = { [weak self] parentSessionID, runID, agentName, request in
             await self?.handleSubagentMemoryWrite(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request) ?? "\(AppBrand.displayName) memory is not available."
@@ -634,9 +684,38 @@ final class AppViewModel: NSObject {
             migrateAgentAssignmentsFromDiscoveredFiles(globalSnapshot: result.globalSnapshot, projectSnapshots: result.projectSnapshots)
         }
 
-        let catalogProjectSnapshots = Array(result.projectSnapshots.values)
+        // Merge the raw per-project snapshots FIRST so the catalog used to
+        // resolve `globalSnapshot.effectiveAgents` reflects EVERY enabled
+        // project — independent of which project triggered this (possibly
+        // partial) refresh. Without this, a partial rescan
+        // (`scanAllProjects: false`, e.g. the refresh fired by selecting a
+        // project) would scope `globalSnapshot` against only the freshly-scanned
+        // project, making the always-global Agents/Skills/Prompts views depend
+        // on the selected project. `scopedAgentSnapshot` only rewrites
+        // `effectiveAgents` (it preserves `projectAgents`/`libraryAgents`), so
+        // mixing already-scoped existing snapshots with raw fresh ones here is
+        // safe — the catalog only reads the preserved fields.
+        let discoveredProjectPaths = Set(result.discoveredProjects.map(\.path))
+        var mergedRawProjectSnapshots: [String: ScanSnapshot]
+        if result.includesAllProjectSnapshots {
+            mergedRawProjectSnapshots = result.projectSnapshots
+                .filter { discoveredProjectPaths.contains($0.key) }
+        } else {
+            mergedRawProjectSnapshots = allProjectSnapshots
+            mergedRawProjectSnapshots.merge(result.projectSnapshots) { _, fresh in fresh }
+            mergedRawProjectSnapshots = mergedRawProjectSnapshots
+                .filter { discoveredProjectPaths.contains($0.key) }
+        }
+        let catalogProjectSnapshots = Array(mergedRawProjectSnapshots.values)
+
         let newGlobalSnapshot = scopedAgentSnapshot(result.globalSnapshot, projectPath: nil, globalCatalogSnapshot: result.globalSnapshot, catalogProjectSnapshots: catalogProjectSnapshots)
         if globalSnapshot != newGlobalSnapshot { globalSnapshot = newGlobalSnapshot }
+
+        // Per-project scoping: only freshly-scanned projects are re-scoped
+        // (existing keep their prior effectiveAgents) and merged with the fresh
+        // set — same number of `scopedAgentSnapshot` calls as before, no perf
+        // change. The complete catalog above is what keeps the always-global
+        // resource views stable across project selection.
         let freshProjectSnapshots = result.projectSnapshots.mapValues { projectSnapshot in
             scopedAgentSnapshot(projectSnapshot, projectPath: projectSnapshot.projectRoot, globalCatalogSnapshot: result.globalSnapshot, catalogProjectSnapshots: catalogProjectSnapshots)
         }
@@ -646,7 +725,6 @@ final class AppViewModel: NSObject {
         } else {
             var merged = allProjectSnapshots
             merged.merge(freshProjectSnapshots) { _, fresh in fresh }
-            let discoveredProjectPaths = Set(result.discoveredProjects.map(\.path))
             newAllProjectSnapshots = merged.filter { discoveredProjectPaths.contains($0.key) }
         }
         if allProjectSnapshots != newAllProjectSnapshots { allProjectSnapshots = newAllProjectSnapshots }
@@ -672,15 +750,21 @@ final class AppViewModel: NSObject {
             if snapshot != newSnapshot { snapshot = newSnapshot }
         }
 
+        // Keep MCP connections + catalog aligned with the active project. The call is
+        // a no-op when the (mcpEnabled, project) key is unchanged, so frequent
+        // file-watch refreshes don't re-spawn servers.
+        refreshMCPConfigurationIfNeeded(projectURL: projectRootURL)
+
         // A fresh snapshot is authoritative. Drop pending deletions no longer
         // present (deletion confirmed); keep IDs still present so a stale
-        // in-flight refresh can't un-hide a row mid-deletion.
+        // in-flight refresh can't un-hide a row mid-deletion. Pruned against the
+        // global catalog — the resource views are always global.
         if !pendingDeletedSkillIDs.isEmpty {
-            let liveSkillIDs = Set((snapshot.skills + snapshot.librarySkills).map(\.id))
+            let liveSkillIDs = Set((globalSnapshot.skills + globalSnapshot.librarySkills).map(\.id))
             pendingDeletedSkillIDs.formIntersection(liveSkillIDs)
         }
         if !pendingDeletedPromptIDs.isEmpty {
-            let livePromptIDs = Set((snapshot.promptTemplates + snapshot.libraryPromptTemplates).map(\.id))
+            let livePromptIDs = Set((globalSnapshot.promptTemplates + globalSnapshot.libraryPromptTemplates).map(\.id))
             pendingDeletedPromptIDs.formIntersection(livePromptIDs)
         }
 
@@ -743,6 +827,12 @@ final class AppViewModel: NSObject {
     /// the agent-catalog fields it copies through. This replaces a full
     /// `refresh()` (which re-walks the filesystem) for assignment toggles.
     private func reconcileSnapshotsFromPreferences() {
+        // Capture the selected agent's name before rebuilding the display
+        // cache, because the agent's EffectiveAgentRecord.id can change when
+        // it moves between catalog-only and effective (e.g. project
+        // assignment toggle). After the rebuild we restore the selection by
+        // name so the detail pane does not tear down and lose its @State.
+        let previousSelectedAgentName = selectedAgent?.name
         let catalogProjectSnapshots = Array(allProjectSnapshots.values)
         globalSnapshot = scopedAgentSnapshot(
             globalSnapshot,
@@ -764,6 +854,16 @@ final class AppViewModel: NSObject {
             snapshot = makeAggregateSnapshot()
         }
         rebuildWarningCaches()
+        // Restore selection when the old EffectiveAgentRecord.id disappeared
+        // from the rebuilt cache (e.g. catalog → effective after project
+        // assignment). Falls back to name-based lookup so the detail pane
+        // stays on the same logical agent.
+        if let previousID = selectedAgentID,
+           let name = previousSelectedAgentName,
+           cachedDisplayAgentByID[previousID] == nil,
+           let newID = cachedAllDisplayAgents.first(where: { $0.name == name })?.id {
+            selectedAgentID = newID
+        }
     }
 
     /// Patch the in-memory effective-agent skill list so snapshot-derived
@@ -1073,7 +1173,11 @@ final class AppViewModel: NSObject {
 
         if let existing {
             let clonePath = URL(fileURLWithPath: existing.clonePath, isDirectory: true)
-            let candidates = try await skillRepositorySyncService.listSkills(inCloneAt: clonePath, progress: progress)
+            let candidates = try await skillRepositorySyncService.listSkills(
+                inCloneAt: clonePath,
+                directoryConstraint: source.preselectedSkillDirectory,
+                progress: progress
+            )
             return RemoteSkillImportContext(
                 source: source,
                 clonePath: clonePath,
@@ -1086,7 +1190,11 @@ final class AppViewModel: NSObject {
 
         let clonePath = SkillRepositorySyncService.cloneDirectoryURL(owner: source.owner, repo: source.repo)
         let info = try await skillRepositorySyncService.cloneForDiscovery(source, into: clonePath)
-        let candidates = try await skillRepositorySyncService.listSkills(inCloneAt: clonePath, progress: progress)
+        let candidates = try await skillRepositorySyncService.listSkills(
+            inCloneAt: clonePath,
+            directoryConstraint: source.preselectedSkillDirectory,
+            progress: progress
+        )
         return RemoteSkillImportContext(
             source: source,
             clonePath: clonePath,
@@ -1416,11 +1524,6 @@ final class AppViewModel: NSObject {
         if selectedProjectPath == nil {
             snapshot = makeAggregateSnapshot()
         }
-    }
-
-    func toggleProjectFavorite(_ project: DiscoveredProject) {
-        projectPreferencesStore.toggleFavorite(for: project.path)
-        applyProjectPreferenceChanges()
     }
 
     func chooseCustomIcon(for project: DiscoveredProject) {
@@ -2247,13 +2350,14 @@ final class AppViewModel: NSObject {
                 selectPiAgentSession(existing.id)
                 ensurePiAgentModelCatalogLoaded()
             } else {
-                _ = piAgentSessionStore.createSession(
+                let session = piAgentSessionStore.createSession(
                     kind: .project,
                     title: "Project agent · \(project.name)",
                     project: project,
                     repository: project.gitHubRemote?.nameWithOwner
                 )
-                ensurePiAgentModelCatalogLoaded()
+                revealSessionGroup(session)
+                selectPiAgentSession(session.id)
             }
         } else {
             acknowledgeVisibleSelectedPiAgentSession()
@@ -2266,13 +2370,23 @@ final class AppViewModel: NSObject {
 
     func createPiAgentDraft(for project: DiscoveredProject) {
         selectedSidebarItem = .agent
-        _ = piAgentSessionStore.createSession(
+        let session = piAgentSessionStore.createSession(
             kind: .project,
             title: "Draft · \(project.name)",
             project: project,
             repository: project.gitHubRemote?.nameWithOwner
         )
-        ensurePiAgentModelCatalogLoaded()
+        // Settle selection synchronously: createSession already inserts, sorts,
+        // and assigns `selectedSessionID`; revealSessionGroup expands the
+        // target's group so the row is on screen; selectPiAgentSession commits
+        // the sidebar tab. A second re-assertion on the next runloop was only
+        // here to win the fight against the per-project `selectedProjectPath`
+        // reconciler, which is gone now (see
+        // `reconcileSelectedSessionWithProjectScope`). Re-running it a frame
+        // later rebuilt the cached sections a second time and visibly jumped
+        // the freshly-created row — so it has been removed.
+        revealSessionGroup(session)
+        selectPiAgentSession(session.id)
     }
 
     func startPiAgentForSelectedProject(initialInstruction: String) {
@@ -2295,6 +2409,8 @@ final class AppViewModel: NSObject {
                 project: project,
                 repository: project.gitHubRemote?.nameWithOwner
             )
+            revealSessionGroup(session)
+            selectPiAgentSession(session.id)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.provisionWorktreeIfEnabled(for: session.id, project: project)
@@ -2314,7 +2430,7 @@ final class AppViewModel: NSObject {
             return
         }
         selectedSidebarItem = .agent
-        _ = piAgentSessionStore.createSession(
+        let session = piAgentSessionStore.createSession(
             kind: .issue,
             title: detail.item.title,
             project: project,
@@ -2322,7 +2438,8 @@ final class AppViewModel: NSObject {
             issueNumber: detail.item.number,
             issueURL: detail.item.url
         )
-        ensurePiAgentModelCatalogLoaded()
+        revealSessionGroup(session)
+        selectPiAgentSession(session.id)
         piAgentPendingComposerText = PiIssuePromptBuilder.issueDraft(detail: detail, project: project)
         piAgentPendingIssueAttachment = PiAgentIssueAttachment(detail: detail)
     }
@@ -2386,21 +2503,27 @@ final class AppViewModel: NSObject {
         acknowledgePiAgentSession(id)
     }
 
-    /// The ONE authority for "is the selected session still valid" — keeps the
-    /// selection when the session exists in the current PROJECT scope, otherwise
-    /// moves it to the first scoped session. Validity deliberately ignores
-    /// per-panel view filters (search text, attention-only): every session list
-    /// delegates here, so two mounted panels with different filters can never
-    /// fight over the global selection (captured: each panel "correcting" the
-    /// selection into its own filtered scope, ping-ponging the transcript
-    /// through session switches that read as flickering).
+    /// The ONE authority for "is the selected session still valid". Now that the
+    /// session list is global (no per-project filter), validity is simply "the
+    /// selected session still exists in the store". It still ignores per-panel
+    /// view filters (search text, attention-only) so two mounted panels with
+    /// different filters can never fight over the global selection.
+    ///
+    /// Previously this also coerced selection into the currently-selected
+    /// *project* scope (`selectedProjectPath`). That was correct when the list
+    /// was project-scoped, but after unscoping it actively broke the app: a user
+    /// could click (or send into) a session whose `projectPath` differs from the
+    /// project they last picked for new-session context, and the next list
+    /// rebuild (fired by the send's `mark(.running)` → `sessionListRevision`
+    /// bump) would call back into here and clear/move the selection right out
+    /// from under the turn — leaving the composer in a "no session selected"
+    /// state even though the message had already gone out. `selectedProjectPath`
+    /// now only drives new-session context and is never assumed to equal the
+    /// active session's project.
     func reconcileSelectedSessionWithProjectScope() {
         let store = piAgentSessionStore
-        let scoped = selectedProjectPath.map { path in
-            store.sessions.filter { $0.projectPath == path }
-        } ?? store.sessions
-        if let id = store.selectedSessionID, scoped.contains(where: { $0.id == id }) { return }
-        if let first = scoped.min(by: { PiAgentSessionRecord.sessionListPrecedes($0, $1) }) {
+        if let id = store.selectedSessionID, store.sessions.contains(where: { $0.id == id }) { return }
+        if let first = store.sessions.min(by: { PiAgentSessionRecord.sessionListPrecedes($0, $1) }) {
             store.select(first.id)
         } else {
             store.clearSelection()
@@ -2425,21 +2548,92 @@ final class AppViewModel: NSObject {
         return piAgentSessionStore.sessions.filter { $0.projectPath == path }
     }
 
-    /// Move selection by `offset` within the scoped session list, wrapping at
-    /// both ends. No-op when there are no sessions. Used by the ⌘] / ⌘[
-    /// shortcuts and reused as the scroll benchmark's "advance" mechanism.
-    func selectAdjacentPiAgentSession(offset: Int) {
-        let sessions = scopedPiAgentSessionsInOrder()
-        guard !sessions.isEmpty else { return }
-        let currentID = piAgentSessionStore.selectedSessionID
-        let currentIndex = sessions.firstIndex { $0.id == currentID } ?? 0
-        let count = sessions.count
-        let nextIndex = ((currentIndex + offset) % count + count) % count
-        selectPiAgentSession(sessions[nextIndex].id)
+    /// Sessions created or touched (`updatedAt` bumped) during the current app
+    /// run. Populated by the store's `createSession`/
+    /// `touchSession(bumpUpdatedAt: true)` paths; disk-reload paths keep it clean.
+    /// The expanded sidebar surfaces these above its top-N preview cap so a
+    /// freshly-created or jostled older chat stays reachable.
+    var piAgentSessionsTouchedThisRunIDs: Set<UUID> {
+        piAgentSessionStore.sessionsTouchedThisRun
     }
 
-    func selectNextPiAgentSession() { selectAdjacentPiAgentSession(offset: 1) }
-    func selectPreviousPiAgentSession() { selectAdjacentPiAgentSession(offset: -1) }
+    /// Visible session rows of the ACTIVE sidebar panel (expanded or collapsed),
+    /// refreshed by that panel whenever it rebuilds its cached sections. Keyboard
+    /// navigation (`selectAdjacentPiAgentSession`, ⌘]/⌘[, in-list ↑/↓) operates
+    /// within this list only — no navigation into hidden preview/collapsed rows
+    /// and no auto-reveal. Empty until the first panel reports in; navigation
+    /// falls back to `scopedPiAgentSessionsInOrder` in that brief window.
+    var piAgentVisibleSessionsForNavigation: [PiAgentSessionRecord] = []
+
+    /// Move selection by `offset` within the active panel's visible session
+    /// list, in display order. `wrap == true` wraps at both ends (⌘]/⌘[);
+    /// `false` stops at the ends (↑/↓). No-op when there are no sessions.
+    ///
+    /// Navigation operates on the visible rows the active sidebar panel reports
+    /// via `piAgentVisibleSessionsForNavigation`. It does NOT auto-expand a
+    /// disclosure-collapsed group or activate "Show more" for a capped one — the
+    /// target row must already be visible. When no panel has reported in yet
+    /// (e.g. before the first rebuild), it falls back to the scoped session
+    /// list in stable order so keyboard shortcuts still work at the start of an
+    /// app launch.
+    ///
+    /// Both ⌘]/⌘[ and the in-list ↑/↓ arrows go through here so the two entry
+    /// points share one navigation order.
+    func selectAdjacentPiAgentSession(offset: Int, wrap: Bool = true) {
+        let ordered = piAgentVisibleSessionsForNavigation.isEmpty
+            ? scopedPiAgentSessionsInOrder()
+            : piAgentVisibleSessionsForNavigation
+        guard !ordered.isEmpty else { return }
+        let currentID = piAgentSessionStore.selectedSessionID
+        let currentIndex = ordered.firstIndex { $0.id == currentID } ?? 0
+        let count = ordered.count
+        var nextIndex: Int
+        if wrap {
+            nextIndex = ((currentIndex + offset) % count + count) % count
+        } else {
+            nextIndex = min(max(currentIndex + offset, 0), count - 1)
+        }
+        let target = ordered[nextIndex]
+        // No auto-reveal: the target row is already visible (it's in `ordered`,
+        // which is the panel's visible row set). The previous `revealSessionGroup`
+        // call here drove navigation into hidden preview/collapsed rows, which
+        // is no longer desired for the expanded/full sidebar UX.
+        selectPiAgentSession(target.id)
+    }
+
+    /// Every scoped session in grouped display order, ignoring group collapse
+    /// and "Show more" caps — the full pre-`exactSort`/visible-rows rework
+    /// navigation surface. Retained for the rare fallback (e.g. nil visible
+    /// panels at cold start) and any future caller needing the full set, but
+    /// `selectAdjacentPiAgentSession` no longer routes through here.
+    private func orderedAllSessionsForNavigation() -> [PiAgentSessionRecord] {
+        PiAgentSessionGrouping.sections(
+            from: scopedPiAgentSessionsInOrder(),
+            projectByPath: projectByPath,
+            expandedProjectIDs: [],
+            collapsedProjectIDs: [],
+            capPreviews: false,
+            isWorking: { _ in false },
+            selectedSessionID: nil
+        ).flatMap(\.items)
+    }
+
+    /// Auto-reveal the group owning `session` so it lands on a rendered row:
+    /// expand a disclosure-collapsed group and activate "Show more" for a
+    /// capped one. State is shared on the view model so every mounted session
+    /// list stays consistent. Used by selection paths that intentionally force
+    /// a hidden target visible (e.g. notification tap); keyboard navigation no
+    /// longer calls this.
+    private func revealSessionGroup(_ session: PiAgentSessionRecord) {
+        let groupID = projectByPath[session.projectPath] != nil
+            ? session.projectPath
+            : PiAgentSessionGrouping.otherSectionID
+        collapsedProjects.remove(groupID)
+        expandedProjects.insert(groupID)
+    }
+
+    func selectNextPiAgentSession() { selectAdjacentPiAgentSession(offset: 1, wrap: true) }
+    func selectPreviousPiAgentSession() { selectAdjacentPiAgentSession(offset: -1, wrap: true) }
 
     var canNavigatePiAgentSessions: Bool {
         scopedPiAgentSessionsInOrder().count > 1
@@ -3060,10 +3254,6 @@ final class AppViewModel: NSObject {
         return "export PATH=\"\(dirs.joined(separator: ":")):$PATH\""
     }
 
-    func togglePiAgentSessionPinned(_ id: UUID) {
-        piAgentSessionStore.togglePinned(id)
-    }
-
     func resumeSelectedPiAgentSession() {
         guard let session = piAgentSessionStore.selectedSession else { return }
         selectedSidebarItem = .agent
@@ -3192,6 +3382,176 @@ final class AppViewModel: NSObject {
     }
 
     @discardableResult
+    func launchLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+        switch draft.structure {
+        case .singleAgent:
+            return await launchSingleAgentLoop(session: session, draft: draft, stopExistingActive: stopExistingActive)
+        case .agentPipeline:
+            return await launchAgentPipelineLoop(session: session, draft: draft, stopExistingActive: stopExistingActive)
+        case .makerChecker:
+            return await launchMakerCheckerLoop(session: session, draft: draft, stopExistingActive: stopExistingActive)
+        case .discoveryTriage:
+            return await launchDiscoveryTriageLoop(session: session, draft: draft, stopExistingActive: stopExistingActive)
+        case .parallelAgents:
+            return await launchParallelAgentsLoop(session: session, draft: draft, stopExistingActive: stopExistingActive)
+        case .humanApproval:
+            return piAgentSessionStore.launchSmokeLoop(sessionID: session.id, projectPath: session.projectPath, draft: draft, stopExistingActive: stopExistingActive)
+        }
+    }
+
+    @discardableResult
+    private func launchSingleAgentLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+        let snapshot = startupSnapshot(forProjectPath: session.projectPath)
+        let agentsByName = Dictionary(uniqueKeysWithValues: allDisplayAgents.map { ($0.name, $0) })
+        return await piAgentSessionStore.launchSingleAgentLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, agentName, task, writeTarget, workingDirectory, requestedOutputPath in
+            guard let self else { return nil }
+            guard let agent = agentsByName[agentName], agent.resolved.disabled != true else {
+                self.piAgentSessionStore.append(.init(sessionID: session.id, role: .error, title: "Loop Agent Unavailable", text: "Single-agent role \"\(agentName)\" is not available in this project."))
+                return nil
+            }
+            var executionSession = session
+            if writeTarget == .newWorktree, let workingDirectory { executionSession.worktreePath = workingDirectory.path }
+            let expectedOutcome: PiSubagentExpectedOutcome = switch writeTarget {
+            case .artifactMarkdown: .reportOnly
+            case .newWorktree: .editFilesInWorktree
+            case .currentCheckout: .directProjectWrites
+            }
+            return await self.runNativeSubagentAndWait(parentSession: executionSession, agent: agent, snapshot: snapshot, task: task, useWorktreeIsolation: false, expectedOutcome: expectedOutcome, requestedOutputPath: requestedOutputPath, loopID: loopID)
+        }
+    }
+
+    @discardableResult
+    private func launchParallelAgentsLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+        await piAgentSessionStore.launchParallelAgentsLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, tasks, concurrency, useWorktreeIsolation in
+            guard let self else { return nil }
+            return await withCheckedContinuation { continuation in
+                Task { @MainActor in
+                    let forcedOutcome: PiSubagentExpectedOutcome? = switch draft.writeTarget {
+                    case .artifactMarkdown: .reportOnly
+                    case .newWorktree: .editFilesInWorktree
+                    case .currentCheckout: .directProjectWrites
+                    }
+                    await self.runNativeParallel(parentSession: session, agentTasks: tasks, concurrency: concurrency, useWorktreeIsolation: useWorktreeIsolation, forcedExpectedOutcome: forcedOutcome, loopID: loopID) { run in
+                        continuation.resume(returning: run)
+                    }
+                }
+            }
+        }
+    }
+
+    @discardableResult
+    private func launchDiscoveryTriageLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+        let snapshot = startupSnapshot(forProjectPath: session.projectPath)
+        let agentsByName = Dictionary(uniqueKeysWithValues: allDisplayAgents.map { ($0.name, $0) })
+        return await piAgentSessionStore.launchDiscoveryTriageLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, agentName, task, writeTarget, workingDirectory, requestedOutputPath in
+            guard let self else { return nil }
+            guard let agent = agentsByName[agentName], agent.resolved.disabled != true else {
+                self.piAgentSessionStore.append(.init(sessionID: session.id, role: .error, title: "Loop Agent Unavailable", text: "Discovery/Triage agent \"\(agentName)\" is not available in this project."))
+                return nil
+            }
+            var executionSession = session
+            if writeTarget == .newWorktree, let workingDirectory { executionSession.worktreePath = workingDirectory.path }
+            let expectedOutcome: PiSubagentExpectedOutcome = switch writeTarget {
+            case .artifactMarkdown: .reportOnly
+            case .newWorktree: .editFilesInWorktree
+            case .currentCheckout: .directProjectWrites
+            }
+            return await self.runNativeSubagentAndWait(parentSession: executionSession, agent: agent, snapshot: snapshot, task: task, useWorktreeIsolation: false, expectedOutcome: expectedOutcome, requestedOutputPath: requestedOutputPath, loopID: loopID)
+        }
+    }
+
+    @discardableResult
+    private func launchMakerCheckerLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+        let snapshot = startupSnapshot(forProjectPath: session.projectPath)
+        let agentsByName = Dictionary(uniqueKeysWithValues: allDisplayAgents.map { ($0.name, $0) })
+        return await piAgentSessionStore.launchMakerCheckerLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, roleName, task, writeTarget, workingDirectory, requestedOutputPath in
+            guard let self else { return nil }
+            guard let agent = agentsByName[roleName], agent.resolved.disabled != true else {
+                self.piAgentSessionStore.append(.init(sessionID: session.id, role: .error, title: "Loop Agent Unavailable", text: "Maker/checker role \"\(roleName)\" is not available in this project."))
+                return nil
+            }
+            var executionSession = session
+            if writeTarget == .newWorktree, let workingDirectory { executionSession.worktreePath = workingDirectory.path }
+            let expectedOutcome: PiSubagentExpectedOutcome = switch writeTarget {
+            case .artifactMarkdown: .reportOnly
+            case .newWorktree: .editFilesInWorktree
+            case .currentCheckout: .directProjectWrites
+            }
+            return await self.runNativeSubagentAndWait(parentSession: executionSession, agent: agent, snapshot: snapshot, task: task, useWorktreeIsolation: false, expectedOutcome: expectedOutcome, requestedOutputPath: requestedOutputPath, loopID: loopID)
+        }
+    }
+
+    @discardableResult
+    private func launchAgentPipelineLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+        let snapshot = startupSnapshot(forProjectPath: session.projectPath)
+        let agentsByName = Dictionary(uniqueKeysWithValues: allDisplayAgents.map { ($0.name, $0) })
+        return await piAgentSessionStore.launchAgentPipelineLoop(session: session, draft: draft, stopExistingActive: stopExistingActive) { [weak self] loopID, stageName, task, writeTarget, workingDirectory, requestedOutputPath in
+            guard let self else { return nil }
+            guard let agent = agentsByName[stageName], agent.resolved.disabled != true else {
+                self.piAgentSessionStore.append(.init(sessionID: session.id, role: .error, title: "Loop Agent Unavailable", text: "Pipeline stage \"\(stageName)\" is not available in this project."))
+                return nil
+            }
+            var executionSession = session
+            if writeTarget == .newWorktree, let workingDirectory {
+                executionSession.worktreePath = workingDirectory.path
+            }
+            let expectedOutcome: PiSubagentExpectedOutcome
+            switch writeTarget {
+            case .artifactMarkdown:
+                expectedOutcome = .reportOnly
+            case .newWorktree:
+                expectedOutcome = .editFilesInWorktree
+            case .currentCheckout:
+                expectedOutcome = .directProjectWrites
+            }
+            let childRun = await self.runNativeSubagentAndWait(
+                parentSession: executionSession,
+                agent: agent,
+                snapshot: snapshot,
+                task: task,
+                useWorktreeIsolation: false,
+                expectedOutcome: expectedOutcome,
+                requestedOutputPath: requestedOutputPath,
+                loopID: loopID
+            )
+            return childRun
+        }
+    }
+
+    private func runNativeSubagentAndWait(parentSession: PiAgentSessionRecord, agent: EffectiveAgentRecord, snapshot: ScanSnapshot, task: String, useWorktreeIsolation: Bool, expectedOutcome: PiSubagentExpectedOutcome, requestedOutputPath: String?, loopID: UUID) async -> PiSubagentRunRecord {
+        await withCheckedContinuation { continuation in
+            var didResume = false
+            Task { @MainActor in
+                let launched = await runNativeSubagent(
+                    parentSession: parentSession,
+                    agent: agent,
+                    snapshot: snapshot,
+                    task: task,
+                    useWorktreeIsolation: useWorktreeIsolation,
+                    expectedOutcome: expectedOutcome,
+                    requestedOutputPath: requestedOutputPath,
+                    allowOverwrite: true,
+                    completion: { completed in
+                        if self.activePipelineChildRunByLoopID[loopID] == completed.id {
+                            self.activePipelineChildRunByLoopID[loopID] = nil
+                        }
+                        guard !didResume else { return }
+                        didResume = true
+                        continuation.resume(returning: completed)
+                    }
+                )
+                self.activePipelineChildRunByLoopID[loopID] = launched.id
+                if !launched.status.isActive {
+                    self.activePipelineChildRunByLoopID[loopID] = nil
+                    guard !didResume else { return }
+                    didResume = true
+                    continuation.resume(returning: launched)
+                }
+            }
+        }
+    }
+
+    @discardableResult
     private func runNativeSubagent(parentSession: PiAgentSessionRecord, agent: EffectiveAgentRecord, snapshot: ScanSnapshot, task: String, continueRunID: UUID? = nil, useWorktreeIsolation: Bool, expectedOutcome: PiSubagentExpectedOutcome = .reportOnly, requestedOutputPath: String? = nil, allowOverwrite: Bool = false, readFirstPaths: [String] = [], completion: ((PiSubagentRunRecord) -> Void)?) async -> PiSubagentRunRecord {
         do {
             return try await nativeSubagentRunner.runSingle(parentSession: parentSession, agent: agent, snapshot: snapshot, task: task, continueRunID: continueRunID, useWorktreeIsolation: useWorktreeIsolation, expectedOutcome: expectedOutcome, requestedOutputPath: requestedOutputPath, allowOverwrite: allowOverwrite, readFirstPaths: readFirstPaths, onCompletion: completion)
@@ -3203,7 +3563,7 @@ final class AppViewModel: NSObject {
         }
     }
 
-    private func runNativeParallel(parentSession: PiAgentSessionRecord, agentTasks: [(agentName: String, task: String)], concurrency: Int, useWorktreeIsolation: Bool, completion: ((PiSubagentRunRecord) -> Void)?) async {
+    private func runNativeParallel(parentSession: PiAgentSessionRecord, agentTasks: [(agentName: String, task: String)], concurrency: Int, useWorktreeIsolation: Bool, forcedExpectedOutcome: PiSubagentExpectedOutcome? = nil, loopID: UUID? = nil, completion: ((PiSubagentRunRecord) -> Void)?) async {
         let tasks = agentTasks.map { ($0.agentName.trimmingCharacters(in: .whitespacesAndNewlines), $0.task.trimmingCharacters(in: .whitespacesAndNewlines)) }.filter { !$0.0.isEmpty && !$0.1.isEmpty }
         guard !tasks.isEmpty else { return }
         let now = Date()
@@ -3211,19 +3571,20 @@ final class AppViewModel: NSObject {
         let artifactDirectory = nativeGraphArtifactDirectory(for: runID)
         let defaultOutcomeByAgent = nativeSubagentDefaultOutcomes(parentSession: parentSession, agentNames: tasks.map(\.0))
         let childRecords = tasks.enumerated().map { index, item in
-            let expectedOutcome = useWorktreeIsolation ? PiSubagentExpectedOutcome.editFilesInWorktree : (defaultOutcomeByAgent[item.0] ?? .reportOnly)
+            let expectedOutcome = forcedExpectedOutcome ?? (useWorktreeIsolation ? PiSubagentExpectedOutcome.editFilesInWorktree : (defaultOutcomeByAgent[item.0] ?? .reportOnly))
             return PiSubagentChildRecord(
                 id: UUID(), runID: runID, index: index, agentName: item.0, task: item.1,
                 status: .queued, model: nil,
                 expectedOutcome: expectedOutcome, requestedOutputPath: nil, allowOverwrite: false,
                 currentTool: nil, inputTokens: nil, outputTokens: nil, totalTokens: nil, toolCount: nil, durationMs: nil,
                 artifactDirectory: nil, sessionFile: nil, outputPath: nil, worktreePath: nil, launchCommand: nil, executionRunID: nil,
-                summary: nil, error: nil, dependencies: nil, completedAt: nil, createdAt: now, updatedAt: now
+                summary: nil, error: nil, dependencies: nil, injectedMemoryIDs: nil, injectedMemoryTitles: nil, completedAt: nil, createdAt: now, updatedAt: now
             )
         }
         let limit = max(1, min(concurrency, tasks.count))
         let run = nativeGraphRun(id: runID, parentSession: parentSession, mode: .parallel, title: "Parallel", task: "\(tasks.count) parallel Deck agent task(s)", artifactDirectory: artifactDirectory, children: childRecords, edges: [], concurrency: limit, worktreeIsolation: useWorktreeIsolation)
         piAgentSessionStore.upsertSubagentRun(run)
+        if let loopID { activePipelineChildRunByLoopID[loopID] = runID }
         piAgentSessionStore.append(.init(
             sessionID: parentSession.id,
             role: .status,
@@ -3231,7 +3592,12 @@ final class AppViewModel: NSObject {
             text: "Deck agent ID: \(run.id.uuidString)\n\nStarted \(tasks.count) task(s), concurrency \(limit).",
             rawJSON: nativeSubagentCardPayload(for: run)
         ))
-        let scheduler = NativeParallelGraphScheduler(parentSession: parentSession, graphRunID: runID, tasks: tasks.map { (agentName: $0.0, task: $0.1) }, concurrency: limit, useWorktreeIsolation: useWorktreeIsolation, completion: completion)
+        let scheduler = NativeParallelGraphScheduler(parentSession: parentSession, graphRunID: runID, tasks: tasks.map { (agentName: $0.0, task: $0.1) }, concurrency: limit, useWorktreeIsolation: useWorktreeIsolation, forcedExpectedOutcome: forcedExpectedOutcome) { [weak self] completed in
+            if let loopID, self?.activePipelineChildRunByLoopID[loopID] == completed.id {
+                self?.activePipelineChildRunByLoopID[loopID] = nil
+            }
+            completion?(completed)
+        }
         nativeParallelSchedulersByID[scheduler.id] = scheduler
         await pumpNativeParallelScheduler(scheduler)
     }
@@ -3250,7 +3616,7 @@ final class AppViewModel: NSObject {
             scheduler.nextIndex += 1
             scheduler.active += 1
             let item = scheduler.tasks[index]
-            let expectedOutcome = scheduler.useWorktreeIsolation ? PiSubagentExpectedOutcome.editFilesInWorktree : nativeSubagentDefaultOutcome(parentSession: scheduler.parentSession, agentName: item.agentName)
+            let expectedOutcome = scheduler.forcedExpectedOutcome ?? (scheduler.useWorktreeIsolation ? PiSubagentExpectedOutcome.editFilesInWorktree : nativeSubagentDefaultOutcome(parentSession: scheduler.parentSession, agentName: item.agentName))
             let allowDirectProjectWrites = expectedOutcome == .directProjectWrites
             updateNativeGraphChild(scheduler.graphRunID, parentSessionID: scheduler.parentSession.id, index: index) { $0.status = .running }
             let childRun = await runNativeSubagent(parentSession: scheduler.parentSession, agentName: item.agentName, task: item.task, useWorktreeIsolation: scheduler.useWorktreeIsolation, allowDirectProjectWrites: allowDirectProjectWrites, expectedOutcome: expectedOutcome) { [weak self, weak scheduler] childResult in
@@ -3312,7 +3678,7 @@ final class AppViewModel: NSObject {
             worktreePath: nil, parentRepoPath: parentSession.worktreePath ?? parentSession.projectPath, baseCommit: nil,
             isWorktreeIsolated: false, worktreeStatus: PiSubagentWorktreeStatus.none, worktreePatchPath: nil,
             childSessionID: nil, childPiSessionFile: nil, launchCommand: nil, summary: nil, error: nil,
-            child: nil, children: children, graphEdges: edges, createdAt: Date(), updatedAt: Date(), completedAt: nil, durationMs: nil
+            child: nil, children: children, graphEdges: edges, injectedMemoryIDs: nil, injectedMemoryTitles: nil, createdAt: Date(), updatedAt: Date(), completedAt: nil, durationMs: nil
         )
     }
 
@@ -3354,6 +3720,8 @@ final class AppViewModel: NSObject {
             child.error = childResult.error
             child.completedAt = childResult.completedAt
             child.durationMs = childResult.durationMs
+            child.injectedMemoryIDs = childResult.injectedMemoryIDs ?? childResult.child?.injectedMemoryIDs
+            child.injectedMemoryTitles = childResult.injectedMemoryTitles ?? childResult.child?.injectedMemoryTitles
         }
     }
 
@@ -3436,6 +3804,387 @@ final class AppViewModel: NSObject {
             return "Session plan updated."
         }
         return "Session plan updated (`\(plan.id.uuidString)`):\n\(text)"
+    }
+
+    // MARK: - MCP bridge
+
+    private static let mcpCatalogToolCap = 60
+    private static let mcpResultCharacterCap = 50_000
+
+    /// Reloads `mcp.json`, reconnects the manager, and rebuilds the cached catalog when
+    /// the (mcpEnabled, project) key changes. No-op otherwise so file-watch refreshes
+    /// don't churn server processes. Pass `forced: true` after the user edits config.
+    func refreshMCPConfigurationIfNeeded(projectURL: URL?, forced: Bool = false) {
+        configureMCPBrandIcon()
+        let enabled = appSettings.mcpEnabled
+        let key = "\(enabled)#\(projectURL?.path ?? "")"
+        if !forced, key == mcpLastRefreshKey { return }
+        mcpLastRefreshKey = key
+
+        Task { [weak self] in
+            guard let self else { return }
+            // Bind OAuth token resolution so remote (http) transports authorize.
+            await self.mcpConnectionManager.setAuthTokenProvider { server in
+                await MCPOAuthService.shared.accessToken(for: server)
+            }
+            // Catalog = every configured server, merged across all mcp.json locations.
+            // Always surface their names (cheap) so the agent picker works even before
+            // MCP is turned on.
+            let configured = await Task.detached { MCPConfigLoader().load(projectRoot: projectURL).servers }.value
+            let names = Set(configured.map(\.name))
+            self.mcpConfiguredServerNames = names
+            guard enabled else {
+                await self.mcpConnectionManager.configure(servers: [])
+                self.mcpCatalogSnapshot = []
+                return
+            }
+            await self.mcpConnectionManager.configure(servers: configured)
+            // Connect/enumerate ONLY servers assigned to this project (defaults +
+            // project assignment + any agent available to the project). Unassigned
+            // servers stay registered but unconnected, so adding an MCP without
+            // assigning it never spawns its process or triggers its permission prompt.
+            // The manager keeps connections live across sessions, so a server connects
+            // (and prompts) at most once, not on every new chat. Per-session scoping is
+            // re-applied on catalog render (snapshot for the active project, on-demand
+            // discovery for other projects — see `mcpCatalogEntries`) and on each bridge call.
+            let scoped = self.assignedMCPServerNames(forProjectPath: projectURL?.path)
+            self.mcpCatalogSnapshot = await self.mcpConnectionManager.discoverCatalog(serverNames: scoped)
+        }
+    }
+
+    /// Configured MCP server names available for assignment (cached; reflects the
+    /// active project's merged `mcp.json`). Sorted for stable UI.
+    var availableMCPServerNames: [String] { mcpConfiguredServerNames.sorted() }
+
+    /// Probes a server (connect + list tools) for the management UI's test button.
+    func probeMCPServer(_ entry: MCPServerEntry) async -> MCPProbeResult {
+        await mcpConnectionManager.probe(entry: entry)
+    }
+
+    /// Tools already discovered for a server (no connection opened), so the management
+    /// view can show a health pill from cache instead of reconnecting on entry.
+    func cachedMCPTools(_ name: String) async -> [MCPProbeTool]? {
+        await mcpConnectionManager.cachedTools(server: name)?
+            .map { MCPProbeTool(name: $0.name, description: $0.description) }
+    }
+
+    /// Whether a live (reused) connection to this server already exists.
+    func mcpServerHasLiveConnection(_ name: String) async -> Bool {
+        await mcpConnectionManager.hasLiveConnection(name)
+    }
+
+    /// Tears down all MCP connections. Called at app termination.
+    func shutdownMCP() async {
+        await mcpConnectionManager.shutdown()
+    }
+
+    // MARK: MCP OAuth (per-server Connect / Sign out)
+
+    /// Runs the OAuth Connect flow for a remote server (opens the browser). Returns an
+    /// error message on failure, or nil on success.
+    func connectMCPServer(_ entry: MCPServerEntry) async -> String? {
+        guard let url = entry.config.url, !url.isEmpty else { return "This server has no URL to connect to." }
+        do {
+            try await MCPOAuthService.shared.connect(serverName: entry.name, serverURLString: url)
+            refreshMCPConfigurationIfNeeded(projectURL: projectRootURL, forced: true)
+            return nil
+        } catch {
+            return (error as? MCPError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Signs out a remote server (drops stored tokens).
+    func disconnectMCPServer(_ name: String) async {
+        await MCPOAuthService.shared.disconnect(serverName: name)
+        refreshMCPConfigurationIfNeeded(projectURL: projectRootURL, forced: true)
+    }
+
+    /// Whether a remote server currently has stored OAuth tokens.
+    func mcpServerIsConnected(_ name: String) async -> Bool {
+        await MCPAuthStore.shared.isConnected(name)
+    }
+
+    /// Renders the app icon to a small base64 PNG once, so the OAuth loopback success
+    /// page can show the brand mark. Cheap + idempotent (runs on the main actor).
+    private func configureMCPBrandIcon() {
+        guard MCPLoopbackServer.brandIconDataURI == nil else { return }
+        guard let icon = NSApp.applicationIconImage ?? NSImage(named: NSImage.applicationIconName) else { return }
+        let size = NSSize(width: 96, height: 96)
+        let resized = NSImage(size: size)
+        resized.lockFocus()
+        icon.draw(in: NSRect(origin: .zero, size: size))
+        resized.unlockFocus()
+        guard let tiff = resized.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else { return }
+        MCPLoopbackServer.brandIconDataURI = "data:image/png;base64,\(png.base64EncodedString())"
+    }
+
+    /// Whether a discovered server can be edited/removed in-app. Only the app-owned
+    /// `~/.pi/agent/mcp.json` is writable; servers from project files or ~/.config/mcp
+    /// are shown read-only.
+    func mcpServerIsEditable(_ entry: MCPServerEntry) -> Bool {
+        URL(fileURLWithPath: entry.sourcePath).standardizedFileURL == MCPConfigLoader.writableConfigURL().standardizedFileURL
+    }
+
+    /// Adds or updates a server in the app-owned mcp.json, then refreshes connections.
+    func upsertMCPServer(name: String, config: MCPServerConfig) throws {
+        try MCPConfigWriter().upsert(name: name, config: config)
+        refreshMCPConfigurationIfNeeded(projectURL: projectRootURL, forced: true)
+    }
+
+    /// Removes a server from the app-owned mcp.json, prunes its assignments, then
+    /// refreshes connections (the configured set genuinely changed here).
+    func removeMCPServer(named name: String) throws {
+        try MCPConfigWriter().remove(name: name)
+        removeMCPServerReferences(named: name)
+        refreshMCPConfigurationIfNeeded(projectURL: projectRootURL, forced: true)
+    }
+
+    /// Drops a removed server from the "All Projects" default, every project
+    /// assignment, and any agent's `mcpServers` frontmatter — mirroring
+    /// `removeSkillReferences` so a deleted server leaves no orphaned assignments.
+    private func removeMCPServerReferences(named name: String) {
+        appSettingsController.setDefaultMcpServer(name, enabled: false)
+        appSettings = appSettingsController.settings
+
+        for projectPath in projectPreferencesStore.preferencesByPath.keys {
+            projectPreferencesStore.setAssignedMcpServer(name, assigned: false, for: projectPath)
+        }
+        applyProjectPreferenceChanges()
+
+        for agent in snapshot.effectiveAgents where (agent.resolved.mcpServers ?? []).contains(name) {
+            guard var draft = makeAgentDraft(for: agent) else { continue }
+            draft.config.mcpServers?.removeAll { $0 == name }
+            if draft.config.mcpServers?.isEmpty == true { draft.config.mcpServers = nil }
+            // Persist directly (no per-agent rescan); the trailing refresh in
+            // removeMCPServer picks up every edit.
+            try? agentPersistence.save(draft, original: agent, projectRoot: selectedProjectPath)
+        }
+    }
+
+    /// MCP servers in scope for a session: a bound-agent (1:1) session uses the agent's
+    /// assigned servers; a project session uses the global defaults unioned with the
+    /// project's assignment. Always intersected with servers that actually exist in config.
+    private func assignedMCPServerNames(for session: PiAgentSessionRecord) -> Set<String> {
+        let resolved: Set<String>
+        if let agent = boundAgent(for: session) {
+            resolved = Set(agent.resolved.mcpServers ?? [])
+        } else {
+            var names = appSettings.defaultMcpServerNames
+            names.formUnion(projectPreference(for: session.projectPath).assignedMcpServerNames)
+            resolved = names
+        }
+        return resolved.intersection(mcpConfiguredServerNames)
+    }
+
+    /// MCP servers worth connecting when a chat in `projectPath` is opened: the global
+    /// defaults, the project's own assignment, and every server any agent available to
+    /// that project assigns (so a bound-agent chat finds its tools already discovered).
+    /// Intersected with the configured set. A server added but assigned to nothing
+    /// (e.g. an Xcode MCP) is excluded here, so it is never connected and never prompts.
+    private func assignedMCPServerNames(forProjectPath projectPath: String?) -> Set<String> {
+        var names = appSettings.defaultMcpServerNames
+        if let projectPath {
+            names.formUnion(projectPreference(for: projectPath).assignedMcpServerNames)
+        }
+        let agents = projectPath.flatMap { allProjectSnapshots[$0]?.effectiveAgents } ?? globalSnapshot.effectiveAgents
+        for agent in agents { names.formUnion(agent.resolved.mcpServers ?? []) }
+        return names.intersection(mcpConfiguredServerNames)
+    }
+
+    // MARK: MCP assignment (used by the MCP servers management UI)
+
+    /// All configured MCP server entries for the active project (merged `mcp.json`).
+    func mcpServerEntries() -> [MCPServerEntry] {
+        MCPConfigLoader().load(projectRoot: projectRootURL).servers
+    }
+
+    func mcpServer(_ name: String, isEnabledFor project: DiscoveredProject) -> Bool {
+        projectPreference(for: project.path).assignedMcpServerNames.contains(name)
+    }
+
+    func setMcpServer(_ name: String, enabled: Bool, for project: DiscoveredProject) {
+        projectPreferencesStore.setAssignedMcpServer(name, assigned: enabled, for: project.path)
+        applyProjectPreferenceChanges()
+        // Assignment now governs which servers we actually connect, so re-run scoped
+        // discovery: a newly-assigned server connects (and populates the catalog) while
+        // a newly-unassigned one drops out. Connections are reused, so this only spawns
+        // a server process the first time it becomes assigned.
+        refreshMCPConfigurationIfNeeded(projectURL: projectRootURL, forced: true)
+    }
+
+    func isMcpServerEnabledForAllProjects(_ name: String) -> Bool {
+        appSettings.defaultMcpServerNames.contains(name)
+    }
+
+    func setMcpServerEnabledForAllProjects(_ name: String, enabled: Bool) {
+        appSettingsController.setDefaultMcpServer(name, enabled: enabled)
+        appSettings = appSettingsController.settings
+        // A default assignment makes this server in-scope for every project, so re-run
+        // scoped discovery to connect/enumerate it (or drop it). Connections are reused.
+        refreshMCPConfigurationIfNeeded(projectURL: projectRootURL, forced: true)
+    }
+
+    func setMCPEnabled(_ enabled: Bool) {
+        appSettingsController.setMCPEnabled(enabled)
+        appSettings = appSettingsController.settings
+        refreshMCPConfigurationIfNeeded(projectURL: projectRootURL, forced: true)
+    }
+
+    /// Compact MCP tool catalog injected into the system prompt, scoped to the session's
+    /// assigned servers. Returns nil when MCP is off or nothing is assigned, so neither
+    /// the bridge nor a prompt block is injected (matching the Deck-agents catalog).
+    ///
+    /// Sessions whose project differs from the active project discover their assigned
+    /// servers on demand via the connection manager instead of filtering the
+    /// active-project snapshot, which only covers the active project's scope. The
+    /// manager reuses live connections and caches tool lists, so a server already
+    /// connected for another project adds no extra process or permission prompt.
+    private func mcpCatalogPrompt(for session: PiAgentSessionRecord) async -> String? {
+        guard appSettings.mcpEnabled else { return nil }
+        let scope = assignedMCPServerNames(for: session)
+        let entries = await mcpCatalogEntries(forScope: scope, projectPath: session.projectPath)
+        return mcpCatalogPrompt(fromEntries: entries)
+    }
+
+    /// Resolves catalog entries for a scope. When the scope belongs to a project other
+    /// than the active one, discovers on demand via the connection manager (reusing
+    /// live connections and cached tool lists) instead of relying on the
+    /// active-project snapshot, which only covers the active project's assigned servers.
+    /// Relies on the servers being in the manager's configured set; globally configured
+    /// servers (the common case) are always present regardless of active project.
+    private func mcpCatalogEntries(forScope scope: Set<String>, projectPath: String?) async -> [MCPCatalogEntry] {
+        guard !scope.isEmpty else { return [] }
+        if projectPath == projectRootURL?.path {
+            return mcpCatalogSnapshot.filter { scope.contains($0.server) }
+        }
+        return await mcpConnectionManager.discoverCatalog(serverNames: scope)
+    }
+
+    /// MCP servers in scope for a delegated Deck agent: its assigned `mcpServers`,
+    /// intersected with the configured set (mirrors the bound-agent branch of
+    /// `assignedMCPServerNames`).
+    private func subagentMCPScope(parentSessionID: UUID, agentName: String?) -> Set<String> {
+        guard let agentName,
+              let parent = piAgentSessionStore.sessions.first(where: { $0.id == parentSessionID }) else { return [] }
+        let agent = (allProjectSnapshots[parent.projectPath]?.effectiveAgents ?? globalSnapshot.effectiveAgents)
+            .first { $0.name == agentName }
+            ?? selectableAgentUniverse(forProjectPath: parent.projectPath).first { $0.name == agentName }
+        return Set(agent?.resolved.mcpServers ?? []).intersection(mcpConfiguredServerNames)
+    }
+
+    /// Launch arguments injecting the native MCP bridge + a scoped catalog into a
+    /// delegated Deck agent, so an agent's assigned `mcpServers` work under delegation
+    /// exactly as they do in a 1:1 bound chat. Returns `[]` when MCP is off or the agent
+    /// has no in-scope servers (no bridge, no prompt block — like the parent path).
+    private func childMCPArguments(for parentSession: PiAgentSessionRecord, agent: EffectiveAgentRecord) async -> [String] {
+        guard appSettings.mcpEnabled else { return [] }
+        let scope = Set(agent.resolved.mcpServers ?? []).intersection(mcpConfiguredServerNames)
+        let entries = await mcpCatalogEntries(forScope: scope, projectPath: parentSession.projectPath)
+        guard let catalog = mcpCatalogPrompt(fromEntries: entries), !catalog.isEmpty,
+              let mcpURL = try? PiNativeSubagentBridgeExtensions.mcpExtensionURL() else { return [] }
+        return ["--extension", mcpURL.path, "--append-system-prompt", catalog]
+    }
+
+    private func handleSubagentMCPBridge(parentSessionID: UUID, agentName: String?, request: PiMCPBridgeRequest) async -> String {
+        await performMCPBridge(request: request, scope: subagentMCPScope(parentSessionID: parentSessionID, agentName: agentName))
+    }
+
+    /// Compact MCP tool catalog for a given set of entries. Shared by the parent-session
+    /// and delegated-Deck-agent paths.
+    private func mcpCatalogPrompt(fromEntries entries: [MCPCatalogEntry]) -> String? {
+        guard appSettings.mcpEnabled else { return nil }
+        let entries = entries.sorted { $0.qualifiedName < $1.qualifiedName }
+        guard !entries.isEmpty else { return nil }
+
+        var lines: [String] = [
+            "MCP tools (call through the `mcp` proxy tool):",
+            "- Call a tool: mcp({ tool: \"server/tool\", args: { ... } })",
+            "- Discover: mcp({}) lists servers, mcp({ search: \"keywords\" }) finds tools, mcp({ describe: \"server/tool\" }) shows a tool's input schema."
+        ]
+        if entries.count <= Self.mcpCatalogToolCap {
+            lines.append("Available MCP tools:")
+            lines.append(contentsOf: entries.map { entry in
+                let desc = entry.description?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return "- \(entry.qualifiedName): \(desc?.isEmpty == false ? desc! : "(no description)")"
+            })
+        } else {
+            let counts = Dictionary(grouping: entries, by: \.server).mapValues(\.count)
+            lines.append("Available MCP servers (use mcp({ search }) to find specific tools):")
+            lines.append(contentsOf: counts.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value) tools" })
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Handles an `mcp` proxy bridge request: routes list/search/describe/call to the
+    /// native connection manager, scoped to the session's assigned servers.
+    private func handleMCPBridge(sessionID: UUID, request: PiMCPBridgeRequest, completion: @escaping (String) -> Void) {
+        let scope: Set<String>
+        if let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID }) {
+            scope = assignedMCPServerNames(for: session)
+        } else {
+            scope = mcpConfiguredServerNames
+        }
+        Task { [weak self] in
+            guard let self else { completion("\(AppBrand.displayName)'s MCP bridge is not available."); return }
+            let text = await self.performMCPBridge(request: request, scope: scope)
+            completion(text)
+        }
+    }
+
+    private func performMCPBridge(request: PiMCPBridgeRequest, scope: Set<String>) async -> String {
+        switch request.action {
+        case "search":
+            let hits = await mcpConnectionManager.search(query: request.query ?? "", serverNames: scope)
+            guard !hits.isEmpty else { return "No MCP tools matched \"\(request.query ?? "")\"." }
+            return hits.map { "- \($0.qualifiedName): \($0.description ?? "(no description)")" }.joined(separator: "\n")
+
+        case "describe":
+            guard let address = MCPConnectionManager.resolveAddress(request.tool ?? "", serverHint: request.server),
+                  scope.contains(address.server) else {
+                return "Unknown or unassigned MCP tool \"\(request.tool ?? "")\"."
+            }
+            guard let descriptor = await mcpConnectionManager.describe(server: address.server, tool: address.tool) else {
+                return "Tool \(address.server)/\(address.tool) was not found."
+            }
+            var out = "\(address.server)/\(descriptor.name): \(descriptor.description ?? "(no description)")"
+            if let schema = descriptor.inputSchema, let json = Self.prettyJSON(schema) {
+                out += "\nInput schema:\n\(json)"
+            }
+            return out
+
+        case "call":
+            guard let address = MCPConnectionManager.resolveAddress(request.tool ?? "", serverHint: request.server) else {
+                return "Specify a tool as \"server/tool\"."
+            }
+            guard scope.contains(address.server) else {
+                return "MCP server \"\(address.server)\" is not assigned to this session."
+            }
+            do {
+                let result = try await mcpConnectionManager.call(server: address.server, tool: address.tool, arguments: request.args)
+                let text = result.combinedText.isEmpty ? "(tool returned no content)" : result.combinedText
+                let prefix = result.isError == true ? "MCP tool reported an error:\n" : ""
+                return String((prefix + text).prefix(Self.mcpResultCharacterCap))
+            } catch {
+                return "MCP call failed: \(error.localizedDescription)"
+            }
+
+        default: // "list"
+            let entries = mcpCatalogSnapshot.filter { scope.contains($0.server) }
+            guard !entries.isEmpty else { return "No MCP servers are assigned to this session." }
+            let counts = Dictionary(grouping: entries, by: \.server).mapValues(\.count)
+            return counts.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value) tools" }.joined(separator: "\n")
+        }
+    }
+
+    private static func prettyJSON(_ value: JSONValue) -> String? {
+        guard let data = try? JSONEncoder().encode(value),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let pretty = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) else {
+            return nil
+        }
+        return String(decoding: pretty, as: UTF8.self)
     }
 
     private func nativeSubagentCatalogPrompt(for session: PiAgentSessionRecord) -> String? {
@@ -3613,6 +4362,88 @@ final class AppViewModel: NSObject {
                 await MainActor.run { recordSubagentWorktreeError(error, runID: runID, parentSessionID: parentSessionID) }
             }
         }
+    }
+
+    func applyLoopWorktree(_ loopRun: LoopRun) {
+        guard let syntheticRun = loopWorktreeSubagentRecord(for: loopRun) else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let patch = try await subagentWorktreeService.applyPatch(for: syntheticRun)
+                try? "Applied at \(Date().formatted(date: .numeric, time: .standard))\nPatch: \(patch.patchPath)\n".write(to: URL(fileURLWithPath: syntheticRun.artifactDirectory).appendingPathComponent("worktree.applied"), atomically: true, encoding: .utf8)
+                await MainActor.run {
+                    piAgentSessionStore.markLoopWorktreeState(runID: loopRun.id, sessionID: loopRun.sessionID, state: .applied)
+                    piAgentSessionStore.append(.init(sessionID: loopRun.sessionID, role: .status, title: "Loop Worktree Applied", text: "Applied \(patch.changedFiles.count) changed file(s) from the loop worktree.\n\nPatch: \(patch.patchPath)"))
+                }
+            } catch {
+                await MainActor.run { piAgentSessionStore.append(.init(sessionID: loopRun.sessionID, role: .error, title: "Loop Worktree Apply Failed", text: error.localizedDescription)) }
+            }
+        }
+    }
+
+    func discardLoopWorktree(_ loopRun: LoopRun) {
+        guard let syntheticRun = loopWorktreeSubagentRecord(for: loopRun) else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await subagentWorktreeService.discardWorktree(for: syntheticRun)
+                try? "Discarded at \(Date().formatted(date: .numeric, time: .standard))\n".write(to: URL(fileURLWithPath: syntheticRun.artifactDirectory).appendingPathComponent("worktree.discarded"), atomically: true, encoding: .utf8)
+                await MainActor.run {
+                    piAgentSessionStore.markLoopWorktreeState(runID: loopRun.id, sessionID: loopRun.sessionID, state: .discarded)
+                    piAgentSessionStore.append(.init(sessionID: loopRun.sessionID, role: .status, title: "Loop Worktree Discarded", text: "Removed loop worktree for run \(loopRun.id.uuidString). Artifacts were kept."))
+                }
+            } catch {
+                await MainActor.run { piAgentSessionStore.append(.init(sessionID: loopRun.sessionID, role: .error, title: "Loop Worktree Discard Failed", text: error.localizedDescription)) }
+            }
+        }
+    }
+
+    private func loopWorktreeSubagentRecord(for loopRun: LoopRun) -> PiSubagentRunRecord? {
+        guard loopRun.writeTarget == .newWorktree, let artifactDirectoryPath = loopRun.artifactDirectoryPath else { return nil }
+        let artifactURL = URL(fileURLWithPath: artifactDirectoryPath).standardizedFileURL
+        let worktreePath = artifactURL.appendingPathComponent("worktree", isDirectory: true).path
+        let now = Date()
+        return PiSubagentRunRecord(
+            id: loopRun.id,
+            parentSessionID: loopRun.sessionID,
+            mode: .single,
+            status: loopRun.status == .completed ? .completed : .stopped,
+            agentName: "Loop Worktree",
+            task: loopRun.goal,
+            model: nil,
+            thinking: nil,
+            expectedOutcome: .editFilesInWorktree,
+            requestedOutputPath: nil,
+            allowOverwrite: nil,
+            readFirstPaths: nil,
+            tools: [],
+            skills: [],
+            concurrencyLimit: nil,
+            worktreePolicy: "loop-new-worktree",
+            aggregateSummary: nil,
+            artifactDirectory: artifactURL.path,
+            outputPath: nil,
+            worktreePath: worktreePath,
+            parentRepoPath: loopRun.projectPath,
+            baseCommit: nil,
+            isWorktreeIsolated: true,
+            worktreeStatus: nil,
+            worktreePatchPath: nil,
+            childSessionID: nil,
+            childPiSessionFile: nil,
+            launchCommand: nil,
+            summary: nil,
+            error: nil,
+            child: nil,
+            children: nil,
+            graphEdges: nil,
+            injectedMemoryIDs: nil,
+            injectedMemoryTitles: nil,
+            createdAt: loopRun.startedAt,
+            updatedAt: loopRun.endedAt ?? now,
+            completedAt: loopRun.endedAt,
+            durationMs: nil
+        )
     }
 
     private func recordSubagentWorktreeError(_ error: Error, runID: UUID, parentSessionID: UUID) {
@@ -4202,6 +5033,30 @@ final class AppViewModel: NSObject {
         NativeToolGroupModel.toolCallRecap(from: piAgentSessionStore.transcript(for: sessionID))
     }
 
+    /// MCP usage for the Session resources popover: every server in scope at launch
+    /// (with the tools it advertised), plus the tools actually called this session.
+    /// Returns empty when MCP is off or nothing was assigned to the session.
+    func mcpSessionRecap(for session: PiAgentSessionRecord) -> [PiAgentMCPSessionRecap] {
+        guard appSettings.mcpEnabled else { return [] }
+        let scope = assignedMCPServerNames(for: session)
+        let usage = NativeToolGroupModel.mcpUsageRecap(from: piAgentSessionStore.transcript(for: session.id))
+        guard !scope.isEmpty || !usage.isEmpty else { return [] }
+
+        let advertised = Dictionary(grouping: mcpCatalogSnapshot.filter { scope.contains($0.server) }, by: \.server)
+        let usageByServer = Dictionary(uniqueKeysWithValues: usage.map { ($0.server, $0.tools) })
+        // Union: in-scope servers (even if never called) and any server actually
+        // called (in case it was assigned then later removed from config).
+        var serverNames = scope
+        serverNames.formUnion(usage.map(\.server))
+        return serverNames.sorted().map { server in
+            PiAgentMCPSessionRecap(
+                server: server,
+                advertisedToolCount: advertised[server]?.count ?? 0,
+                calledTools: usageByServer[server] ?? []
+            )
+        }
+    }
+
     func forkPiAgentSession(from entry: PiAgentTranscriptEntry) {
         guard entry.role == .user else { return }
         let transcript = piAgentSessionStore.transcript(for: entry.sessionID)
@@ -4434,7 +5289,7 @@ final class AppViewModel: NSObject {
                     id: model.model,
                     name: nil,
                     contextWindow: Int(model.contextWindow),
-                    maxOutput: Int(model.maxOutput),
+                    maxOutput: model.maxOutput.flatMap { Int($0) },
                     supportsThinking: model.supportsThinking,
                     supportedThinkingLevels: model.supportedThinkingLevels,
                     supportsImages: model.supportsImages
@@ -4504,7 +5359,7 @@ final class AppViewModel: NSObject {
         deletePiAgentSessions(staleIDs)
     }
 
-    func deletePiAgentSessions(_ sessionIDs: Set<UUID>) {
+    func deletePiAgentSessions(_ sessionIDs: Set<UUID>, fallbackSelectionID: UUID? = nil) {
         for sessionID in sessionIDs where piAgentRunner.isRunning(sessionID: sessionID) {
             piAgentRunner.stop(sessionID: sessionID, recordTranscript: false)
         }
@@ -4526,12 +5381,17 @@ final class AppViewModel: NSObject {
             return (worktreePath, session.projectPath, session.branchName, session.sourceBranch)
         }
 
-        piAgentSessionStore.deleteSessions(sessionIDs)
-        // The store's deletion clamp picks the GLOBALLY first session (it has no
-        // notion of project scope); reconcile to the scoped choice in the same
-        // runloop turn so the UI only ever observes the final selection — without
-        // this, launch-time draft pruning briefly selected an out-of-scope
-        // session and the correction read as an extra transcript switch.
+        // If the caller handed us the next-visible neighbor (the row below the
+        // deleted set in the user's grouped list), hand it to the store so it
+        // lands where the user expects instead of clamping to the globally
+        // most-recent session. The store ignores the hint when the active
+        // selection survives the delete.
+        piAgentSessionStore.deleteSessions(sessionIDs, fallbackSelectionID: fallbackSelectionID)
+        // Belt-and-suspenders: still reconcile in the same runloop turn so the
+        // UI only ever observes the final selection — without this, launch-time
+        // draft pruning briefly selected an out-of-scope session and the
+        // correction read as an extra transcript switch. After the fallback
+        // above, reconcile is usually a no-op (selection already valid).
         reconcileSelectedSessionWithProjectScope()
 
         for cleanup in worktreeCleanups {
@@ -4888,6 +5748,11 @@ final class AppViewModel: NSObject {
         syncAppSettings()
     }
 
+    func markLoopsOpenedFromSidebar() {
+        guard appSettingsController.markLoopsOpenedFromSidebar() else { return }
+        syncAppSettings()
+    }
+
     // MARK: - Color themes
     //
     // Theme state is read by the UI straight off `appSettings` (the observable
@@ -4999,6 +5864,14 @@ final class AppViewModel: NSObject {
     func refreshDiscoveredPiExtensions() {
         piExtensionsRefreshToken &+= 1
     }
+
+    // MCP screen toolbar triggers (the toolbar lives in ContentView; the screen reacts
+    // to these via .onChange).
+    private(set) var mcpAddRequestToken = 0
+    private(set) var mcpRefreshRequestToken = 0
+
+    func requestAddMCPServer() { mcpAddRequestToken &+= 1 }
+    func requestRefreshMCPServers() { mcpRefreshRequestToken &+= 1 }
 
     func isPiExtensionEnabled(_ candidate: PiExtensionCandidate) -> Bool {
         appSettingsController.isPiExtensionEnabled(candidate)
@@ -5386,8 +6259,8 @@ final class AppViewModel: NSObject {
         return [guidance, retrieval.prompt]
     }
 
-    private func childMemoryArguments(for parentSession: PiAgentSessionRecord, agent: EffectiveAgentRecord, task: String) async -> [String] {
-        guard appSettings.agentMemoryEnabled, appSettings.agentMemorySubagentsEnabled else { return [] }
+    private func childMemoryLaunchContext(for parentSession: PiAgentSessionRecord, agent: EffectiveAgentRecord, task: String) async -> PiSubagentMemoryLaunchContext {
+        guard appSettings.agentMemoryEnabled, appSettings.agentMemorySubagentsEnabled else { return .empty }
         let query = [agent.name, agent.resolved.description, task].joined(separator: "\n")
         var prompts = [agentMemoryGuidancePrompt(projectPath: parentSession.projectPath, isSubagent: true)]
         guard let retrieval = await agentMemoryStore.retrieve(
@@ -5395,11 +6268,17 @@ final class AppViewModel: NSObject {
             query: query,
             maxItems: 4,
             maxCharacters: min(appSettings.agentMemoryInjectionCharacterBudget, 3_500)
-        ) else { return prompts.flatMap { ["--append-system-prompt", $0] } }
+        ) else {
+            return PiSubagentMemoryLaunchContext(arguments: prompts.flatMap { ["--append-system-prompt", $0] }, memoryIDs: nil, memoryTitles: nil)
+        }
         agentMemoryStore.markUsed(retrieval.records.map(\.id))
         appendMemoryEvent(.recalled, records: retrieval.records, summary: "Loaded \(retrieval.records.count) scoped memor\(retrieval.records.count == 1 ? "y" : "ies") for Deck agent \(agent.name).", sessionID: parentSession.id)
         prompts.append(retrieval.prompt)
-        return prompts.flatMap { ["--append-system-prompt", $0] }
+        return PiSubagentMemoryLaunchContext(
+            arguments: prompts.flatMap { ["--append-system-prompt", $0] },
+            memoryIDs: retrieval.records.map(\.id),
+            memoryTitles: retrieval.records.map(\.title)
+        )
     }
 
     private func agentMemoryGuidancePrompt(projectPath: String?, isSubagent: Bool = false) -> String {
@@ -5667,6 +6546,8 @@ final class AppViewModel: NSObject {
     @objc private func handleAppWillTerminateNotification(_ notification: Notification) {
         shutdown(recordTranscript: false)
         piAgentSessionStore.flushPendingSave()
+        // Best-effort teardown of MCP server subprocesses on quit.
+        Task { await shutdownMCP() }
     }
 
     var areSubagentsEnabledForNewSessions: Bool {
@@ -5741,10 +6622,42 @@ final class AppViewModel: NSObject {
     /// Cached — see `cachedAllDisplayAgents`. Rebuilt by `rebuildWarningCaches()`.
     var allDisplayAgents: [EffectiveAgentRecord] { cachedAllDisplayAgents }
 
+    /// Plain builtin rows for editors that must expose the bundled base even
+    /// when the regular display list shows a custom replacement of the same
+    /// name. These rows write settings overrides, never the bundled files.
+    var builtinAgentModelRecords: [EffectiveAgentRecord] {
+        let globalSettingsPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".pi/agent/settings.json")
+            .standardizedFileURL.path
+        let globalOverrides = globalSnapshot.settings
+            .first { URL(fileURLWithPath: $0.path).standardizedFileURL.path == globalSettingsPath }?
+            .agentOverrides ?? []
+        return globalSnapshot.builtinAgents
+            .map { builtin in
+                let userOverride = globalOverrides.first { $0.agentName == builtin.name }
+                return EffectiveAgentRecord(
+                    id: "builtin-model::\(builtin.name)",
+                    name: builtin.name,
+                    projectRoot: nil,
+                    builtin: builtin,
+                    globalCustom: nil,
+                    projectCustom: nil,
+                    userOverride: userOverride,
+                    projectOverride: nil,
+                    resolved: builtin.parsed,
+                    resolutionKind: userOverride == nil ? .builtin : .builtinWithOverride
+                )
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     /// The actual merge+sort. Called only from `rebuildWarningCaches()`.
     private func computeAllDisplayAgents() -> [EffectiveAgentRecord] {
+        // Sourced from `globalSnapshot` so the Agents view stays global even
+        // when a project is selected for Issues/Memory. Mirrors the prior
+        // no-project-selected presentation exactly.
         var byID: [EffectiveAgentRecord.ID: EffectiveAgentRecord] = [:]
-        for agent in snapshot.effectiveAgents { byID[agent.id] = agent }
+        for agent in globalSnapshot.effectiveAgents { byID[agent.id] = agent }
         for agent in catalogOnlyEffectiveAgents { byID[agent.id] = agent }
         for agent in libraryOnlyEffectiveAgents { byID[agent.id] = agent }
         for agent in projectAssignedLibraryAgentsForAggregateView { byID[agent.id] = agent }
@@ -5788,24 +6701,26 @@ final class AppViewModel: NSObject {
     }
 
     private var catalogOnlyEffectiveAgents: [EffectiveAgentRecord] {
-        let effectivePaths = Set(snapshot.effectiveAgents.compactMap(\.sourcePath).map(standardizedPath))
-        return agentCatalog(forProjectPath: selectedProjectPath)
+        // Global catalog: union of every project's catalog plus the global one,
+        // independent of `selectedProjectPath`. `nil` already unions all
+        // `allProjectSnapshots` in `agentCatalog(forProjectPath:)`.
+        let effectivePaths = Set(globalSnapshot.effectiveAgents.compactMap(\.sourcePath).map(standardizedPath))
+        return agentCatalog(forProjectPath: nil)
             .filter { $0.source.kind != .builtin }
             .filter { !effectivePaths.contains(standardizedPath($0.filePath)) }
             .filter { $0.source.kind != .library }
-            .map { catalogDisplayAgent(from: $0, projectRoot: snapshot.projectRoot) }
+            .map { catalogDisplayAgent(from: $0, projectRoot: nil) }
     }
 
     private var libraryOnlyEffectiveAgents: [EffectiveAgentRecord] {
-        // In the global view, project-local agents should not hide reusable library
-        // agents with the same name. Global/custom winners still hide library duplicates.
-        let agentsThatHideLibrary = snapshot.projectRoot == nil
-            ? snapshot.effectiveAgents.filter { $0.projectCustom == nil && $0.projectOverride == nil }
-            : snapshot.effectiveAgents
+        // Global view: project-local agents do not hide reusable library agents
+        // with the same name. Global/custom winners still hide library duplicates.
+        let agentsThatHideLibrary = globalSnapshot.effectiveAgents
+            .filter { $0.projectCustom == nil && $0.projectOverride == nil }
         let effectiveNames = Set(agentsThatHideLibrary.map(\.name))
-        return snapshot.libraryAgents
+        return globalSnapshot.libraryAgents
             .filter { !effectiveNames.contains($0.name) }
-            .map { libraryDisplayAgent(from: $0, projectRoot: snapshot.projectRoot) }
+            .map { libraryDisplayAgent(from: $0, projectRoot: nil) }
     }
 
     /// Every agent a session could pick for its subagent catalog: the
@@ -5967,11 +6882,12 @@ final class AppViewModel: NSObject {
     }
 
     private var projectAssignedLibraryAgentsForAggregateView: [EffectiveAgentRecord] {
-        guard snapshot.projectRoot == nil else { return [] }
-        let effectiveNames = Set(snapshot.effectiveAgents.map(\.name))
-        let libraryByName = Dictionary(uniqueKeysWithValues: snapshot.libraryAgents.map { ($0.name, $0) })
+        // Global view — `globalSnapshot.projectRoot` is always nil here.
+        guard globalSnapshot.projectRoot == nil else { return [] }
+        let effectiveNames = Set(globalSnapshot.effectiveAgents.map(\.name))
+        let libraryByName = Dictionary(uniqueKeysWithValues: globalSnapshot.libraryAgents.map { ($0.name, $0) })
         let assignedNames = Set(projectPreferencesByPath.values.flatMap(\.assignedAgentNames))
-        let libraryNames = Set(snapshot.libraryAgents.map(\.name))
+        let libraryNames = Set(globalSnapshot.libraryAgents.map(\.name))
         return assignedNames
             .filter { !effectiveNames.contains($0) && libraryNames.contains($0) }
             .compactMap { libraryByName[$0] }
@@ -6077,7 +6993,9 @@ final class AppViewModel: NSObject {
     }
 
     var allVisibleSkillRecords: [SkillRecord] {
-        let records = deduplicateByID(snapshot.skills + snapshot.librarySkills)
+        // Global resource catalog — independent of `selectedProjectPath` so the
+        // Skills view stays global even when a project is selected for Issues.
+        let records = deduplicateByID(globalSnapshot.skills + globalSnapshot.librarySkills)
             .sorted { lhs, rhs in
                 let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
                 if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
@@ -6110,7 +7028,9 @@ final class AppViewModel: NSObject {
     }
 
     var allVisiblePromptTemplateRecords: [PromptTemplateRecord] {
-        let records = deduplicateByID(snapshot.promptTemplates + snapshot.libraryPromptTemplates)
+        // Global resource catalog — independent of `selectedProjectPath` so the
+        // Prompts view stays global even when a project is selected for Issues.
+        let records = deduplicateByID(globalSnapshot.promptTemplates + globalSnapshot.libraryPromptTemplates)
             .sorted { lhs, rhs in
                 let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
                 if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
@@ -6202,10 +7122,6 @@ final class AppViewModel: NSObject {
 
     var enabledProjects: [DiscoveredProject] {
         discoveredProjects.filter { projectPreference(for: $0.path).isEnabled }
-    }
-
-    var favoriteProjects: [DiscoveredProject] {
-        enabledProjects.filter { projectPreference(for: $0.path).isFavorite }
     }
 
     var gitHubProjects: [DiscoveredProject] {
@@ -6394,6 +7310,7 @@ final class AppViewModel: NSObject {
             disabled: nil,
             tools: ["read", "grep", "find", "ls", "bash"],
             mcpDirectTools: nil,
+            mcpServers: nil,
             extensions: nil,
             skills: [],
             output: nil,
@@ -7250,7 +8167,9 @@ final class AppViewModel: NSObject {
         // on every render.
         var skillMetadataByID: [SkillRecord.ID: SkillListMetadata] = [:]
         var warningsBySkillID: [SkillRecord.ID: [DiagnosticWarning]] = [:]
-        let activeProject = selectedDiscoveredProject
+        // Resource catalog is always global; "active" = globally enabled (the
+        // global-view definition), independent of `selectedProjectPath`.
+        let activeProject: DiscoveredProject? = nil
         for record in allVisibleSkillRecords {
             let matchingWarnings = skillWarnings.filter { warning in
                 warning.id == "duplicate-skill:\(record.name)" ||
@@ -7269,7 +8188,8 @@ final class AppViewModel: NSObject {
             skillMetadataByID[record.id] = SkillListMetadata(
                 isAssigned: isAssigned,
                 hasWarnings: hasWarnings,
-                isActiveForCurrentProject: isActive
+                isActiveForCurrentProject: isActive,
+                isImported: isImportedSkill(record)
             )
         }
 
@@ -7287,7 +8207,7 @@ final class AppViewModel: NSObject {
     }
 
     private func buildSkillWarnings() -> [DiagnosticWarning] {
-        let baseWarnings = snapshot.warnings.filter { warning in
+        let baseWarnings = globalSnapshot.warnings.filter { warning in
             warning.id.hasPrefix("malformed-skill:") || warning.message.localizedCaseInsensitiveContains("skill")
         }
         let collisionWarnings = PiSkillLaunchResolver.collisions(in: allVisibleSkillRecords).map { collision in
@@ -7298,7 +8218,7 @@ final class AppViewModel: NSObject {
     }
 
     private func buildPromptWarnings() -> [DiagnosticWarning] {
-        let baseWarnings = snapshot.warnings.filter { warning in
+        let baseWarnings = globalSnapshot.warnings.filter { warning in
             warning.id.hasPrefix("duplicate-prompt:")
         }
         let collisionWarnings = PiPromptTemplateLaunchResolver.collisions(in: allVisiblePromptTemplateRecords).map { collision in
@@ -7317,7 +8237,7 @@ final class AppViewModel: NSObject {
                 .filter { !$0.isEmpty }
             guard !explicitSkills.isEmpty else { continue }
 
-            let managedRecord = snapshot.libraryAgents.first { $0.name == agent.name }
+            let managedRecord = globalSnapshot.libraryAgents.first { $0.name == agent.name }
                 ?? agent.globalCustom
                 ?? agent.projectCustom
             guard let managedRecord else { continue }
@@ -7603,6 +8523,46 @@ final class AppViewModel: NSObject {
         return failed
     }
 
+    /// Resolves a duplicate skill name by keeping one canonical copy and
+    /// removing all other copies. Project assignments, global defaults, and
+    /// agent skill lists keyed by the skill name are intentionally preserved,
+    /// because the name remains valid via the kept copy.
+    func resolveSkillDuplicate(keeping keptSkill: SkillRecord, removing removedSkills: [SkillRecord]) throws {
+        try SkillDuplicateResolution.removeDuplicateCopies(
+            keeping: keptSkill,
+            removing: removedSkills,
+            canDelete: canDeleteSkill,
+            delete: { [weak self] skill in
+                guard let self else { return }
+                let url = self.skillDeletionTargetURL(for: skill)
+                try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                self.removeExternalSkillCatalogReferences(for: skill, deletedTarget: url)
+                self.unlistSkillFromSyncedRepository(skill)
+            },
+            isImported: isImportedSkill,
+            removeExternalPath: { [weak self] skill in
+                guard let self else { return }
+                let url = self.skillDeletionTargetURL(for: skill)
+                self.removeExternalSkillCatalogReferences(for: skill, deletedTarget: url)
+            },
+            unlistFromSyncedRepository: { [weak self] skill in
+                self?.unlistSkillFromSyncedRepository(skill)
+            }
+        )
+
+        // Hide removed rows immediately. `removeDuplicateCopies` already
+        // performed the file/catalog work; this only updates the UI.
+        withAnimation(.snappy(duration: 0.18)) {
+            for skill in removedSkills {
+                _ = pendingDeletedSkillIDs.insert(skill.id)
+            }
+        }
+
+        // Select the kept copy. Because its id is unchanged, this is stable.
+        selectedSkillID = keptSkill.id
+        refresh(includeModels: false, scanAllProjects: true, silentlyReconcile: true)
+    }
+
     /// Drop `skill` from its synced repository's tracked set, if it belongs to
     /// one. When that leaves the repository with no synced skills, the whole
     /// repository is un-registered — its record is removed (so it is no longer
@@ -7743,6 +8703,50 @@ final class AppViewModel: NSObject {
         )
     }
 
+    /// MCP servers assigned to a project (global defaults + per-project), resolved
+    /// against the merged `mcp.json` so the project-row summary can list them like
+    /// skills. Synchronous config read — call on a tap, not a hot path.
+    func mcpRecap(for project: DiscoveredProject) -> ProjectMcpServerRecap {
+        let defaultNames = appSettings.defaultMcpServerNames
+        let projectNames = projectPreference(for: project.path).assignedMcpServerNames.subtracting(defaultNames)
+        let entries = MCPConfigLoader().load(projectRoot: URL(fileURLWithPath: project.path)).servers
+        let byName = Dictionary(entries.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+
+        func resolve(_ names: Set<String>) -> ([MCPServerRecapItem], [String]) {
+            var items: [MCPServerRecapItem] = []
+            var unresolved: [String] = []
+            for name in names.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }) {
+                if let entry = byName[name] {
+                    items.append(MCPServerRecapItem(name: name, detail: Self.mcpServerDetail(entry.config)))
+                } else {
+                    unresolved.append(name)
+                }
+            }
+            return (items, unresolved)
+        }
+
+        let defaultResult = resolve(defaultNames)
+        let projectResult = resolve(projectNames)
+        return ProjectMcpServerRecap(
+            defaultServers: defaultResult.0,
+            projectServers: projectResult.0,
+            unresolvedNames: (defaultResult.1 + projectResult.1).sorted()
+        )
+    }
+
+    /// A short transport/endpoint summary for an MCP server config.
+    private static func mcpServerDetail(_ config: MCPServerConfig) -> String? {
+        switch config.resolvedTransport {
+        case .stdio:
+            guard let command = config.command, !command.isEmpty else { return "Local" }
+            return "Local · \(command)"
+        case .http, .sse:
+            guard let url = config.url, !url.isEmpty else { return "Remote" }
+            let host = URL(string: url)?.host(percentEncoded: false) ?? url
+            return "Remote · \(host)"
+        }
+    }
+
     func agentRecap(for project: DiscoveredProject) -> ProjectAgentRecap {
         let defaultNames = appSettings.defaultAgentNames
         let projectNames = projectPreference(for: project.path).assignedAgentNames.subtracting(defaultNames)
@@ -7877,11 +8881,121 @@ final class AppViewModel: NSObject {
             .filter { seenName.insert($0.name).inserted }
     }
 
-    /// Materializes the full universe of Skills, Prompts, and Commands the
-    /// composer's `/` browser can show. Pure in-memory: walks already-cached
-    /// scan snapshots + the command catalog. Build once when the panel opens
-    /// and hold the result in `@State` — never call inside a SwiftUI `body`,
-    /// since command library discovery touches the filesystem.
+    func reloadLoopDefinitions() {
+        loopDefinitions = loopDefinitionStore.loadDefinitions()
+        if let selectedLoopDefinitionID,
+           !loopDefinitions.contains(where: { $0.id == selectedLoopDefinitionID }) {
+            self.selectedLoopDefinitionID = loopDefinitions.first?.id
+        }
+    }
+
+    var selectedLoopDefinition: LoopDefinition? {
+        guard let selectedLoopDefinitionID else { return nil }
+        return loopDefinitions.first { $0.id == selectedLoopDefinitionID }
+    }
+
+    func requestNewLoopDefinition() {
+        selectedLoopDefinitionID = nil
+        newLoopRequestID = UUID()
+    }
+
+    @discardableResult
+    func saveLoopDefinition(_ definition: LoopDefinition) throws -> LoopDefinition {
+        let saved = try loopDefinitionStore.saveUserDefinition(definition)
+        reloadLoopDefinitions()
+        selectedLoopDefinitionID = saved.filePath ?? saved.id
+        return saved
+    }
+
+    @discardableResult
+    func duplicateLoopDefinition(_ definition: LoopDefinition) throws -> LoopDefinition {
+        let saved = try loopDefinitionStore.duplicateUserDefinition(definition)
+        reloadLoopDefinitions()
+        selectedLoopDefinitionID = saved.filePath ?? saved.id
+        return saved
+    }
+
+    func deleteLoopDefinition(_ definition: LoopDefinition) throws {
+        try loopDefinitionStore.deleteUserDefinition(definition)
+        reloadLoopDefinitions()
+    }
+
+    @discardableResult
+    func saveLoopDefinitionFromRun(_ run: LoopRun) throws -> LoopDefinition {
+        try saveLoopDefinitionFromDraft(
+            loopDraft(from: run),
+            request: LoopSaveRequest(
+                name: defaultLoopSaveName(for: run),
+                description: "Saved from completed loop run.",
+                availability: run.projectPath?.isEmpty == false ? .projectPaths : .allProjects,
+                projectPaths: run.projectPath.map { [$0] } ?? []
+            )
+        )
+    }
+
+    func retryLoopRun(_ run: LoopRun) {
+        guard !run.isActive, run.status == .failed else { return }
+        guard let session = piAgentSessionStore.sessions.first(where: { $0.id == run.sessionID }) else { return }
+        let draft = loopDraft(from: run)
+        Task { @MainActor in
+            _ = await launchLoop(session: session, draft: draft, stopExistingActive: false)
+        }
+    }
+
+    private func loopDraft(from run: LoopRun) -> LoopDraft {
+        LoopDraft(
+            goal: run.goal,
+            structure: run.structure,
+            writeTarget: run.writeTarget,
+            maxIterations: run.maxIterations,
+            validationCommand: run.validationCommand,
+            makerChecker: run.makerChecker,
+            pipeline: run.pipeline,
+            parallel: run.parallel,
+            discoveryTriage: run.discoveryTriage,
+            humanApproval: run.humanApproval
+        )
+    }
+
+    private func defaultLoopSaveName(for run: LoopRun) -> String {
+        let firstLine = run.goal.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
+        let trimmed = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Saved Loop" : String(trimmed.prefix(64))
+    }
+
+    @discardableResult
+    func saveLoopDefinitionFromDraft(_ draft: LoopDraft, request: LoopSaveRequest) throws -> LoopDefinition {
+        let projectPaths = request.availability == .projectPaths ? request.projectPaths : []
+        let definition = LoopDefinition(
+            name: request.name,
+            description: request.description,
+            goalTemplate: draft.goal,
+            structure: draft.structure,
+            writeTarget: draft.writeTarget,
+            maxIterations: draft.maxIterations,
+            validationCommand: draft.validationCommand,
+            makerChecker: draft.makerChecker,
+            pipeline: draft.pipeline,
+            parallel: draft.parallel,
+            discoveryTriage: draft.discoveryTriage,
+            humanApproval: draft.humanApproval,
+            source: .user,
+            availability: request.availability,
+            projectPaths: projectPaths
+        )
+        let saved = try loopDefinitionStore.saveUserDefinition(definition)
+        reloadLoopDefinitions()
+        return saved
+    }
+
+    func configureLoopDefinitionStoreForTesting(directoryURL: URL) {
+        loopDefinitionStore = LoopDefinitionStore(directoryURL: directoryURL)
+        reloadLoopDefinitions()
+    }
+
+    /// Materializes the full universe of Skills, Prompts, Commands, and Loops the
+    /// composer's `/` browser can show. Build once when the panel opens and hold
+    /// the result in `@State` — never call inside a SwiftUI `body`.
     func slashUniverse(forProjectPath projectPath: String?) -> SlashUniverse {
         let scopedPath = projectPath ?? selectedProjectPath
 
@@ -7956,7 +9070,32 @@ final class AppViewModel: NSObject {
                 )
             }
 
-        return SlashUniverse(skills: skills, prompts: prompts, commands: commands)
+        let createLoop = SlashItem(
+            id: "loop:create-new",
+            kind: .loop,
+            displayName: "Create New Loop…",
+            description: "Configure and launch an unsaved loop for this transcript.",
+            scopeLabel: "Unsaved",
+            isActive: true,
+            payload: .loopCreateNew
+        )
+        let savedLoops = loopDefinitions
+            .filter { $0.isAvailable(in: scopedPath) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .map { definition in
+                SlashItem(
+                    id: "loop:\(definition.id)",
+                    kind: .loop,
+                    displayName: definition.name,
+                    description: definition.description.isEmpty ? nil : definition.description,
+                    scopeLabel: definition.source.displayName,
+                    isActive: true,
+                    payload: .loopDefinition(definition)
+                )
+            }
+        let loops = [createLoop] + savedLoops
+
+        return SlashUniverse(skills: skills, prompts: prompts, commands: commands, loops: loops)
     }
 
     private func skillDeletionTargetURL(for skill: SkillRecord) -> URL {
@@ -8232,13 +9371,13 @@ final class AppViewModel: NSObject {
     }
 
     private func computeWarnings(for agent: EffectiveAgentRecord) -> [DiagnosticWarning] {
-        snapshot.warnings.filter { warning in
+        globalSnapshot.warnings.filter { warning in
             warning.message.contains("Agent \(agent.name) ") || warning.message.contains("Agent \(agent.name)")
         }
     }
 
     func agentsExplicitlyUsingSkill(_ skill: SkillRecord) -> [EffectiveAgentRecord] {
-        snapshot.effectiveAgents
+        globalSnapshot.effectiveAgents
             .filter { $0.resolved.skills.contains(skill.name) }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
@@ -8364,6 +9503,14 @@ final class AppViewModel: NSObject {
         isRefreshingModels = true
 
         Task.detached(priority: .utility) { [weak self] in
+            // Keep NeuralWatt's ~/.pi/agent/models.json block in sync with the user's sign-in
+            // state and NeuralWatt's live /v1/models, before querying pi. The neuralwatt block
+            // exists ONLY when a real key is in ~/.pi/agent/auth.json — sign-out removes it, so
+            // pi never lists NeuralWatt models without a credential. Best-effort: a failed fetch
+            // leaves the existing block untouched and never blocks the model list. See
+            // NeuralWattCatalogSync.
+            let hasNeuralWattKey = PiAuthCredentialStore().signedInProviders().contains(NeuralWattProviderSpec.providerID)
+            await NeuralWattCatalogSync().reconcile(hasRealKey: hasNeuralWattKey)
             let models = await PiModelDiscoveryService().loadAvailableModels()
             await self?.applyAvailableModelsRefresh(models, markRefreshComplete: true)
         }
@@ -8457,6 +9604,8 @@ final class AppViewModel: NSObject {
         fileWatchEventMonitor = nil
         watchEventDebounceTask?.cancel()
         watchEventDebounceTask = nil
+        deferredWatchRefreshTask?.cancel()
+        deferredWatchRefreshTask = nil
         autoRefreshCancellable?.cancel()
         autoRefreshCancellable = nil
         if cancelPendingScan {
@@ -8478,6 +9627,12 @@ final class AppViewModel: NSObject {
 
     private func scheduleRefreshForWatchedFileEvent() {
         guard !didShutdown else { return }
+        if shouldDeferWatchedFileRefresh {
+            watchEventDebounceTask?.cancel()
+            watchEventDebounceTask = nil
+            scheduleDeferredWatchedFileRefresh()
+            return
+        }
         watchEventDebounceTask?.cancel()
         let delay = watchEventDebounceNanoseconds
         watchEventDebounceTask = Task { @MainActor [weak self, delay] in
@@ -8488,8 +9643,31 @@ final class AppViewModel: NSObject {
         }
     }
 
+    private var shouldDeferWatchedFileRefresh: Bool {
+        TranscriptInteractionGate.isInteractingRecently || TranscriptInteractionGate.isStreamingRecently
+    }
+
+    private func scheduleDeferredWatchedFileRefresh() {
+        guard !didShutdown, deferredWatchRefreshTask == nil else { return }
+        let quietDelay = watchRefreshQuietNanoseconds
+        deferredWatchRefreshTask = Task { @MainActor [weak self, quietDelay] in
+            while true {
+                try? await Task.sleep(nanoseconds: quietDelay)
+                guard let self, !Task.isCancelled, !self.didShutdown else { return }
+                guard self.shouldDeferWatchedFileRefresh else { break }
+            }
+            guard let self, !Task.isCancelled, !self.didShutdown else { return }
+            self.deferredWatchRefreshTask = nil
+            self.refreshIfWatchedFilesChanged()
+        }
+    }
+
     private func refreshIfWatchedFilesChanged() {
         guard watchFingerprintTask == nil else { return }
+        guard !shouldDeferWatchedFileRefresh else {
+            scheduleDeferredWatchedFileRefresh()
+            return
+        }
         let previousFingerprint = lastWatchFingerprint
         let urls = currentWatchedURLsForAutoRefresh()
         watchFingerprintTask = Task.detached(priority: .utility) { [weak self, previousFingerprint, urls] in
@@ -8503,12 +9681,13 @@ final class AppViewModel: NSObject {
         guard !Task.isCancelled else { return }
         watchFingerprintTask = nil
         guard fingerprint != previousFingerprint else { return }
-        // A real on-disk change, but reassigning project state mid-scroll re-evals
-        // the screen body (transcript itemsBuild + updateNSView) and drops frames.
-        // Re-arm the debounce WITHOUT committing the new fingerprint, so once the
-        // gesture settles the next check still sees the change and refreshes.
-        if TranscriptInteractionGate.isInteractingRecently {
-            scheduleRefreshForWatchedFileEvent()
+        // A real on-disk change, but reassigning project state mid-scroll or
+        // mid-stream re-evals the screen body (transcript itemsBuild +
+        // updateNSView) and drops frames. Keep one deferred refresh armed
+        // WITHOUT committing the new fingerprint, so once interaction/streaming
+        // settles the next check still sees the change and refreshes.
+        if shouldDeferWatchedFileRefresh {
+            scheduleDeferredWatchedFileRefresh()
             return
         }
         lastWatchFingerprint = fingerprint

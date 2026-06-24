@@ -367,14 +367,23 @@ nonisolated struct PiExtensionConflictDetector: @unchecked Sendable {
         guard let source = try? String(contentsOfFile: candidate.launchSource, encoding: .utf8) else {
             return []
         }
-        return PiNativeSubagentBridgeExtensions.allBridgeToolNames
+        var names = PiNativeSubagentBridgeExtensions.allBridgeToolNames
             .filter { name in
                 // Match the name as a quoted string literal — single or double quotes.
                 // This catches `server.tool("web_search", …)` and `name: 'web_search'`
                 // while ignoring coincidental substring matches like variable names.
                 source.contains("\"\(name)\"") || source.contains("'\(name)'")
             }
-            .sorted()
+        // MCP adapter extensions (pi-mcp-adapter / pi-mcp-extension) don't register a
+        // tool literally named "mcp"; they register prefixed tools like "mcp_<server>_<tool>"
+        // and/or a "/mcp" command. Treat either as a conflict with the native MCP bridge,
+        // surfaced under the synthetic name "mcp" so the existing warning row renders.
+        if source.contains("\"mcp_") || source.contains("'mcp_")
+            || source.contains("\"/mcp") || source.contains("'/mcp")
+            || source.contains("\"mcp:") || source.contains("'mcp:") {
+            names.insert(PiNativeSubagentBridgeExtensions.mcpProxyToolName)
+        }
+        return names.sorted()
     }
 }
 

@@ -260,11 +260,21 @@ struct PiAgentTranscriptThread: Identifiable, Hashable {
                         ? normalizedCompaction(arrival.entry)
                         : arrival.entry
                     if normalized.title == "Retry", let retryInfo = ProviderRetryInfo(entry: normalized) {
-                        // Collapse a consecutive run of Pi auto-retry statuses into one
-                        // card — only the last (the auto_retry_end marker) is kept. Keyed
-                        // on the Pi retry envelope, so this holds for every provider, and
-                        // parsed here at thread-build time so the card never re-parses
-                        // during render.
+                        // Collapse a retry burst into one card. Pi emits TWO entries per
+                        // failed attempt — a paired `Model Error` (role:error) carrying the
+                        // raw provider payload, immediately followed by the `Retry` status —
+                        // so on Codex usage-limit bursts we used to render four Error cards
+                        // and four hourglass cards for what's a single event. Drop the
+                        // trailing paired Model Error(s) whose text matches this retry's
+                        // payload, then collapse any adjacent retry (the prior attempt of
+                        // the same burst). Only the final `auto_retry_end` survives — the
+                        // repeating attempt text is still parsed at thread-build time so
+                        // the card never re-parses during render.
+                        let payload = retryInfo.errorPayload
+                        while case .error(let prev)? = children.last,
+                              prev.text == payload {
+                            children.removeLast()
+                        }
                         if case .retry? = children.last { children.removeLast() }
                         children.append(.retry(normalized, retryInfo))
                     } else {
@@ -310,6 +320,7 @@ struct PiAgentTranscriptThread: Identifiable, Hashable {
 
         private func coalescedErrors(_ entries: [PiAgentTranscriptEntry]) -> [PiAgentTranscriptEntry] {
             var output: [PiAgentTranscriptEntry] = []
+            var seenNonToolTexts = Set<String>()
             var latestByTool: [String: PiAgentTranscriptEntry] = [:]
             var toolOrder: [String] = []
             for entry in entries {
@@ -318,7 +329,15 @@ struct PiAgentTranscriptThread: Identifiable, Hashable {
                     if latestByTool[key] == nil { toolOrder.append(key) }
                     latestByTool[key] = normalizedToolError(entry)
                 } else {
-                    output.append(entry)
+                    // Pi emits a paired (Model Error, Retry) per failed attempt, so a
+                    // retry burst with the same underlying payload (e.g. a Codex
+                    // usage-limit burst once credits are gone) would otherwise stack N
+                    // identical Model Error rows here. Keep only the first per distinct
+                    // text; the burst's final verdict is surfaced by the consolidated
+                    // retry card.
+                    if seenNonToolTexts.insert(entry.text).inserted {
+                        output.append(entry)
+                    }
                 }
             }
             output.append(contentsOf: toolOrder.compactMap { latestByTool[$0] })
@@ -359,6 +378,95 @@ struct PiAgentTranscriptActivity: Identifiable, Hashable {
         switch name.lowercased() {
         case "web_search", "fetch_content", "get_search_content", "web_fetch": return true
         default: return false
+        }
+    }
+    /// The native MCP proxy tool. Every assigned MCP server is reached through this
+    /// one tool, so the activity's per-call breakdown (server/tool) lives in `args`.
+    nonisolated var isMCPActivity: Bool { name.lowercased() == "mcp" }
+
+    /// Whether this activity holds at least one real MCP tool *call* (action == call,
+    /// i.e. an args.tool address) — as opposed to only list/search/describe
+    /// introspection. The dedicated card renders only when this is true, so visibility
+    /// gating MUST use this (not just the name) or the row toggles between a real card
+    /// and a 0-height spacer mid-stream. Cheap: the RPC event is render-cached.
+    @MainActor
+    var hasMCPCall: Bool {
+        guard isMCPActivity else { return false }
+        return entries.contains { entry in
+            guard let tool = PiAgentTranscriptActivity.toolArgs(from: entry)?["tool"]?.stringValue else { return false }
+            return !tool.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+
+    /// One resolved MCP tool call, parsed from an `mcp` proxy entry's args/result.
+    /// Built once in the items pass (see `NativeToolGroupModel.make`) so the card is
+    /// a dumb renderer.
+    struct MCPCall: Identifiable, Hashable {
+        var id: UUID
+        var server: String
+        var tool: String
+        var argsPreview: String?
+        var resultPreview: String?
+        var isError: Bool
+    }
+
+    /// The actual tool calls in this `mcp` activity (action == call), each with its
+    /// server/tool address, a compact args preview, and a result preview. List /
+    /// search / describe introspection entries (no `tool` arg) are skipped — the card
+    /// surfaces real tool invocations only.
+    @MainActor
+    func mcpCalls() -> [MCPCall] {
+        entries.compactMap { entry in
+            let args = PiAgentTranscriptActivity.toolArgs(from: entry)
+            guard let rawTool = args?["tool"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !rawTool.isEmpty,
+                  let address = MCPConnectionManager.resolveAddress(rawTool, serverHint: args?["server"]?.stringValue)
+            else { return nil }
+
+            let resultText = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isError = entry.role == .error
+                || resultText.hasPrefix("MCP tool reported an error")
+                || resultText.hasPrefix("MCP call failed")
+
+            return MCPCall(
+                id: entry.id,
+                server: address.server,
+                tool: address.tool,
+                argsPreview: PiAgentTranscriptActivity.mcpArgsPreview(args?["args"]),
+                resultPreview: resultText.isEmpty ? nil : resultText,
+                isError: isError
+            )
+        }
+    }
+
+    /// A compact, single-line preview of a tool's arguments object (keys + scalar
+    /// values), for the card's call row. Returns nil for an empty/absent args object.
+    nonisolated static func mcpArgsPreview(_ value: JSONValue?) -> String? {
+        guard let value else { return nil }
+        switch value {
+        case let .object(object) where !object.isEmpty:
+            let parts = object.keys.sorted().map { key -> String in
+                "\(key): \(mcpScalarPreview(object[key]))"
+            }
+            return parts.joined(separator: ", ")
+        case .object:
+            return nil
+        default:
+            let scalar = mcpScalarPreview(value)
+            return scalar.isEmpty ? nil : scalar
+        }
+    }
+
+    nonisolated private static func mcpScalarPreview(_ value: JSONValue?) -> String {
+        switch value {
+        case let .string(string): return string
+        case let .number(number):
+            return number == number.rounded() ? String(Int(number)) : String(number)
+        case let .bool(bool): return bool ? "true" : "false"
+        case let .array(items): return "[\(items.count)]"
+        case .object: return "{…}"
+        case .null, .none: return ""
         }
     }
 
@@ -998,15 +1106,29 @@ struct PiAgentTranscriptThreadCard: View {
     }
 
     /// One reply row — assistant / tool / status card on the left, copy button
-    /// hover-revealed on the RIGHT. Divider-style status entries (Compaction +
-    /// git completions) bypass ThreadMessageRow so they span the full transcript
-    /// width instead of sitting inside the assistant bubble column.
+    /// hover-revealed on the RIGHT. Steering messages are user messages and are
+    /// rendered like the initial question (right-aligned, hugged width). Divider-
+    /// style status entries bypass ThreadMessageRow so they span the full
+    /// transcript width instead of sitting inside the assistant bubble column.
     @ViewBuilder
     private func childBlock(_ child: PiAgentThreadChild) -> some View {
         if case .status(let entry) = child,
            entry.isDividerStatus,
            !Self.shouldHideNativeSubagentStatus(entry, nativeSubagentRunsByID: nativeSubagentRunsByID) {
             statusRowView(entry)
+        } else if case .steering(let entry) = child {
+            ThreadMessageRow(
+                copyText: entry.text,
+                copyOn: .leading,
+                cardMaxWidth: PiAgentBubbleWidth.huggedUser(
+                    text: PiAgentUserMessageContent.displayMessageText(for: entry, skills: skills, commandSlashNames: commandSlashNames),
+                    pillsWidth: PiAgentUserMessageContent.displayChipsNaturalWidth(for: entry, skills: skills, commandSlashNames: commandSlashNames),
+                    paneWidth: transcriptContentWidth
+                )
+            ) {
+                PiAgentTranscriptCard(entry: entry, style: .question, skills: skills, commandSlashNames: commandSlashNames)
+                    .id(entry.id)
+            }
         } else {
             ThreadMessageRow(
                 copyText: copyText(for: child),
@@ -1036,9 +1158,10 @@ struct PiAgentTranscriptThreadCard: View {
     @ViewBuilder
     private func childView(_ child: PiAgentThreadChild) -> some View {
         switch child {
-        case .steering(let entry):
-            PiAgentTranscriptCard(entry: entry, style: childStyle, skills: skills, commandSlashNames: commandSlashNames)
-                .id(entry.id)
+        case .steering:
+            // Steering children are rendered directly in childBlock so they can
+            // use user-message (right-aligned) layout. This branch is unreachable.
+            EmptyView()
         case .thinking(let entry):
             if visibility.showThinking {
                 PiAgentTranscriptCard(entry: entry, style: childStyle, skills: skills, commandSlashNames: commandSlashNames)
@@ -1219,10 +1342,14 @@ struct PiAgentTranscriptThreadCard: View {
         _ group: PiAgentThreadToolGroup,
         visibility: PiAgentTranscriptVisibilitySettings
     ) -> Bool {
-        var hasWeb = false, hasEditable = false
+        var hasWeb = false, hasEditable = false, hasMCP = false
         for activity in group.activities {
             if activity.isWebActivity {
                 hasWeb = true
+            } else if activity.hasMCPCall {
+                // Name-based would over-report (list/describe have no card) and the
+                // row would flicker between a card and a spacer; gate on a real call.
+                hasMCP = true
             } else {
                 let name = activity.name.lowercased()
                 if name == "edit" || name == "write" { hasEditable = true }
@@ -1230,6 +1357,7 @@ struct PiAgentTranscriptThreadCard: View {
         }
         return (visibility.showWebActivity && hasWeb)
             || (visibility.showDiffs && hasEditable)
+            || (visibility.showMCPCards && hasMCP)
     }
 
     private static func shouldShowStatusEntry(
@@ -1623,12 +1751,144 @@ struct PiAgentNativeFullDiffSheet: View {
     }
 }
 
+/// Modal showing an MCP tool's full response, opened by the transcript MCP card's
+/// "View" button. Mirrors `PiAgentNativeFullDiffSheet`'s chrome (title + Copy +
+/// Done), with the body pretty-printed when the response is JSON.
+struct PiAgentNativeMCPResultSheet: View {
+    let server: String
+    let tool: String
+    let text: String
+    let onDone: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(server)/\(tool)")
+                        .font(AppTheme.Font.headline.weight(.semibold))
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                    Text("MCP response")
+                        .font(AppTheme.Font.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                }
+                Spacer(minLength: 0)
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                }
+                Button("Done", action: onDone)
+                    .keyboardShortcut(.cancelAction)
+            }
+            PiAgentMCPResultTextView(text: text)
+        }
+        .padding(AppTheme.pagePadding)
+        .frame(minWidth: 620, idealWidth: 820, minHeight: 440, idealHeight: 620)
+    }
+}
+
+struct PiAgentMCPResultTextView: View {
+    let text: String
+    @State private var rendered: String = ""
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            Text(rendered.isEmpty ? text : rendered)
+                .font(AppTheme.Font.caption.monospaced())
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+        }
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.textContentFill))
+        .overlay(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).stroke(AppTheme.contentStroke, lineWidth: 1))
+        .task(id: text) {
+            rendered = Self.formatted(text)
+        }
+    }
+
+    /// Renders a response for display: a pure-JSON body is pretty-printed; an error
+    /// like `MCP call failed: … [ {…} ]` keeps its leading message and pretty-prints
+    /// the embedded JSON below it; anything else shows verbatim.
+    static func formatted(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let whole = prettyJSON(trimmed) { return whole }
+        if let jsonStart = trimmed.firstIndex(where: { $0 == "{" || $0 == "[" }) {
+            let prefix = trimmed[..<jsonStart].trimmingCharacters(in: .whitespacesAndNewlines)
+            if let body = prettyJSON(String(trimmed[jsonStart...])) {
+                return prefix.isEmpty ? body : "\(prefix)\n\n\(body)"
+            }
+        }
+        return trimmed
+    }
+
+    /// Pretty-prints `raw` when the whole string parses as JSON; nil otherwise.
+    /// Re-indents the ORIGINAL text rather than re-serializing a parsed object, so
+    /// number literals stay byte-exact (`5.2` never becomes `5.2000000000000002`) and
+    /// key order is preserved.
+    static func prettyJSON(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.first == "{" || trimmed.first == "[" else { return nil }
+        // Validate it really is JSON before re-indenting.
+        guard let data = trimmed.data(using: .utf8),
+              (try? JSONSerialization.jsonObject(with: data)) != nil else { return nil }
+
+        var out = ""
+        out.reserveCapacity(trimmed.count + trimmed.count / 4)
+        var indent = 0
+        var inString = false
+        var escaped = false
+        let pad = "  "
+        func newline() { out += "\n" + String(repeating: pad, count: indent) }
+
+        let chars = Array(trimmed)
+        var i = 0
+        while i < chars.count {
+            let c = chars[i]
+            if inString {
+                out.append(c)
+                if escaped { escaped = false }
+                else if c == "\\" { escaped = true }
+                else if c == "\"" { inString = false }
+                i += 1
+                continue
+            }
+            switch c {
+            case "\"":
+                inString = true
+                out.append(c)
+            case "{", "[":
+                // Collapse an empty container onto one line.
+                var j = i + 1
+                while j < chars.count, chars[j] == " " || chars[j] == "\n" || chars[j] == "\t" || chars[j] == "\r" { j += 1 }
+                if j < chars.count, (c == "{" && chars[j] == "}") || (c == "[" && chars[j] == "]") {
+                    out.append(c); out.append(chars[j]); i = j
+                } else {
+                    out.append(c); indent += 1; newline()
+                }
+            case "}", "]":
+                indent = max(0, indent - 1); newline(); out.append(c)
+            case ",":
+                out.append(c); newline()
+            case ":":
+                out.append(": ")
+            case " ", "\n", "\t", "\r":
+                break  // drop insignificant whitespace outside strings
+            default:
+                out.append(c)
+            }
+            i += 1
+        }
+        return out
+    }
+}
+
 struct PiAgentFullDiffView: View {
     let diffText: String
     @State private var lines: [PiAgentFullDiffLine] = []
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: true) {
+        ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(lines.indices, id: \.self) { index in
                     let line = lines[index]

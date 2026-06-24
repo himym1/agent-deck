@@ -16,7 +16,7 @@ Verified against:
 - Pi docs: `docs/rpc.md`, `docs/usage.md`
 - Pi parser/runtime: `dist/cli/args.js`, `dist/main.js`
 
-Last checked: 2026-05-11.
+Last checked: 2026-06-20.
 
 ## Summary
 
@@ -58,7 +58,7 @@ The following table describes Pi CLI flags that are accepted by the Pi parser an
 | Flag | Pi meaning | Agent Deck usage |
 |---|---|---|
 | `--provider <name>` | Select provider. | Used for parent sessions, subagents, title helper, and commit helper when known. |
-| `--model <pattern>` | Select model; supports `provider/model` and optional `:<thinking>` suffix. | Used broadly. Subagents may pass an inherited or explicit model with a thinking suffix. Helpers force `:off`. |
+| `--model <pattern>` | Select model; supports `provider/model` and optional `:<thinking>` suffix. | Used broadly. Subagents may pass an inherited or explicit model with the agent's or parent's resolved thinking suffix. Helpers force `:off`. |
 | `--thinking <level>` | Set thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. | Used by parent sessions. Subagents generally encode thinking in `--model <model>:<thinking>`. |
 | `--models <patterns>` | Scoped model list for model cycling. | Parser supports it. Agent Deck does not use it for app sessions. |
 | `--api-key <key>` | Runtime API-key override for selected provider. | Parser supports it. Agent Deck does not pass API keys as CLI args; credentials come from environment/settings. |
@@ -190,6 +190,8 @@ Fresh launch shape:
 [--provider <provider>]
 [--model <model[:thinking]>]
 ```
+
+For native subagents, agent frontmatter `thinking` applies even when frontmatter `model` is omitted; the child inherits the parent/default model and uses the agent's thinking suffix.
 
 Continuation launch shape:
 

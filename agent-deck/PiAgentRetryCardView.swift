@@ -17,6 +17,10 @@ struct ProviderRetryInfo: Hashable {
     var isQuotaLimit: Bool
     /// Best-effort human-readable error message.
     var message: String
+    /// The raw error payload this retry was parsed from — exposed so the thread
+    /// builder can drop the paired `Model Error` entry Pi emits alongside every
+    /// attempt (same string) and collapse a burst into one card.
+    var errorPayload: String
     /// When the limit clears, if the provider's payload tells us (Codex / Gemini).
     var resetsAt: Date?
     /// Codex-only plan tier, e.g. "plus".
@@ -39,6 +43,7 @@ struct ProviderRetryInfo: Hashable {
             self.gaveUp = false
         }
 
+        self.errorPayload = errorPayload
         self.message = Self.humanMessage(from: errorPayload)
         self.isQuotaLimit = Self.detectsQuotaLimit(payload: errorPayload)
 
@@ -218,15 +223,15 @@ struct PiAgentRetryCard: View {
     let timestamp: Date
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 7) {
             Image(systemName: icon)
-                .font(AppTheme.Font.callout.weight(.semibold))
                 .foregroundStyle(accent)
-                .frame(width: 18)
+                .frame(width: 16)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(headline)
-                    .font(AppTheme.Font.callout.weight(.semibold))
+                    .font(AppTheme.Font.footnote.weight(.semibold))
+                    .fontWidth(.expanded)
                 Text(detail)
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)

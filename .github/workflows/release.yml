@@ -241,27 +241,23 @@ jobs:
           xcrun stapler staple "$DMG"
           spctl --assess --type open --context context:primary-signature -v "$DMG"
 
-      - name: Stable-name copy and checksums
+      - name: DMG checksum
         # Must run AFTER stapling: the staple rewrites the DMG, so hashes taken
-        # earlier would not match what users download. The stable-named copy
-        # (identical bytes) gives the website and install script a permanent
-        # `releases/latest/download/Agent-Deck.dmg` URL; the .sha256 files let
-        # the install script and the Homebrew cask verify downloads.
+        # earlier would not match what users download. Keep a single versioned
+        # DMG asset on the release; the .sha256 file lets installers and casks
+        # verify the downloaded artifact.
         id: shasum
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          cp "$DMG" "build/release/Agent-Deck.dmg"
-          # Bare filenames inside the .sha256 files so `shasum -c` works from
+          # Bare filename inside the .sha256 file so `shasum -c` works from
           # any directory containing the download.
           (
             cd build/release
             shasum -a 256 "Agent-Deck-${VERSION}.dmg" > "Agent-Deck-${VERSION}.dmg.sha256"
-            shasum -a 256 "Agent-Deck.dmg" > "Agent-Deck.dmg.sha256"
-            cat ./*.sha256
+            cat "Agent-Deck-${VERSION}.dmg.sha256"
           )
-          echo "STABLE_DMG=build/release/Agent-Deck.dmg" >> "$GITHUB_ENV"
           echo "sha256=$(cut -d' ' -f1 < "build/release/Agent-Deck-${VERSION}.dmg.sha256")" >> "$GITHUB_OUTPUT"
 
       - name: Sign update with Sparkle EdDSA key
@@ -322,7 +318,7 @@ jobs:
           gh release create "$TAG" \
             --title "Agent Deck $VERSION" \
             --notes-file release-notes.md \
-            "$DMG" "$STABLE_DMG" "${DMG}.sha256" "${STABLE_DMG}.sha256"
+            "$DMG" "${DMG}.sha256"
 
       - name: Publish appcast item asset
         # Instead of committing docs/appcast.xml back to main (which polluted
@@ -355,14 +351,55 @@ jobs:
           repo = os.environ["GITHUB_REPOSITORY"]
           min_os = os.environ["MIN_OS"]
           pubdate = os.environ["PUBDATE"]
+          def release_notes_for(tag_name):
+              try:
+                  return subprocess.check_output(
+                      ["gh", "release", "view", tag_name, "--json", "body", "--jq", ".body"],
+                      text=True,
+                      stderr=subprocess.DEVNULL,
+                  ).strip()
+              except subprocess.CalledProcessError:
+                  return ""
+
+          def tags_in_series(major, minor):
+              tags = subprocess.check_output(["git", "tag", "--list", "v*.*"], text=True).split()
+              series = []
+              for t in tags:
+                  body = t[1:]  # strip leading 'v'
+                  parts = body.split(".")
+                  if len(parts) not in (2, 3):
+                      continue
+                  if parts[0] != major or parts[1] != minor:
+                      continue
+                  if not all(p.isdigit() for p in parts):
+                      continue
+                  series.append(t)
+              return sorted(series, key=lambda t: [int(p) for p in t[1:].split(".")])
+
           version_parts = version.split(".")
           is_major_release = len(version_parts) == 2 and version_parts[1] == "0"
+          is_patch_release = len(version_parts) == 3 and version_parts[2] != "0"
           should_phase_release = not is_major_release
 
-          notes_md = subprocess.check_output(
-              ["gh", "release", "view", tag, "--json", "body", "--jq", ".body"],
-              text=True,
-          ).strip()
+          if is_patch_release:
+              # Sparkle only shows the current item's description, so users who
+              # skip patches (e.g. 2.7 -> 2.7.2) would otherwise miss 2.7.1's
+              # changes. Aggregate the minor-series tags up to and including this
+              # release; minor/major updates still show only the target version.
+              # List newest first so the most relevant changes appear at the top.
+              current_key = [int(p) for p in version_parts]
+              series = [
+                  t for t in tags_in_series(version_parts[0], version_parts[1])
+                  if [int(p) for p in t[1:].split(".")] <= current_key
+              ]
+              series.sort(key=lambda t: [int(p) for p in t[1:].split(".")], reverse=True)
+              bodies = [release_notes_for(t) for t in series]
+              notes_md = "\n\n".join(b for b in bodies if b)
+              if not notes_md:
+                  notes_md = release_notes_for(tag)
+          else:
+              notes_md = release_notes_for(tag)
+
           notes_html = markdown.markdown(notes_md, extensions=["fenced_code", "tables"])
           if not notes_html.strip():
               notes_html = f'<p><a href="https://github.com/{repo}/releases/tag/{tag}">Release notes</a></p>'

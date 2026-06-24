@@ -40,3 +40,6 @@ scripts/release.sh
 
 # Playwright MCP session artifacts (snapshots, console logs, screenshots)
 .playwright-mcp/
+
+# Local-only loop planning docs
+/docs/loop-plan/

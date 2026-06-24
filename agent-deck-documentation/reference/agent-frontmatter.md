@@ -20,9 +20,9 @@ You are a review-only agent. Inspect the requested evidence and report findings 
 | `name` | Runtime agent name |
 | `description` | Human-readable summary for UI and lists |
 | `whenToUse` | Concise parent-session routing rule; Agent Deck uses this before falling back to `description` |
-| `model` | Preferred model |
+| `model` | Preferred model; omit to inherit the parent/default Pi model |
 | `fallbackModels` | Fallback model list |
-| `thinking` | Preferred thinking level |
+| `thinking` | Preferred thinking level; can be set even when `model` is omitted |
 | `systemPromptMode` | Replace/append behavior where supported |
 | `inheritSkills` | Compatibility metadata; current Agent Deck native runs use explicit agent skills instead of ambient skill discovery |
 | `tools` | Tool names available to the child |

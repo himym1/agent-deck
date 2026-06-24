@@ -153,6 +153,17 @@ struct PiNativeAskOption: Codable, Hashable {
     var description: String?
 }
 
+/// A request from the `mcp` proxy bridge. `action` is one of list / search /
+/// describe / call. The bridge derives the action from which key the model passed,
+/// and may address a tool as `"server/tool"` or via separate `server` + `tool`.
+struct PiMCPBridgeRequest: Codable, Hashable {
+    var action: String
+    var server: String?
+    var tool: String?
+    var query: String?
+    var args: JSONValue?
+}
+
 struct PiSessionPlanBridgeItem: Codable, Hashable {
     var id: String?
     var title: String
@@ -322,6 +333,10 @@ struct PiSubagentChildRecord: Identifiable, Codable, Hashable {
     var summary: String?
     var error: String?
     var dependencies: [UUID]?
+    /// Snapshot of Agent Deck memory IDs injected into this child run at launch.
+    var injectedMemoryIDs: [String]?
+    /// Index-aligned titles for `injectedMemoryIDs`, captured when injected.
+    var injectedMemoryTitles: [String]?
     var completedAt: Date?
     var createdAt: Date
     var updatedAt: Date
@@ -365,6 +380,10 @@ struct PiSubagentRunRecord: Identifiable, Codable, Hashable {
     /// code reads `children` directly without re-sorting.
     var children: [PiSubagentChildRecord]?
     var graphEdges: [PiSubagentGraphEdgeRecord]?
+    /// Snapshot of Agent Deck memory IDs injected into this run at launch.
+    var injectedMemoryIDs: [String]?
+    /// Index-aligned titles for `injectedMemoryIDs`, captured when injected.
+    var injectedMemoryTitles: [String]?
     var createdAt: Date
     var updatedAt: Date
     var completedAt: Date?
@@ -408,6 +427,8 @@ extension PiSubagentRunRecord {
             child: nil,
             children: nil,
             graphEdges: nil,
+            injectedMemoryIDs: nil,
+            injectedMemoryTitles: nil,
             createdAt: now,
             updatedAt: now,
             completedAt: now,
@@ -676,6 +697,9 @@ struct PiAgentContextEstimateBuilder {
         let toolsStart = lower.range(of: "available tools:").locationOrNil
         let projectStart = lower.range(of: "# project context").locationOrNil
         let skillsStart = skillsRange?.location
+        // The injected MCP catalog (an appended block). Bounded by the blank line that
+        // separates it from the next appended section (memory, APPEND_SYSTEM, …).
+        let mcpStart = lower.range(of: "mcp tools (call through").locationOrNil
 
         func nextBoundary(after start: Int, candidates: [Int?]) -> Int {
             candidates.compactMap { $0 }.filter { $0 > start }.min() ?? fullLength
@@ -686,21 +710,26 @@ struct PiAgentContextEstimateBuilder {
             ranges.append((
                 "promptTools",
                 "Tool descriptions",
-                NSRange(location: toolsStart, length: nextBoundary(after: toolsStart, candidates: [projectStart, skillsStart]) - toolsStart)
+                NSRange(location: toolsStart, length: nextBoundary(after: toolsStart, candidates: [projectStart, skillsStart, mcpStart]) - toolsStart)
             ))
         }
         if let projectStart {
             ranges.append((
                 "promptProjectContext",
                 "Project context",
-                NSRange(location: projectStart, length: nextBoundary(after: projectStart, candidates: [skillsStart]) - projectStart)
+                NSRange(location: projectStart, length: nextBoundary(after: projectStart, candidates: [skillsStart, mcpStart]) - projectStart)
             ))
         }
         if let skillsRange {
             ranges.append(("promptSkills", "Skill catalog", skillsRange))
         }
+        if let mcpStart {
+            let searchRange = NSRange(location: mcpStart, length: fullLength - mcpStart)
+            let blankLine = prompt.range(of: "\n\n", options: [], range: searchRange).locationOrNil
+            ranges.append(("promptMCP", "MCP catalog", NSRange(location: mcpStart, length: (blankLine ?? fullLength) - mcpStart)))
+        }
 
-        let firstSectionStart = [toolsStart, projectStart, skillsStart].compactMap { $0 }.min() ?? fullLength
+        let firstSectionStart = [toolsStart, projectStart, skillsStart, mcpStart].compactMap { $0 }.min() ?? fullLength
         if firstSectionStart > 0 {
             ranges.append(("promptCore", "Core instructions", NSRange(location: 0, length: firstSectionStart)))
         }
@@ -864,7 +893,6 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
     var lastError: String?
     var lastSummary: String?
     var needsAttention: Bool
-    var isPinned: Bool
     var lastNotificationAt: Date?
     var inputTokens: Int?
     var outputTokens: Int?
@@ -939,7 +967,7 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, kind, title, projectPath, projectName, repository, issueNumber, issueURL, piSessionFile, piSessionId
         case model, modelProvider, modelOverrideID, modelOverrideProvider, commandInvocations, thinkingLevel, launchCommand, branchName, worktreePath, sourceBranch
-        case status, lastError, lastSummary, needsAttention, isPinned, lastNotificationAt
+        case status, lastError, lastSummary, needsAttention, lastNotificationAt
         case inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, totalTokens, toolCalls, toolResults, contextTokens, contextWindow, contextPercent, contextBreakdown, cost
         case finalSystemPrompt, finalSystemPromptCapturedAt
         case pendingSteeringMessages, pendingFollowUpMessages, subagentsEnabled, memoryEnabled, agentSelection, injectedExtensions, agentName, isCompacting, isTitleUserEdited, createdAt, updatedAt
@@ -972,7 +1000,6 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
         lastError: String?,
         lastSummary: String?,
         needsAttention: Bool,
-        isPinned: Bool = false,
         lastNotificationAt: Date?,
         inputTokens: Int?,
         outputTokens: Int?,
@@ -1031,7 +1058,6 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
         self.lastError = lastError
         self.lastSummary = lastSummary
         self.needsAttention = needsAttention
-        self.isPinned = isPinned
         self.lastNotificationAt = lastNotificationAt
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
@@ -1094,7 +1120,6 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
             lastError: try container.decodeIfPresent(String.self, forKey: .lastError),
             lastSummary: try container.decodeIfPresent(String.self, forKey: .lastSummary),
             needsAttention: try container.decodeIfPresent(Bool.self, forKey: .needsAttention) ?? false,
-            isPinned: try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false,
             lastNotificationAt: try container.decodeIfPresent(Date.self, forKey: .lastNotificationAt),
             inputTokens: try container.decodeIfPresent(Int.self, forKey: .inputTokens),
             outputTokens: try container.decodeIfPresent(Int.self, forKey: .outputTokens),
@@ -1133,12 +1158,35 @@ struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
 }
 
 extension PiAgentSessionRecord {
+    /// Canonical session-list ordering, shared by the compact recent strip and
+    /// the store's persistent order. Keep this comparator on the collapsed strip
+    /// and the on-disk session list so a streaming pulse (bumping `updatedAt`
+    /// within the same day) does NOT reshuffle the compact strip's rows.
+    ///
+    /// `updatedAt` is compared at `.day` granularity so a session that streams a
+    /// response (bumping `updatedAt` within the same day) does NOT reshuffle to
+    /// the top of the list — only a calendar-day change reorders. Within a day,
+    /// sessions settle by `createdAt` DESC then `id` for a stable tiebreak.
     static func sessionListPrecedes(_ lhs: PiAgentSessionRecord, _ rhs: PiAgentSessionRecord, calendar: Calendar = .current) -> Bool {
-        if lhs.isPinned != rhs.isPinned { return lhs.isPinned && !rhs.isPinned }
-
         let updatedDayComparison = calendar.compare(lhs.updatedAt, to: rhs.updatedAt, toGranularity: .day)
         if updatedDayComparison != .orderedSame { return updatedDayComparison == .orderedDescending }
 
+        if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    /// Strict exact-precision ordering used by the expanded/full coding-agent
+    /// sidebar: sort by exact `updatedAt` DESC, then `createdAt` DESC, then `id`
+    /// ASC. Within-day activity promotes a session to the top of its project
+    /// group, so the most-recently-touched chat leads the expanded list. The
+    /// compact strip keeps the day-granular `sessionListPrecedes` for stability.
+    ///
+    /// Streaming-induced reshuffling of the expanded list is suppressed by the
+    /// panel's hybrid freeze (see `CodingAgentExpandedPanel`), not by this
+    /// comparator; the comparator merely defines the natural top-of-list winner
+    /// once the freeze releases.
+    static func sessionListPrecedesExact(_ lhs: PiAgentSessionRecord, _ rhs: PiAgentSessionRecord) -> Bool {
+        if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
         if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
         return lhs.id.uuidString < rhs.id.uuidString
     }

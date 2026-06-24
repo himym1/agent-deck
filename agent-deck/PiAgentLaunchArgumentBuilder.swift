@@ -23,6 +23,10 @@ enum PiAgentLaunchArgumentBuilder {
         let includeMemoryTools: Bool
         let includeExaTools: Bool
         let includeFallbackWebFetchTool: Bool
+        /// Whether the native `mcp` proxy tool was injected for this agent. When the
+        /// agent declares a restrictive `tools:` allowlist, `mcp` must be added to it
+        /// (like the memory tools) or Pi blocks the bridge-registered tool.
+        var includeMCPTool: Bool = false
     }
 
     /// Build the `--system-prompt` / `--append-system-prompt` pair for the agent
@@ -108,6 +112,9 @@ enum PiAgentLaunchArgumentBuilder {
         }
         if profile.includeMemoryTools {
             result.append(contentsOf: PiNativeSubagentBridgeExtensions.memoryToolNames)
+        }
+        if profile.includeMCPTool {
+            result.append(PiNativeSubagentBridgeExtensions.mcpProxyToolName)
         }
         return distinctPreservingOrder(result)
     }

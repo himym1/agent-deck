@@ -5,44 +5,44 @@ import Observation
 struct ProjectPreference: Codable, Hashable, Identifiable, Sendable {
     let path: String
     var isEnabled: Bool
-    var isFavorite: Bool
     var isHidden: Bool
     var customIconPath: String?
     var assignedAgentNames: Set<String>
     var assignedSkillNames: Set<String>
     var assignedPromptTemplateNames: Set<String>
+    var assignedMcpServerNames: Set<String>
 
     var id: String { path }
 
     static func `default`(for path: String) -> ProjectPreference {
-        ProjectPreference(path: path, isEnabled: false, isFavorite: false, isHidden: false, customIconPath: nil, assignedAgentNames: [], assignedSkillNames: [], assignedPromptTemplateNames: [])
+        ProjectPreference(path: path, isEnabled: false, isHidden: false, customIconPath: nil, assignedAgentNames: [], assignedSkillNames: [], assignedPromptTemplateNames: [])
     }
 
     enum CodingKeys: String, CodingKey {
-        case path, isEnabled, isFavorite, isHidden, customIconPath, assignedAgentNames, assignedSkillNames, assignedPromptTemplateNames
+        case path, isEnabled, isHidden, customIconPath, assignedAgentNames, assignedSkillNames, assignedPromptTemplateNames, assignedMcpServerNames
     }
 
-    init(path: String, isEnabled: Bool, isFavorite: Bool, isHidden: Bool, customIconPath: String?, assignedAgentNames: Set<String> = [], assignedSkillNames: Set<String> = [], assignedPromptTemplateNames: Set<String> = []) {
+    init(path: String, isEnabled: Bool, isHidden: Bool, customIconPath: String?, assignedAgentNames: Set<String> = [], assignedSkillNames: Set<String> = [], assignedPromptTemplateNames: Set<String> = [], assignedMcpServerNames: Set<String> = []) {
         self.path = path
         self.isEnabled = isEnabled
-        self.isFavorite = isFavorite
         self.isHidden = isHidden
         self.customIconPath = customIconPath
         self.assignedAgentNames = assignedAgentNames
         self.assignedSkillNames = assignedSkillNames
         self.assignedPromptTemplateNames = assignedPromptTemplateNames
+        self.assignedMcpServerNames = assignedMcpServerNames
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         path = try container.decode(String.self, forKey: .path)
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
-        isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
         isHidden = try container.decodeIfPresent(Bool.self, forKey: .isHidden) ?? false
         customIconPath = try container.decodeIfPresent(String.self, forKey: .customIconPath)
         assignedAgentNames = try container.decodeIfPresent(Set<String>.self, forKey: .assignedAgentNames) ?? []
         assignedSkillNames = try container.decodeIfPresent(Set<String>.self, forKey: .assignedSkillNames) ?? []
         assignedPromptTemplateNames = try container.decodeIfPresent(Set<String>.self, forKey: .assignedPromptTemplateNames) ?? []
+        assignedMcpServerNames = try container.decodeIfPresent(Set<String>.self, forKey: .assignedMcpServerNames) ?? []
     }
 }
 
@@ -86,14 +86,6 @@ final class ProjectPreferencesStore {
         update(path) { $0.isEnabled = isEnabled }
     }
 
-    func toggleFavorite(for path: String) {
-        update(path) { $0.isFavorite.toggle() }
-    }
-
-    func setFavorite(_ isFavorite: Bool, for path: String) {
-        update(path) { $0.isFavorite = isFavorite }
-    }
-
     func setHidden(_ isHidden: Bool, for path: String) {
         update(path) { $0.isHidden = isHidden }
     }
@@ -124,6 +116,16 @@ final class ProjectPreferencesStore {
                 preference.assignedPromptTemplateNames.insert(promptName)
             } else {
                 preference.assignedPromptTemplateNames.remove(promptName)
+            }
+        }
+    }
+
+    func setAssignedMcpServer(_ serverName: String, assigned: Bool, for path: String) {
+        update(path) { preference in
+            if assigned {
+                preference.assignedMcpServerNames.insert(serverName)
+            } else {
+                preference.assignedMcpServerNames.remove(serverName)
             }
         }
     }
@@ -217,7 +219,7 @@ final class ProjectPreferencesStore {
     }
 
     /// Same debounce-then-off-main pattern as `AppSettingsStore.schedulePersist`.
-    /// Coalesces bursts of assignment toggles (favorite, hide, project agent/skill
+    /// Coalesces bursts of assignment toggles (hide, project agent/skill
     /// assignment) into one encode + UserDefaults write per ~150ms window.
     private var pendingPersistTask: Task<Void, Never>?
     private static let persistDebounceNanoseconds: UInt64 = 150_000_000
@@ -260,7 +262,9 @@ final class ProjectPreferencesStore {
         try? fileManager.removeItem(atPath: path)
     }
 
-    private static func loadPreferences(from defaults: UserDefaults, key: String) -> [String: ProjectPreference] {
+    // Internal (not private) so a regression test can exercise the reconstruction
+    // path directly — this is where a per-project assigned-set field was once dropped.
+    static func loadPreferences(from defaults: UserDefaults, key: String) -> [String: ProjectPreference] {
         guard let data = defaults.data(forKey: key),
               let preferences = try? JSONDecoder().decode([ProjectPreference].self, from: data) else {
             return [:]
@@ -271,12 +275,12 @@ final class ProjectPreferencesStore {
             return (standardizedPath, ProjectPreference(
                 path: standardizedPath,
                 isEnabled: preference.isEnabled,
-                isFavorite: preference.isFavorite,
                 isHidden: preference.isHidden,
                 customIconPath: preference.customIconPath,
                 assignedAgentNames: preference.assignedAgentNames,
                 assignedSkillNames: preference.assignedSkillNames,
-                assignedPromptTemplateNames: preference.assignedPromptTemplateNames
+                assignedPromptTemplateNames: preference.assignedPromptTemplateNames,
+                assignedMcpServerNames: preference.assignedMcpServerNames
             ))
         })
     }

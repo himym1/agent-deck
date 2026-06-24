@@ -32,6 +32,7 @@ bash scripts/package-dmg.sh
 - Version tags may be two-part feature releases (`v1.8`, `v2.0`) or three-part patch releases (`v1.7.1`).
 - Patch and minor releases are published to the same Sparkle appcast with a one-day phased rollout interval; manual "Check for Updates..." sees them immediately, while scheduled checks roll out across Sparkle's update groups. Major releases, such as `v2.0`, are not phased.
 - Requires signing, notarization, and Sparkle secrets from GitHub Actions.
-- Updates `docs/appcast.xml` after publishing the DMG.
+- Attaches the Sparkle `<item>` as `appcast-item.xml` to the GitHub release; `agentdeck.site` stitches these fragments into `/appcast.xml` dynamically.
+- Patch-release appcast descriptions include the cumulative changelog for the whole minor series (e.g. 2.7 + 2.7.1 + 2.7.2 for a 2.7.2 update), because Sparkle only shows the current item's notes and would otherwise hide skipped patches.
 
 If release behavior changes, update both the script and the workflow.

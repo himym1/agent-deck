@@ -329,7 +329,7 @@ private struct PiAgentProjectPickerPopover: View {
 
     var body: some View {
         AppPopoverContainer(title: "New Session", subtitle: "Choose a project for Pi Agent.") {
-            AppPopoverScrollList {
+            AppProjectPickerPopoverList {
                 ForEach(projects) { project in
                     AppPopoverProjectRow(
                         imageURL: project.iconFileURL,
@@ -351,14 +351,15 @@ struct PiAgentSessionRow: View, Equatable {
     let session: PiAgentSessionRecord
     let isSelected: Bool
     let isRunning: Bool
+    let hasUIRequest: Bool
     let isRenaming: Bool
     let isGeneratingTitle: Bool
+    let hasActiveLoop: Bool
     let gitActivity: PiAgentSessionGitActivity
     let onSelect: () -> Void
     let onBeginRename: () -> Void
     let onEndRename: () -> Void
     let onRename: (String) -> Void
-    let onTogglePinned: () -> Void
     let onDelete: () -> Void
 
     // Equatable so `.equatable()` can short-circuit re-evaluation: the session list
@@ -372,8 +373,10 @@ struct PiAgentSessionRow: View, Equatable {
         lhs.session == rhs.session
             && lhs.isSelected == rhs.isSelected
             && lhs.isRunning == rhs.isRunning
+            && lhs.hasUIRequest == rhs.hasUIRequest
             && lhs.isRenaming == rhs.isRenaming
             && lhs.isGeneratingTitle == rhs.isGeneratingTitle
+            && lhs.hasActiveLoop == rhs.hasActiveLoop
             && lhs.gitActivity == rhs.gitActivity
     }
 
@@ -440,7 +443,7 @@ struct PiAgentSessionRow: View, Equatable {
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                 Spacer(minLength: 4)
-                SessionGitActivityStrip(activity: gitActivity, isSelected: isSelected)
+                SessionGitActivityStrip(activity: gitActivity, isSelected: isSelected, hasLoop: hasActiveLoop)
             }
         }
         .saturation(seenAppearanceAmount)
@@ -490,7 +493,7 @@ struct PiAgentSessionRow: View, Equatable {
     }
 
     private var isSeenInactive: Bool {
-        !isSelected && !isRunning && !session.needsAttention
+        !isSelected && !hasUIRequest && !isRunning && !session.needsAttention
     }
 
     private var seenAppearanceAmount: Double {
@@ -504,7 +507,17 @@ struct PiAgentSessionRow: View, Equatable {
     @ViewBuilder
     private var attentionStatusSlot: some View {
         ZStack(alignment: .trailing) {
-            if isRunning {
+            if hasUIRequest {
+                askUserBadge
+                    .transition(.opacity)
+            } else if hasActiveLoop {
+                AppSpinner()
+                    .controlSize(.small)
+                    .frame(width: 14, height: 14)
+                    .help("Loop running")
+                    .accessibilityLabel("Loop running")
+                    .transition(.opacity)
+            } else if isRunning {
                 PiAgentTypingIndicator()
                     .transition(.opacity)
             } else if session.needsAttention {
@@ -512,8 +525,18 @@ struct PiAgentSessionRow: View, Equatable {
                     .transition(.opacity)
             }
         }
+        .animation(.snappy(duration: 0.24), value: hasUIRequest)
         .animation(.snappy(duration: 0.24), value: isRunning)
+        .animation(.snappy(duration: 0.24), value: hasActiveLoop)
         .animation(.snappy(duration: 0.24), value: session.needsAttention)
+    }
+
+    private var askUserBadge: some View {
+        Image(systemName: "questionmark.bubble.fill")
+            .font(AppTheme.Font.caption.weight(.semibold))
+            .foregroundStyle(AppTheme.brandAccent)
+            .help("Pi Agent is waiting for your response")
+            .accessibilityLabel("Waiting for your response")
     }
 
     private var needsAttentionBell: some View {
@@ -634,6 +657,8 @@ struct PiAgentSessionRow: View, Equatable {
     }
 
     private var statusHelp: String {
+        if hasUIRequest { return "Waiting for your response" }
+        if hasActiveLoop { return "Loop running" }
         if isRunning { return "Active" }
         return session.status.rawValue
     }
@@ -652,9 +677,17 @@ struct PiAgentSessionRow: View, Equatable {
 private struct SessionGitActivityStrip: View {
     let activity: PiAgentSessionGitActivity
     let isSelected: Bool
+    let hasLoop: Bool
 
     var body: some View {
         HStack(spacing: 5) {
+            if hasLoop {
+                Image(systemName: "infinity")
+                    .font(AppTheme.Font.caption2.weight(.semibold))
+                    .foregroundStyle(isSelected ? AppTheme.brandAccent : AppTheme.mutedText)
+                    .help("Loop active")
+                    .accessibilityLabel("Loop active")
+            }
             pip(kind: .commit, date: activity.lastCommit, verb: "commit")
             pip(kind: .push,   date: activity.lastPush,   verb: "push")
             pip(kind: .merge,  date: activity.lastMerge,  verb: "merge")

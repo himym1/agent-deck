@@ -5,12 +5,16 @@ struct SidebarNavigationRow: View {
     let item: SidebarItem
     var isSelected: Bool = false
     var showsWarning = false
+    var showsNewFeatureBadge = false
 
     var body: some View {
         Label {
             HStack(spacing: 6) {
                 Text(item.localizedTitle)
                     .font(.callout.weight(.medium))
+                if showsNewFeatureBadge {
+                    SidebarNewFeatureBadge(isSelected: isSelected)
+                }
                 if showsWarning {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.caption.weight(.semibold))
@@ -45,6 +49,29 @@ struct SidebarNavigationRow: View {
         isSelected
             ? AnyShapeStyle(AppTheme.brandAccent)
             : AnyShapeStyle(Color.secondary)
+    }
+}
+
+private struct SidebarNewFeatureBadge: View {
+    let isSelected: Bool
+
+    var body: some View {
+        Text("NEW")
+            .font(AppTheme.Font.caption2.weight(.bold))
+            .fontWidth(.condensed)
+            .foregroundStyle(isSelected ? .primary : AppTheme.brandAccent)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background {
+                Capsule(style: .continuous)
+                    .fill(AppTheme.brandAccent.opacity(isSelected ? 0.24 : 0.14))
+            }
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(AppTheme.brandAccent.opacity(isSelected ? 0.55 : 0.35), lineWidth: 0.75)
+            }
+            .help("New Loop functionality")
+            .accessibilityLabel("New functionality")
     }
 }
 
@@ -124,6 +151,99 @@ struct SidebarTitleBar: View {
             .buttonStyle(.plain)
             .help("Settings…")
             .accessibilityLabel("Settings")
+        }
+    }
+}
+
+/// Shared project-scope picker used by project-scoped screen toolbars
+/// (Issues, Memory, System Prompt). Shows the active project (or "Select
+/// Project") and opens a popover listing every enabled project; selection
+/// routes through `viewModel.setSelectedProject(_:)`.
+struct ProjectToolbarSelector: View {
+    @Bindable var viewModel: AppViewModel
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        Button {
+            isPresented.toggle()
+        } label: {
+            HStack(spacing: 7) {
+                if let project = viewModel.selectedDiscoveredProject {
+                    ProjectIconView(
+                        imageURL: project.iconFileURL,
+                        symbolName: project.fallbackSymbolName,
+                        size: 18,
+                        assetName: project.projectType.assetName
+                    )
+                    Text(project.repositoryDisplayName)
+                } else {
+                    Image(systemName: "folder")
+                    Text("Select Project")
+                }
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .toolbarNeutralChrome()
+        .help("Choose project")
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Projects")
+                    .font(.headline)
+                Button {
+                    viewModel.clearProjectRoot()
+                    isPresented = false
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "square.grid.2x2")
+                            .frame(width: 24, height: 24)
+                            .foregroundStyle(AppTheme.mutedText)
+                        Text("All Projects")
+                            .font(.body.weight(.medium))
+                        Spacer(minLength: 12)
+                        if viewModel.selectedProjectPath == nil {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(AppTheme.brandAccent)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                ForEach(viewModel.enabledProjects) { project in
+                    Button {
+                        viewModel.setSelectedProject(project.url)
+                        isPresented = false
+                    } label: {
+                        HStack(spacing: 10) {
+                            ProjectIconView(
+                                imageURL: project.iconFileURL,
+                                symbolName: project.fallbackSymbolName,
+                                size: 24,
+                                assetName: project.projectType.assetName
+                            )
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(project.repositoryDisplayName)
+                                    .font(.body.weight(.medium))
+                                if let remote = project.gitHubRemote {
+                                    Text(remote.nameWithOwner)
+                                        .font(.caption)
+                                        .foregroundStyle(AppTheme.mutedText)
+                                }
+                            }
+                            Spacer(minLength: 12)
+                            if project.path == viewModel.selectedProjectPath {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(AppTheme.brandAccent)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(14)
+            .frame(width: 300)
         }
     }
 }

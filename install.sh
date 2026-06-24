@@ -23,8 +23,6 @@ set -euo pipefail
 
 REPO="a-streetcoder/agent-deck"
 APP_PATH="/Applications/Agent Deck.app"
-DMG_URL="https://github.com/${REPO}/releases/latest/download/Agent-Deck.dmg"
-SHA_URL="${DMG_URL}.sha256"
 PI_LATEST_URL="https://pi.dev/api/latest-version"
 
 FORCE=0
@@ -120,6 +118,13 @@ fi
 
 # ── Step 2: existing install ────────────────────────────────────────────────
 LATEST_TAG="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest" 2>/dev/null | sed 's|.*/tag/||' || true)"
+VERSION="${LATEST_TAG#v}"
+DMG_NAME="Agent-Deck-${VERSION}.dmg"
+DMG_URL="https://github.com/${REPO}/releases/latest/download/${DMG_NAME}"
+SHA_URL="${DMG_URL}.sha256"
+if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" = "$VERSION" ]; then
+  die "Could not determine the latest Agent Deck release. Try again in a minute."
+fi
 if [ -d "$APP_PATH" ]; then
   INSTALLED_VERSION="$(defaults read "$APP_PATH/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo "")"
   if [ -n "$INSTALLED_VERSION" ] && [ "v$INSTALLED_VERSION" = "$LATEST_TAG" ] && [ "$FORCE" != 1 ]; then
@@ -149,9 +154,9 @@ cleanup() {
 trap cleanup EXIT
 
 download_and_verify() {
-  curl -fL --progress-bar "$DMG_URL" -o "$WORK/Agent-Deck.dmg"
-  curl -fsSL "$SHA_URL" -o "$WORK/Agent-Deck.dmg.sha256"
-  (cd "$WORK" && shasum -a 256 -c Agent-Deck.dmg.sha256 >/dev/null)
+  curl -fL --progress-bar "$DMG_URL" -o "$WORK/$DMG_NAME"
+  curl -fsSL "$SHA_URL" -o "$WORK/${DMG_NAME}.sha256"
+  (cd "$WORK" && shasum -a 256 -c "${DMG_NAME}.sha256" >/dev/null)
 }
 
 bold "Downloading Agent Deck…"
@@ -163,7 +168,7 @@ fi
 
 bold "Installing to /Applications…"
 mkdir -p "$MOUNT"
-hdiutil attach "$WORK/Agent-Deck.dmg" -nobrowse -readonly -quiet -mountpoint "$MOUNT"
+hdiutil attach "$WORK/$DMG_NAME" -nobrowse -readonly -quiet -mountpoint "$MOUNT"
 rm -rf "$APP_PATH"
 ditto "$MOUNT/Agent Deck.app" "$APP_PATH"
 hdiutil detach "$MOUNT" -quiet

@@ -12,60 +12,50 @@ nonisolated enum ProviderLogo {
     }
 
     static func assetName(for provider: String) -> String? {
-        switch provider.lowercased() {
-        case "anthropic":
-            return "claude"
-        case "azure-openai-responses", "openai", "openai-codex":
-            return "openai"
-        case "github-copilot":
-            return "copilot"
-        case "kimi-coding", "moonshotai", "moonshotai-cn":
-            return "kimi"
-        case "minimax", "minimax-cn":
-            return "minimax"
-        case "mistral":
-            return "mistralai"
-        case "opencode", "opencode-go":
-            return "opencode"
-        case "openrouter":
-            return "openrouter"
-        case "vercel-ai-gateway":
-            return "vercel"
-        case "xai":
-            return "xai"
-        case "zai", "zai-coding-cn":
-            return "zai"
-        // Pre-wired names for providers that ship no logo yet. Add an asset with
-        // the returned name (see `rasterImagesets`) and it appears automatically;
-        // until then `assetExists` routes them to the monogram fallback.
-        case "amazon-bedrock":
-            return "bedrock"
-        case "ant-ling":
-            return "ling"
-        case "cerebras":
-            return "cerebras"
-        case "cloudflare-ai-gateway", "cloudflare-workers-ai":
-            return "cloudflare"
-        case "deepseek":
-            return "deepseek"
-        case "fireworks":
-            return "fireworks"
-        case "google", "google-vertex":
-            return "google"
-        case "groq":
-            return "groq"
-        case "huggingface":
-            return "huggingface"
-        case "nvidia":
-            return "nvidia"
-        case "together":
-            return "together"
-        case "xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp":
-            return "xiaomi"
-        default:
-            return nil
-        }
+        providerAssetMap[provider.lowercased()]
     }
+
+    /// Pre-wired provider → asset name map. Add an asset with the returned name
+    /// (see `rasterImagesets`) and it appears automatically; until then
+    /// `assetExists` routes missing assets to the monogram fallback.
+    private static let providerAssetMap: [String: String] = [
+        "anthropic": "claude",
+        "azure-openai-responses": "openai",
+        "openai": "openai",
+        "openai-codex": "openai",
+        "github-copilot": "copilot",
+        "kimi-coding": "kimi",
+        "moonshotai": "kimi",
+        "moonshotai-cn": "kimi",
+        "minimax": "minimax",
+        "minimax-cn": "minimax",
+        "mistral": "mistralai",
+        "opencode": "opencode",
+        "opencode-go": "opencode",
+        "openrouter": "openrouter",
+        "vercel-ai-gateway": "vercel",
+        "xai": "xai",
+        "zai": "zai",
+        "zai-coding-cn": "zai",
+        "amazon-bedrock": "bedrock",
+        "ant-ling": "ling",
+        "cerebras": "cerebras",
+        "cloudflare-ai-gateway": "cloudflare",
+        "cloudflare-workers-ai": "cloudflare",
+        "deepseek": "deepseek",
+        "fireworks": "fireworks",
+        "google": "google",
+        "google-vertex": "google",
+        "groq": "groq",
+        "huggingface": "huggingface",
+        "neuralwatt": "neuralwatt",
+        "nvidia": "nvidia",
+        "together": "together",
+        "xiaomi": "xiaomi",
+        "xiaomi-token-plan-ams": "xiaomi",
+        "xiaomi-token-plan-cn": "xiaomi",
+        "xiaomi-token-plan-sgp": "xiaomi",
+    ]
 
     /// Logos backed by a raster/template imageset (sized with `resizable()`)
     /// rather than a custom SF symbol set (sized with `imageScale`). Every
@@ -148,7 +138,8 @@ struct ProviderLabel: View {
     }
 
     private var displayName: String {
-        provider.lowercased() == "apple" ? "Apple" : provider
+        if provider.lowercased() == "apple" { return "Apple" }
+        return ProviderDisplay.name(for: provider)
     }
 }
 

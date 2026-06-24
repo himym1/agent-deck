@@ -12,6 +12,7 @@ enum ProviderDisplay {
         case "github-copilot": return "GitHub Copilot"
         case "google": return "Google Gemini"
         case "google-vertex": return "Google Vertex AI"
+        case "neuralwatt": return "NeuralWatt"
         case "openrouter": return "OpenRouter"
         case "azure-openai-responses": return "Azure OpenAI"
         case "amazon-bedrock": return "Amazon Bedrock"
@@ -548,7 +549,7 @@ struct ProviderLoginPhaseView: View {
 
     private func busyRow(_ text: String) -> some View {
         HStack(spacing: 10) {
-            ProgressView()
+            AppSpinner()
                 .controlSize(.small)
             Text(text)
                 .font(.subheadline)

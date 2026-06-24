@@ -36,7 +36,7 @@ For behavior-changing PRs, verify the relevant areas:
 ### Persistence
 
 - builtin edits write settings overrides, not read-only bundled files
-- custom agents/chains/prompts write to the selected active/library/project target
+- custom agents/prompts write to the selected active/library/project target
 - env updates preserve unrelated lines and hide secret values by default
 
 ### Pi Agent
@@ -51,7 +51,7 @@ For behavior-changing PRs, verify the relevant areas:
 - report-only run writes artifacts and does not modify project files
 - worktree run creates a worktree and patch
 - blocking supervisor requests appear in UI and can be answered
-- chain/parallel graph status updates correctly
+- native subagent graph status updates correctly, including sequential and parallel bridge requests
 
 ### GitHub/Git
 

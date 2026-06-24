@@ -29,14 +29,6 @@ This page lists the important paths Agent Deck scans or writes.
 | Assignment state | Agent Deck app settings/project preferences |
 | Builtin overrides | `settings.json -> subagents.agentOverrides` |
 
-## Chains
-
-| Scope | Path |
-|---|---|
-| Global active | `~/.pi/agent/chains/*.chain.md` |
-| Library | `~/.pi/agent/agent-library/chains/*.chain.md` |
-| Project active | `PROJECT/.pi/chains/*.chain.md` |
-
 ## Skills
 
 | Scope | Path |

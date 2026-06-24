@@ -19,81 +19,20 @@ extension PiAgentSessionRecord {
 }
 
 /// Header row shared by both states of the Coding Agent pull-up panel: the
-/// project selector (icon + name + picker glyph opening the project popover),
-/// live status badges, a per-state trailing slot (new-session controls,
-/// delete) and the expand/collapse chevron. The whole row is tappable; inner
+/// fixed Sessions title, a per-state trailing slot (new-session controls,
+/// delete), and the expand/collapse chevron. The whole row is tappable; inner
 /// buttons take gesture priority so their own actions still win.
 struct CodingAgentPanelHeader<Trailing: View>: View {
-    let viewModel: AppViewModel
     let isExpanded: Bool
     let onToggle: () -> Void
-    let projects: [DiscoveredProject]
-    let selectedProject: DiscoveredProject?
-    let selectedProjectPath: String?
-    @Binding var projectFilterText: String
-    let isSearchDebouncing: Bool
-    let onSelectProject: (DiscoveredProject?) -> Void
     @ViewBuilder var trailing: Trailing
-
-    @State private var isProjectPickerPresented = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            Button {
-                isProjectPickerPresented.toggle()
-            } label: {
-                // Logo + name are ONE click target: both open the picker, and
-                // the popover anchors under the whole block.
-                HStack(alignment: .center, spacing: 10) {
-                    // 30 matches the visible height of the title+subtitle block
-                    // beside it (34 overhung the text on both ends) and the 30pt
-                    // round controls at the row's trailing edge.
-                    ProjectIconView(
-                        imageURL: selectedProject?.iconFileURL,
-                        symbolName: selectedProject?.fallbackSymbolName ?? "square.grid.2x2",
-                        size: 30,
-                        assetName: selectedProject?.projectType.assetName
-                    )
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(alignment: .center, spacing: 5) {
-                            Text(selectedProjectTitle)
-                                .font(.body)
-                                .fontWeight(.medium)
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                        if selectedProject != nil {
-                            Text(selectedProjectSubtitle)
-                                .font(.callout)
-                                .fontWeight(.regular)
-                                .foregroundStyle(AppTheme.mutedText)
-                                .lineLimit(1)
-                                .fontWidth(.compressed)
-                        }
-                    }
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Choose project")
-            .accessibilityLabel("Choose project")
-            .accessibilityHint("Opens the project picker")
-            .popover(isPresented: $isProjectPickerPresented, arrowEdge: .bottom) {
-                ProjectPickerPopover(
-                    projects: projects,
-                    selectedProjectPath: selectedProjectPath,
-                    filterText: $projectFilterText,
-                    isSearchDebouncing: isSearchDebouncing,
-                    onSelectProject: { project in
-                        onSelectProject(project)
-                        isProjectPickerPresented = false
-                    }
-                )
-            }
+            Text("Sessions")
+                .font(AppTheme.Font.headline)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
 
             Spacer(minLength: 8)
 
@@ -112,49 +51,22 @@ struct CodingAgentPanelHeader<Trailing: View>: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onToggle)
     }
-
-    private var selectedProjectTitle: String {
-        if selectedProject == nil && selectedProjectPath == nil {
-            return "All Projects"
-        }
-        if let remote = selectedProject?.gitHubRemote {
-            return remote.repo
-        }
-        if let selectedProject {
-            return selectedProject.name
-        }
-        if let selectedProjectPath {
-            return URL(fileURLWithPath: selectedProjectPath).lastPathComponent
-        }
-        return "Choose Project"
-    }
-
-    private var selectedProjectSubtitle: String {
-        if let remote = selectedProject?.gitHubRemote {
-            return remote.owner
-        }
-        return selectedProject?.path ?? selectedProjectPath ?? ""
-    }
 }
 
-/// New-session control shared by the collapsed and expanded panel headers:
-/// the project picker `+` when no project is scoped, otherwise the plain `+`.
+/// New-session control shared by the collapsed and expanded panel headers.
+/// The Sessions panel is always global, so `+` always opens the project picker.
 /// Starting a 1:1 agent chat lives in the draft's Deck-agents card, next to
 /// the agents themselves, so the header stays a single button.
 struct CodingAgentNewSessionControls: View {
     let viewModel: AppViewModel
 
     var body: some View {
-        if viewModel.selectedDiscoveredProject == nil {
-            PiAgentAddSessionMenuButton(
-                projects: orderedProjects,
-                selectedProject: viewModel.selectedDiscoveredProject,
-                action: { viewModel.createPiAgentDraftForSelectedProject() },
-                onSelectProject: { viewModel.createPiAgentDraft(for: $0) }
-            )
-        } else {
-            PiAgentAddSessionButton(action: { viewModel.createPiAgentDraftForSelectedProject() })
-        }
+        PiAgentAddSessionMenuButton(
+            projects: orderedProjects,
+            selectedProject: nil,
+            action: { viewModel.createPiAgentDraftForSelectedProject() },
+            onSelectProject: { viewModel.createPiAgentDraft(for: $0) }
+        )
     }
 
     private var orderedProjects: [DiscoveredProject] {
@@ -169,11 +81,6 @@ struct CodingAgentNewSessionControls: View {
 struct CodingAgentCollapsedPanel: View {
     let viewModel: AppViewModel
     let store: PiAgentSessionStore
-    let projects: [DiscoveredProject]
-    let selectedProject: DiscoveredProject?
-    @Binding var projectFilterText: String
-    let isSearchDebouncing: Bool
-    let onSelectProject: (DiscoveredProject?) -> Void
     /// The same toolbar search the expanded list filters on, so searching
     /// narrows the recents too.
     let sessionSearchText: String
@@ -181,7 +88,7 @@ struct CodingAgentCollapsedPanel: View {
     /// Cached so `body` never reads `store.sessions` directly — `touchSession`
     /// mutates that array many times per second during streaming. Rebuilt only
     /// on the non-streaming triggers that actually change the list, mirroring
-    /// the expanded panel's `cachedVisibleSessions`.
+    /// the expanded panel's `cachedSections`.
     @State private var recentSessions: [PiAgentSessionRecord] = []
     /// On-demand jump consumed by the list's `AppList`; set when this panel
     /// becomes the visible one so the selected session scrolls into view.
@@ -195,15 +102,8 @@ struct CodingAgentCollapsedPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             CodingAgentPanelHeader(
-                viewModel: viewModel,
                 isExpanded: false,
-                onToggle: { viewModel.openPiAgentScreen() },
-                projects: projects,
-                selectedProject: selectedProject,
-                selectedProjectPath: viewModel.selectedProjectPath,
-                projectFilterText: $projectFilterText,
-                isSearchDebouncing: isSearchDebouncing,
-                onSelectProject: onSelectProject
+                onToggle: { viewModel.openPiAgentScreen() }
             ) {
                 CodingAgentNewSessionControls(viewModel: viewModel)
             }
@@ -212,12 +112,19 @@ struct CodingAgentCollapsedPanel: View {
             .padding(.horizontal, 6)
             .padding(.top, 2)
 
+            Rectangle()
+                .fill(AppTheme.contentStroke)
+                .frame(height: 1)
+                .padding(.horizontal, 6)
+
             if !recentSessions.isEmpty {
                 CodingAgentRecentList(
                     sessions: recentSessions,
                     selectedSessionID: store.selectedSessionID,
                     isAgentSelected: viewModel.selectedSidebarItem == .agent,
                     workingSessionIDs: workingRecentSessionIDs,
+                    uiRequestSessionIDs: uiRequestRecentSessionIDs,
+                    projectByPath: viewModel.projectByPath,
                     bottomContentInset: recentListFadeHeight > 0 ? recentListFadeHeight + 2 : 4,
                     scrollRequestID: recentScrollRequest,
                     scrollRequest: $recentScrollRequest,
@@ -240,7 +147,6 @@ struct CodingAgentCollapsedPanel: View {
             recentScrollRequest = store.selectedSessionID
         }
         .onChange(of: store.sessionListRevision) { _, _ in rebuildRecents() }
-        .onChange(of: viewModel.selectedProjectPath) { _, _ in rebuildRecents() }
         .onChange(of: sessionSearchText) { _, _ in rebuildRecents() }
         .onChange(of: viewModel.showPiAgentAttentionOnly) { _, _ in rebuildRecents() }
         // The expanded panel stays mounted while this one shows (and vice
@@ -248,6 +154,17 @@ struct CodingAgentCollapsedPanel: View {
         // offset with whatever session was picked in the expanded list.
         .onChange(of: viewModel.isCodingAgentPanelExpanded) { _, isExpanded in
             if !isExpanded { recentScrollRequest = store.selectedSessionID }
+        }
+        // Keep the selected row in view whenever selection changes — a newly
+        // created session is selected by `createPiAgentDraft`, and without this
+        // the strip would just highlight it offscreen if the user was scrolled
+        // down. Gated on the collapsed state (expanded mode hides this strip via
+        // opacity 0, so scrolling it would be wasted work and could realize lazy
+        // rows the user never sees). The same value backing the row's selection
+        // highlight is observed here, so no extra derivation per body eval.
+        .onChange(of: store.selectedSessionID) { _, newID in
+            guard !viewModel.isCodingAgentPanelExpanded, let newID else { return }
+            recentScrollRequest = newID
         }
         .alert("Delete Pi Agent session?", isPresented: $isDeleteSessionAlertPresented) {
             Button("Delete", role: .destructive) {
@@ -282,13 +199,14 @@ struct CodingAgentCollapsedPanel: View {
         Set(recentSessions.filter { viewModel.piAgentSessionIsWorking($0) }.map(\.id))
     }
 
+    private var uiRequestRecentSessionIDs: Set<UUID> {
+        Set(recentSessions.compactMap { session in
+            store.uiRequestsBySessionID[session.id] == nil ? nil : session.id
+        })
+    }
+
     private func rebuildRecents() {
-        var scoped: [PiAgentSessionRecord]
-        if let path = viewModel.selectedProjectPath {
-            scoped = store.sessions.filter { $0.projectPath == path }
-        } else {
-            scoped = store.sessions
-        }
+        var scoped = store.sessions
         if viewModel.showPiAgentAttentionOnly {
             scoped = scoped.filter(\.needsAttention)
         }
@@ -296,8 +214,33 @@ struct CodingAgentCollapsedPanel: View {
         if !query.isEmpty {
             scoped = scoped.filter { $0.matchesSessionSearch(query) }
         }
-        let next = scoped.sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
+        // Sessions are always global now: project selection in other views must
+        // not change the session strip.
+        let next = interleaveByLiveness(scoped)
         if next != recentSessions { recentSessions = next }
+        // Report the collapsed strip's flat visible row snapshot to the view
+        // model so keyboard navigation operates on rendered rows only. Only
+        // reports when this strip is the active panel (i.e. the expanded panel
+        // is hidden); the expanded panel owns the report when it's showing.
+        if !viewModel.isCodingAgentPanelExpanded {
+            viewModel.piAgentVisibleSessionsForNavigation = next
+        }
+    }
+
+    /// Live sessions (working / updated in the last 30 min) first in
+    /// recency order, then the remaining sessions in recency order. Used only
+    /// for the All-Projects compact strip.
+    private func interleaveByLiveness(_ sessions: [PiAgentSessionRecord]) -> [PiAgentSessionRecord] {
+        let recentCutoff = Date().addingTimeInterval(-1_800)
+        let liveIDs = Set(sessions.filter {
+            viewModel.piAgentSessionIsWorking($0) || $0.updatedAt >= recentCutoff
+        }.map(\.id))
+        let sortRecency: (PiAgentSessionRecord, PiAgentSessionRecord) -> Bool = {
+            PiAgentSessionRecord.sessionListPrecedes($0, $1)
+        }
+        let live = sessions.filter { liveIDs.contains($0.id) }.sorted(by: sortRecency)
+        let rest = sessions.filter { !liveIDs.contains($0.id) }.sorted(by: sortRecency)
+        return live + rest
     }
 }
 
@@ -310,6 +253,8 @@ private struct CodingAgentRecentList: View, Equatable {
     let selectedSessionID: UUID?
     let isAgentSelected: Bool
     let workingSessionIDs: Set<UUID>
+    let uiRequestSessionIDs: Set<UUID>
+    let projectByPath: [String: DiscoveredProject]
     /// Past the panel's fade when one shows, so the last row can scroll clear
     /// of the gradient. Derived from the session count, so `==` already
     /// covers it via `sessions`.
@@ -328,6 +273,8 @@ private struct CodingAgentRecentList: View, Equatable {
             && lhs.selectedSessionID == rhs.selectedSessionID
             && lhs.isAgentSelected == rhs.isAgentSelected
             && lhs.workingSessionIDs == rhs.workingSessionIDs
+            && lhs.uiRequestSessionIDs == rhs.uiRequestSessionIDs
+            && lhs.projectByPath == rhs.projectByPath
             // A pending scroll request must defeat the gate so the inner
             // AppList's onChange sees it (same trap as SessionListContent).
             && lhs.scrollRequestID == rhs.scrollRequestID
@@ -345,8 +292,10 @@ private struct CodingAgentRecentList: View, Equatable {
         ) { session in
             CodingAgentRecentRow(
                 session: session,
+                project: projectByPath[session.projectPath],
                 isSelected: isAgentSelected && session.id == selectedSessionID,
                 isRunning: workingSessionIDs.contains(session.id),
+                hasUIRequest: uiRequestSessionIDs.contains(session.id),
                 onDelete: { onDelete(session.id) }
             )
             .equatable()
@@ -364,15 +313,16 @@ private struct CodingAgentRecentList: View, Equatable {
     }
 }
 
-/// Compact one-line session row for the collapsed panel: title and a live
-/// status slot (typing dots while running, bell when waiting; a hover swaps it
-/// for the delete affordance). No project icon — the panel header's project
-/// selector already says where you are. Selection/hover chrome and the tap
-/// come from the enclosing `AppList` row.
+/// Compact one-line session row for the collapsed panel: project icon, title,
+/// and a live status slot (typing dots while running, bell when waiting; a hover
+/// swaps it for the delete affordance). Selection/hover chrome and the tap come
+/// from the enclosing `AppList` row.
 struct CodingAgentRecentRow: View, Equatable {
     let session: PiAgentSessionRecord
+    let project: DiscoveredProject?
     let isSelected: Bool
     let isRunning: Bool
+    let hasUIRequest: Bool
     let onDelete: () -> Void
 
     /// Fixed so the collapsed panel can size its visible window exactly.
@@ -382,14 +332,24 @@ struct CodingAgentRecentRow: View, Equatable {
     // instance's closure captured the same session id, so it stays correct.
     static func == (lhs: CodingAgentRecentRow, rhs: CodingAgentRecentRow) -> Bool {
         lhs.session == rhs.session
+            && lhs.project == rhs.project
             && lhs.isSelected == rhs.isSelected
             && lhs.isRunning == rhs.isRunning
+            && lhs.hasUIRequest == rhs.hasUIRequest
     }
 
     @State private var isHovering = false
 
     var body: some View {
         HStack(spacing: 8) {
+            ProjectIconView(
+                imageURL: project?.iconFileURL,
+                symbolName: project?.fallbackSymbolName ?? "folder",
+                size: 18,
+                assetName: project?.projectType.assetName
+            )
+            .opacity(isSelected || hasUIRequest || isRunning || session.needsAttention ? 1 : 0.58)
+
             Text(session.displayTitle)
                 .font(AppTheme.Font.footnote.weight(.medium))
                 .fontWidth(.expanded)
@@ -397,7 +357,7 @@ struct CodingAgentRecentRow: View, Equatable {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 // Same seen-inactive dimming as the expanded rows.
-                .opacity(isSelected || isRunning || session.needsAttention ? 1 : 0.58)
+                .opacity(isSelected || hasUIRequest || isRunning || session.needsAttention ? 1 : 0.58)
 
             Spacer(minLength: 6)
 
@@ -422,7 +382,13 @@ struct CodingAgentRecentRow: View, Equatable {
 
     @ViewBuilder
     private var statusSlot: some View {
-        if isRunning {
+        if hasUIRequest {
+            Image(systemName: "questionmark.bubble.fill")
+                .font(AppTheme.Font.caption.weight(.semibold))
+                .foregroundStyle(AppTheme.brandAccent)
+                .help("Pi Agent is waiting for your response")
+                .accessibilityLabel("Waiting for your response")
+        } else if isRunning {
             PiAgentTypingIndicator()
         } else if session.needsAttention {
             Image(systemName: "bell.fill")

@@ -802,6 +802,14 @@ final class AppSettingsController {
     }
 
     @discardableResult
+    func markLoopsOpenedFromSidebar() -> Bool {
+        guard !settings.didOpenLoopsFromSidebar else { return false }
+        settings.didOpenLoopsFromSidebar = true
+        persist()
+        return true
+    }
+
+    @discardableResult
     func setAutoGenerateAgentAvatarPrompts(_ isEnabled: Bool) -> Bool {
         guard settings.autoGenerateAgentAvatarPrompts != isEnabled else { return false }
         settings.autoGenerateAgentAvatarPrompts = isEnabled
@@ -1055,6 +1063,18 @@ final class AppSettingsController {
         settings.customThemes.append(copy)
         persist()
         return copy
+    }
+
+    func setMCPEnabled(_ enabled: Bool) {
+        guard settings.mcpEnabled != enabled else { return }
+        settings.mcpEnabled = enabled
+        persist()
+    }
+
+    func setDefaultMcpServer(_ name: String, enabled: Bool) {
+        if enabled { settings.defaultMcpServerNames.insert(name) }
+        else { settings.defaultMcpServerNames.remove(name) }
+        persist()
     }
 
     private func persist() {

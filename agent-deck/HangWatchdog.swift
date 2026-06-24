@@ -21,6 +21,30 @@ nonisolated final class HangWatchdog: @unchecked Sendable {
     static let shared = HangWatchdog()
     static let logger = Logger(subsystem: "streetcoding.agent-deck", category: "HangWatchdog")
 
+#if DEBUG
+    /// Running tallies (main-thread heartbeat only writes these) so a harness can
+    /// snapshot a delta over a window without parsing logs. `hitchCount` = frames
+    /// 33-150ms; `hangMsTotal` = summed duration of full hangs (>150ms). DEBUG only.
+    // Written only from the main-thread heartbeat timer, read from the main-thread
+    // StreamSim — effectively main-thread-confined, so unchecked is safe here.
+    nonisolated(unsafe) static var hitchCount = 0
+    nonisolated(unsafe) static var hangCount = 0
+    nonisolated(unsafe) static var hangMsTotal = 0
+    nonisolated(unsafe) static var worstHitchMs = 0
+
+    /// Mirror hang/hitch events to a file (unified log is unreachable in some
+    /// headless/automation contexts). Append-only, best-effort. DEBUG only.
+    static func fileLog(_ line: String) {
+        guard let data = (line + "\n").data(using: .utf8) else { return }
+        let url = URL(fileURLWithPath: "/tmp/agentdeck-perf.txt")
+        if let h = try? FileHandle(forWritingTo: url) {
+            h.seekToEndOfFile(); h.write(data); try? h.close()
+        } else {
+            try? data.write(to: url)
+        }
+    }
+#endif
+
     private let lock = NSLock()
     private var lastBeat: CFTimeInterval = 0
     private var mainTimer: Timer?
@@ -94,8 +118,14 @@ nonisolated final class HangWatchdog: @unchecked Sendable {
 
             if let hung = endedHang {
                 Self.logger.error("HANG ENDED — main thread blocked ~\(Int(hung * 1000))ms · scene=\(scene, privacy: .public)")
+                Self.fileLog("HANG \(Int(hung * 1000))ms scene=\(scene)")
+                Self.hangCount += 1
+                Self.hangMsTotal += Int(hung * 1000)
             } else if gap > self.hitchThreshold && gap < self.threshold {
                 Self.logger.error("HITCH Δ=\(Int(gap * 1000))ms · scene=\(scene, privacy: .public)")
+                Self.fileLog("HITCH \(Int(gap * 1000))ms scene=\(scene)")
+                Self.hitchCount += 1
+                Self.worstHitchMs = max(Self.worstHitchMs, Int(gap * 1000))
                 if gap >= self.hitchCaptureThreshold { self.captureHitch(gapMs: Int(gap * 1000)) }
             }
         }

@@ -30,7 +30,7 @@ For agent names that appear in multiple places, the native-subagent winning defi
 
 For same-name assigned catalog records, project assignment prefers project files before library/global files; default assignment prefers library/global files.
 
-Builtin overrides are different from custom replacements: they patch supported fields only when the builtin remains the winner. Project overrides beat global overrides. Builtin-disable flags can hide builtins entirely.
+Builtin overrides are different from custom replacements: they patch supported fields only when the builtin remains the winner. Project overrides refine global builtin overrides field-by-field: project-set fields win, while omitted fields continue to inherit global override values. Builtin-disable flags can hide builtins entirely.
 
 ## Skill references
 

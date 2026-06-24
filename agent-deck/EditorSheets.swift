@@ -464,7 +464,7 @@ struct PiAgentFinalSystemPromptSheet: View {
 
             Divider()
 
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 Text(text)
                     .font(.system(.body, design: .monospaced))
                     .textSelection(.enabled)
@@ -857,7 +857,7 @@ struct AgentEditorSheet: View {
                                 .labelsHidden()
                                 .appMenuPicker()
                             } label: {
-                                editorFieldLabel("Thinking", help: "Reasoning effort for the selected model. Pi only shows levels that the current model supports.")
+                                editorFieldLabel("Thinking", help: selectedAvailableModel == nil ? "Reasoning effort to use with Pi's default model when supported." : "Reasoning effort for the selected model. Pi only shows levels that the current model supports.")
                             }
 
                             LabeledContent {
@@ -1087,7 +1087,7 @@ struct AgentEditorSheet: View {
     private func modelMenuLabel(for model: AvailableModel) -> String {
         let thinking = model.supportsThinking ? "thinking" : "no thinking"
         let images = model.supportsImages ? "images" : "text"
-        return "\(model.model) · \(thinking) · \(images) · ctx \(model.contextWindow) · out \(model.maxOutput)"
+        return "\(model.model) · \(thinking) · \(images) · ctx \(model.contextWindow) · out \(model.maxOutput ?? "—")"
     }
 
     private var selectedAvailableModel: AvailableModel? {
@@ -1097,9 +1097,10 @@ struct AgentEditorSheet: View {
 
     private var availableThinkingLevelsForDraft: [String] {
         if let model = selectedAvailableModel {
-            return model.supportedThinkingLevels
+            return model.supportedThinkingLevels.isEmpty ? ["off"] : model.supportedThinkingLevels
         }
-        return []
+        let discovered = Array(Set(availableModels.flatMap(\.supportedThinkingLevels))).sorted { thinkingSortIndex($0) < thinkingSortIndex($1) }
+        return discovered.isEmpty ? ["off", "minimal", "low", "medium", "high", "xhigh"] : discovered
     }
 
     private var thinkingSelectionBinding: Binding<String> {
@@ -1193,6 +1194,10 @@ struct AgentEditorSheet: View {
         let current = draft.config.thinking ?? "off"
         if available.contains(current) { return }
         draft.config.thinking = (available.first ?? "off") == "off" ? nil : (available.first ?? "off")
+    }
+
+    private func thinkingSortIndex(_ level: String) -> Int {
+        ["off", "minimal", "low", "medium", "high", "xhigh"].firstIndex(of: level) ?? Int.max
     }
 
     private func addFallbackModel(_ model: String) {

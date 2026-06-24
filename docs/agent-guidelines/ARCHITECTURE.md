@@ -41,8 +41,8 @@ File watching uses `FileWatchEventMonitor` (macOS FSEvents) with a 1-second debo
 | `PiSubagentWorktreeService` | Git worktree isolation and patching |
 | `PiNativeSubagentBridgeExtensions` | Generated TypeScript bridge extensions |
 | `AppRefreshService` | Orchestrate scan/poll, manage FSEvents watchers |
-| `PiScanner` | Discover and parse agents, chains, skill, prompts, settings, env |
-| `AgentPersistence` / `ChainPersistence` | Write custom agents/chains and builtin overrides |
+| `PiScanner` | Discover and parse agents, skills, prompts, settings, env, and resource warnings |
+| `AgentPersistence` | Write custom agents and builtin overrides |
 | `EnvPersistence` | Write `.env` files; hides secret values by default |
 | `SubagentConfigPersistence` | Subagent configuration JSON |
 | `PiAgentSessionStore` | Session file persistence |

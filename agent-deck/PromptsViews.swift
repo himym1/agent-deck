@@ -126,9 +126,6 @@ struct PromptsScreen: View {
             cachedLayout = recomputeLayout()
             scheduleSelectionSynchronization()
         }
-        .onChange(of: viewModel.selectedDiscoveredProject) { _, _ in
-            cachedLayout = recomputeLayout()
-        }
         .onChange(of: selectedCommandItemID) { _, id in
             guard viewModel.selectedCommandItemID != id else { return }
             viewModel.selectedCommandItemID = id
@@ -138,7 +135,7 @@ struct PromptsScreen: View {
     private func logPromptLayoutState(_ event: String) {
         #if DEBUG
         let prompt = viewModel.selectedPromptTemplate
-        Self.layoutLog.debug("Prompts.state event=\(event, privacy: .public) selectedID=\(selectedCommandItemID ?? "nil", privacy: .public) vmSelectedID=\(viewModel.selectedCommandItemID ?? "nil", privacy: .public) prompt=\(prompt?.name ?? "nil", privacy: .public) fileLength=\(prompt?.filePath.count ?? 0, privacy: .public) sections=\(cachedLayout.sections.count, privacy: .public) visible=\(cachedLayout.visiblePrompts.count, privacy: .public) project=\(viewModel.selectedDiscoveredProject?.name ?? "nil", privacy: .public)")
+        Self.layoutLog.debug("Prompts.state event=\(event, privacy: .public) selectedID=\(selectedCommandItemID ?? "nil", privacy: .public) vmSelectedID=\(viewModel.selectedCommandItemID ?? "nil", privacy: .public) prompt=\(prompt?.name ?? "nil", privacy: .public) fileLength=\(prompt?.filePath.count ?? 0, privacy: .public) sections=\(cachedLayout.sections.count, privacy: .public) visible=\(cachedLayout.visiblePrompts.count, privacy: .public)")
         #endif
     }
 
@@ -210,44 +207,21 @@ struct PromptsScreen: View {
 
         var sections: [AppListSection<PromptTemplateRecord>] = []
 
-        if let selectedProject = viewModel.selectedDiscoveredProject {
-            if !projectPrompts.isEmpty {
-                sections.append(AppListSection(
-                    id: "project",
-                    title: "Project Prompts",
-                    info: "Loaded from \(selectedProject.name)'s .pi/prompts directory or project settings.",
-                    items: projectPrompts
-                ))
-            }
-            if !globalPrompts.isEmpty {
-                sections.append(AppListSection(
-                    id: "global",
-                    title: "Global Prompts",
-                    info: "Loaded from global prompt locations and available in every project.",
-                    items: globalPrompts
-                ))
-            }
-            if !libraryPrompts.isEmpty {
-                sections.append(AppListSection(
-                    id: "library",
-                    title: "Prompt Library",
-                    info: "Loaded from ~/.pi/agent/prompt-library as reusable prompt templates.",
-                    items: libraryPrompts
-                ))
-            }
-        } else {
-            sections.append(AppListSection(
-                id: "global",
-                title: "Global Prompts",
-                items: globalPrompts,
-                emptyMessage: "No global prompt templates."
-            ))
-            if !projectPrompts.isEmpty {
-                sections.append(AppListSection(id: "project", title: "Project Prompts", items: projectPrompts))
-            }
-            if !libraryPrompts.isEmpty {
-                sections.append(AppListSection(id: "library", title: "Prompt Library", items: libraryPrompts))
-            }
+        // Resource catalog is always global — the Prompts view is decoupled
+        // from `selectedProjectPath`. Project-scoped prompts (from any project)
+        // still surface in the project section; project assignment is managed
+        // per-prompt via the detail card's project toggles.
+        sections.append(AppListSection(
+            id: "global",
+            title: "Global Prompts",
+            items: globalPrompts,
+            emptyMessage: "No global prompt templates."
+        ))
+        if !projectPrompts.isEmpty {
+            sections.append(AppListSection(id: "project", title: "Project Prompts", items: projectPrompts))
+        }
+        if !libraryPrompts.isEmpty {
+            sections.append(AppListSection(id: "library", title: "Prompt Library", items: libraryPrompts))
         }
 
         if !settingsPrompts.isEmpty {
@@ -382,13 +356,20 @@ struct PromptsScreen: View {
         let iconName = promptIcon(prompt)
         let iconColor = promptColor(prompt)
         let canRename = viewModel.canRenamePrompt(prompt)
+        let isAssignedSomewhere = viewModel.promptIsEnabledGlobally(prompt) || !viewModel.assignedProjects(for: prompt).isEmpty
         return PromptListRowView(
             prompt: prompt,
             iconName: iconName,
             iconColor: iconColor,
+            isInactive: !isAssignedSomewhere,
+            isDisabled: viewModel.bundledPromptIsDisabled(prompt),
             canRename: canRename,
             onEdit: { promptEditTarget = makePromptEditTarget(prompt) }
         )
+        // Fill the row and give it a hit-testable shape so a right-click anywhere on the
+        // row (not just on the name text) opens the context menu.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .contextMenu {
             Button {
                 copyCommandValue(prompt.invocation)
@@ -788,6 +769,8 @@ private struct PromptListRowView: View {
     let prompt: PromptTemplateRecord
     let iconName: String
     let iconColor: Color
+    let isInactive: Bool
+    let isDisabled: Bool
     let canRename: Bool
     let onEdit: () -> Void
 
@@ -803,6 +786,7 @@ private struct PromptListRowView: View {
                     .font(.headline)
                     .fontWidth(.expanded)
                     .foregroundStyle(.primary)
+                    .strikethrough(isDisabled, color: AppTheme.mutedText)
                     .lineLimit(1)
                 Text(prompt.description)
                     .font(.caption)
@@ -825,5 +809,7 @@ private struct PromptListRowView: View {
         }
         .onHover { isHovered = $0 }
         .padding(.vertical, 6)
+        .opacity(isInactive ? 0.62 : 1)
+        .saturation(isInactive ? 0.25 : 1)
     }
 }

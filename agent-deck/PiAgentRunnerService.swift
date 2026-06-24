@@ -85,6 +85,12 @@ final class PiAgentRunnerService {
     private var thinkingEntryIDsBySessionID: [UUID: UUID] = [:]
     private var thinkingTextBySessionID: [UUID: String] = [:]
     private var toolEntryIDsByCallID: [String: UUID] = [:]
+    /// A tool call's arguments, captured from `tool_execution_start` and kept until
+    /// the call ends. The update/end events drop the top-level `args`, but transcript
+    /// cards (notably the MCP card, which needs the `server/tool` address that only
+    /// lives in `args`) read it off the entry — so we re-attach it to every later
+    /// event's rawJSON for this call.
+    private var toolStartArgsByCallID: [String: JSONValue] = [:]
     private var compactionEntryIDsBySessionID: [UUID: UUID] = [:]
     private struct PendingThinkingLevel {
         let requestedLevel: String
@@ -150,6 +156,13 @@ final class PiAgentRunnerService {
     var onSessionPlanSet: ((UUID, PiSessionPlanSetBridgeRequest) -> String)?
     var onSessionPlanUpdate: ((UUID, PiSessionPlanUpdateBridgeRequest) -> String)?
     var nativeSubagentCatalogProvider: ((PiAgentSessionRecord) -> String?)?
+    /// Returns the compact MCP tool catalog to inject for this session, scoped to its
+    /// assigned servers. Nil/empty means MCP is off for the session: no bridge, no
+    /// system-prompt block (same gating as the Deck-agents catalog). Async so the
+    /// provider can discover a non-active project's servers on demand instead of
+    /// relying solely on the active-project snapshot.
+    var mcpCatalogProvider: ((PiAgentSessionRecord) async -> String?)?
+    var onMCPBridgeRequest: ((UUID, PiMCPBridgeRequest, @escaping (String) -> Void) -> Void)?
     var parentSkillArgumentsProvider: ((URL) throws -> [String])?
     var parentPromptTemplateArgumentsProvider: ((URL) throws -> [String])?
     /// Returns the Agent Deck memory append *prompt texts* (policy + recall) for a
@@ -301,16 +314,12 @@ final class PiAgentRunnerService {
         }
         let transcriptMessage = displayText.map { userMessage($0, images: images) } ?? message
         store.append(.init(sessionID: sessionID, role: .user, title: transcriptTitle(for: effectiveMode, isStreaming: isStreaming), text: transcriptText(transcriptMessage, images: images), rawJSON: transcriptAttachmentJSON(messageText: transcriptMessage, images: images, pasteAttachments: pasteAttachments, issueAttachment: issueAttachment)))
-        switch effectiveMode {
-        case .prompt:
-            // Harmless when Pi is idle, but prevents dropped messages if our local
-            // status lags behind Pi's authoritative streaming state.
-            client.prompt(message, images: images, streamingBehavior: "steer")
-        case .steer:
-            client.prompt(message, images: images, streamingBehavior: "steer")
-        case .followUp:
-            client.prompt(message, images: images, streamingBehavior: "followUp")
-        }
+        // Harmless when Pi is idle, but prevents dropped messages if our local
+        // status lags behind Pi's authoritative streaming state. Routed through
+        // `prompt` + streamingBehavior rather than the dedicated `steer` type so
+        // slash/skill/prompt-template commands still work during streaming.
+        let streamingBehavior = effectiveMode == .followUp ? "followUp" : "steer"
+        client.prompt(message, images: images, streamingBehavior: streamingBehavior)
         mark(sessionID, status: .running, error: nil)
     }
 
@@ -716,6 +725,12 @@ final class PiAgentRunnerService {
             // Collected here and emitted once below so the active APPEND_SYSTEM.md is
             // preserved a single time, regardless of how many features contribute.
             var agentDeckAppendPrompts: [String] = []
+            // Resolve the session's MCP catalog once so both the bound-agent tool
+            // allowlist decision and the append below reuse the same discovery. The
+            // provider discovers on demand for sessions in a project other than the
+            // active one, so their assigned servers are connected even when the
+            // active-project snapshot wouldn't cover them.
+            let mcpCatalog: String? = await mcpCatalogProvider?(session)
             if let boundAgent {
                 // 1:1 agent chat: launch Pi with the agent's raw system prompt,
                 // its tool allowlist (minus `contact_supervisor` — there's no
@@ -735,7 +750,10 @@ final class PiAgentRunnerService {
                     includeSupervisorTool: false,
                     includeMemoryTools: memoryEnabled,
                     includeExaTools: exaConfigured,
-                    includeFallbackWebFetchTool: !exaConfigured && webFetchInstalled
+                    includeFallbackWebFetchTool: !exaConfigured && webFetchInstalled,
+                    // The native `mcp` bridge is injected below when the agent has
+                    // in-scope servers; a restrictive allowlist must include it.
+                    includeMCPTool: mcpCatalog?.isEmpty == false
                 )))
                 // Share the single `--no-extensions` already at the top of
                 // extraArguments; only append the agent's authored extensions.
@@ -752,6 +770,17 @@ final class PiAgentRunnerService {
                 // were turned off — no bridge extension, no system-prompt block.
                 extraArguments.append(contentsOf: ["--extension", bridgeURL.path])
                 agentDeckAppendPrompts.append(catalog)
+            }
+            // Native MCP bridge + catalog, injected together and independently of Deck
+            // agents. When no MCP servers are assigned the provider returns nil and the
+            // session launches exactly as if MCP were off — no bridge, no prompt block.
+            // Loaded before user extensions below so the `mcp` tool wins any conflict.
+            // `mcpCatalog` is resolved once above the bound-agent branch so the tool
+            // allowlist decision and the append both reuse the same discovery.
+            if let mcpCatalog, !mcpCatalog.isEmpty,
+               let mcpURL = try? PiNativeSubagentBridgeExtensions.mcpExtensionURL() {
+                extraArguments.append(contentsOf: ["--extension", mcpURL.path])
+                agentDeckAppendPrompts.append(mcpCatalog)
             }
             extraArguments.append("--no-skills")
             if let boundAgent {
@@ -1710,6 +1739,7 @@ final class PiAgentRunnerService {
         activeAgentRunSessionIDs.remove(sessionID)
         let keyPrefix = "\(sessionID.uuidString):"
         toolEntryIDsByCallID = toolEntryIDsByCallID.filter { !$0.key.hasPrefix(keyPrefix) }
+        toolStartArgsByCallID = toolStartArgsByCallID.filter { !$0.key.hasPrefix(keyPrefix) }
     }
 
     private func handleMessageEnd(_ event: PiAgentRPCEvent, rawLine: String, sessionID: UUID) {
@@ -1862,8 +1892,20 @@ final class PiAgentRunnerService {
 
         if transcript.isEmpty {
             var built = 0
+            // Collected forward as we walk: an `mcp` toolCall's args (the server/tool
+            // address) keyed by id, so the later toolResult message can re-attach them.
+            var argsByToolCallId: [String: JSONValue] = [:]
             for message in piMessages {
-                for entry in transcriptEntries(rehydrating: message, sessionID: sessionID) {
+                if (message["role"]?.stringValue ?? "") == "assistant",
+                   case let .array(blocks) = message["content"] {
+                    for block in blocks where block["type"]?.stringValue == "toolCall" {
+                        if let id = block["toolCallId"]?.stringValue ?? block["id"]?.stringValue,
+                           let args = block["arguments"] {
+                            argsByToolCallId[id] = args
+                        }
+                    }
+                }
+                for entry in transcriptEntries(rehydrating: message, sessionID: sessionID, argsByToolCallId: argsByToolCallId) {
                     store.append(entry)
                     built += 1
                 }
@@ -1891,7 +1933,11 @@ final class PiAgentRunnerService {
 
     /// Maps a single Pi session message into the transcript entries used to rebuild
     /// a missing transcript. Mirrors how the live stream produces entries.
-    private func transcriptEntries(rehydrating message: JSONValue, sessionID: UUID) -> [PiAgentTranscriptEntry] {
+    private func transcriptEntries(
+        rehydrating message: JSONValue,
+        sessionID: UUID,
+        argsByToolCallId: [String: JSONValue] = [:]
+    ) -> [PiAgentTranscriptEntry] {
         switch message["role"]?.stringValue ?? "" {
         case "user":
             let text = extractText(from: message)
@@ -1910,10 +1956,29 @@ final class PiAgentRunnerService {
         case "toolResult", "bashExecution":
             let text = extractText(from: message)
             let name = message["toolName"]?.stringValue ?? "Tool"
-            return text.isEmpty ? [] : [.init(sessionID: sessionID, role: .tool, title: name, text: text)]
+            guard !text.isEmpty else { return [] }
+            // The live stream re-attaches a tool call's args to its entry so the MCP
+            // card can read the `server/tool` address. On reload the result lives in a
+            // separate message from the `toolCall` that carried the args, so pair them
+            // back by id — scoped to `mcp` so the tuned web/diff reload rows are untouched.
+            var rawJSON: String?
+            if name == "mcp", let id = message["toolCallId"]?.stringValue, let args = argsByToolCallId[id] {
+                rawJSON = Self.rehydratedToolRawJSON(toolName: name, args: args)
+            }
+            return [.init(sessionID: sessionID, role: .tool, title: name, text: text, rawJSON: rawJSON)]
         default:
             return []
         }
+    }
+
+    /// Synthesizes a minimal tool-end rawJSON carrying the call's `args`, for a
+    /// rehydrated tool entry whose original RPC line is gone.
+    private static func rehydratedToolRawJSON(toolName: String, args: JSONValue) -> String? {
+        guard let argsData = try? JSONEncoder().encode(args),
+              let argsObject = try? JSONSerialization.jsonObject(with: argsData) else { return nil }
+        let object: [String: Any] = ["type": "tool_execution_end", "toolName": toolName, "args": argsObject]
+        guard let data = try? JSONSerialization.data(withJSONObject: object) else { return nil }
+        return String(decoding: data, as: UTF8.self)
     }
 
     /// Reads a Pi session `.jsonl` file off the main thread and returns the message
@@ -1961,6 +2026,7 @@ final class PiAgentRunnerService {
                 .runningTool(name: toolName, detail: toolActivityDetail(toolName: toolName, args: event.args)),
                 for: sessionID
             )
+            if let args = event.args { toolStartArgsByCallID[toolKey] = args }
             text = event.args?.compactDescription ?? "Starting…"
         case "tool_execution_update":
             text = extractText(from: event.partialResult ?? .null).isEmpty ? (event.partialResult?.compactDescription ?? "Running…") : extractText(from: event.partialResult ?? .null)
@@ -1977,7 +2043,30 @@ final class PiAgentRunnerService {
         default:
             text = rawLine
         }
-        store.upsert(.init(id: entryID, sessionID: sessionID, role: event.isError == true ? .error : .tool, title: title, text: text, rawJSON: rawLine))
+        // Keep the call's args on the entry across its lifetime: the update/end events
+        // drop top-level `args`, but the stored entry must still expose it (the MCP
+        // card reads `args.tool`). Re-attach the cached start args when the current
+        // event lacks them, so the final rawJSON carries both args and result.
+        var effectiveRawJSON = rawLine
+        if event.args == nil, let cachedArgs = toolStartArgsByCallID[toolKey],
+           let merged = Self.rawJSON(rawLine, attaching: cachedArgs) {
+            effectiveRawJSON = merged
+        }
+        if event.type == "tool_execution_end" { toolStartArgsByCallID[toolKey] = nil }
+        store.upsert(.init(id: entryID, sessionID: sessionID, role: event.isError == true ? .error : .tool, title: title, text: text, rawJSON: effectiveRawJSON))
+    }
+
+    /// Returns `rawLine` (a JSON object string) with the tool-call `args` re-attached
+    /// under the top-level `args` key. Used so update/end tool events keep the call's
+    /// arguments that only the start event carried. Returns nil if `rawLine` isn't a
+    /// JSON object or the args can't be encoded (caller falls back to `rawLine`).
+    private static func rawJSON(_ rawLine: String, attaching args: JSONValue) -> String? {
+        guard var object = (try? JSONSerialization.jsonObject(with: Data(rawLine.utf8))) as? [String: Any],
+              let argsData = try? JSONEncoder().encode(args),
+              let argsObject = try? JSONSerialization.jsonObject(with: argsData) else { return nil }
+        object["args"] = argsObject
+        guard let mergedData = try? JSONSerialization.data(withJSONObject: object) else { return nil }
+        return String(decoding: mergedData, as: UTF8.self)
     }
 
     /// Flushes any pending thinking text to the store and clears the in-flight thinking
@@ -2019,6 +2108,12 @@ final class PiAgentRunnerService {
             return condensedSingleLine(args["command"]?.stringValue)
         case "web_search", "code_search":
             return condensedSingleLine(args["query"]?.stringValue)
+        case "mcp":
+            guard let rawTool = args["tool"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !rawTool.isEmpty,
+                  let address = MCPConnectionManager.resolveAddress(rawTool, serverHint: args["server"]?.stringValue)
+            else { return nil }
+            return "\(address.server)/\(address.tool)"
         default:
             return nil
         }
@@ -2115,6 +2210,8 @@ final class PiAgentRunnerService {
                 handleSystemPromptAuditBridgeRequest(event, requestID: requestID, rawLine: rawLine, sessionID: sessionID)
             case "ask_user":
                 handleNativeAskUserBridgeRequest(event, requestID: requestID, rawLine: rawLine, sessionID: sessionID)
+            case "mcp":
+                handleMCPBridgeRequest(event, requestID: requestID, rawLine: rawLine, sessionID: sessionID)
             case "memory_write":
                 handleMemoryWriteBridgeRequest(event, requestID: requestID, rawLine: rawLine, sessionID: sessionID)
             case "memory_mark_stale":
@@ -2202,6 +2299,23 @@ final class PiAgentRunnerService {
         }
     }
 
+    private func handleMCPBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, sessionID: UUID) {
+        guard let payload = bridgePayload(from: event),
+              let request = try? JSONDecoder().decode(PiMCPBridgeRequest.self, from: Data(payload.utf8)) else {
+            clientsBySessionID[sessionID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) could not parse the mcp request.")
+            return
+        }
+        guard let onMCPBridgeRequest else {
+            clientsBySessionID[sessionID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName)'s MCP bridge is not available.")
+            return
+        }
+        onMCPBridgeRequest(sessionID, request) { [weak self] result in
+            Task { @MainActor in
+                self?.clientsBySessionID[sessionID]?.respondToExtensionUI(id: requestID, value: result)
+            }
+        }
+    }
+
     private func handleManagedSubagentBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, sessionID: UUID) {
         guard let payload = bridgePayload(from: event),
               let request = try? JSONDecoder().decode(PiManagedSubagentBridgeRequest.self, from: Data(payload.utf8)) else {
@@ -2212,6 +2326,9 @@ final class PiAgentRunnerService {
             clientsBySessionID[sessionID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName)'s Deck agent bridge is not available.")
             return
         }
+        // Surface the request in the parent transcript (the UI maps this title to a
+        // "Starting Deck agent" status), mirroring the supervisor/ask_user bridges.
+        store.append(.init(sessionID: sessionID, role: .status, title: "Deck Agent Requested", text: "\(request.agent): \(request.task)", rawJSON: rawLine))
         onManagedSubagentRequest(sessionID, request) { [weak self] result in
             Task { @MainActor in
                 self?.clientsBySessionID[sessionID]?.respondToExtensionUI(id: requestID, value: result)
@@ -2229,6 +2346,9 @@ final class PiAgentRunnerService {
             clientsBySessionID[sessionID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName)'s Deck agent parallel bridge is not available.")
             return
         }
+        // Surface the parallel request in the parent transcript (UI maps this title to
+        // a "Starting parallel run" status).
+        store.append(.init(sessionID: sessionID, role: .status, title: "Parallel Deck Agents Requested", text: request.tasks.map(\.agent).joined(separator: ", "), rawJSON: rawLine))
         onManagedParallelRequest(sessionID, request) { [weak self] result in
             Task { @MainActor in
                 self?.clientsBySessionID[sessionID]?.respondToExtensionUI(id: requestID, value: result)

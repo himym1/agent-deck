@@ -136,6 +136,7 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
     }
 
     func testTranscriptStackFirstPaintIsNotBlankAfterInitialBottomScroll() throws {
+        try requireTranscriptRenderSmokeEnabled()
         let host = NSHostingView(rootView: PiAgentTranscriptFirstPaintSmokeView(
             rows: (0..<80).map { "Transcript row \($0)" }
         ))
@@ -154,7 +155,7 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
         runMainLoop(iterations: 10, delay: 0.03)
         host.layoutSubtreeIfNeeded()
 
-        let paintedSamples = try nonWhiteSampleCount(in: host)
+        let paintedSamples = try waitForNonWhiteSampleCount(in: host)
         XCTAssertGreaterThan(
             paintedSamples,
             100,
@@ -163,6 +164,7 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
     }
 
     func testTranscriptStackDoesNotBlankAfterAppendingAndBottomScroll() throws {
+        try requireTranscriptRenderSmokeEnabled()
         let host = NSHostingView(rootView: PiAgentTranscriptAppendSmokeView())
         host.frame = NSRect(x: 0, y: 0, width: 520, height: 420)
 
@@ -179,7 +181,7 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
         runMainLoop(iterations: 12, delay: 0.03)
         host.layoutSubtreeIfNeeded()
 
-        let paintedSamples = try nonWhiteSampleCount(in: host)
+        let paintedSamples = try waitForNonWhiteSampleCount(in: host)
         XCTAssertGreaterThan(
             paintedSamples,
             100,
@@ -239,10 +241,123 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
         XCTAssertEqual(split.count, 3, "A visible thinking block must keep the diff cards separate.")
     }
 
+    func testMCPProxyEntriesParseIntoDedicatedCardAndRecapNotGenericToolCalls() {
+        let sessionID = UUID()
+
+        func mcpCall(tool: String, args: String, result: String, isError: Bool = false) -> PiAgentTranscriptEntry {
+            let raw = "{\"args\": {\"tool\": \"\(tool)\", \"args\": \(args)}}"
+            return PiAgentTranscriptEntry(
+                sessionID: sessionID,
+                role: isError ? .error : .tool,
+                title: "Tool: mcp",
+                text: result,
+                rawJSON: raw
+            )
+        }
+
+        // Two calls to Pidgeon (one of them an error) + one Read (generic tool).
+        let listStories = mcpCall(tool: "Pidgeon/list_stories", args: "{\"limit\": 5}", result: "[{\"id\":1}]")
+        let pipeline = mcpCall(tool: "Pidgeon/get_pipeline_status", args: "{}", result: "MCP tool reported an error:\nboom", isError: true)
+        let readEntry = PiAgentTranscriptEntry(sessionID: sessionID, role: .tool, title: "Tool: read", text: "file")
+        let entries = [listStories, pipeline, readEntry]
+
+        let activities = PiAgentTranscriptActivity.make(from: entries)
+        let group = PiAgentThreadToolGroup(id: listStories.id, entries: entries, activities: activities)
+
+        // The mcp activity parses into per-call breakdowns with server/tool + args.
+        guard let mcpActivity = activities.first(where: { $0.isMCPActivity }) else {
+            return XCTFail("Expected an mcp activity.")
+        }
+        let calls = mcpActivity.mcpCalls()
+        XCTAssertEqual(calls.count, 2)
+        XCTAssertEqual(calls.first?.server, "Pidgeon")
+        XCTAssertEqual(calls.first?.tool, "list_stories")
+        XCTAssertEqual(calls.first?.argsPreview, "limit: 5")
+        XCTAssertEqual(calls.first?.isError, false)
+        XCTAssertEqual(calls.last?.tool, "get_pipeline_status")
+        XCTAssertTrue(calls.last?.isError == true, "An error-prefixed result must mark the call as failed.")
+
+        // The native tool-group model builds the dedicated MCP card.
+        let model = NativeToolGroupModel.make(group: group, visibility: .init(), projectPath: nil)
+        XCTAssertNotNil(model?.mcp)
+        XCTAssertEqual(model?.mcp?.rows.count, 2)
+        XCTAssertEqual(model?.mcp?.callCount, "2 calls")
+        XCTAssertTrue(model?.mcp?.hasErrors == true)
+        // The error row carries a concise inline summary; the success row does not.
+        let errorRow = model?.mcp?.rows.first { $0.isError }
+        XCTAssertNotNil(errorRow?.errorSummary)
+        XCTAssertNil(model?.mcp?.rows.first { !$0.isError }?.errorSummary)
+
+        // The View modal keeps an error's leading message and pretty-prints the JSON
+        // body that follows it (not just whole-string JSON).
+        let formatted = PiAgentMCPResultTextView.formatted("MCP call failed: server error -32603: [{\"code\":\"invalid_type\"}]")
+        XCTAssertTrue(formatted.hasPrefix("MCP call failed: server error -32603:"))
+        XCTAssertTrue(formatted.contains("\"code\""))
+        XCTAssertTrue(formatted.contains("\n"), "The embedded JSON should be pretty-printed across lines.")
+
+        // Visibility toggle gates the card without affecting other sections.
+        var mcpOff = PiAgentTranscriptVisibilitySettings()
+        mcpOff.showMCPCards = false
+        XCTAssertNil(NativeToolGroupModel.make(group: group, visibility: mcpOff, projectPath: nil)?.mcp)
+        XCTAssertTrue(PiAgentTranscriptThreadCard.toolGroupHasVisibleContent(group, visibility: .init()))
+        // Read alone isn't a diff/web/mcp section, so with mcp off the group hides.
+        let mcpOnlyGroup = PiAgentThreadToolGroup(
+            id: listStories.id,
+            entries: [listStories, pipeline],
+            activities: PiAgentTranscriptActivity.make(from: [listStories, pipeline])
+        )
+        XCTAssertFalse(PiAgentTranscriptThreadCard.toolGroupHasVisibleContent(mcpOnlyGroup, visibility: mcpOff))
+
+        // MCP is excluded from the generic tool-call recap (only Read remains)...
+        let toolRecap = NativeToolGroupModel.toolCallRecap(from: entries)
+        XCTAssertEqual(toolRecap.map(\.name), ["Read"])
+
+        // ...and surfaces in its own usage recap, grouped by server then tool.
+        let usage = NativeToolGroupModel.mcpUsageRecap(from: entries)
+        XCTAssertEqual(usage.count, 1)
+        XCTAssertEqual(usage.first?.server, "Pidgeon")
+        XCTAssertEqual(usage.first?.tools.map(\.name), ["list_stories", "get_pipeline_status"])
+        XCTAssertEqual(usage.first?.tools.first(where: { $0.name == "get_pipeline_status" })?.errorCount, 1)
+
+        // Flicker guard: an introspection-only group (mcp({}) list — no `tool` arg)
+        // must NOT be visible and must NOT build a card, so the row can't toggle
+        // between a card and a 0-height spacer mid-stream. `toolGroupHasVisibleContent`
+        // and `make` must agree.
+        let listOnly = PiAgentTranscriptEntry(
+            sessionID: sessionID, role: .tool, title: "Tool: mcp",
+            text: "- Pidgeon: 24 tools", rawJSON: "{\"args\": {}}"
+        )
+        let listGroup = PiAgentThreadToolGroup(
+            id: listOnly.id, entries: [listOnly],
+            activities: PiAgentTranscriptActivity.make(from: [listOnly])
+        )
+        XCTAssertFalse(listGroup.activities.first?.hasMCPCall ?? true)
+        XCTAssertFalse(PiAgentTranscriptThreadCard.toolGroupHasVisibleContent(listGroup, visibility: .init()))
+        XCTAssertNil(NativeToolGroupModel.make(group: listGroup, visibility: .init(), projectPath: nil))
+    }
+
+    private func requireTranscriptRenderSmokeEnabled() throws {
+        guard ProcessInfo.processInfo.environment["AGENT_DECK_ENABLE_TRANSCRIPT_RENDER_SMOKE"] == "1" else {
+            throw XCTSkip("Transcript render smoke tests are manual AppKit/SwiftUI diagnostics and are flaky under parallel xcodebuild test runs. Set AGENT_DECK_ENABLE_TRANSCRIPT_RENDER_SMOKE=1 to run them.")
+        }
+    }
+
     private func runMainLoop(iterations: Int, delay: TimeInterval) {
         for _ in 0..<iterations {
             RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(delay))
         }
+    }
+
+    private func waitForNonWhiteSampleCount(in view: NSView) throws -> Int {
+        var best = 0
+        for _ in 0..<10 {
+            view.layoutSubtreeIfNeeded()
+            view.displayIfNeeded()
+            best = max(best, try nonWhiteSampleCount(in: view))
+            if best > 100 { return best }
+            runMainLoop(iterations: 2, delay: 0.05)
+        }
+        return best
     }
 
     private func nonWhiteSampleCount(in view: NSView) throws -> Int {

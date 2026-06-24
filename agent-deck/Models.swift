@@ -30,6 +30,9 @@ nonisolated struct AgentConfig: Hashable, Sendable {
     var disabled: Bool?
     var tools: [String]?
     var mcpDirectTools: [String]?
+    /// MCP server names assigned to this agent (native MCP bridge). Distinct from
+    /// `mcpDirectTools`, which is the external pi-mcp-adapter `mcp:tool` convention.
+    var mcpServers: [String]?
     var extensions: [String]?
     var skills: [String]
     var output: String?
@@ -53,6 +56,7 @@ nonisolated struct AgentConfig: Hashable, Sendable {
         disabled: nil,
         tools: nil,
         mcpDirectTools: nil,
+        mcpServers: nil,
         extensions: nil,
         skills: [],
         output: nil,
@@ -145,6 +149,23 @@ nonisolated struct ProjectAgentRecap: Hashable, Sendable {
     let unresolvedNames: [String]
 }
 
+/// One MCP server in a project's assignment recap: its name plus a short
+/// transport/endpoint detail (e.g. "Local · npx" or "Remote · api.pidgeon.news").
+nonisolated struct MCPServerRecapItem: Hashable, Sendable, Identifiable {
+    let name: String
+    let detail: String?
+    var id: String { name }
+}
+
+nonisolated struct ProjectMcpServerRecap: Hashable, Sendable {
+    let defaultServers: [MCPServerRecapItem]
+    let projectServers: [MCPServerRecapItem]
+    let unresolvedNames: [String]
+
+    var hasResolvedServers: Bool { !defaultServers.isEmpty || !projectServers.isEmpty }
+    var totalAssigned: Int { defaultServers.count + projectServers.count + unresolvedNames.count }
+}
+
 nonisolated struct ExternalSkillCandidate: Identifiable, Hashable, Sendable {
     let name: String
     let description: String?
@@ -219,7 +240,9 @@ nonisolated struct AvailableModel: Identifiable, Hashable, Sendable {
     let provider: String
     let model: String
     let contextWindow: String
-    let maxOutput: String
+    /// nil when the source reports no max-output limit. Rendered as a dash, never a fabricated
+    /// default. See [[feedback-show-dash-for-unknown-max-output]].
+    let maxOutput: String?
     let supportsThinking: Bool
     let supportsImages: Bool
     let supportedThinkingLevels: [String]
@@ -227,7 +250,7 @@ nonisolated struct AvailableModel: Identifiable, Hashable, Sendable {
     var id: String { identifier }
     var identifier: String { "\(provider)/\(model)" }
     var summary: String {
-        "\(identifier) · ctx \(contextWindow) · out \(maxOutput)"
+        "\(identifier) · ctx \(contextWindow) · out \(maxOutput ?? "—")"
     }
 
     var displayName: String {

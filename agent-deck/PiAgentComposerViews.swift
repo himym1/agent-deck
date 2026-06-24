@@ -866,7 +866,7 @@ private struct PiAgentIssuePickerPopover: View {
                     .foregroundStyle(AppTheme.mutedText)
                     .frame(width: 400, alignment: .leading)
             } else {
-                ScrollView {
+                ScrollView(showsIndicators: false) {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(items.prefix(20)) { item in
                             ZStack(alignment: .topTrailing) {
@@ -1298,7 +1298,7 @@ private struct PiAgentComposerProjectPickerPopover: View {
 
     var body: some View {
         AppPopoverContainer(title: "New Session", subtitle: "Choose a project for Pi Agent.") {
-            AppPopoverScrollList {
+            AppProjectPickerPopoverList {
                 ForEach(projects) { project in
                     AppPopoverProjectRow(
                         imageURL: project.iconFileURL,
@@ -2472,7 +2472,7 @@ struct PiAgentModelPicker: View {
                 id: model.model,
                 name: nil,
                 contextWindow: PiAgentContextEstimateBuilder.parseTokenCount(model.contextWindow),
-                maxOutput: PiAgentContextEstimateBuilder.parseTokenCount(model.maxOutput),
+                maxOutput: model.maxOutput.flatMap { PiAgentContextEstimateBuilder.parseTokenCount($0) },
                 supportsThinking: model.supportsThinking,
                 supportedThinkingLevels: model.supportedThinkingLevels,
                 supportsImages: model.supportsImages
@@ -2503,7 +2503,9 @@ struct PiAgentModelPicker: View {
     private func modelMetadataSubtitle(_ model: PiAgentModelOption) -> String {
         var parts: [String] = []
         if let contextWindow = model.contextWindow { parts.append("\(compactModelNumber(contextWindow)) context") }
-        if let maxOutput = model.maxOutput { parts.append("\(compactModelNumber(maxOutput)) output") }
+        // Dash (not omission) for unknown max output, matching the catalog UI.
+        let outputPart = model.maxOutput.map { compactModelNumber($0) } ?? "—"
+        parts.append("\(outputPart) output")
         return parts.joined(separator: ", ")
     }
 

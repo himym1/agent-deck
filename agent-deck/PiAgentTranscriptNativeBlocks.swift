@@ -500,6 +500,9 @@ struct NativeStatusPayload {
 /// Full-width divider row: a line — capsule(icon + label + time) — line. Mirrors
 /// `PiAgentStatusTranscriptRow.compactionDivider`.
 final class PiAgentNativeStatusDividerView: NSView, PiAgentNativeRowContent {
+    /// Pill height: the ~16pt caption label plus ~6pt breathing room top & bottom.
+    /// Corner radius is half this so it stays a full capsule.
+    private static let capsuleHeight: CGFloat = 28
     private let leftRule = NSView()
     private let rightRule = NSView()
     private let capsule = NSGlassEffectView()
@@ -508,6 +511,10 @@ final class PiAgentNativeStatusDividerView: NSView, PiAgentNativeRowContent {
     private let labelField = NSTextField(labelWithString: "")
     private let timeField = NSTextField(labelWithString: "")
     private let capsuleStack = NSStackView()
+    /// `NSGlassEffectView` hugs its content view's height, so the stack's vertical
+    /// `edgeInsets` never widen the pill — the label ends up touching the stroke.
+    /// We drive the capsule height explicitly instead (set in `configure`).
+    private var capsuleHeightC: NSLayoutConstraint!
     var onIntrinsicHeightChange: (() -> Void)?
 
     required init() {
@@ -540,20 +547,24 @@ final class PiAgentNativeStatusDividerView: NSView, PiAgentNativeRowContent {
         capsuleStack.orientation = .horizontal
         capsuleStack.spacing = 7
         capsuleStack.alignment = .centerY
-        capsuleStack.edgeInsets = NSEdgeInsets(top: 5, left: 10, bottom: 5, right: 10)
+        // Vertical breathing room comes from the explicit capsule height below;
+        // the stack only carries horizontal insets.
+        capsuleStack.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
         capsuleStack.addArrangedSubview(iconView)
         capsuleStack.addArrangedSubview(spinner)
         capsuleStack.addArrangedSubview(labelField)
         capsuleStack.addArrangedSubview(timeField)
 
         capsule.translatesAutoresizingMaskIntoConstraints = false
-        capsule.cornerRadius = 13
+        capsule.cornerRadius = Self.capsuleHeight / 2
         capsule.contentView = capsuleStack
         addSubview(capsule)
 
+        capsuleHeightC = capsule.heightAnchor.constraint(equalToConstant: Self.capsuleHeight)
         NSLayoutConstraint.activate([
             capsule.centerXAnchor.constraint(equalTo: centerXAnchor),
             capsule.centerYAnchor.constraint(equalTo: centerYAnchor),
+            capsuleHeightC,
             leftRule.leadingAnchor.constraint(equalTo: leadingAnchor),
             leftRule.trailingAnchor.constraint(equalTo: capsule.leadingAnchor, constant: -10),
             leftRule.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -584,10 +595,9 @@ final class PiAgentNativeStatusDividerView: NSView, PiAgentNativeRowContent {
     }
 
     func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat {
-        // Capsule height (icon/label + vertical insets) plus the 4pt outer padding
-        // the SwiftUI divider carries above and below.
-        let labelH = max(16, ceil(labelField.intrinsicContentSize.height))
-        return ceil(labelH + 10 /* capsule v-insets */ + 8 /* outer .vertical 4 */)
+        // Explicit capsule height plus the 4pt outer padding the SwiftUI divider
+        // carries above and below.
+        Self.capsuleHeight + 8
     }
 }
 
@@ -615,7 +625,7 @@ final class PiAgentNativeRetryRowView: PiAgentNativeCardRowView {
         iconView.imageScaling = .scaleProportionallyUpOrDown
         iconView.setContentHuggingPriority(.required, for: .horizontal)
 
-        headlineLabel.font = NativeTranscriptFont.callout(.semibold)
+        headlineLabel.font = NativeTranscriptFont.header
         headlineLabel.lineBreakMode = .byTruncatingTail
 
         detailLabel.font = NativeTranscriptFont.caption()
@@ -645,10 +655,10 @@ final class PiAgentNativeRetryRowView: PiAgentNativeCardRowView {
         NSLayoutConstraint.activate([
             iconView.leadingAnchor.constraint(equalTo: cardContent.leadingAnchor),
             iconView.topAnchor.constraint(equalTo: cardContent.topAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 18),
-            iconView.heightAnchor.constraint(equalToConstant: 18),
+            iconView.widthAnchor.constraint(equalToConstant: NativeTranscriptFont.headerIconSize),
+            iconView.heightAnchor.constraint(equalToConstant: NativeTranscriptFont.headerIconSize),
 
-            textStack.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 10),
+            textStack.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 7),
             textStack.topAnchor.constraint(equalTo: cardContent.topAnchor),
             textStack.bottomAnchor.constraint(equalTo: cardContent.bottomAnchor),
 
@@ -660,7 +670,7 @@ final class PiAgentNativeRetryRowView: PiAgentNativeCardRowView {
 
     func configure(payload: NativeRetryPayload, width rowWidth: CGFloat) {
         accentColor = payload.accent
-        iconView.image = NSImage(systemSymbolName: payload.icon, accessibilityDescription: nil)
+        iconView.image = NativeTranscriptFont.headerIcon(payload.icon)
         iconView.contentTintColor = payload.accent
         headlineLabel.stringValue = payload.headline
         headlineLabel.textColor = .labelColor
@@ -687,8 +697,8 @@ final class PiAgentNativeRetryRowView: PiAgentNativeCardRowView {
 
     override func contentHeight(forInnerWidth innerWidth: CGFloat) -> CGFloat {
         // The text stack wraps the detail; measure it at the width left after the
-        // 18pt icon + 10pt gap and the trailing timestamp column (~48pt).
-        let textWidth = max(40, innerWidth - 18 - 10 - 52)
+        // 16pt icon + 7pt gap and the trailing timestamp column (~48pt).
+        let textWidth = max(40, innerWidth - NativeTranscriptFont.headerIconSize - 7 - 52)
         var h = ceil(headlineLabel.intrinsicContentSize.height)
         detailLabel.preferredMaxLayoutWidth = textWidth
         h += 3 + ceil(detailLabel.intrinsicContentSize.height)
@@ -712,45 +722,34 @@ struct NativeRetryPayload {
 // MARK: - Model/provider error row
 
 /// A fatal model/provider error (`PiAgentTranscriptEntry.isModelError`). Shows
-/// the error's first line as a red-tinted headline; any remaining detail (e.g.
-/// provider onboarding text) is tucked under an inline "more" disclosure and
-/// rendered italic in the same caption font. Mirrors the retry card's chrome.
+/// a fixed "Error" headline (shared bubble header font) with the full error
+/// message below it as the detail body. Mirrors the retry card's chrome.
 final class PiAgentNativeErrorRowView: PiAgentNativeCardRowView {
     private let iconView = NSImageView()
-    private let headlineLabel = NSTextField(wrappingLabelWithString: "")
+    private let headlineLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(wrappingLabelWithString: "")
     private let timeLabel = NSTextField(labelWithString: "")
-    private let chevronView = NSImageView()
     private let textStack = NSStackView()
     private let headerRight = NSStackView()
-    private var details: String?
-    private var expanded = false
-
-    private static let detailFont: NSFont =
-        NSFontManager.shared.convert(NativeTranscriptFont.caption(), toHaveTrait: .italicFontMask)
 
     override func commonSetup() {
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconView.imageScaling = .scaleProportionallyUpOrDown
         iconView.setContentHuggingPriority(.required, for: .horizontal)
-        iconView.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)
+        iconView.image = NativeTranscriptFont.headerIcon("exclamationmark.triangle.fill")
 
-        headlineLabel.font = NativeTranscriptFont.caption(.semibold)
+        headlineLabel.font = NativeTranscriptFont.header
+        headlineLabel.lineBreakMode = .byTruncatingTail
+        headlineLabel.maximumNumberOfLines = 1
         headlineLabel.textColor = .labelColor
-        headlineLabel.lineBreakMode = .byWordWrapping
-        headlineLabel.maximumNumberOfLines = 0
 
-        detailLabel.font = Self.detailFont
+        detailLabel.font = NativeTranscriptFont.caption()
         detailLabel.textColor = AppTheme.ns(AppTheme.mutedText)
         detailLabel.lineBreakMode = .byWordWrapping
         detailLabel.maximumNumberOfLines = 0
 
         timeLabel.font = NativeTranscriptFont.caption2()
         timeLabel.textColor = AppTheme.ns(AppTheme.mutedText)
-
-        chevronView.imageScaling = .scaleProportionallyDown
-        chevronView.contentTintColor = AppTheme.ns(AppTheme.mutedText)
-        chevronView.setContentHuggingPriority(.required, for: .horizontal)
 
         headerRight.translatesAutoresizingMaskIntoConstraints = false
         headerRight.orientation = .horizontal
@@ -759,7 +758,6 @@ final class PiAgentNativeErrorRowView: PiAgentNativeCardRowView {
         headerRight.setContentHuggingPriority(.required, for: .horizontal)
         headerRight.setContentCompressionResistancePriority(.required, for: .horizontal)
         headerRight.addArrangedSubview(timeLabel)
-        headerRight.addArrangedSubview(chevronView)
 
         textStack.translatesAutoresizingMaskIntoConstraints = false
         textStack.orientation = .vertical
@@ -774,37 +772,25 @@ final class PiAgentNativeErrorRowView: PiAgentNativeCardRowView {
 
         NSLayoutConstraint.activate([
             iconView.leadingAnchor.constraint(equalTo: cardContent.leadingAnchor),
-            // Center the icon on the headline (matching the compact status row).
-            // In the collapsed state the headline fills cardContent, so this is the
-            // card's vertical center; expanded, it stays on the headline's line.
-            iconView.centerYAnchor.constraint(equalTo: headlineLabel.centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 14),
-            iconView.heightAnchor.constraint(equalToConstant: 14),
+            iconView.topAnchor.constraint(equalTo: cardContent.topAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: NativeTranscriptFont.headerIconSize),
+            iconView.heightAnchor.constraint(equalToConstant: NativeTranscriptFont.headerIconSize),
 
-            textStack.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 10),
+            textStack.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 7),
             textStack.topAnchor.constraint(equalTo: cardContent.topAnchor),
             textStack.bottomAnchor.constraint(equalTo: cardContent.bottomAnchor),
 
             headerRight.leadingAnchor.constraint(greaterThanOrEqualTo: textStack.trailingAnchor, constant: 10),
             headerRight.trailingAnchor.constraint(equalTo: cardContent.trailingAnchor),
-            // Time + chevron share the icon's centerline.
-            headerRight.centerYAnchor.constraint(equalTo: iconView.centerYAnchor)
+            headerRight.topAnchor.constraint(equalTo: cardContent.topAnchor)
         ])
-
-        // The whole card toggles the detail — no separate button.
-        addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(rowTapped)))
     }
 
     func configure(payload: NativeErrorPayload, width rowWidth: CGFloat) {
         iconView.contentTintColor = payload.accent
         headlineLabel.stringValue = payload.headline
-        details = payload.details
-        detailLabel.stringValue = payload.details ?? ""
+        detailLabel.stringValue = payload.details
         timeLabel.stringValue = payload.timeText
-        let hasDetails = payload.details != nil
-        chevronView.isHidden = !hasDetails
-        detailLabel.isHidden = !hasDetails || !expanded
-        updateChevron()
 
         applyCard(
             fill: payload.accent.withAlphaComponent(AppTheme.roleFillOpacity),
@@ -817,62 +803,31 @@ final class PiAgentNativeErrorRowView: PiAgentNativeCardRowView {
         )
     }
 
-    private func updateChevron() {
-        chevronView.image = NSImage(systemSymbolName: expanded ? "chevron.up" : "chevron.down",
-                                    accessibilityDescription: expanded ? "Collapse" : "Expand")?
-            .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.caption2Size, weight: .semibold))
-    }
-
-    @objc private func rowTapped() {
-        guard details != nil else { return }
-        expanded.toggle()
-        detailLabel.isHidden = !expanded
-        updateChevron()
-        notifyContentHeightChanged()
-    }
-
     override func contentHeight(forInnerWidth innerWidth: CGFloat) -> CGFloat {
-        // Reserve the icon (14 + 10 gap) and the trailing time+chevron column (~64).
-        let textWidth = max(40, innerWidth - 14 - 10 - 64)
+        // Reserve the 16pt icon + 7pt gap and the trailing timestamp column (~48).
+        let textWidth = max(40, innerWidth - NativeTranscriptFont.headerIconSize - 7 - 48)
         headlineLabel.preferredMaxLayoutWidth = textWidth
         var h = ceil(headlineLabel.intrinsicContentSize.height)
-        if details != nil, expanded {
-            detailLabel.preferredMaxLayoutWidth = textWidth
-            h += 5 + ceil(detailLabel.intrinsicContentSize.height)
-        }
-        return max(14, h)
-    }
-
-    override func prepareForReuseIfNeeded() {
-        super.prepareForReuseIfNeeded()
-        expanded = false
+        detailLabel.preferredMaxLayoutWidth = textWidth
+        h += 5 + ceil(detailLabel.intrinsicContentSize.height)
+        return max(NativeTranscriptFont.headerIconSize, h)
     }
 }
 
-/// Typed payload for the model/provider error row. Splits the entry text into a
-/// first-line headline and the (optional) remaining detail.
+/// Typed payload for the model/provider error row. The headline is a fixed
+/// "Error" role label; `details` holds the full error message shown as the body.
 struct NativeErrorPayload {
     var headline: String
-    var details: String?
+    var details: String
     var timeText: String
     var copyText: String
     var accent: NSColor
 
     static func make(for entry: PiAgentTranscriptEntry) -> NativeErrorPayload {
         let full = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let headline: String
-        let details: String?
-        if let firstBreak = full.firstIndex(of: "\n") {
-            headline = String(full[..<firstBreak]).trimmingCharacters(in: .whitespaces)
-            let rest = String(full[full.index(after: firstBreak)...]).trimmingCharacters(in: .whitespacesAndNewlines)
-            details = rest.isEmpty ? nil : rest
-        } else {
-            headline = full
-            details = nil
-        }
         return NativeErrorPayload(
-            headline: headline.isEmpty ? "Error" : headline,
-            details: details,
+            headline: "Error",
+            details: full.isEmpty ? "The model provider returned an error." : full,
             timeText: entry.timestamp.formatted(date: .omitted, time: .shortened),
             copyText: full,
             accent: AppTheme.ns(AppTheme.roleError)
@@ -1098,4 +1053,354 @@ private extension NSLayoutConstraint {
         self.priority = NSLayoutConstraint.Priority(priority)
         return self
     }
+}
+
+// MARK: - Loop run card
+
+private func loopTimelineStepDisplayName(_ step: LoopTimelineStepKind) -> String {
+    switch step {
+    case .makerAct: return "Maker"
+    case .checkerReview: return "Checker"
+    case .pipelineStage: return "Pipeline stage"
+    case .parallelBranch: return "Parallel branch"
+    case .discoveryTriage: return "Discovery / triage"
+    case .humanApprovalCheckpoint: return "Human approval"
+    }
+}
+
+private func loopRunDetailsText(for run: LoopRun) -> String {
+    var sections: [String] = []
+    var overview: [String] = [
+        "Status: \(run.status.displayName)",
+        "Structure: \(run.structure.displayName)",
+        "Write target: \(run.writeTarget.displayName)",
+        "Goal: \(run.goal)",
+        "Iterations: \(run.currentIteration)/\(run.maxIterations)"
+    ]
+    if let stopReason = run.stopReason { overview.append("Stop reason: \(stopReason.displayName)") }
+    if !run.validationCommand.isEmpty { overview.append("Validation command: \(run.validationCommand)") }
+    if let directoryPath = run.artifactDirectoryPath { overview.append("Artifact directory: \(directoryPath)") }
+    sections.append((["Overview"] + overview.map { "• \($0)" }).joined(separator: "\n"))
+
+    if run.iterations.isEmpty {
+        sections.append("Iterations\n• No iterations recorded yet.")
+    } else {
+        for iteration in run.iterations {
+            var lines: [String] = ["Iteration \(iteration.index)"]
+            lines.append("• Started: \(iteration.startedAt.formatted(date: .abbreviated, time: .standard))")
+            if let ended = iteration.endedAt { lines.append("• Ended: \(ended.formatted(date: .abbreviated, time: .standard))") }
+            if !iteration.summary.isEmpty { lines.append("• Summary: \(iteration.summary)") }
+            if !iteration.changedFiles.isEmpty {
+                lines.append("• Changed files:")
+                lines.append(contentsOf: iteration.changedFiles.map { "  - \($0)" })
+            }
+            if !iteration.artifacts.isEmpty {
+                lines.append("• Artifacts:")
+                lines.append(contentsOf: iteration.artifacts.map { artifact in
+                    let pathSuffix = artifact.filePath.map { " — \($0)" } ?? ""
+                    return "  - \(artifact.filename)\(pathSuffix)"
+                })
+            }
+            if !iteration.timeline.isEmpty {
+                lines.append("• Timeline:")
+                lines.append(contentsOf: iteration.timeline.map { event in
+                    var text = "  - \(loopTimelineStepDisplayName(event.step)): \(event.roleName)"
+                    if !event.note.isEmpty { text += " — \(event.note)" }
+                    return text
+                })
+            }
+            if let validation = iteration.validationResult {
+                lines.append("• Validation:")
+                lines.append("  - Exit code: \(validation.exitCode.map(String.init) ?? "unavailable")")
+                lines.append("  - Duration: \(String(format: "%.2fs", validation.duration))")
+                if let stdoutPath = validation.stdoutPath { lines.append("  - Stdout artifact: \(stdoutPath)") }
+                if let stderrPath = validation.stderrPath { lines.append("  - Stderr artifact: \(stderrPath)") }
+                if !validation.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    lines.append("  - Stdout:\n\(validation.stdout)")
+                }
+                if !validation.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    lines.append("  - Stderr:\n\(validation.stderr)")
+                }
+            }
+            sections.append(lines.joined(separator: "\n"))
+        }
+    }
+    return sections.joined(separator: "\n\n")
+}
+
+struct NativeLoopRunPayload {
+    var title: String
+    var statusText: String
+    var detailText: String
+    var isActive: Bool
+    var canRevealArtifacts: Bool
+    var canRevealWorktree: Bool
+    var canApplyWorktree: Bool
+    var canDiscardWorktree: Bool
+    var canApproveHumanApproval: Bool
+    var canRejectHumanApproval: Bool
+    var canRetry: Bool
+    var canSave: Bool
+    var onStop: (() -> Void)?
+    var onRetry: (() -> Void)?
+    var onSave: (() -> Void)?
+    var onRevealArtifacts: (() -> Void)?
+    var onRevealWorktree: (() -> Void)?
+    var onApplyWorktree: (() -> Void)?
+    var onDiscardWorktree: (() -> Void)?
+    var onApproveHumanApproval: (() -> Void)?
+    var onRejectHumanApproval: (() -> Void)?
+
+    static func make(run: LoopRun, onStop: (() -> Void)?, onRetry: (() -> Void)?, onSave: (() -> Void)?, onRevealArtifacts: (() -> Void)?, onRevealWorktree: (() -> Void)?, onApplyWorktree: (() -> Void)? = nil, onDiscardWorktree: (() -> Void)? = nil, onApproveHumanApproval: (() -> Void)? = nil, onRejectHumanApproval: (() -> Void)? = nil) -> NativeLoopRunPayload {
+        let details = loopRunDetailsText(for: run)
+        let worktreeURL = run.artifactDirectoryPath.map { URL(fileURLWithPath: $0).appendingPathComponent("worktree", isDirectory: true) }
+        let hasWorktree = worktreeURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        let hasAppliedMarker = run.artifactDirectoryPath.map { FileManager.default.fileExists(atPath: URL(fileURLWithPath: $0).appendingPathComponent("worktree.applied").path) } ?? false
+        let hasDiscardedMarker = run.artifactDirectoryPath.map { FileManager.default.fileExists(atPath: URL(fileURLWithPath: $0).appendingPathComponent("worktree.discarded").path) } ?? false
+        let worktreeAlreadyHandled = run.worktreeState == .applied || run.worktreeState == .discarded || hasAppliedMarker || hasDiscardedMarker
+        let canOperateOnWorktree = run.writeTarget == .newWorktree && !run.isActive && hasWorktree && !worktreeAlreadyHandled
+        let canResolveHumanApproval = run.structure == .humanApproval && run.status == .stopped && run.stopReason == .humanInputRequired
+        return NativeLoopRunPayload(
+            title: run.status == .completed ? "Loop completed" : "Loop: \(run.structure.displayName)",
+            statusText: "Status: \(run.status.displayName)",
+            detailText: details,
+            isActive: run.isActive,
+            canRevealArtifacts: run.artifactDirectoryPath != nil,
+            canRevealWorktree: run.writeTarget == .newWorktree && hasWorktree && !worktreeAlreadyHandled,
+            canApplyWorktree: canOperateOnWorktree,
+            canDiscardWorktree: canOperateOnWorktree,
+            canApproveHumanApproval: canResolveHumanApproval,
+            canRejectHumanApproval: canResolveHumanApproval,
+            canRetry: !run.isActive && run.status == .failed,
+            canSave: !run.isActive,
+            onStop: onStop,
+            onRetry: onRetry,
+            onSave: onSave,
+            onRevealArtifacts: onRevealArtifacts,
+            onRevealWorktree: onRevealWorktree,
+            onApplyWorktree: onApplyWorktree,
+            onDiscardWorktree: onDiscardWorktree,
+            onApproveHumanApproval: onApproveHumanApproval,
+            onRejectHumanApproval: onRejectHumanApproval
+        )
+    }
+}
+
+final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
+    private let card = NSView()
+    private let iconView = NSImageView()
+    private let titleField = NSTextField(labelWithString: "")
+    private let statusField = NSTextField(labelWithString: "")
+    private let detailField = NSTextField(labelWithString: "")
+    private var cardWidthC: NSLayoutConstraint!
+    private let detailsButton = NSButton(title: "Open Details", target: nil, action: nil)
+    private let stopButton = NSButton(title: "Stop", target: nil, action: nil)
+    private let retryButton = NSButton(title: "Retry Failed Iteration", target: nil, action: nil)
+    private let saveButton = NSButton(title: "Save Loop", target: nil, action: nil)
+    private let revealButton = NSButton(title: "Reveal Artifacts", target: nil, action: nil)
+    private let revealWorktreeButton = NSButton(title: "Reveal Worktree", target: nil, action: nil)
+    private let applyWorktreeButton = NSButton(title: "Apply Worktree", target: nil, action: nil)
+    private let discardWorktreeButton = NSButton(title: "Discard Worktree", target: nil, action: nil)
+    private let approveHumanApprovalButton = NSButton(title: "Approve", target: nil, action: nil)
+    private let rejectHumanApprovalButton = NSButton(title: "Reject", target: nil, action: nil)
+    private let actionRows = NSStackView()
+    private var payload: NativeLoopRunPayload?
+    var onIntrinsicHeightChange: (() -> Void)?
+
+    required init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        card.translatesAutoresizingMaskIntoConstraints = false
+        card.wantsLayer = true
+        card.layer?.cornerRadius = AppTheme.Chat.bubbleCornerRadius
+        card.layer?.cornerCurve = .continuous
+        card.layer?.borderWidth = 1
+        card.layer?.borderColor = AppTheme.ns(AppTheme.contentStroke).cgColor
+        card.layer?.backgroundColor = AppTheme.ns(AppTheme.roleStatus).withAlphaComponent(0.10).cgColor
+        addSubview(card)
+
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.image = NSImage(systemSymbolName: "infinity", accessibilityDescription: nil)
+        iconView.contentTintColor = AppTheme.ns(AppTheme.brandAccent)
+
+        titleField.translatesAutoresizingMaskIntoConstraints = false
+        titleField.font = NativeTranscriptFont.header
+        titleField.textColor = .labelColor
+        titleField.lineBreakMode = .byTruncatingTail
+        statusField.translatesAutoresizingMaskIntoConstraints = false
+        statusField.font = NativeTranscriptFont.caption(.semibold)
+        statusField.textColor = AppTheme.ns(AppTheme.mutedText)
+        detailField.translatesAutoresizingMaskIntoConstraints = false
+        detailField.font = NativeTranscriptFont.caption()
+        detailField.textColor = AppTheme.ns(AppTheme.mutedText)
+        detailField.maximumNumberOfLines = 0
+        detailField.isHidden = true
+
+        for button in actionButtons {
+            button.bezelStyle = .rounded
+            button.controlSize = .small
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        }
+        detailsButton.target = self
+        detailsButton.action = #selector(openDetails)
+        stopButton.target = self
+        stopButton.action = #selector(stopTapped)
+        retryButton.target = self
+        retryButton.action = #selector(retryTapped)
+        saveButton.target = self
+        saveButton.action = #selector(saveTapped)
+        revealButton.target = self
+        revealButton.action = #selector(revealTapped)
+        revealWorktreeButton.target = self
+        revealWorktreeButton.action = #selector(revealWorktreeTapped)
+        applyWorktreeButton.target = self
+        applyWorktreeButton.action = #selector(applyWorktreeTapped)
+        discardWorktreeButton.target = self
+        discardWorktreeButton.action = #selector(discardWorktreeTapped)
+        approveHumanApprovalButton.target = self
+        approveHumanApprovalButton.action = #selector(approveHumanApprovalTapped)
+        rejectHumanApprovalButton.target = self
+        rejectHumanApprovalButton.action = #selector(rejectHumanApprovalTapped)
+
+        let header = NSStackView(views: [iconView, titleField])
+        header.translatesAutoresizingMaskIntoConstraints = false
+        header.orientation = .horizontal
+        header.alignment = .centerY
+        header.spacing = 8
+
+        actionRows.translatesAutoresizingMaskIntoConstraints = false
+        actionRows.orientation = .vertical
+        actionRows.alignment = .leading
+        actionRows.spacing = 6
+
+        card.addSubview(header)
+        card.addSubview(statusField)
+        card.addSubview(detailField)
+        card.addSubview(actionRows)
+
+        cardWidthC = card.widthAnchor.constraint(equalToConstant: 320)
+        NSLayoutConstraint.activate([
+            card.leadingAnchor.constraint(equalTo: leadingAnchor),
+            card.topAnchor.constraint(equalTo: topAnchor),
+            cardWidthC,
+            card.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            card.bottomAnchor.constraint(equalTo: bottomAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 16),
+            iconView.heightAnchor.constraint(equalToConstant: 16),
+            header.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: AppTheme.Chat.bubbleHPadding),
+            header.trailingAnchor.constraint(lessThanOrEqualTo: card.trailingAnchor, constant: -AppTheme.Chat.bubbleHPadding),
+            header.topAnchor.constraint(equalTo: card.topAnchor, constant: AppTheme.Chat.bubbleVPadding),
+            statusField.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            statusField.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -AppTheme.Chat.bubbleHPadding),
+            statusField.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6),
+            detailField.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            detailField.trailingAnchor.constraint(equalTo: statusField.trailingAnchor),
+            detailField.topAnchor.constraint(equalTo: statusField.bottomAnchor, constant: 8),
+            actionRows.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            actionRows.trailingAnchor.constraint(lessThanOrEqualTo: card.trailingAnchor, constant: -AppTheme.Chat.bubbleHPadding),
+            actionRows.topAnchor.constraint(equalTo: statusField.bottomAnchor, constant: 10),
+            actionRows.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -AppTheme.Chat.bubbleVPadding)
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var isFlipped: Bool { true }
+
+    func configure(payload: NativeLoopRunPayload, width rowWidth: CGFloat) {
+        self.payload = payload
+        cardWidthC.constant = Self.cardWidth(for: rowWidth)
+        titleField.stringValue = payload.title
+        statusField.stringValue = payload.statusText
+        detailField.stringValue = payload.detailText
+        detailField.isHidden = true
+        detailsButton.title = "Open Details"
+        stopButton.isHidden = !payload.isActive
+        stopButton.isEnabled = payload.isActive && payload.onStop != nil
+        retryButton.isHidden = !payload.canRetry
+        retryButton.isEnabled = payload.canRetry && payload.onRetry != nil
+        saveButton.isHidden = !payload.canSave
+        saveButton.isEnabled = payload.canSave && payload.onSave != nil
+        revealButton.isEnabled = payload.canRevealArtifacts && payload.onRevealArtifacts != nil
+        revealWorktreeButton.isHidden = !payload.canRevealWorktree
+        revealWorktreeButton.isEnabled = payload.canRevealWorktree && payload.onRevealWorktree != nil
+        applyWorktreeButton.isHidden = !payload.canApplyWorktree
+        applyWorktreeButton.isEnabled = payload.canApplyWorktree && payload.onApplyWorktree != nil
+        discardWorktreeButton.isHidden = !payload.canDiscardWorktree
+        discardWorktreeButton.isEnabled = payload.canDiscardWorktree && payload.onDiscardWorktree != nil
+        approveHumanApprovalButton.isHidden = !payload.canApproveHumanApproval
+        approveHumanApprovalButton.isEnabled = payload.canApproveHumanApproval && payload.onApproveHumanApproval != nil
+        rejectHumanApprovalButton.isHidden = !payload.canRejectHumanApproval
+        rejectHumanApprovalButton.isEnabled = payload.canRejectHumanApproval && payload.onRejectHumanApproval != nil
+        rebuildActionRows(forCardWidth: cardWidthC.constant)
+    }
+
+    func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat {
+        let cardWidth = Self.cardWidth(for: rowWidth)
+        let rowCount = packedActionRows(forCardWidth: cardWidth, visibleButtons: visibleActionButtons).count
+        return AppTheme.Chat.bubbleVPadding * 2 + 18 + 6 + 16 + 10 + CGFloat(max(1, rowCount)) * 26 + CGFloat(max(0, rowCount - 1)) * 6
+    }
+
+    private var actionButtons: [NSButton] {
+        [detailsButton, stopButton, retryButton, saveButton, revealButton, revealWorktreeButton, applyWorktreeButton, discardWorktreeButton, approveHumanApprovalButton, rejectHumanApprovalButton]
+    }
+
+    private var visibleActionButtons: [NSButton] { actionButtons.filter { !$0.isHidden } }
+
+    private func rebuildActionRows(forCardWidth cardWidth: CGFloat) {
+        for view in actionRows.arrangedSubviews {
+            actionRows.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        for rowButtons in packedActionRows(forCardWidth: cardWidth, visibleButtons: visibleActionButtons) {
+            let row = NSStackView(views: rowButtons)
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.spacing = 8
+            row.translatesAutoresizingMaskIntoConstraints = false
+            actionRows.addArrangedSubview(row)
+        }
+    }
+
+    private func packedActionRows(forCardWidth cardWidth: CGFloat, visibleButtons: [NSButton]) -> [[NSButton]] {
+        guard !visibleButtons.isEmpty else { return [] }
+        let availableWidth = max(120, cardWidth - AppTheme.Chat.bubbleHPadding * 2)
+        var rows: [[NSButton]] = [[]]
+        var currentWidth: CGFloat = 0
+        for button in visibleButtons {
+            let width = max(44, button.fittingSize.width)
+            let nextWidth = rows[rows.count - 1].isEmpty ? width : currentWidth + 8 + width
+            if nextWidth > availableWidth, !rows[rows.count - 1].isEmpty {
+                rows.append([button])
+                currentWidth = width
+            } else {
+                rows[rows.count - 1].append(button)
+                currentWidth = nextWidth
+            }
+        }
+        return rows
+    }
+
+    private static func cardWidth(for rowWidth: CGFloat) -> CGFloat {
+        min(max(rowWidth * 0.78, min(rowWidth, 240)), rowWidth)
+    }
+
+    @objc private func openDetails() {
+        guard let payload else { return }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentSize = NSSize(width: 560, height: 520)
+        popover.contentViewController = PiAgentNativeTextPopoverController(title: payload.title, text: payload.detailText)
+        popover.show(relativeTo: detailsButton.bounds, of: detailsButton, preferredEdge: .maxY)
+    }
+
+    @objc private func stopTapped() { payload?.onStop?() }
+    @objc private func retryTapped() { payload?.onRetry?() }
+    @objc private func saveTapped() { payload?.onSave?() }
+    @objc private func revealTapped() { payload?.onRevealArtifacts?() }
+    @objc private func revealWorktreeTapped() { payload?.onRevealWorktree?() }
+    @objc private func applyWorktreeTapped() { payload?.onApplyWorktree?() }
+    @objc private func discardWorktreeTapped() { payload?.onDiscardWorktree?() }
+    @objc private func approveHumanApprovalTapped() { payload?.onApproveHumanApproval?() }
+    @objc private func rejectHumanApprovalTapped() { payload?.onRejectHumanApproval?() }
 }

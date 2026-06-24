@@ -1,8 +1,6 @@
 import Foundation
 
 struct PiModelDiscoveryService: Sendable {
-    private static let defaultSupportedThinkingLevels = ["off", "minimal", "low", "medium", "high"]
-
     private let commandRunner: CommandRunning
     private let piResolver: PiExecutableResolver
 
@@ -32,9 +30,7 @@ struct PiModelDiscoveryService: Sendable {
     }
 
     private func loadModelThinkingLevels(fromPiListOutput text: String, piPath: String) async -> [String: [String]] {
-        let knownModels: [[String: Any]] = Self.availableModelDescriptors(fromPiListOutput: text).map {
-            ["provider": $0.provider, "model": $0.model, "supportsThinking": $0.supportsThinking]
-        }
+        let knownModels = Self.availableModelIdentifiers(fromPiListOutput: text).map { ["provider": $0.provider, "model": $0.model] }
         guard !knownModels.isEmpty,
               let inputData = try? JSONSerialization.data(withJSONObject: knownModels),
               let inputText = String(data: inputData, encoding: .utf8)
@@ -42,13 +38,17 @@ struct PiModelDiscoveryService: Sendable {
             return [:]
         }
 
-        // Walk up from the real pi binary location to find models.js, covering nvm,
-        // volta, fnm, local installs, and anything else where the binary is a symlink
-        // into a node_modules tree. Falls back to known Homebrew paths.
+        // Walk up from the real pi binary location to find pi-coding-agent's dist, covering nvm,
+        // volta, fnm, local installs, and anything else where the binary is a symlink into a
+        // node_modules tree. Falls back to known Homebrew paths. We import pi's ModelRegistry
+        // (not just pi-ai's `getModel`) because `getModel` only knows built-in models — custom
+        // providers declared in ~/.pi/agent/models.json (NeuralWatt, Ollama, etc.) are invisible
+        // to it and would wrongly resolve to ['off']. ModelRegistry loads models.json, so its
+        // getAll() returns custom models with their real `reasoning` flag.
         let script = #"""
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { dirname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
-import { dirname, resolve } from 'node:path';
 
 const candidates = [];
 
@@ -56,13 +56,14 @@ function expandHome(path) {
   return path.replace(/^\$HOME\b|^~(?=\/)/, homedir()).replace(/^\$\{HOME\}/, homedir());
 }
 
-function addModelCandidatesFromCliPath(cliPath) {
+function addModelRegistryCandidatesFromCliPath(cliPath) {
   try {
     let dir = dirname(realpathSync(expandHome(cliPath)));
     for (let i = 0; i < 10; i++) {
-      const earendil = resolve(dir, 'node_modules/@earendil-works/pi-ai/dist/models.js');
-      const mario    = resolve(dir, 'node_modules/@mariozechner/pi-ai/dist/models.js');
-      candidates.push(earendil, mario);
+      const paAgent = resolve(dir, 'node_modules/@earendil-works/pi-coding-agent/dist/core/model-registry.js');
+      if (existsSync(paAgent)) { candidates.push(paAgent); break; }
+      const paMario  = resolve(dir, 'node_modules/@mariozechner/pi-coding-agent/dist/core/model-registry.js');
+      if (existsSync(paMario)) { candidates.push(paMario);  break; }
       const parent = dirname(dir);
       if (parent === dir) break;
       dir = parent;
@@ -71,71 +72,65 @@ function addModelCandidatesFromCliPath(cliPath) {
 }
 
 const piPath = process.env.AGENT_DECK_PI_PATH;
-if (piPath && existsSync(piPath)) {
-  addModelCandidatesFromCliPath(piPath);
+if (piPath && existsSync(expandHome(piPath))) {
+  addModelRegistryCandidatesFromCliPath(piPath);
   try {
-    const wrapper = readFileSync(piPath, 'utf8');
+    const wrapper = readFileSync(expandHome(piPath), 'utf8');
     const cliMatch = wrapper.match(/PI_CLI=["']?([^"'\n]+)/);
-    if (cliMatch?.[1]) addModelCandidatesFromCliPath(cliMatch[1]);
+    if (cliMatch?.[1]) addModelRegistryCandidatesFromCliPath(cliMatch[1]);
   } catch {}
 }
 
 candidates.push(
-  resolve(homedir(), '.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/models.js'),
-  resolve(homedir(), '.npm-global/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@mariozechner/pi-ai/dist/models.js'),
-  '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/models.js',
-  '/opt/homebrew/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@mariozechner/pi-ai/dist/models.js',
-  '/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/models.js',
-  '/usr/local/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@mariozechner/pi-ai/dist/models.js',
+  resolve(homedir(), '.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/model-registry.js'),
+  resolve(homedir(), '.npm-global/lib/node_modules/@mariozechner/pi-coding-agent/dist/core/model-registry.js'),
+  '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/model-registry.js',
+  '/opt/homebrew/lib/node_modules/@mariozechner/pi-coding-agent/dist/core/model-registry.js',
+  '/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/model-registry.js',
+  '/usr/local/lib/node_modules/@mariozechner/pi-coding-agent/dist/core/model-registry.js',
 );
 
 const modulePath = candidates.find((path) => existsSync(path));
-if (!modulePath) throw new Error('Could not locate pi-ai models.js');
+if (!modulePath) throw new Error('Could not locate pi-coding-agent model-registry.js');
 
-const models = await import(modulePath);
+const registryModule = await import(modulePath);
+const ModelRegistry = registryModule.ModelRegistry;
+// AuthStorage lives alongside ModelRegistry; load it so the registry can resolve auth-gated
+// providers, then point it at the real ~/.pi/agent/models.json.
+const authModule = await import(resolve(dirname(modulePath), 'auth-storage.js'));
+const AuthStorage = authModule.AuthStorage;
+const auth = AuthStorage.create();
+const modelsJsonPath = join(homedir(), '.pi/agent/models.json');
+const registry = ModelRegistry.create(auth, modelsJsonPath);
+const allModels = (typeof registry.getAll === 'function') ? registry.getAll() : [];
+const byKey = new Map(allModels.map((m) => [`${m.provider}/${m.id}`, m]));
+
+// pi-ai's getSupportedThinkingLevels consumes a model object (built-in or custom) read from
+// the registry, so custom-provider reasoning flags are honored. pi-ai is a dependency of
+// pi-coding-agent: <pkg-root>/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/models.js
+// where <pkg-root> is the directory above dist/core.
+const coreDir = dirname(modulePath);              // .../pi-coding-agent/dist/core
+const distDir = dirname(coreDir);                 // .../pi-coding-agent/dist
+const pkgRoot = dirname(distDir);                 // .../pi-coding-agent
+const piAiCandidates = [
+  resolve(pkgRoot, 'node_modules/@earendil-works/pi-ai/dist/models.js'),
+  resolve(pkgRoot, 'node_modules/@mariozechner/pi-ai/dist/models.js'),
+];
+const piAiPath = piAiCandidates.find((p) => existsSync(p));
+const getLevels = piAiPath ? (await import(piAiPath)).getSupportedThinkingLevels : undefined;
+
 const input = JSON.parse(process.env.AGENT_DECK_MODEL_INPUT ?? '[]');
-const defaultThinkingLevels = ['off', 'minimal', 'low', 'medium', 'high'];
-
-function loadCustomModelConfig() {
-  const configPath = resolve(homedir(), '.pi/agent/models.json');
-  if (!existsSync(configPath)) return {};
-  try {
-    return JSON.parse(readFileSync(configPath, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
-const customModelConfig = loadCustomModelConfig();
-const customProviders = customModelConfig.providers ?? customModelConfig;
-
-function customModelFor(provider, modelId) {
-  const providerConfig = customProviders?.[provider];
-  const providerModels = Array.isArray(providerConfig?.models) ? providerConfig.models : [];
-  return providerModels.find((model) => model?.id === modelId);
-}
-
-function supportedThinkingLevelsFor(model, supportsThinking) {
-  if (!supportsThinking || model?.reasoning === false) return ['off'];
-  if (model?.reasoning === true && typeof models.getSupportedThinkingLevels === 'function') {
-    try {
-      return models.getSupportedThinkingLevels(model);
-    } catch {}
-  }
-  return defaultThinkingLevels;
-}
-
 const result = {};
 for (const item of input) {
-  const identifier = `${item.provider}/${item.model}`;
-  const supportsThinking = item.supportsThinking === true;
-  let model = customModelFor(item.provider, item.model);
-  if (!model) {
-    try {
-      model = models.getModel(item.provider, item.model);
-    } catch {}
+  const key = `${item.provider}/${item.model}`;
+  const model = byKey.get(key);
+  if (!model || !model.reasoning) {
+    result[key] = ['off'];
+    continue;
   }
-  result[identifier] = supportedThinkingLevelsFor(model, supportsThinking);
+  if (typeof getLevels === 'function') {
+    result[key] = getLevels(model);
+  }
 }
 process.stdout.write(JSON.stringify(result));
 """#
@@ -161,14 +156,10 @@ process.stdout.write(JSON.stringify(result));
     }
 
     static func availableModelIdentifiers(fromPiListOutput text: String) -> [(provider: String, model: String)] {
-        availableModelDescriptors(fromPiListOutput: text).map { (provider: $0.provider, model: $0.model) }
-    }
-
-    private static func availableModelDescriptors(fromPiListOutput text: String) -> [(provider: String, model: String, supportsThinking: Bool)] {
         text.split(whereSeparator: \.isNewline).dropFirst().compactMap { line in
             let parts = line.split(whereSeparator: \.isWhitespace).map(String.init)
-            guard parts.count >= 5 else { return nil }
-            return (provider: parts[0], model: parts[1], supportsThinking: parts[4].lowercased() == "yes")
+            guard parts.count >= 2 else { return nil }
+            return (provider: parts[0], model: parts[1])
         }
     }
 
@@ -181,15 +172,27 @@ process.stdout.write(JSON.stringify(result));
                 guard parts.count >= 6 else { return nil }
                 let identifier = "\(parts[0])/\(parts[1])"
                 let supportsThinking = parts[4].lowercased() == "yes"
+                // `pi --list-models` always prints a number for max-out (its own 16384 default
+                // when the source omits a cap), so the text can't tell "real 16.4K" from "unknown."
+                // Providers Agent Deck knows report no limit (NeuralWatt today) are mapped to nil
+                // here so the UI shows a dash instead of pi's fabricated default.
+                let maxOutput = Self.maxOutput(forProvider: parts[0], rawColumn: parts[3])
                 return AvailableModel(
                     provider: parts[0],
                     model: parts[1],
                     contextWindow: parts[2],
-                    maxOutput: parts[3],
+                    maxOutput: maxOutput,
                     supportsThinking: supportsThinking,
                     supportsImages: parts[5].lowercased() == "yes",
-                    supportedThinkingLevels: exactThinkingLevels[identifier] ?? (supportsThinking ? Self.defaultSupportedThinkingLevels : ["off"])
+                    supportedThinkingLevels: exactThinkingLevels[identifier] ?? (supportsThinking ? [] : ["off"])
                 )
             }
+    }
+
+    /// Resolve the max-output column to display. Returns nil (→ dash) for providers Agent Deck
+    /// knows report no limit; passes the raw pi value through otherwise.
+    static func maxOutput(forProvider provider: String, rawColumn: String) -> String? {
+        if NeuralWattProviderSpec.providerID == provider { return nil }
+        return rawColumn
     }
 }

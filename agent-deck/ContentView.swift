@@ -532,6 +532,7 @@ struct ContentView: View {
     @State private var projectSearchText = ""
     @State private var skillSearchText = ""
     @State private var promptSearchText = ""
+    @State private var loopSearchText = ""
     @State private var piAgentSessionSearchText = ""
     @State private var isMemoryInfoPresented = false
     @State private var isSkillsInfoPresented = false
@@ -548,6 +549,8 @@ struct ContentView: View {
     @State private var navigationColumnVisibility: NavigationSplitViewVisibility = .all
     @State private var agentModelQuickEditor: AgentModelQuickEditorContext?
     @State private var commandContext = AgentDeckCommandContext()
+    @State private var isIssuesProjectPopoverPresented = false
+    @State private var isMemoryProjectPopoverPresented = false
     @State private var isIssuesFilterPopoverPresented = false
     @State private var isAgentsFilterPopoverPresented = false
     #if DEBUG
@@ -614,11 +617,6 @@ struct ContentView: View {
                     CodingAgentExpandedPanel(
                         viewModel: viewModel,
                         store: viewModel.piAgentSessionStore,
-                        projects: filteredProjects,
-                        selectedProject: selectedProject,
-                        projectFilterText: $projectFilterText,
-                        isSearchDebouncing: projectSearchIsDebouncing,
-                        onSelectProject: { viewModel.setSelectedProject($0?.url) },
                         sessionSearchText: $piAgentSessionSearchText,
                         isActive: isExpanded,
                         onCollapse: { viewModel.isCodingAgentPanelExpanded = false }
@@ -758,11 +756,6 @@ struct ContentView: View {
             CodingAgentCollapsedPanel(
                 viewModel: viewModel,
                 store: viewModel.piAgentSessionStore,
-                projects: filteredProjects,
-                selectedProject: selectedProject,
-                projectFilterText: $projectFilterText,
-                isSearchDebouncing: projectSearchIsDebouncing,
-                onSelectProject: { viewModel.setSelectedProject($0?.url) },
                 sessionSearchText: piAgentSessionSearchText
             )
             .padding(.horizontal, 16)
@@ -807,7 +800,7 @@ struct ContentView: View {
 
     private var toolbarSearchIsVisible: Bool {
         switch viewModel.selectedSidebarItem {
-        case .projects, .agents, .issues, .memory, .skills, .prompts, .agent:
+        case .projects, .agents, .issues, .memory, .skills, .prompts, .loops, .agent:
             return true
         default:
             return false
@@ -822,6 +815,7 @@ struct ContentView: View {
         case .memory: return AppLocalization.string("Search memories", default: "Search memories")
         case .skills: return AppLocalization.string("Search skills", default: "Search skills")
         case .prompts: return AppLocalization.string("Search prompts", default: "Search prompts")
+        case .loops: return AppLocalization.string("Search loops", default: "Search loops")
         case .agent: return AppLocalization.string("Search sessions", default: "Search sessions")
         default: return AppLocalization.string("Search", default: "Search")
         }
@@ -837,6 +831,7 @@ struct ContentView: View {
                 case .memory: return memorySearchText
                 case .skills: return skillSearchText
                 case .prompts: return promptSearchText
+                case .loops: return loopSearchText
                 case .agent: return piAgentSessionSearchText
                 default: return ""
                 }
@@ -849,6 +844,7 @@ struct ContentView: View {
                 case .memory: memorySearchText = value
                 case .skills: skillSearchText = value
                 case .prompts: promptSearchText = value
+                case .loops: loopSearchText = value
                 case .agent: piAgentSessionSearchText = value
                 default: break
                 }
@@ -943,7 +939,7 @@ struct ContentView: View {
         ctx.selectPreviousPiAgentSession = { viewModel.selectPreviousPiAgentSession() }
         ctx.createAgent = {
             editingAgent = nil
-            agentDraft = viewModel.makeNewAgentDraft(scope: viewModel.selectedProjectPath == nil ? .library : .project)
+            agentDraft = viewModel.makeNewAgentDraft(scope: .library)
         }
         ctx.deletePiAgentSession = { showingPiAgentDeleteAlert = true }
         ctx.stopPiAgentSession = { viewModel.stopSelectedPiAgentSession() }
@@ -1019,9 +1015,7 @@ struct ContentView: View {
                     }
                 }
             )),
-            isDisabled: { item in
-                item == .instructions && viewModel.selectedProjectPath == nil
-            },
+            isDisabled: { _ in false },
             // Constant on purpose: tying this to the panel-expansion flag handed
             // AppList a changed parameter on every toggle, forcing a full nav
             // re-diff (a per-toggle hitch). Arrow keys while the panel covers
@@ -1034,7 +1028,8 @@ struct ContentView: View {
             SidebarNavigationRow(
                 item: item,
                 isSelected: viewModel.selectedSidebarItem == item,
-                showsWarning: warnings[item] ?? false
+                showsWarning: warnings[item] ?? false,
+                showsNewFeatureBadge: item == .loops && !viewModel.appSettings.didOpenLoopsFromSidebar
             )
         }
         .bottomEdgeFade(height: 34)
@@ -1079,6 +1074,13 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var primaryActionToolbarItems: some ToolbarContent {
+        workspaceToolbarItems
+        resourceToolbarItems
+        runtimeToolbarItems
+    }
+
+    @ToolbarContentBuilder
+    private var workspaceToolbarItems: some ToolbarContent {
         if viewModel.selectedSidebarItem == .projects {
             projectsPrimaryToolbarContent
         }
@@ -1088,26 +1090,78 @@ struct ContentView: View {
         if viewModel.selectedSidebarItem == .memory {
             memoryPrimaryToolbarContent
         }
+        if viewModel.selectedSidebarItem == .agent {
+            piAgentPrimaryToolbarContent
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var resourceToolbarItems: some ToolbarContent {
         if viewModel.selectedSidebarItem == .agents {
             agentsPrimaryToolbarContent
-        }
-        if viewModel.selectedSidebarItem == .environment {
-            environmentPrimaryToolbarContent
         }
         if viewModel.selectedSidebarItem == .prompts {
             promptsPrimaryToolbarContent
         }
+        if viewModel.selectedSidebarItem == .loops {
+            loopsPrimaryToolbarContent
+        }
         if viewModel.selectedSidebarItem == .skills {
             skillsPrimaryToolbarContent
         }
-        if viewModel.selectedSidebarItem == .agent {
-            piAgentPrimaryToolbarContent
+    }
+
+    @ToolbarContentBuilder
+    private var runtimeToolbarItems: some ToolbarContent {
+        if viewModel.selectedSidebarItem == .environment {
+            environmentPrimaryToolbarContent
         }
         if viewModel.selectedSidebarItem == .models {
             modelsPrimaryToolbarContent
         }
         if viewModel.selectedSidebarItem == .extensions {
             extensionsPrimaryToolbarContent
+        }
+        if viewModel.selectedSidebarItem == .mcp {
+            mcpPrimaryToolbarContent
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var mcpPrimaryToolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            ControlGroup {
+                // Button-style toggle (not a switch), mirroring Memory: the on-state
+                // renders as the native tinted glass highlight and the title shows
+                // "MCP: On/Off" so the state reads at a glance.
+                Toggle(isOn: Binding(
+                    get: { viewModel.appSettings.mcpEnabled },
+                    set: { viewModel.setMCPEnabled($0) }
+                )) {
+                    Label("Enable MCP", systemImage: SidebarItem.mcp.systemImage)
+                }
+                .toggleStyle(.button)
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(viewModel.appSettings.mcpEnabled ? AppTheme.brandAccent : .secondary)
+                .tint(AppTheme.brandAccent)
+                .help(viewModel.appSettings.mcpEnabled ? "MCP is on for new sessions. Click to turn off." : "MCP is off. Click to enable it for new sessions.")
+
+                Button {
+                    viewModel.requestRefreshMCPServers()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .toolbarNeutralChrome()
+                .help("Reload MCP servers")
+
+                Button {
+                    viewModel.requestAddMCPServer()
+                } label: {
+                    Label("Add server", systemImage: "plus")
+                }
+                .toolbarPrimaryActionChrome()
+                .help("Add an MCP server")
+            }
         }
     }
 
@@ -1194,12 +1248,6 @@ struct ContentView: View {
             Button("New Library Agent") {
                 editingAgent = nil
                 agentDraft = viewModel.makeNewAgentDraft(scope: .library)
-            }
-            if viewModel.selectedProjectPath != nil {
-                Button("New Project Agent") {
-                    editingAgent = nil
-                    agentDraft = viewModel.makeNewAgentDraft(scope: .project)
-                }
             }
         } label: {
             Label("New", systemImage: "plus")
@@ -1288,6 +1336,15 @@ struct ContentView: View {
                 .help("Refresh models")
 
                 Button {
+                    agentModelQuickEditor = currentAgentModelQuickEditorContext
+                } label: {
+                    Label("Quick Edit", systemImage: "cpu")
+                }
+                .toolbarNeutralChrome()
+                .help("Quick edit every agent's model and thinking at once")
+                .disabled(currentAgentModelQuickEditorContext.sections.allSatisfy { $0.agents.isEmpty })
+
+                Button {
                     viewModel.isAddProviderPresented = true
                 } label: {
                     Label("Add Provider", systemImage: "plus")
@@ -1314,6 +1371,19 @@ struct ContentView: View {
             .menuIndicator(.hidden)
             .toolbarPrimaryActionChrome()
             .help("Create a new prompt template or import an existing markdown file")
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var loopsPrimaryToolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                viewModel.requestNewLoopDefinition()
+            } label: {
+                Label("New Loop", systemImage: "plus")
+            }
+            .toolbarPrimaryActionChrome()
+            .help("Create a user loop")
         }
     }
 
@@ -1504,6 +1574,15 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var issuesPrimaryToolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            ProjectToolbarSelector(
+                viewModel: viewModel,
+                isPresented: $isIssuesProjectPopoverPresented
+            )
+        }
+
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+
         // One ControlGroup so the two buttons share an island with the same
         // spacing as every other view (Memory, Projects, …), instead of the
         // narrower separate-items + ToolbarSpacer look.
@@ -1521,6 +1600,15 @@ struct ContentView: View {
     // MemoryScreen (which owns the editor sheet) via NotificationCenter.
     @ToolbarContentBuilder
     private var memoryPrimaryToolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            ProjectToolbarSelector(
+                viewModel: viewModel,
+                isPresented: $isMemoryProjectPopoverPresented
+            )
+        }
+
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+
         ToolbarItem(placement: .primaryAction) {
             ControlGroup {
                 // Button-style toggle, not a switch: toolbar islands hold
@@ -1611,16 +1699,15 @@ struct ContentView: View {
     private var currentAgentModelQuickEditorContext: AgentModelQuickEditorContext {
         AgentModelQuickEditorContext(
             title: AppLocalization.string("Agent Models", default: "Agent Models"),
-            subtitle: viewModel.selectedDiscoveredProject.map {
-                AppLocalization.format("agentModels.quickEdit.projectSubtitle", default: "Quick edits for agents visible in %@.", $0.name)
-            } ?? AppLocalization.string("Quick edits for agents visible in the current global view.", default: "Quick edits for agents visible in the current global view."),
+            subtitle: AppLocalization.string("Quick edits for agents visible in the current global view.", default: "Quick edits for agents visible in the current global view."),
             sections: currentAgentModelQuickEditorSections,
-            preferredOverrideScope: viewModel.selectedProjectPath == nil ? .global : .project
+            preferredOverrideScope: .global
         )
     }
 
     private var currentAgentModelQuickEditorSections: [AgentModelQuickEditorSection] {
-        let filteredAgents = viewModel.selectedProjectPath == nil ? viewModel.allDisplayAgents : viewModel.filteredAgents
+        // Global catalog — independent of `selectedProjectPath`.
+        let filteredAgents = viewModel.allDisplayAgents
 
         func sortedUnique(_ agents: [EffectiveAgentRecord]) -> [EffectiveAgentRecord] {
             preferredAgentsByName(agents) { records in records.first }
@@ -1640,25 +1727,8 @@ struct ContentView: View {
             let isPlainBuiltin = agent.builtin != nil && agent.globalCustom == nil && agent.projectCustom == nil
             return !isPlainBuiltin
         }
-        if viewModel.selectedProjectPath == nil {
-            return [
-                AgentModelQuickEditorSection(title: "Custom Agents", agents: sortedUnique(editableNonBuiltinAgents)),
-                AgentModelQuickEditorSection(title: "Builtin Agents", agents: builtinAgents)
-            ]
-        }
-
-        let activeCandidates = editableNonBuiltinAgents.filter { agent in
-            agent.resolved.disabled != true
-        }
-        let inactiveCandidates = editableNonBuiltinAgents.filter { agent in
-            agent.resolved.disabled == true
-        }
-        let activeAgents = sortedUnique(activeCandidates)
-        let inactiveAgents = sortedUnique(inactiveCandidates)
-
         return [
-            AgentModelQuickEditorSection(title: "Active Agents", agents: activeAgents),
-            AgentModelQuickEditorSection(title: "Inactive Agents", agents: inactiveAgents, isDimmed: true),
+            AgentModelQuickEditorSection(title: "Custom Agents", agents: sortedUnique(editableNonBuiltinAgents)),
             AgentModelQuickEditorSection(title: "Builtin Agents", agents: builtinAgents)
         ]
     }
@@ -1711,15 +1781,15 @@ struct ContentView: View {
             )
         case .prompts:
             PromptsScreen(viewModel: viewModel, searchText: $promptSearchText)
+        case .loops:
+            LoopBankScreen(viewModel: viewModel, searchText: $loopSearchText)
         case .agent:
             // Handled by the always-mounted layer above.
             EmptyView()
         case .models:
             ModelsScreen(viewModel: viewModel)
         case .subagents:
-            SubagentsScreen(viewModel: viewModel) {
-                viewModel.selectedSidebarItem = .agent
-            }
+            SubagentsScreen(viewModel: viewModel)
         case .environment:
             EnvironmentScreen(
                 snapshot: viewModel.snapshot,
@@ -1733,12 +1803,18 @@ struct ContentView: View {
             )
         case .extensions:
             ExtensionsScreen(viewModel: viewModel)
+        case .mcp:
+            MCPServersScreen(viewModel: viewModel)
         case .doctor:
             DoctorScreen(viewModel: viewModel)
         }
     }
 
     private func handleSidebarSelectionChange(_ newValue: SidebarItem) {
+        if newValue == .loops {
+            viewModel.markLoopsOpenedFromSidebar()
+        }
+
         if newValue == .agent {
             viewModel.acknowledgeVisibleSelectedPiAgentSession()
         } else if viewModel.isCodingAgentPanelExpanded {
@@ -1762,6 +1838,11 @@ struct ContentView: View {
             return viewModel.appSettings.nativeSubagentsEnabledForNewSessions
                 ? AppLocalization.string("agents.status.on", default: "Agents: On")
                 : AppLocalization.string("agents.status.off", default: "Agents: Off")
+        case .mcp:
+            // Same at-a-glance state as Memory, driven by the toolbar enable toggle.
+            return viewModel.appSettings.mcpEnabled
+                ? AppLocalization.string("mcp.status.on", default: "MCP: On")
+                : AppLocalization.string("mcp.status.off", default: "MCP: Off")
         default:
             return viewModel.selectedSidebarItem.localizedTitle
         }

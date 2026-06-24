@@ -3,7 +3,7 @@ import XCTest
 
 final class PiExecutableResolverTests: XCTestCase {
     func testCommonCandidatesIncludesStandardPaths() {
-        let candidates = PiExecutableResolver().commonPiCandidates()
+        let candidates = PiExecutableResolver.commonPiCandidates()
         let paths = candidates.map(\.path)
 
         XCTAssertTrue(paths.contains("/opt/homebrew/bin/pi"), "Should include Apple Silicon Homebrew path")
@@ -12,7 +12,7 @@ final class PiExecutableResolverTests: XCTestCase {
     }
 
     func testCommonCandidatesIncludesHomeDirectoryPaths() {
-        let candidates = PiExecutableResolver().commonPiCandidates()
+        let candidates = PiExecutableResolver.commonPiCandidates()
         let paths = candidates.map(\.path)
         let home = FileManager.default.homeDirectoryForCurrentUser.path
 
@@ -66,6 +66,11 @@ final class PiExecutableResolverTests: XCTestCase {
             setenv("PATH", oldPath, 1)
         }
 
-        XCTAssertNil(PiExecutableResolver().resolve())
+        // Stub the candidate list and default PATH directories empty so neither
+        // the fallback candidates nor the standard-PATH fallback can discover a
+        // real `pi` installed on this machine (e.g. /opt/homebrew/bin/pi),
+        // making the "not found" assertion deterministic across machines.
+        let resolver = PiExecutableResolver(candidatesProvider: { [] }, defaultPathDirectories: { [] })
+        XCTAssertNil(resolver.resolve())
     }
 }

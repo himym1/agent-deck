@@ -62,8 +62,14 @@ struct PiAgentTranscriptStack<Content: View>: View {
 
 @MainActor
 final class PiAgentTranscriptRenderCache: ObservableObject {
-    @Published private(set) var entries: [PiAgentTranscriptEntry] = []
-    @Published private(set) var threads: [PiAgentTranscriptThread] = []
+    // NOT @Published: the transcript host re-evaluates off the revision counters
+    // below (which bump in lockstep with content in `publish`), so publishing these
+    // too is a redundant 30Hz re-eval trigger — and it would defeat the streaming
+    // pulse deferral (a held pulse updates these but intentionally does NOT bump a
+    // revision, so the host must not observe them directly). `makeItems` reads
+    // `threads` directly, which is a value read, not an observation.
+    private(set) var entries: [PiAgentTranscriptEntry] = []
+    private(set) var threads: [PiAgentTranscriptThread] = []
     @Published private(set) var renderRevision = 0
     @Published private(set) var streamingRevision = 0
     @Published private(set) var autoScrollTurnRevision = 0
@@ -224,9 +230,159 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
         if structurallyChanged {
             renderRevision += 1
         } else {
+            bumpStreamingRevisionOrDefer()
+        }
+#if DEBUG
+        streamSimArmIfEnabled()
+#endif
+    }
+
+    /// Bump the streaming pulse — UNLESS the reader has scrolled away from the
+    /// bottom. There the growing row is off-screen, so showing it is pointless, but
+    /// the pulse would re-evaluate the SwiftUI transcript host and force the whole
+    /// screen scaffold to re-lay-out (StackLayout / FlexFrame `sizeThatFits`, up to
+    /// ~166ms) on EVERY token — the "scrolling during a stream hitches/jumps" bug.
+    /// Hold it and flush one bump when they return to the bottom (`setUserScrolling`).
+    private func bumpStreamingRevisionOrDefer() {
+        var defer_ = userScrolling
+#if DEBUG
+        if UserDefaults.standard.bool(forKey: "StreamDeferDisabled_AB") { defer_ = false }
+#endif
+        if defer_ {
+            hasDeferredStreamingPulse = true
+        } else {
             streamingRevision += 1
         }
     }
+
+    /// Set by the transcript coordinator (via the host) while a user scroll gesture
+    /// is in flight. While true, streaming pulses are deferred (see `publish`).
+    private var userScrolling = false
+    private var hasDeferredStreamingPulse = false
+    func setUserScrolling(_ scrolling: Bool) {
+        guard scrolling != userScrolling else { return }
+        userScrolling = scrolling
+        if !scrolling, hasDeferredStreamingPulse {
+            // Scroll settled — flush the held streaming growth in one pulse so the
+            // transcript catches up (off-screen below, or in view if they returned
+            // to the bottom) with a single relayout instead of one per token.
+            hasDeferredStreamingPulse = false
+            streamingRevision += 1
+        }
+    }
+
+#if DEBUG
+    // MARK: - Streaming pulse simulator (perf harness)
+    //
+    // Reproduces a live response WITHOUT a model: appends a token to the last
+    // assistant message at 30Hz, rebuilding threads + bumping streamingRevision
+    // exactly like real streaming, so the full pipeline runs — per-token reconcile
+    // + row re-tile (regime A) AND the SwiftUI scaffold relayout the pulse triggers
+    // (regime B). The 33ms timer's *lateness* measures how congested the main
+    // thread is each frame: low avgLate/maxLate = smooth. Bracketed by STREAMSIM
+    // markers so HangWatchdog HITCH/HANG lines in the window are attributable.
+    //
+    //   defaults write streetcoding.agent-deck StreamSimEnabled -bool YES
+    //   (StreamSimRounds=3, StreamSimSeconds=6 overridable)
+    //   log stream --predicate 'subsystem == "streetcoding.agent-deck" AND (category == "StreamSim" OR category == "HangWatchdog" OR category == "ScrollPerf")' --info
+    private static let streamSimLog = Logger(subsystem: "streetcoding.agent-deck", category: "StreamSim")
+    private var streamSimTimer: Timer?
+    private var streamSimArmed = false
+    private var streamSimRoundsLeft = 0
+    private var streamSimPulses = 0
+    private var streamSimDeadline: CFTimeInterval = 0
+    private var streamSimTargetIndex: Int?
+    private var streamSimOriginalEntries: [PiAgentTranscriptEntry]?
+    private var streamSimHitchAtStart = 0
+    private var streamSimHangAtStart = 0
+    private var streamSimHangMsAtStart = 0
+    private var streamSimRoundNo = 0
+
+    /// Markdown chunk that mimics a real assistant message: heading, prose, a
+    /// bullet list and a fenced code block — i.e. a multi-block message whose cell
+    /// build is a genuine FULL-REBUILD of many block views (the dominant cost).
+    private static let streamSimRichChunks: [String] = [
+        "## Plan\nHere's the approach I'd take, broken into a few concrete steps that build on each other.\n\n- Parse the input and validate the shape\n- Walk the tree and collect the candidate nodes\n- Apply the transform and re-measure\n\n```swift\nfunc transform(_ nodes: [Node]) -> [Node] {\n    nodes.map { node in\n        var copy = node\n        copy.resolved = true\n        return copy\n    }\n}\n```\n",
+        "### Detail\nThe tricky part is the ordering: each item must be processed before its dependents, otherwise the resolved flag is stale.\n\n1. Topologically sort the graph\n2. Process in dependency order\n3. Verify no cycle remains\n\n```text\nA -> B -> C\nA -> C\n```\nThat means `C` is visited last regardless of the path taken.\n",
+    ]
+
+    private func streamSimArmIfEnabled() {
+        guard !streamSimArmed,
+              UserDefaults.standard.bool(forKey: "StreamSimEnabled"),
+              entries.contains(where: { $0.role == .assistant }) else { return }
+        streamSimArmed = true
+        streamSimRoundsLeft = max(1, UserDefaults.standard.object(forKey: "StreamSimRounds") as? Int ?? 3)
+        streamSimOriginalEntries = entries
+        Self.streamSimLog.error("STREAMSIM armed — \(self.streamSimRoundsLeft) round(s) on session \(self.lastSessionID?.uuidString.prefix(8) ?? "?", privacy: .public)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in self?.streamSimStartRound() }
+    }
+
+    private func streamSimStartRound() {
+        guard streamSimRoundsLeft > 0 else {
+            streamSimRestore()
+            Self.streamSimLog.error("STREAMSIM COMPLETE")
+            TranscriptScrollProfiler.fileLog("STREAMSIM COMPLETE")
+            return
+        }
+        guard let idx = entries.lastIndex(where: { $0.role == .assistant }) else {
+            Self.streamSimLog.error("STREAMSIM aborted — no assistant entry"); return
+        }
+        streamSimRoundNo += 1
+        streamSimTargetIndex = idx
+        let seconds = max(1.0, UserDefaults.standard.object(forKey: "StreamSimSeconds") as? Double ?? 6.0)
+        streamSimDeadline = CACurrentMediaTime() + seconds
+        streamSimPulses = 0
+        streamSimHitchAtStart = HangWatchdog.hitchCount
+        streamSimHangAtStart = HangWatchdog.hangCount
+        streamSimHangMsAtStart = HangWatchdog.hangMsTotal
+        Self.streamSimLog.error("STREAMSIM round \(self.streamSimRoundNo) START (\(seconds, format: .fixed(precision: 0))s @30Hz) ──────────")
+        TranscriptScrollProfiler.fileLog("STREAMSIM round \(streamSimRoundNo) START")
+        let t = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.streamSimTick() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        streamSimTimer = t
+    }
+
+    private func streamSimTick() {
+        if CACurrentMediaTime() >= streamSimDeadline { streamSimEndRound(); return }
+        guard let idx = streamSimTargetIndex, idx < entries.count else { streamSimEndRound(); return }
+        // Every ~22 pulses, append a NEW rich assistant row (a fresh cell build —
+        // the dominant real streaming cost). Otherwise grow the active message,
+        // which drives per-token reconcile + row re-tile + the follow glide.
+        if streamSimPulses % 22 == 21, let sid = entries[idx].sessionID as UUID? {
+            let chunk = Self.streamSimRichChunks[streamSimPulses % Self.streamSimRichChunks.count]
+            entries.append(PiAgentTranscriptEntry(sessionID: sid, role: .assistant, title: "Assistant", text: chunk))
+            streamSimTargetIndex = entries.count - 1
+        } else {
+            entries[idx].text += (streamSimPulses % 9 == 8) ? "\n\nNext, a fresh paragraph that adds another line or two of streamed prose. " : "token "
+        }
+        threads = PiAgentTranscriptThread.make(from: entries)
+        bumpStreamingRevisionOrDefer()   // honor scroll-away deferral, like real streaming
+        streamSimPulses += 1
+    }
+
+    private func streamSimEndRound() {
+        streamSimTimer?.invalidate(); streamSimTimer = nil
+        let hitches = HangWatchdog.hitchCount - streamSimHitchAtStart
+        let hangs = HangWatchdog.hangCount - streamSimHangAtStart
+        let hangMs = HangWatchdog.hangMsTotal - streamSimHangMsAtStart
+        let summary = "STREAMSIM round \(streamSimRoundNo) END pulses=\(streamSimPulses) hitches=\(hitches) hangs=\(hangs) hangMs=\(hangMs) worstHitch=\(HangWatchdog.worstHitchMs)ms"
+        Self.streamSimLog.error("\(summary, privacy: .public) ──────────")
+        TranscriptScrollProfiler.fileLog(summary)
+        streamSimRoundsLeft -= 1
+        // Reset the worst-hitch high-water mark between rounds for a per-round read.
+        HangWatchdog.worstHitchMs = 0
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.streamSimStartRound() }
+    }
+
+    private func streamSimRestore() {
+        guard let original = streamSimOriginalEntries else { return }
+        entries = original
+        threads = PiAgentTranscriptThread.make(from: entries)
+        renderRevision += 1
+    }
+#endif
 
     private enum AssistantContentInterpretation {
         case assistant(String)
@@ -347,6 +503,7 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
             return isMeaningfulAssistantEntry(entry)
         case .status:
             return entry.isNativeSubagentCard
+                || entry.isLoopTranscriptCard
                 || entry.agentMemoryEvent != nil
                 || entry.title == "Compaction"
                 || entry.title == "Retry"
@@ -363,7 +520,7 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
 
     private func isMeaningfulAssistantEntry(_ entry: PiAgentTranscriptEntry) -> Bool {
         let text = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return true }
+        guard !text.isEmpty else { return false }
         return !piAgentLeakedToolNames.contains(text.lowercased())
     }
 }
@@ -569,6 +726,7 @@ private struct PiAgentTranscriptHost: View {
             autoScrollTurnRevision: cache.autoScrollTurnRevision,
             bottomScrollRequest: bottomScrollRequest,
             onPinnedToBottomChange: onPinnedToBottomChange,
+            onScrollingChange: { [cache] scrolling in cache.setUserScrolling(scrolling) },
             onBenchAdvanceSession: onBenchAdvanceSession,
             benchSessionCount: benchSessionCount
         )
@@ -587,6 +745,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
     let autoScrollTurnRevision: Int
     let bottomScrollRequest: Int
     let onPinnedToBottomChange: (Bool) -> Void
+    /// Called as the user starts/stops scrolling history; the cache uses it to
+    /// defer streaming pulses (and the scaffold relayout they cause) until settle.
+    let onScrollingChange: (Bool) -> Void
     /// Advance selection to the next session (the ⌘] action). Used only by the
     /// scroll benchmark to sweep multiple chats; nil disables multi-session.
     var onBenchAdvanceSession: (() -> Void)?
@@ -656,6 +817,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         context.coordinator.tableView = tableView
         context.coordinator.onBenchAdvanceSession = onBenchAdvanceSession
         context.coordinator.benchSessionCount = benchSessionCount
+        context.coordinator.onScrollingChange = onScrollingChange
         context.coordinator.setupDataSource(for: tableView)
         context.coordinator.setupScrollObservation(scrollView)
         context.coordinator.updateColumnWidthIfNeeded()
@@ -678,6 +840,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             coordinator.onPinnedToBottomChange = onPinnedToBottomChange
             coordinator.onBenchAdvanceSession = onBenchAdvanceSession
             coordinator.benchSessionCount = benchSessionCount
+            coordinator.onScrollingChange = onScrollingChange
             coordinator.updateColumnWidthIfNeeded()
             coordinator.apply(
                 items: items,
@@ -764,14 +927,14 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// than the target can never loop forever wrapping the list.
         private var benchAdvanceBudget = 0
         private let benchMaxSessions = 6
-        private let benchShortDuration: CFTimeInterval = 2.5
-        private let benchLongDuration: CFTimeInterval = 7
+        private let benchShortDuration: CFTimeInterval = UserDefaults.standard.object(forKey: "BenchShortSec") as? Double ?? 2.5
+        private let benchLongDuration: CFTimeInterval = UserDefaults.standard.object(forKey: "BenchLongSec") as? Double ?? 7
         /// Long full-sweeps run back-to-back per session: repeated traversals are
         /// far more likely to surface a hang/hitch than a single pass (the first
         /// pass warms caches; a stall that survives into passes 2–3 is the real
         /// jank). Each pass is its own profiler gesture, so each gets a summary
         /// and can trip the hitch backtrace independently.
-        private let benchLongRepeats = 3
+        private let benchLongRepeats = UserDefaults.standard.object(forKey: "BenchLongRepeats") as? Int ?? 3
 
         var sessionID: UUID?
         var lastRenderRevision = -1
@@ -810,16 +973,19 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private var pendingHeightWork: DispatchWorkItem?
         private var pendingScrollWork: DispatchWorkItem?
         private var pendingSettleScrollWork: DispatchWorkItem?
+        private var pendingGlideLandingSettleWork: DispatchWorkItem?
         private var pendingRemeasureWork: DispatchWorkItem?
+        private var pendingRemeasureIDs = Set<String>()
         private var pendingScrollSettle = false
         private var pendingWidthWork: DispatchWorkItem?
+        private var lastWidthChangeTime: CFTimeInterval = 0
         // Smooth auto-follow. The streaming follow doesn't snap to the bottom each
         // batch (that reads as a step every ~130ms); instead a 60fps timer eases
         // the clip origin toward the *current* bottom each frame, continuously
         // chasing the growing document so the motion is a glide. It disengages the
         // instant the user scrolls (checked per tick + on live-scroll start + on
         // any user-driven bounds change). Explicit scrolls (send, jump-to-latest,
-        // session switch) still snap — see `performScrollToBottom(_:animated:)`.
+        // session switch) still snap — see `performScrollToBottom(_:animated:forceLayout:)`.
         private var followGlideTimer: Timer?
         // Fraction of the remaining gap consumed per frame. Higher = snappier /
         // smaller trailing gap during fast streaming; lower = softer glide.
@@ -835,7 +1001,17 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         // switch (set true). The follow decisions read this, NOT the live position,
         // so the smooth-glide trailing a little behind the bottom never causes the
         // follow to give up and leave the view parked below the latest content.
-        private var isAutoFollowing = true
+        private var isAutoFollowing = true {
+            didSet {
+                guard isAutoFollowing != oldValue else { return }
+                // Scrolled away from the bottom → tell the cache to DEFER streaming
+                // pulses (the off-screen growing row would otherwise force a full
+                // SwiftUI scaffold relayout — up to ~166ms — every token). Returned
+                // to the bottom → resume + flush. This is what makes scrolling /
+                // reading history during a live stream smooth.
+                onScrollingChange?(!isAutoFollowing)
+            }
+        }
         private var isProgrammaticScroll = false
         // True between willStartLiveScroll / didEndLiveScroll — an authoritative
         // "user is driving the scroll" signal, but it only fires for trackpad
@@ -909,6 +1085,163 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private func touchCell(_ id: String) {
             if let idx = cellCacheLRU.firstIndex(of: id) { cellCacheLRU.remove(at: idx) }
             cellCacheLRU.append(id)
+        }
+
+        // MARK: - Idle pre-warm
+        //
+        // Building a transcript cell (markdown block stack, or a tool-group /
+        // subagent card) costs 10-46ms for a heavy row, and a long session has
+        // dozens. Doing it lazily on the scroll path is the dominant scroll hitch
+        // (a 130-row session = ~458ms of construction). Instead, after a session
+        // settles, build the off-screen cells during idle in small time-budgeted
+        // slices, so by the time the user scrolls the cells are already cached and
+        // the vend is a no-op configure. Yields to the user: paused while a scroll
+        // gesture or streaming is in flight, resumed when idle.
+        private var prewarmQueue: [String] = []
+        private var prewarmScheduled = false
+        /// IDs blocked from prewarm because a single build exceeded the per-row
+        /// cost cap — a heavy row that eats the whole slice budget would otherwise
+        /// be retried every idle tick and starve the rows behind it. Cleared on
+        /// session switch and width change (geometry/content invalidate the
+        /// block — the row may be cheaper to build at the new width or not exist).
+        private var prewarmBlockedIDs: Set<String> = []
+        /// Hard per-row cost cap: if a single prewarm build exceeds this, the row
+        /// is blocked from future prewarm attempts so the budget goes to cheaper
+        /// rows instead. Kept well above the per-slice budget so a normal row is
+        /// never blocked, but a pathological 20ms+ markdown stack is.
+        private let prewarmPerRowCostCapMs: Double = 15.0
+        /// Kill switch for A/B: `defaults write streetcoding.agent-deck TranscriptPrewarmDisabled -bool YES`.
+        private static let prewarmDisabled: Bool = {
+            UserDefaults.standard.bool(forKey: "TranscriptPrewarmDisabled")
+        }()
+        /// Per-runloop-slice main-thread budget. Kept under half a 120Hz frame so a
+        /// slice never itself drops a frame; construction is spread across ticks.
+        private let prewarmSliceBudgetMs: Double = 4.0
+        /// Kill switch for the old offscreen height-measurement path. Keeping this
+        /// off by default avoids surprise main-thread TextKit/layout stalls while
+        /// preserving visible-row rendering and measurement behavior.
+        private static let prewarmMeasuresHeights: Bool = {
+            UserDefaults.standard.bool(forKey: "TranscriptPrewarmMeasureHeightsEnabled")
+        }()
+        private let prewarmWidthChangeCooldown: CFTimeInterval = 0.35
+        private let prewarmMaxEstimatedHeight: CGFloat = 420
+
+        func schedulePrewarm() {
+            guard !Self.prewarmDisabled, let tableView else { return }
+            let now = CACurrentMediaTime()
+            let widthSettlesIn = prewarmWidthChangeCooldown - (now - lastWidthChangeTime)
+            if widthSettlesIn > 0 {
+                guard !prewarmScheduled else { return }
+                prewarmScheduled = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + widthSettlesIn) { [weak self] in
+                    guard let self else { return }
+                    self.prewarmScheduled = false
+                    self.schedulePrewarm()
+                }
+                return
+            }
+            // While streaming AND still pinned to the bottom, skip: new rows arrive
+            // every pulse and the visible streaming row owns the main thread, so a
+            // heavy pre-warm build would hitch what the reader is watching. But once
+            // the reader has scrolled UP to read history (auto-follow off), the
+            // stream is off-screen — pre-warm the history they're scrolling toward so
+            // those rows are already built (no construction stutter) even mid-stream.
+            guard !profiler.isStreamingRecently || !isAutoFollowing else { return }
+            // Build the work list: every row without a live cached cell, in document
+            // order, capped to the cache limit (pre-warming past it would just evict
+            // what we built). Skip while streaming — new content is arriving and the
+            // visible path takes priority.
+            let pending = orderedIDs.filter { id in
+                guard cellCache[id] == nil, !prewarmBlockedIDs.contains(id) else { return false }
+                // Heavy markdown/tool rows are exactly the rows that can block the
+                // main thread for a visible hitch if built speculatively. Let them
+                // build only when actually needed; prewarm the cheaper majority.
+                guard let item = itemByID[id] else { return false }
+                return item.estimatedHeight(contentWidth) <= prewarmMaxEstimatedHeight
+            }
+            guard !pending.isEmpty, cellCache.count < cellCacheLimit else { return }
+            // Build outward from the viewport: the user scrolls away from where they
+            // are (the view opens pinned to the bottom), so rows nearest the visible
+            // range should be ready first. Order pending ids by row distance from the
+            // current visible window's centre.
+            let visible = tableView.rows(in: tableView.visibleRect)
+            let anchorRow = visible.length > 0 ? visible.location + visible.length / 2 : orderedIDs.count - 1
+            let indexByID = Dictionary(uniqueKeysWithValues: orderedIDs.enumerated().map { ($1, $0) })
+            let ordered = pending.sorted { (indexByID[$0] ?? 0) - anchorRow == 0 ? false :
+                abs((indexByID[$0] ?? 0) - anchorRow) < abs((indexByID[$1] ?? 0) - anchorRow) }
+            prewarmQueue = Array(ordered.prefix(cellCacheLimit - cellCache.count))
+            guard !prewarmScheduled else { return }
+            prewarmScheduled = true
+            DispatchQueue.main.async { [weak self] in self?.prewarmStep() }
+        }
+
+        private func prewarmStep() {
+            prewarmScheduled = false
+            guard !Self.prewarmDisabled, tableView != nil else { prewarmQueue.removeAll(); return }
+            // Don't compete with an active scroll gesture, live streaming, or a
+            // settling width change — retry shortly. (Streaming re-tiles + the
+            // follow glide own the main thread; width changes reconfigure visible
+            // cells and can otherwise cascade into speculative offscreen work.)
+            let widthSettlesIn = prewarmWidthChangeCooldown - (CACurrentMediaTime() - lastWidthChangeTime)
+            if isUserScrollingRecently || profiler.isStreamingRecently || widthSettlesIn > 0 {
+                prewarmScheduled = true
+                let delay = max(0.2, widthSettlesIn)
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.prewarmStep() }
+                return
+            }
+            let start = CACurrentMediaTime()
+#if DEBUG
+            var builtThisSlice = 0
+#endif
+            while !prewarmQueue.isEmpty {
+                let id = prewarmQueue.removeFirst()
+                // Skip rows that scrolled into view (already built) or vanished.
+                guard cellCache[id] == nil, !prewarmBlockedIDs.contains(id),
+                      let item = itemByID[id],
+                      let row = orderedIDs.firstIndex(of: id) else { continue }
+                let cell = cachedCell(for: id)
+                let rowStart = CACurrentMediaTime()
+                configure(cell, with: item, row: row, via: "prewarm")
+                // Hard per-row cap: if this single build exceeded the cost
+                // threshold, block it from future prewarm so a pathological row
+                // can't starve the budget every idle tick. The row will still
+                // build on the scroll path when actually needed.
+                let rowCostMs = (CACurrentMediaTime() - rowStart) * 1000
+                if rowCostMs >= prewarmPerRowCostCapMs {
+                    prewarmBlockedIDs.insert(id)
+#if DEBUG
+                    TranscriptScrollProfiler.fileLog("PREWARM blocked id=\(id.suffix(6)) cost=\(String(format: "%.1f", rowCostMs))ms")
+#endif
+                }
+                // Do not force an offscreen layout by default. The old path called
+                // `forcedIntrinsicHeight()` here, which is good for future scroll
+                // stability but can spend hundreds of milliseconds in TextKit/AppKit
+                // on the main thread after a sidebar/window width change. Visible
+                // rows still measure themselves through the normal on-layout path.
+                if Self.prewarmMeasuresHeights {
+                    let h = cell.forcedIntrinsicHeight()
+                    if h > 0 {
+                        let height = ceil(h)
+                        measuredHeightByID[id, default: [:]][widthBucket] = height
+                        lastNotedHeight[id] = height
+                    }
+                }
+#if DEBUG
+                builtThisSlice += 1
+#endif
+                if (CACurrentMediaTime() - start) * 1000 >= prewarmSliceBudgetMs { break }
+            }
+            if prewarmQueue.isEmpty {
+#if DEBUG
+                if builtThisSlice > 0 {
+                    TranscriptScrollProfiler.fileLog("PREWARM done cached=\(cellCache.count)/\(orderedIDs.count)")
+                }
+#endif
+            } else {
+                prewarmScheduled = true
+                // Yield a full runloop turn between slices so the UI stays live.
+                DispatchQueue.main.async { [weak self] in self?.prewarmStep() }
+            }
         }
 
         /// Drop least-recently-vended cached cells over the cap. Never evicts a row
@@ -987,6 +1320,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                         self.pendingScrollWork = nil
                         self.pendingSettleScrollWork?.cancel()
                         self.pendingSettleScrollWork = nil
+                        self.pendingGlideLandingSettleWork?.cancel()
+                        self.pendingGlideLandingSettleWork = nil
                         self.pendingScrollSettle = false
                     }
                     // Clip-view bounds change before the scrollView frame notification fires,
@@ -1022,6 +1357,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     self.isLiveScrolling = true
                     self.profiler.gestureStart()
                     self.stopFollowGlide()
+                    self.pendingGlideLandingSettleWork?.cancel()
+                    self.pendingGlideLandingSettleWork = nil
                     // The user grabbed the scroll — drop follow intent until they
                     // either land back at the bottom or jump to latest.
                     self.isAutoFollowing = false
@@ -1064,7 +1401,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             pendingHeightWork?.cancel()
             pendingScrollWork?.cancel()
             pendingSettleScrollWork?.cancel()
+            pendingGlideLandingSettleWork?.cancel()
             pendingRemeasureWork?.cancel()
+            pendingRemeasureIDs.removeAll()
             pendingWidthWork?.cancel()
             stopFollowGlide()
         }
@@ -1121,6 +1460,18 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 return
             }
 
+            // Stamp streaming activity up front so every profiler line emitted by
+            // the builds/re-tiles below is tagged [stream] vs [static] — the shared
+            // capture mixes "scrolling a finished transcript" with "live generation"
+            // and they need opposite fixes.
+            if streamingUpdate {
+                profiler.noteStreamingActivity()
+                TranscriptInteractionGate.noteStreaming()
+            }
+#if DEBUG
+            if streamingUpdate { maybeRunStreamScrollTest() }
+#endif
+
             self.items = items
             itemByID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             let nextRevisions = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.contentRevision) })
@@ -1136,15 +1487,29 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 streamingUpdate ? "streaming" : nil,
                 explicitScroll ? "explicitScroll" : nil
             ].compactMap { $0 }.joined(separator: "+")
-            TranscriptScrollProfiler.logger.error("apply work — trigger: \(trigger, privacy: .public)")
+            if TranscriptScrollProfiler.verboseTrace {
+                TranscriptScrollProfiler.logger.error("apply work — trigger: \(trigger, privacy: .public)")
+            }
 #endif
 
             if isSessionSwitch || idsChanged {
                 let anchor = (!isSessionSwitch && !explicitScroll && !wasFollowing) ? captureScrollAnchor() : nil
+#if DEBUG
+                let coldT0 = isSessionSwitch ? CACurrentMediaTime() : 0
+                let coldCacheBefore = isSessionSwitch ? cellCache.count : 0
+#endif
                 if isSessionSwitch {
                     pendingHeightIDs.removeAll()
                     pendingHeightWork?.cancel()
                     pendingHeightWork = nil
+                    pendingRemeasureWork?.cancel()
+                    pendingRemeasureWork = nil
+                    pendingRemeasureIDs.removeAll()
+                    // A new session's rows may have completely different
+                    // construction costs; clear the block list so rows that
+                    // were too expensive in the previous session get a fresh
+                    // evaluation.
+                    prewarmBlockedIDs.removeAll()
                 }
                 let previousIDs = Set(orderedIDs)
                 let removedIDs = previousIDs.subtracting(nextIDs)
@@ -1200,6 +1565,16 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     // Rows were added/removed (or the session switched) — content
                     // geometry genuinely moved, so passive follow may act on it.
                     self.handleScrollAfterUpdate(isSessionSwitch: isSessionSwitch, explicitScroll: explicitScroll, wasFollowing: wasFollowing, contentAdvanced: true)
+#if DEBUG
+                    if isSessionSwitch {
+                        let ms = (CACurrentMediaTime() - coldT0) * 1000
+                        let built = self.cellCache.count - coldCacheBefore
+                        TranscriptScrollProfiler.fileLog("COLDSTART session=\(self.sessionID?.uuidString.prefix(8) ?? "?") rows=\(self.orderedIDs.count) builtCells=\(built) ms=\(String(format: "%.0f", ms))")
+                    }
+#endif
+                    // Build off-screen cells during idle so scrolling never pays
+                    // the per-row construction cost (the dominant scroll hitch).
+                    self.schedulePrewarm()
                 }
             } else {
                 let changedIDs = nextIDs.filter { contentRevisionByID[$0] != nextRevisions[$0] }
@@ -1275,7 +1650,133 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             lastBottomScrollRequest = bottomScrollRequest
             tableView.sizeLastColumnToFit()
             maybeStartScrollBenchmark()
+#if DEBUG
+            if isSessionSwitch { buildBenchDone = false; scrollProbeDone = false }
+            maybeRunBuildBench()
+            maybeRunScrollProbe()
+#endif
         }
+
+#if DEBUG
+        // Reproduces the user's actual scenario: REAL simulated scrolling (the bench
+        // scroll driver scrolls the clip view without the programmatic flag, so the
+        // bounds observer treats it as a genuine user scroll) WHILE StreamSim streams.
+        // Measures (a) HangWatchdog hitches during the stream+scroll window and (b)
+        // viewport drift after the scroll stops (glide-yank check).
+        //   defaults write streetcoding.agent-deck StreamScrollTestEnabled -bool YES
+        private var streamScrollTestDone = false
+        private func maybeRunStreamScrollTest() {
+            guard !streamScrollTestDone,
+                  UserDefaults.standard.bool(forKey: "StreamScrollTestEnabled"),
+                  scrollView != nil, orderedIDs.count > 20 else { return }
+            streamScrollTestDone = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                guard let self, let scrollView = self.scrollView else { return }
+                // Scroll UP 600px as a genuine user scroll (no programmatic flag, so
+                // the bounds observer registers it and sets isAutoFollowing=false).
+                guard let tableView = self.tableView else { return }
+                let clip = scrollView.contentView
+                let target = max(0, clip.bounds.origin.y - 600)
+                clip.scroll(to: NSPoint(x: 0, y: target)); scrollView.reflectScrolledClipView(clip)
+                // Record the top-visible ROW + its offset on screen — the true "is the
+                // content I'm reading holding still" signal (origin.y alone drifts as
+                // the document grows above/below, which is benign).
+                let topRow = tableView.row(at: NSPoint(x: 0, y: clip.bounds.origin.y + 4))
+                let topID = (topRow >= 0 && topRow < self.orderedIDs.count) ? self.orderedIDs[topRow] : ""
+                let topOffset0 = topRow >= 0 ? clip.bounds.origin.y - tableView.rect(ofRow: topRow).minY : 0
+                let h0 = HangWatchdog.hitchCount
+                HangWatchdog.worstHitchMs = 0
+                let upd0 = TranscriptScrollProfiler.bodyCallCount("updateNSView")
+                let rev0 = self.lastStreamingRevision
+                TranscriptScrollProfiler.fileLog("STREAMSCROLL away topID=\(topID.suffix(6)) following=\(self.isAutoFollowing) — holding 4s while streaming")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+                    guard let self, let tableView = self.tableView, let clip = self.scrollView?.contentView else { return }
+                    let rowNow = self.orderedIDs.firstIndex(of: topID) ?? -1
+                    let topOffset1 = rowNow >= 0 ? clip.bounds.origin.y - tableView.rect(ofRow: rowNow).minY : -99999
+                    let visualShift = Int(topOffset1 - topOffset0)
+                    let updates = TranscriptScrollProfiler.bodyCallCount("updateNSView") - upd0
+                    let pulses = self.lastStreamingRevision - rev0
+                    TranscriptScrollProfiler.fileLog("STREAMSCROLL end updateNSView-calls=\(updates) streamPulsesSeen=\(pulses) hitches=\(HangWatchdog.hitchCount - h0) worstHitch=\(HangWatchdog.worstHitchMs)ms VISUAL-SHIFT=\(visualShift)px")
+                }
+            }
+        }
+
+        private var scrollProbeDone = false
+        /// Deterministic per-session scroll probe: on each session switch, if the
+        /// session is big enough to be interesting, wait for pre-warm to settle then
+        /// run one scroll pass. The profiler gesture summary (with the rows= finger-
+        /// print) captures hitches + hostCreate, so the SAME heavy session can be
+        /// compared pre-warm ON vs OFF just by cycling sessions with Cmd-].
+        ///   defaults write streetcoding.agent-deck ScrollProbeEnabled -bool YES
+        private func maybeRunScrollProbe() {
+            guard !scrollProbeDone,
+                  UserDefaults.standard.bool(forKey: "ScrollProbeEnabled"),
+                  tableView != nil, orderedIDs.count > 25 else { return }
+            scrollProbeDone = true
+            probeWhenPrewarmed(attempt: 0)
+        }
+
+        private func probeWhenPrewarmed(attempt: Int) {
+            // Wait for the idle pre-warm to drain (ON case) so the probe scrolls a
+            // fully-warmed session; OFF case has nothing pending and proceeds. Cap
+            // the wait so a stuck queue can't block the probe forever.
+            if !Self.prewarmDisabled, (prewarmScheduled || !prewarmQueue.isEmpty), attempt < 30 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                    self?.probeWhenPrewarmed(attempt: attempt + 1)
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self, self.orderedIDs.count > 25 else { return }
+                self.updateBenchFingerprint()
+                self.profiler.setBenchTag("probe")
+                self.runScrollPass(duration: 4.0, step: 40) { [weak self] in
+                    self?.profiler.setBenchTag(nil)
+                }
+            }
+        }
+#endif
+
+#if DEBUG
+        private var buildBenchDone = false
+        /// Deterministic construction microbenchmark: build EVERY row's cell of the
+        /// current session once (into the cache, off the scroll path) and report
+        /// total + worst construction cost. Repeatable on the same restored session,
+        /// so it isolates the cell-build fix from scroll/session-order noise.
+        ///   defaults write streetcoding.agent-deck BuildBenchEnabled -bool YES
+        private func maybeRunBuildBench() {
+            guard !buildBenchDone,
+                  UserDefaults.standard.bool(forKey: "BuildBenchEnabled"),
+                  tableView != nil, orderedIDs.count > 5 else { return }
+            buildBenchDone = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in self?.runBuildBench() }
+        }
+
+        private func runBuildBench() {
+            guard let tableView else { return }
+            // Drop any cached cells so this measures cold construction of the whole
+            // session, not just the rows that haven't been vended yet.
+            cellCache.removeAll(); cellCacheLRU.removeAll()
+            let ids = orderedIDs
+            let t0 = CACurrentMediaTime()
+            var total = 0.0
+            var built = 0
+            for (row, id) in ids.enumerated() {
+                guard let item = itemByID[id] else { continue }
+                let cell = cachedCell(for: id)
+                let s = CACurrentMediaTime()
+                configure(cell, with: item, row: row, via: "buildbench")
+                total += (CACurrentMediaTime() - s) * 1000
+                built += 1
+            }
+            let wall = (CACurrentMediaTime() - t0) * 1000
+            let line = "BUILDBENCH cells=\(built) total=\(String(format: "%.0f", total))ms wall=\(String(format: "%.0f", wall))ms session=\(self.sessionID?.uuidString.prefix(8) ?? "?") rows=\(ids.count)"
+            TranscriptScrollProfiler.logger.error("\(line, privacy: .public)")
+            TranscriptScrollProfiler.fileLog(line)
+            // Force a redisplay so the table isn't left showing stale cached cells.
+            tableView.reloadData()
+        }
+#endif
 
         // MARK: - Scroll benchmark (multi-session)
 
@@ -1371,6 +1872,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 benchActive = false
                 benchPhase = .idle
                 TranscriptScrollProfiler.logger.info("SCROLLBENCH COMPLETE — tested \(self.benchSessionsTested) session(s); see per-gesture summaries above")
+                TranscriptScrollProfiler.fileLog("SCROLLBENCH COMPLETE tested=\(benchSessionsTested)")
                 return
             }
             benchPhase = .advancing
@@ -1443,6 +1945,12 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             let width = currentViewportWidth()
             guard abs(width - contentWidth) > 0.5 else { return }
             contentWidth = width
+            lastWidthChangeTime = CACurrentMediaTime()
+            prewarmQueue.removeAll()
+            // Width changes can alter which rows are expensive to build (text
+            // reflow changes block count), so clear the block list and let
+            // rows be re-evaluated at the new width.
+            prewarmBlockedIDs.removeAll()
             tableView.tableColumns.first?.width = width
             // Re-fit the table to the clip view so the document view shrinks
             // with it. Setting only the column width leaves the table's own
@@ -1483,7 +1991,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                       let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? TranscriptTableCellView else { continue }
                 // configure() is a no-op when nothing's changed; otherwise the cell
                 // measures itself and reports a new height via onHeightChanged.
-                configure(cell, with: item, row: row)
+                configure(cell, with: item, row: row, via: "snapshot-reconfig")
             }
         }
 
@@ -1496,32 +2004,102 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 guard ids.contains(id),
                       let item = itemByID[id],
                       let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? TranscriptTableCellView else { continue }
-                configure(cell, with: item, row: row)
+                configure(cell, with: item, row: row, via: "stream-reconfig")
             }
         }
 
-        /// Force-lay-out the freshly-reconfigured visible cells for `ids` and
-        /// write their true heights into `measuredHeightByID` synchronously, so a
-        /// re-tile issued in this same pass uses the new content height. Returns
-        /// the ids whose tiled height actually needs to change.
-        private func measureChangedCellsSynchronously(_ ids: Set<String>) -> Set<String> {
+        /// Force-lay-out freshly-reconfigured visible cells for `ids` and write
+        /// their true heights into `measuredHeightByID` synchronously, so a re-tile
+        /// issued in this same pass uses the new content height. The pinned
+        /// streaming path passes a tiny budget and bottom-first ordering: measure
+        /// the newest visible changed row to preserve anti-wobble, then let any
+        /// remaining rows settle through the normal async height-report path.
+        /// Returns the ids whose tiled height actually needs to change.
+        private func measureChangedCellsSynchronously(
+            _ ids: Set<String>,
+            budgetMs: Double? = nil,
+            maxRows: Int? = nil,
+            deferUnmeasured: Bool = false
+        ) -> Set<String> {
             guard let tableView, !ids.isEmpty else { return [] }
             let visible = tableView.rows(in: tableView.visibleRect)
             guard visible.length > 0 else { return [] }
+            let visibleRows = (visible.location ..< visible.location + visible.length)
+                .filter { $0 < orderedIDs.count && ids.contains(orderedIDs[$0]) }
+                .sorted(by: >)
+            guard !visibleRows.isEmpty else { return [] }
+
             var needRetile = Set<String>()
-            for row in visible.location ..< visible.location + visible.length where row < orderedIDs.count {
+            var deferredIDs = Set<String>()
+            let streaming = profiler.isStreamingRecently
+            let start = CACurrentMediaTime()
+            var measuredCount = 0
+
+            for row in visibleRows {
                 let id = orderedIDs[row]
-                guard ids.contains(id),
-                      let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? TranscriptTableCellView else { continue }
+                if let maxRows, measuredCount >= maxRows {
+                    deferredIDs.insert(id)
+                    continue
+                }
+                if measuredCount > 0, let budgetMs,
+                   (CACurrentMediaTime() - start) * 1000 >= budgetMs {
+                    deferredIDs.insert(id)
+                    continue
+                }
+                guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? TranscriptTableCellView else { continue }
                 let h = cell.forcedIntrinsicHeight()
+                measuredCount += 1
                 guard h > 0 else { continue }
-                let height = ceil(h)
+                var height = ceil(h)
+                let previousTiled = lastNotedHeight[id] ?? -1
+                // Streaming content only grows; a measured height that comes back
+                // shorter than the last tile is a TextKit/measurement artifact
+                // (cold double-pass disagreement, settle-loop wobble) and must not
+                // be allowed to yank the row upward.
+                if streaming, previousTiled > 0 {
+                    height = max(height, previousTiled)
+                }
+#if DEBUG
+                // Smoking-gun: the streaming row's tiled height per token, folded
+                // with the measure path that produced it (set inside forcedIntrinsic
+                // → markdown measureHeight just above). A Δ<0 here = visible wobble.
+                TranscriptStreamWobbleProbe.shared.noteTile(
+                    id: id, height: height, previousTiled: previousTiled,
+                    width: contentWidth, pinned: true, gliding: followGlideTimer != nil, source: "sync")
+#endif
                 measuredHeightByID[id, default: [:]][widthBucket] = height
-                if abs((lastNotedHeight[id] ?? -1) - height) > heightChangeEpsilon {
+                if abs(previousTiled - height) > heightChangeEpsilon {
                     needRetile.insert(id)
                 }
             }
+
+            if deferUnmeasured, !deferredIDs.isEmpty {
+                scheduleVisibleHeightRemeasure(forIDs: deferredIDs)
+            }
             return needRetile
+        }
+
+        private func scheduleVisibleHeightRemeasure(forIDs ids: Set<String>) {
+            guard !ids.isEmpty else { return }
+            pendingRemeasureIDs.formUnion(ids)
+            guard pendingRemeasureWork == nil else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                let ids = self.pendingRemeasureIDs
+                self.pendingRemeasureIDs.removeAll()
+                self.pendingRemeasureWork = nil
+                guard !self.isUserScrollingRecently else {
+                    self.scheduleVisibleHeightRemeasure(forIDs: ids)
+                    return
+                }
+                let retileIDs = self.measureChangedCellsSynchronously(ids, budgetMs: 5, deferUnmeasured: true)
+                guard !retileIDs.isEmpty else { return }
+                self.flushPendingHeightWorkSynchronously()
+                self.noteHeightsChanged(forIDs: retileIDs)
+            }
+            pendingRemeasureWork = work
+            let delay = isUserScrollingRecently ? 0.05 : heightReportInterval
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
         }
 
         private func reconfigureAllVisibleCells() {
@@ -1536,18 +2114,18 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 // new width's bucket fills in on its own as the cell re-measures
                 // and reports. Only the transient estimate is cleared.
                 estimateByID.removeValue(forKey: id)
-                configure(cell, with: item, row: row)
+                configure(cell, with: item, row: row, via: "width-reconfig")
             }
         }
 
-        private func configure(_ cell: TranscriptTableCellView, with item: PiAgentAppKitTranscriptItem, row: Int) {
+        private func configure(_ cell: TranscriptTableCellView, with item: PiAgentAppKitTranscriptItem, row: Int, via: String = "scroll-vend") {
             let width = currentViewportWidth()
             // Each cell owns its own NSHostingView for its lifetime. Recycling
             // a cell for a new item just swaps the host's rootView — never
             // detaches the host. That's what keeps multiple visible cells from
             // ever contending for a single shared host (the bug fixed here).
             profiler.noteConfigure()
-            cell.installRootView(item: item, width: width, profiler: profiler)
+            cell.installRootView(item: item, width: width, profiler: profiler, via: via)
             // No measurement here — the cell reports its real height via
             // `onMeasuredHeight` once it lays out. Until then `heightOfRow`
             // serves the char-count estimate (or a cached real height).
@@ -1583,11 +2161,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // wrote ~56 over the card's real 157 during a switch). Drop them; the
             // id's next live cell re-reports through this same path.
             guard itemByID[itemID] != nil else { return }
-            let height = ceil(rawHeight)
+            var height = ceil(rawHeight)
             let bucket = widthBucket
             let priorMeasured = measuredHeightByID[itemID]?[bucket]
-            measuredHeightByID[itemID, default: [:]][bucket] = height
-            estimateByID.removeValue(forKey: itemID)
             // Re-tile only when AppKit's *laid-out* height is genuinely stale.
             // The baseline is what the table currently has tiled (lastNotedHeight),
             // not the cache — falling back to the prior measurement, then the
@@ -1595,6 +2171,21 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // spurious noteHeightOfRows whenever the cache shifted without the
             // laid-out height actually changing.
             let baseline = lastNotedHeight[itemID] ?? priorMeasured ?? estimatedRowHeight
+            // Streaming content only grows; clamp the async reported height to the
+            // last real measurement so a late-settle measure cannot pull the row up.
+            // Never clamp against the rough `estimatedRowHeight` for a brand-new row.
+            if profiler.isStreamingRecently, let clampBase = lastNotedHeight[itemID] ?? priorMeasured {
+                height = max(height, clampBase)
+            }
+            measuredHeightByID[itemID, default: [:]][bucket] = height
+            estimateByID.removeValue(forKey: itemID)
+#if DEBUG
+            // Same smoking-gun line for the debounced async path (rows that aren't
+            // force-measured while pinned, e.g. when not auto-following).
+            TranscriptStreamWobbleProbe.shared.noteTile(
+                id: itemID, height: height, previousTiled: baseline,
+                width: contentWidth, pinned: isAutoFollowing, gliding: followGlideTimer != nil, source: "async")
+#endif
             let delta = abs(baseline - height)
             guard delta > heightChangeEpsilon else { return }
             pendingHeightIDs.insert(itemID)
@@ -1731,8 +2322,16 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 guard visible.length > 0 else { return }
                 var ids = Set<String>()
                 for row in visible.location ..< visible.location + visible.length where row < orderedIDs.count {
-                    ids.insert(orderedIDs[row])
+                    let id = orderedIDs[row]
+                    // Skip rows whose height is already measured for this width (the
+                    // idle pre-warm measures every cell). Re-measuring them forces a
+                    // full layout pass per heavy markdown cell — the dominant cost of
+                    // re-opening a long session whose cells are already cached. A
+                    // cached height is authoritative, so the first frame stays exact.
+                    if measuredHeightByID[id]?[widthBucket] == nil { ids.insert(id) }
                 }
+                // All visible heights known (pre-warmed revisit) — already settled.
+                guard !ids.isEmpty else { return }
                 let retileIDs = measureChangedCellsSynchronously(ids)
                 guard !retileIDs.isEmpty else { return }
                 flushPendingHeightWorkSynchronously()
@@ -1791,6 +2390,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 isAutoFollowing = true
                 pendingScrollWork?.cancel()
                 pendingScrollWork = nil
+                pendingGlideLandingSettleWork?.cancel()
+                pendingGlideLandingSettleWork = nil
                 pendingScrollSettle = false
                 performScrollToBottom(scrollView, animated: false)
                 settleVisibleRowsAfterSessionSwitch()
@@ -1813,7 +2414,17 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         }
 
         private func scrollToBottom(settle: Bool) {
+            if settle {
+                pendingGlideLandingSettleWork?.cancel()
+                pendingGlideLandingSettleWork = nil
+            }
             pendingScrollSettle = pendingScrollSettle || settle
+            // While the passive streaming glide is already following, additional
+            // non-settle requests do not need even a runloop-hop work item. The
+            // timer re-reads the current document height each frame, so new tokens
+            // are naturally coalesced into that in-flight glide. Explicit settle
+            // requests still pierce through and snap to the authoritative bottom.
+            if !settle, followGlideTimer != nil { return }
             guard pendingScrollWork == nil else { return }
             let work = DispatchWorkItem { [weak self] in
                 guard let self, let scrollView = self.scrollView else { return }
@@ -1823,22 +2434,22 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 // Re-check at fire time: this item runs a runloop hop after it
                 // was scheduled, and the user may have grabbed the scroll in
                 // between. Explicit jumps (settle) still win; the passive follow
-                // yields — its glide would be stopped by the next user tick
-                // anyway, but only after paying the height flush + full-document
-                // layout in performScrollToBottom mid-gesture.
+                // yields without paying a synchronous height flush or full-document
+                // layout mid-gesture.
                 if !shouldSettle, self.isUserScrollingRecently { return }
-                // Streaming follow (settle == false) glides; explicit / session
-                // switch (settle == true) snaps.
-                self.performScrollToBottom(scrollView, animated: !shouldSettle)
+                // Streaming follow (settle == false) glides using current geometry;
+                // explicit settle/session-switch paths snap after an authoritative
+                // height flush + layout.
+                self.performScrollToBottom(scrollView, animated: !shouldSettle, forceLayout: shouldSettle)
                 guard shouldSettle else { return }
                 self.pendingSettleScrollWork?.cancel()
                 let settleWork = DispatchWorkItem { [weak self] in
                     guard let self, let scrollView = self.scrollView else { return }
                     self.pendingSettleScrollWork = nil
-                    // Don't force a re-measure here — pre-measurement and the synchronous
-                    // height-work flush inside performScrollToBottom mean heights are already
-                    // accurate. Re-measuring would risk a small secondary scroll jump.
-                    self.performScrollToBottom(scrollView, animated: false)
+                    // The delayed settle is explicit: pay the synchronous flush once
+                    // here so jump-to-latest/send lands on the true bottom after any
+                    // pending cell measurements have arrived.
+                    self.performScrollToBottom(scrollView, animated: false, forceLayout: true)
                 }
                 self.pendingSettleScrollWork = settleWork
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: settleWork)
@@ -1847,46 +2458,29 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             DispatchQueue.main.async(execute: work)
         }
 
-        private func performScrollToBottom(_ scrollView: NSScrollView, animated: Bool) {
+        private func performScrollToBottom(_ scrollView: NSScrollView, animated: Bool, forceLayout: Bool = true) {
             guard let documentView = scrollView.documentView else { return }
             // An auto-follow glide already eases toward the (growing) bottom every
-            // frame and re-reads the document height as it goes, so re-running the
-            // synchronous height flush + full-document `layoutSubtreeIfNeeded` here
-            // on every streaming re-tile is wasted work (this was the steady ~33ms
-            // streaming hitch). Skip it while a glide is in flight; `stepFollowGlide`
-            // forces an authoritative layout before it ever stops, so the glide
-            // cannot settle above the true bottom even if these ticks are skipped.
+            // frame and re-reads the document height as it goes, so repeated
+            // streaming requests should collapse into that in-flight timer instead
+            // of flushing heights or forcing full-document layout.
             if animated, followGlideTimer != nil { return }
-            // Cheap pre-check: when no height work is pending (so the content
-            // height is already settled) and the current bounds already place us at
-            // the bottom, skip the forced flush + full-document layout below. This
-            // is the common case for auto-follow glide ticks and bounds-callback
-            // re-checks — running `layoutSubtreeIfNeeded()` there cost a full layout
-            // pass (~50ms on large transcripts) just to confirm we hadn't moved.
-            if pendingHeightIDs.isEmpty {
-                let clipView = scrollView.contentView
-                let maxY = max(0, documentView.bounds.height - clipView.bounds.height)
-                if abs(clipView.bounds.origin.y - maxY) <= 1 {
-                    stopFollowGlide()
-                    publishPinnedState(true)
-                    return
-                }
-            }
-            // Flush any debounced height work and force a layout pass so the documentView's
-            // bounds reflect current row heights. Without this, the math below uses stale
-            // heights and ends up scrolling short of the true bottom — which crops the last
-            // assistant message during streaming.
-            flushPendingHeightWorkSynchronously()
-            documentView.layoutSubtreeIfNeeded()
-            let maxY = max(0, documentView.bounds.height - scrollView.contentView.bounds.height)
             let clipView = scrollView.contentView
+            if forceLayout {
+                // Explicit settle/session-switch paths need authoritative geometry.
+                // Keep this synchronous work out of normal streaming auto-follow,
+                // where samples showed it repeatedly forcing full document layout.
+                flushPendingHeightWorkSynchronously()
+                documentView.layoutSubtreeIfNeeded()
+            }
+            let maxY = max(0, documentView.bounds.height - clipView.bounds.height)
             guard abs(clipView.bounds.origin.y - maxY) > 1 else {
-                stopFollowGlide()
+                if !animated { stopFollowGlide() }
                 publishPinnedState(true)
                 return
             }
             // Streaming follow: hand off to the glide timer, which eases toward the
-            // (still-growing) bottom over the next frames instead of snapping.
+            // current bottom and picks up future height changes on later ticks.
             if animated {
                 startFollowGlide()
                 return
@@ -1904,7 +2498,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// frame. Idempotent — if a glide is already running it simply continues
         /// and naturally picks up the new, larger bottom on its next tick.
         private func startFollowGlide() {
-            guard followGlideTimer == nil else { return }
+            // Never start a glide when auto-follow is disengaged — the caller's
+            // intent check and this guard together ensure the glide can only run
+            // while the reader is actually pinned to the bottom.
+            guard followGlideTimer == nil, isAutoFollowing else { return }
             let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated {
                     // self is nil only after the coordinator tore down, which
@@ -1927,6 +2524,16 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 stopFollowGlide()
                 return
             }
+            // Auto-follow is disengaged (the user scrolled away from the bottom) —
+            // the glide must NEVER move the viewport, even if a stale timer is still
+            // ticking or the user paused long enough for the scroll grace window to
+            // lapse. Without this, a streaming re-tile lets the glide ease back to
+            // the bottom and yanks the reader down: the "scroll against the stream
+            // makes it jump" bug.
+            guard isAutoFollowing else {
+                stopFollowGlide()
+                return
+            }
             let clipView = scrollView.contentView
             // Cheap path: ease using the current (possibly slightly stale during a
             // streaming re-tile) document height. The authoritative confirm below
@@ -1942,33 +2549,54 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 isProgrammaticScroll = false
                 return
             }
-            // Looks settled — but the height may be stale if a streaming re-tile has
-            // not laid out yet. Force the pending height work + a layout once here
-            // (cheap: only at the landing, not per tick) to confirm the TRUE bottom
-            // before stopping. If content grew under us, keep gliding toward it; this
-            // is what guarantees the glide never settles above the last line, even
-            // though `performScrollToBottom` skips its layout while we run.
-            flushPendingHeightWorkSynchronously()
-            documentView.layoutSubtreeIfNeeded()
-            let trueMaxY = max(0, documentView.bounds.height - clipView.bounds.height)
-            let trueGap = trueMaxY - clipView.bounds.origin.y
-            guard abs(trueGap) > 0.5 else {
-                if abs(trueGap) > 0.01 {
-                    isProgrammaticScroll = true
-                    clipView.scroll(to: NSPoint(x: 0, y: trueMaxY))
-                    scrollView.reflectScrolledClipView(clipView)
-                    isProgrammaticScroll = false
-                }
-                stopFollowGlide()
-                publishPinnedState(true)
-                return
-            }
-            let nextY = clipView.bounds.origin.y + trueGap * followGlideFactor
-            isProgrammaticScroll = true
-            clipView.scroll(to: NSPoint(x: 0, y: nextY))
-            scrollView.reflectScrolledClipView(clipView)
-            isProgrammaticScroll = false
+            // Looks settled against the geometry AppKit has already produced.
+            // Do not force pending height work or document layout here: during
+            // streaming this landing check can happen for every token batch, and
+            // samples showed that synchronous full-document layout dominating the
+            // main thread. If height work is still pending, schedule one deferred
+            // authoritative snap after streaming goes quiet so the glide cannot
+            // remain permanently short of the final measured bottom.
+#if DEBUG
+            TranscriptStreamWobbleProbe.shared.noteGlideLanding(
+                trueGap: gap, docHeight: documentView.bounds.height, clipHeight: clipView.bounds.height)
+#endif
+            scheduleGlideLandingSettleIfNeeded()
+            stopFollowGlide()
+            publishPinnedState(true)
+            return
         }
+
+        private func scheduleGlideLandingSettleIfNeeded(
+            delay: TimeInterval = 0.12,
+            requirePendingHeightWork: Bool = true
+        ) {
+            guard pendingGlideLandingSettleWork == nil,
+                  !requirePendingHeightWork || pendingHeightWork != nil || !pendingHeightIDs.isEmpty else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.pendingGlideLandingSettleWork = nil
+                guard self.isAutoFollowing, !self.isUserScrollingRecently else { return }
+                // While tokens are still arriving, keep deferring instead of
+                // turning the landing check back into a per-token forced layout.
+                // Preserve the one requested settle even if the original pending
+                // height work drained meanwhile; the point is to confirm the final
+                // measured bottom after the stream goes quiet.
+                if self.profiler.isStreamingRecently {
+                    self.scheduleGlideLandingSettleIfNeeded(delay: 0.2, requirePendingHeightWork: false)
+                    return
+                }
+                guard let scrollView = self.scrollView else { return }
+                self.performScrollToBottom(scrollView, animated: false, forceLayout: true)
+            }
+            pendingGlideLandingSettleWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        }
+
+        /// Forwarded to the render cache (via the host) to gate streaming pulses
+        /// while the reader is scrolled away from the bottom. Set in `updateNSView`.
+        /// Driven entirely by the `isAutoFollowing` didSet, so every transition
+        /// (user scroll away, return to bottom, send, session switch) is covered.
+        var onScrollingChange: ((Bool) -> Void)?
 
         private func stopFollowGlide() {
             followGlideTimer?.invalidate()
@@ -2089,10 +2717,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
         /// Configure the cell for an item. Every row is native; the spec's view is
         /// built/reused and pinned to the cell with the row insets.
-        func installRootView(item: PiAgentAppKitTranscriptItem, width: CGFloat, profiler: TranscriptScrollProfiler? = nil) {
+        func installRootView(item: PiAgentAppKitTranscriptItem, width: CGFloat, profiler: TranscriptScrollProfiler? = nil, via: String = "scroll-vend") {
             self.profiler = profiler
             guard case .native(let spec) = item.kind else { return }
-            installNativeRow(spec: spec, item: item, width: width)
+            installNativeRow(spec: spec, item: item, width: width, via: via)
         }
 
         /// Tear down the native row view (when a recycled cell switches to a
@@ -2112,19 +2740,28 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// Native render path: build/configure the spec's view pinned to the cell
         /// with the row insets, rebuilding if the recycled cell held a different
         /// view type.
-        private func installNativeRow(spec: NativeRowSpec, item: PiAgentAppKitTranscriptItem, width: CGFloat) {
+        private func installNativeRow(spec: NativeRowSpec, item: PiAgentAppKitTranscriptItem, width: CGFloat, via: String = "scroll-vend") {
             // A recycled cell holding a different native view type must rebuild it.
             if let existingType = nativeRowTypeID, existingType != spec.typeID {
                 teardownNativeRow()
             }
             let row: NSView
             let createdNow: Bool
+#if DEBUG
+            var makeMs = 0.0
+#endif
             if let existing = nativeRow {
                 row = existing
                 createdNow = false
             } else {
                 createdNow = true
+#if DEBUG
+                let t0 = CACurrentMediaTime()
                 row = spec.make()
+                makeMs = (CACurrentMediaTime() - t0) * 1000
+#else
+                row = spec.make()
+#endif
                 row.translatesAutoresizingMaskIntoConstraints = false
                 addSubview(row)
                 // Full-width row; the view sizes/positions its own content.
@@ -2169,19 +2806,43 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             let revisionChanged = itemChanged || configuredRevision != item.contentRevision
             let widthChanged = abs(configuredWidth - width) > 0.5
             if revisionChanged || widthChanged {
+#if DEBUG
+                // DEBUG-only attribution of the build cost — fresh-view construction
+                // + the markdown configure (reconcile vs full rebuild). This is the
+                // scroll/stream hitch the other profiler hooks never wrapped (it runs
+                // inside the table's cell-provider closure). Compiled out of release.
+                if let profiler {
+                    profiler.measureCellBuild(id: item.id, fresh: createdNow, makeMs: makeMs, via: via) {
+                        let seqBefore = NativeMarkdownTextContainer.configureSeq
+                        spec.configure(row, width)
+                        // Only trust the markdown attribution if a build actually
+                        // ran this vend (seq advanced) — a non-markdown row leaves
+                        // the statics stale, so report nil instead of mislabeling.
+                        guard NativeMarkdownTextContainer.configureSeq != seqBefore else { return nil }
+                        return (NativeMarkdownTextContainer.lastConfigureWasRebuild,
+                                NativeMarkdownTextContainer.lastConfigureBlockCount)
+                    }
+                } else {
+                    spec.configure(row, width)
+                }
+#else
                 spec.configure(row, width)
+#endif
                 lastIntrinsicHeight = -1
             }
-            // `settle` is the immediate layout pass that stops a layer painting at a
-            // stale position. With per-item cells (one cell per id, never recycled to a
-            // different item) there is no stale recycled position to fix on a fresh
-            // build — and forcing the layout here would lay out rows that scroll past
-            // before they're ever displayed, the dominant cold-scroll cost. So skip it
-            // on first build (`createdNow`) and on streaming appends (same id/width),
-            // running it only when an already-displayed cell changes geometry (width or
-            // inset). The cell still lays out + reports its real height naturally via
-            // `layout()` when AppKit displays it.
-            if !createdNow && (widthChanged || insetChanged) {
+            // `settle` is the immediate layout pass that stops a layer-backed row
+            // painting at a stale position. Rows can be vended on cells that AppKit
+            // recycled from another item of the same native view type; that path keeps
+            // the view (`createdNow == false`) but swaps content at the same width. Settle
+            // first paint for any real content row after creation or item reuse, plus
+            // later geometry changes. Spacers have no visible geometry to correct.
+            // Skip for offscreen prewarm: the row is not on screen so there is no
+            // stale paint to correct, and the layout cost (up to 60ms for heavy rows)
+            // is wasted work that stalls the main thread during idle pre-warm slices.
+            // The cell will lay out naturally when it scrolls into view.
+            let hasVisibleNativeGeometry = spec.typeID != ObjectIdentifier(PiAgentNativeSpacerView.self)
+            let needsInitialSettle = hasVisibleNativeGeometry && (createdNow || itemChanged)
+            if via != "prewarm", needsInitialSettle || (!createdNow && (widthChanged || insetChanged)) {
                 spec.settle(row)
             }
             configuredItemID = item.id
@@ -2274,11 +2935,17 @@ private extension PiAgentTranscriptThread {
 /// list can never go stale: a real change to any of them differs the inputs and
 /// forces a rebuild. Bindings and callbacks are intentionally excluded from `==`.
 private struct SessionListContent: View, Equatable {
-    let visibleSessions: [PiAgentSessionRecord]
+    let sections: [PiAgentSessionListSection]
+    /// Render per-project group headers. False for the single-project scoped
+    /// view, which renders one anonymous section identical to the pre-grouping
+    /// flat layout.
+    let isGrouped: Bool
     let selectedSessionIDs: Set<UUID>
     let renamingSessionID: UUID?
     let workingSessionIDs: Set<UUID>
+    let uiRequestSessionIDs: Set<UUID>
     let generatingTitleIDs: Set<UUID>
+    let activeLoopSessionIDs: Set<UUID>
     let activityByID: [UUID: PiAgentSessionGitActivity]
     /// Snapshot of `scrollRequest`'s value at construction, compared in `==`.
     /// The binding itself can't be compared: both sides read the same live
@@ -2294,16 +2961,28 @@ private struct SessionListContent: View, Equatable {
     let onBeginRename: (PiAgentSessionRecord) -> Void
     let onEndRename: () -> Void
     let onRename: (UUID, String) -> Void
-    let onTogglePinned: (UUID) -> Void
     let onDelete: (UUID) -> Void
+    /// Toggle a project group's "Show more/less" state.
+    let onToggleExpand: (String) -> Void
+    /// Toggle a project group's disclosure collapse (header-only / expanded).
+    let onToggleCollapse: (String) -> Void
+    /// Start a new session scoped to the given project path. No-op for the
+    /// catch-all "Other" group (it has no resolvable project).
+    let onCreateSessionForProject: (String) -> Void
+    /// Arrow-key navigation (↑/↓), routed through the same view-model path as
+    /// ⌘]/⌘[ so both follow the grouped list with auto-reveal. `nil` disables
+    /// arrows (lists that don't need keyboard nav).
+    var onArrowNavigate: ((MoveCommandDirection) -> Void)? = nil
 
     static func == (lhs: SessionListContent, rhs: SessionListContent) -> Bool {
         let diff: String?
-        if lhs.visibleSessions != rhs.visibleSessions { diff = "visibleSessions" }
+        if lhs.sections != rhs.sections { diff = "sections" }
         else if lhs.selectedSessionIDs != rhs.selectedSessionIDs { diff = "selectedSessionIDs" }
         else if lhs.renamingSessionID != rhs.renamingSessionID { diff = "renamingSessionID" }
         else if lhs.workingSessionIDs != rhs.workingSessionIDs { diff = "workingSessionIDs" }
+        else if lhs.uiRequestSessionIDs != rhs.uiRequestSessionIDs { diff = "uiRequestSessionIDs" }
         else if lhs.generatingTitleIDs != rhs.generatingTitleIDs { diff = "generatingTitleIDs" }
+        else if lhs.activeLoopSessionIDs != rhs.activeLoopSessionIDs { diff = "activeLoopSessionIDs" }
         else if lhs.activityByID != rhs.activityByID { diff = "activityByID" }
         // A pending scroll request must defeat the equatable gate, or the
         // inner AppList's onChange never sees the new value and the jump to
@@ -2311,7 +2990,7 @@ private struct SessionListContent: View, Equatable {
         else if lhs.scrollRequestID != rhs.scrollRequestID { diff = "scrollRequest" }
         else { diff = nil }
 #if DEBUG
-        if let diff {
+        if let diff, TranscriptScrollProfiler.verboseTrace {
             if diff == "selectedSessionIDs" {
                 // Selection churn with no user click has shown up in scroll
                 // traces; print the actual delta so the mutator can be named.
@@ -2332,8 +3011,10 @@ private struct SessionListContent: View, Equatable {
 
     var body: some View {
         AppList(
-            sections: [AppListSection(id: "sessions", title: nil, items: visibleSessions)],
+            sections: appSections,
             selection: .multi($selection),
+            keyboardNavigation: onArrowNavigate != nil,
+            onArrowNavigate: onArrowNavigate,
             cornerRadius: AppTheme.Chat.subCardCornerRadius,
             rowHorizontalPadding: 0,
             rowVerticalPadding: 0,
@@ -2345,8 +3026,44 @@ private struct SessionListContent: View, Equatable {
         ) { session in
             row(session)
         }
-        .animation(.snappy(duration: 0.24), value: visibleSessions.map(\.id))
+        .animation(.snappy(duration: 0.24), value: sections.flatMap(\.items).map(\.id))
         .bottomEdgeFade(height: 34)
+    }
+
+    /// Map the value-type `PiAgentSessionListSection`s to `AppListSection`s,
+    /// attaching a custom project-group header to any section that needs one.
+    private var appSections: [AppListSection<PiAgentSessionRecord>] {
+        sections.map { section in
+            AppListSection(
+                id: section.id,
+                header: shouldShowHeader(for: section)
+                    ? AnyView(PiAgentSessionGroupHeader(
+                        section: section,
+                        onToggleCollapse: { onToggleCollapse(section.id) },
+                        onCreateSession: { onCreateSessionForProject(section.id) }
+                    ))
+                    : nil,
+                footer: shouldShowFooter(for: section)
+                    ? AnyView(PiAgentSessionGroupFooter(
+                        section: section,
+                        onToggleShowMore: { onToggleExpand(section.id) }
+                    ))
+                    : nil,
+                items: section.items
+            )
+        }
+    }
+
+    /// A header renders whenever the list is grouped — every group needs a
+    /// disclosure + identity, now that groups can collapse to just their
+    /// header. A single-project scoped view (`isGrouped == false`) stays
+    /// headerless, identical to the pre-grouping flat layout.
+    private func shouldShowHeader(for section: PiAgentSessionListSection) -> Bool {
+        isGrouped
+    }
+
+    private func shouldShowFooter(for section: PiAgentSessionListSection) -> Bool {
+        isGrouped && !section.isCollapsed && (section.hiddenCount > 0 || section.isShowMoreActive)
     }
 
     @ViewBuilder
@@ -2355,23 +3072,19 @@ private struct SessionListContent: View, Equatable {
             session: session,
             isSelected: selectedSessionIDs.contains(session.id),
             isRunning: workingSessionIDs.contains(session.id),
+            hasUIRequest: uiRequestSessionIDs.contains(session.id),
             isRenaming: renamingSessionID == session.id,
             isGeneratingTitle: generatingTitleIDs.contains(session.id),
+            hasActiveLoop: activeLoopSessionIDs.contains(session.id),
             gitActivity: activityByID[session.id] ?? .none,
             onSelect: { onSelect(session) },
             onBeginRename: { onBeginRename(session) },
             onEndRename: onEndRename,
             onRename: { onRename(session.id, $0) },
-            onTogglePinned: { onTogglePinned(session.id) },
             onDelete: { onDelete(session.id) }
         )
         .equatable()
         .contextMenu {
-            Button {
-                onTogglePinned(session.id)
-            } label: {
-                Label(session.isPinned ? "Unpin Session" : "Pin Session", systemImage: session.isPinned ? "pin.slash" : "pin")
-            }
             Button(role: .destructive) {
                 onDelete(session.id)
             } label: {
@@ -2381,17 +3094,112 @@ private struct SessionListContent: View, Equatable {
     }
 }
 
+/// Per-project group header for the All-Projects session list: a disclosure
+/// project icon, repo name (primary) + owner (muted), an inline disclosure
+/// chevron that collapses the group to its header, a "Show N more / Show less"
+/// affordance when the group has capped content, and a trailing `+` that
+/// starts a new session in that project. Rendered through
+/// `AppListSection.header`, so it inherits `AppList`'s section spacing.
+private struct PiAgentSessionGroupHeader: View {
+    let section: PiAgentSessionListSection
+    let onToggleCollapse: () -> Void
+    let onCreateSession: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Button(action: onToggleCollapse) {
+                HStack(alignment: .center, spacing: 8) {
+                    ProjectIconView(
+                        imageURL: section.iconFileURL,
+                        symbolName: section.fallbackSymbolName,
+                        size: 30,
+                        assetName: section.assetName
+                    )
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(alignment: .center, spacing: 5) {
+                            Text(section.title)
+                                .font(AppTheme.Font.footnote.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(AppTheme.mutedText)
+                                .frame(width: 11, height: 11, alignment: .center)
+                                .rotationEffect(.degrees(section.isCollapsed ? 0 : 90))
+                                .animation(.snappy(duration: 0.22), value: section.isCollapsed)
+                        }
+                        if let subtitle = section.subtitle {
+                            Text(subtitle)
+                                .font(AppTheme.Font.caption2)
+                                .foregroundStyle(AppTheme.mutedText)
+                                .lineLimit(1)
+                        }
+                    }
+                    .frame(minHeight: 30, alignment: .center)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help(section.isCollapsed ? "Expand" : "Collapse")
+
+            if section.isProjectGroup {
+                Button(action: onCreateSession) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(AppTheme.mutedText)
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(isHovering ? AppTheme.contentSubtleFill : Color.clear))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .frame(width: 30, height: 30, alignment: .center)
+                .help("New session in \(section.title)")
+                .accessibilityLabel("New session in \(section.title)")
+            }
+        }
+        // Aligns the icon's leading edge with the session row title (row text
+        // sits at listHorizontalInset 6 + the row's own 8pt padding = 14pt).
+        .padding(.horizontal, 8)
+        .frame(minHeight: 34, alignment: .center)
+        .onHover { isHovering = $0 }
+    }
+}
+
+private struct PiAgentSessionGroupFooter: View {
+    let section: PiAgentSessionListSection
+    let onToggleShowMore: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: onToggleShowMore) {
+            Text(section.isShowMoreActive ? "Show less" : "Show more")
+                .font(AppTheme.Font.footnote.weight(.semibold))
+                .foregroundStyle(isHovering ? AppTheme.brandAccentBright : AppTheme.brandAccent)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isHovering ? AppTheme.brandAccent.opacity(0.10) : Color.clear)
+        )
+        .onHover { isHovering = $0 }
+        .help(section.isShowMoreActive ? "Show fewer" : "Show \(section.hiddenCount) hidden session\(section.hiddenCount == 1 ? "" : "s")")
+    }
+}
+
 /// Expanded state of the Coding Agent pull-up panel: the full searchable
 /// session list that overlays the upper nav sections when the panel is pulled
 /// up (see `mainContent`'s sidebar ZStack).
 struct CodingAgentExpandedPanel: View {
     let viewModel: AppViewModel
     let store: PiAgentSessionStore
-    let projects: [DiscoveredProject]
-    let selectedProject: DiscoveredProject?
-    @Binding var projectFilterText: String
-    let isSearchDebouncing: Bool
-    let onSelectProject: (DiscoveredProject?) -> Void
     @Binding var sessionSearchText: String
     /// True only while the panel is expanded. Both panel states are kept
     /// permanently mounted (ZStack in `mainContent`) so the pull-up is a cheap
@@ -2402,7 +3210,7 @@ struct CodingAgentExpandedPanel: View {
     let isActive: Bool
     let onCollapse: () -> Void
 
-    @State private var cachedVisibleSessions: [PiAgentSessionRecord] = []
+    @State private var cachedSections: [PiAgentSessionListSection] = []
     @State private var hasBuiltVisibleSessions = false
     // Cached so `body` never reads `store.sessions` directly: `touchSession`
     // mutates that array many times per second during streaming, and a live read
@@ -2415,6 +3223,7 @@ struct CodingAgentExpandedPanel: View {
     @State private var pendingDeleteSessionIDs: Set<UUID> = []
     @State private var isDeleteSessionsAlertPresented = false
     @State private var sessionActivityCache: [UUID: PiAgentSessionGitActivity] = [:]
+    @State private var postExpandTask: Task<Void, Never>?
     /// Per-session memo of the last activity parse, keyed by the store's
     /// `gitActivityRevision` it was computed at. That revision bumps exactly
     /// when a commit/push/merge entry lands, so a memo entry parsed at the
@@ -2435,17 +3244,34 @@ struct CodingAgentExpandedPanel: View {
                 .padding(.top, 12)
                 .padding(.bottom, 10)
 
-            if !hasAnyScopedSessions {
+            Rectangle()
+                .fill(AppTheme.contentStroke)
+                .frame(height: 1)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
+
+            if isActive && !hasBuiltVisibleSessions {
+                // Lightweight placeholder during the expand animation's first
+                // frames: computing visibleSections (grouping) or even reading
+                // hasAnyScopedSessions here would force synchronous work that
+                // competes with the spring animation. After the deferred
+                // schedulePostExpandWork rebuild lands, this branch disappears.
+                Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if !hasAnyScopedSessions {
                 AppEmptyState("No sessions yet", systemImage: "square.and.pencil", description: emptySessionsMessage, layout: .fill)
-            } else if visibleSessions.isEmpty {
+            } else if visibleSections.isEmpty {
                 AppEmptyState("No sessions found", systemImage: "magnifyingglass", description: "Try another search.", layout: .fill)
             } else {
                 SessionListContent(
-                    visibleSessions: visibleSessions,
+                    sections: visibleSections,
+                    isGrouped: isAllProjects,
                     selectedSessionIDs: selectedSessionIDs,
                     renamingSessionID: renamingSessionID,
                     workingSessionIDs: workingVisibleSessionIDs,
+                    uiRequestSessionIDs: uiRequestVisibleSessionIDs,
                     generatingTitleIDs: viewModel.piAgentTitleGeneratingSessionIDs,
+                    activeLoopSessionIDs: activeLoopSessionIDs,
                     activityByID: visibleSessionActivityByID,
                     scrollRequestID: sessionScrollRequest,
                     scrollRequest: $sessionScrollRequest,
@@ -2460,8 +3286,23 @@ struct CodingAgentExpandedPanel: View {
                     },
                     onEndRename: { renamingSessionID = nil },
                     onRename: { viewModel.renamePiAgentSession($0, title: $1) },
-                    onTogglePinned: { viewModel.togglePiAgentSessionPinned($0) },
-                    onDelete: { id in requestDeleteSessions(selectedSessionIDs.contains(id) && selectedSessionIDs.count > 1 ? selectedSessionIDs : [id]) }
+                    onDelete: { id in requestDeleteSessions(selectedSessionIDs.contains(id) && selectedSessionIDs.count > 1 ? selectedSessionIDs : [id]) },
+                    onToggleExpand: { projectID in
+                        if viewModel.expandedProjects.contains(projectID) { viewModel.expandedProjects.remove(projectID) }
+                        else { viewModel.expandedProjects.insert(projectID) }
+                    },
+                    onToggleCollapse: { projectID in
+                        if viewModel.collapsedProjects.contains(projectID) { viewModel.collapsedProjects.remove(projectID) }
+                        else { viewModel.collapsedProjects.insert(projectID) }
+                    },
+                    onCreateSessionForProject: { projectPath in
+                        if let project = viewModel.projectByPath[projectPath] {
+                            viewModel.createPiAgentDraft(for: project)
+                        }
+                    },
+                    onArrowNavigate: { direction in
+                        viewModel.selectAdjacentPiAgentSession(offset: direction == .down ? 1 : -1, wrap: false)
+                    }
                 )
                 .equatable()
             }
@@ -2470,45 +3311,68 @@ struct CodingAgentExpandedPanel: View {
         // expanding sheds the container so the list gets the whole sidebar.
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .onAppear {
-            rebuildVisibleSessions()
-            syncVisibleSessionSelection()
-            syncMultiSelectionToSelectedSession()
-            rebuildSessionActivityCache()
-            // Pre-position even while hidden: the jump realizes the LazyVStack
-            // rows between the stale offset and the target NOW, off the expand
-            // animation's critical path. Expanding then animates over an
-            // already-positioned, already-realized list.
-            sessionScrollRequest = store.selectedSession?.id
+            if isActive {
+                // Defer the initial rebuild/sync past the expand animation's
+                // first frames so grouping, selection reconciliation, and git
+                // activity parsing don't fight the spring for main-thread time.
+                // The placeholder branch above covers the gap.
+                schedulePostExpandWork()
+            } else {
+                // Background prebuild while hidden — no animation to compete
+                // with, so the next expand shows the list immediately.
+                rebuildVisibleSessions()
+                syncVisibleSessionSelection()
+                syncMultiSelectionToSelectedSession()
+            }
+        }
+        .onDisappear {
+            postExpandTask?.cancel()
+            postExpandTask = nil
         }
         .onChange(of: isActive) { _, active in
-            if active { sessionScrollRequest = store.selectedSession?.id }
+            if active {
+                schedulePostExpandWork()
+            } else {
+                postExpandTask?.cancel()
+                postExpandTask = nil
+            }
         }
-        .onChange(of: store.sessionListRevision) { _, _ in rebuildVisibleSessions() }
-        .onChange(of: sessionSearchText) { _, _ in rebuildVisibleSessions() }
-        .onChange(of: viewModel.showPiAgentAttentionOnly) { _, _ in rebuildVisibleSessions() }
-        .onChange(of: viewModel.selectedProjectPath) { _, _ in
-            rebuildVisibleSessions()
-            syncVisibleSessionSelection()
-        }
+        .onChange(of: store.sessionListRevision) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
+        .onChange(of: sessionSearchText) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
+        .onChange(of: viewModel.showPiAgentAttentionOnly) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
+        .onChange(of: viewModel.expandedProjects) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
+        .onChange(of: viewModel.collapsedProjects) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
+        // Projects load asynchronously after sessions on first launch; without
+        // this trigger the cached sections stayed grouped under "Other" until a
+        // later rebuild (the original first-launch "all Other" symptom).
+        .onChange(of: viewModel.discoveredProjectsRevision) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
         .onChange(of: store.selectedSession?.id) { _, _ in
             syncMultiSelectionToSelectedSession()
-            // Track selection while hidden (collapsed-recents clicks) so the
-            // scroll-to-selection happens during the click, not at expand time.
-            if !isActive { sessionScrollRequest = store.selectedSession?.id }
+            // Keep the selected row in view for both click selection and keyboard
+            // navigation. While hidden, this still pre-positions the list before
+            // the next expand; while active, it tracks ↑/↓ and ⌘]/⌘[ jumps.
+            sessionScrollRequest = store.selectedSession?.id
         }
         .onChange(of: visibleSessionIDs) { _, _ in
             syncVisibleSessionSelection()
             pruneMultiSelectionToVisibleSessions()
             rebuildSessionActivityCache()
         }
-        // While hidden, `activityRevisionToken` is a constant, so this never fires
-        // and the parse never runs. On activation the token flips to the live
-        // revision, firing exactly one refresh — no separate activation handler
-        // or dirty flag needed.
-        .onChange(of: activityRevisionToken) { _, _ in rebuildSessionActivityCache() }
+        // Git activity is derived by scanning visible transcripts. Do not run it
+        // on the first expand frame: that frame is already resizing/laying out the
+        // sidebar and `ScrollViewReader.scrollTo` can realize many lazy rows.
+        .onChange(of: store.gitActivityRevision) { _, _ in
+            if isActive { rebuildSessionActivityCache() }
+        }
         .alert(deleteSessionsAlertTitle, isPresented: $isDeleteSessionsAlertPresented) {
             Button("Delete", role: .destructive) {
-                viewModel.deletePiAgentSessions(pendingDeleteSessionIDs)
+                let deleteIDs = pendingDeleteSessionIDs
+                let nextID = PiAgentSessionGrouping.nextSelectionAfterDeletion(
+                    visibleSessions: visibleSessions,
+                    deletedIDs: deleteIDs,
+                    selectedID: store.selectedSession?.id
+                )
+                viewModel.deletePiAgentSessions(deleteIDs, fallbackSelectionID: nextID)
                 pendingDeleteSessionIDs = []
             }
             Button("Cancel", role: .cancel) { pendingDeleteSessionIDs = [] }
@@ -2519,15 +3383,8 @@ struct CodingAgentExpandedPanel: View {
 
     private var header: some View {
         CodingAgentPanelHeader(
-            viewModel: viewModel,
             isExpanded: true,
-            onToggle: onCollapse,
-            projects: projects,
-            selectedProject: selectedProject,
-            selectedProjectPath: viewModel.selectedProjectPath,
-            projectFilterText: $projectFilterText,
-            isSearchDebouncing: isSearchDebouncing,
-            onSelectProject: onSelectProject
+            onToggle: onCollapse
         ) {
             if selectedSessionIDs.count > 1 {
                 Button(role: .destructive) { requestDeleteSessions(selectedSessionIDs) } label: {
@@ -2545,51 +3402,181 @@ struct CodingAgentExpandedPanel: View {
     }
 
     private var scopedSessions: [PiAgentSessionRecord] {
-        guard let path = viewModel.selectedProjectPath else { return store.sessions }
-        return store.sessions.filter { $0.projectPath == path }
+        store.sessions
     }
 
-    private var visibleSessions: [PiAgentSessionRecord] {
-        hasBuiltVisibleSessions ? cachedVisibleSessions : computedVisibleSessions()
+    private var isAllProjects: Bool { true }
+
+    private var visibleSections: [PiAgentSessionListSection] {
+        // When active and not yet built, the placeholder branch is rendering —
+        // return [] so `.onChange(of: visibleSessionIDs)` and other getters
+        // referencing visibleSections don't compute grouping synchronously
+        // during the expand animation. When inactive, allow computedSections()
+        // for the background prebuild path (no animation to compete with).
+        if !hasBuiltVisibleSessions { return isActive ? [] : computedSections() }
+        return cachedSections
     }
+
+    /// Flattened rendered sessions (preview sets only) for helpers that still
+    /// think in terms of a flat list — selection sync, working set, activity
+    /// cache. Hidden sessions are intentionally excluded.
+    private var visibleSessions: [PiAgentSessionRecord] { visibleSections.flatMap(\.items) }
 
     private var visibleSessionIDs: [UUID] { visibleSessions.map(\.id) }
 
-    /// Drives the git-activity refresh. `gitActivityRevision` only bumps when a
-    /// commit/push/merge entry lands (not per streaming token), so the visible
-    /// sidebar's body no longer re-evaluates ~30Hz during a run. Gated on
-    /// `isActive` so the hidden sidebar reads a constant and registers no store
-    /// dependency at all; the drain in `.onChange(of: isActive)` catches up any
-    /// events that landed while hidden.
-    private var activityRevisionToken: Int {
-        isActive ? store.gitActivityRevision : -1
+    private func schedulePostExpandWork() {
+        postExpandTask?.cancel()
+        postExpandTask = Task { @MainActor in
+            // Let the panel's expand animation and first layout pass get on
+            // screen before forcing a ScrollViewReader jump or parsing transcript
+            // git activity. Doing both synchronously on activation caused the
+            // expanded sidebar to hitch and could trip AppKit layout recursion.
+            try? await Task.sleep(for: .milliseconds(260))
+            guard !Task.isCancelled, isActive else { return }
+            rebuildVisibleSessions()
+            syncVisibleSessionSelection()
+            syncMultiSelectionToSelectedSession()
+            sessionScrollRequest = store.selectedSession?.id
+            rebuildSessionActivityCache()
+            postExpandTask = nil
+        }
+    }
+
+    /// Guarded rebuild for reactive `.onChange` triggers: during the deferred
+    /// first-expand window (`isActive && !hasBuiltVisibleSessions`), reschedule
+    /// `schedulePostExpandWork` instead of rebuilding immediately — a reactive
+    /// rebuild would set `hasBuiltVisibleSessions = true` and kill the
+    /// placeholder before the expand animation finishes. Once the initial build
+    /// has landed, rebuilds happen immediately as before.
+    private func rebuildVisibleSessionsDeferredIfNeeded() {
+        if isActive && !hasBuiltVisibleSessions {
+            schedulePostExpandWork()
+        } else {
+            rebuildVisibleSessions()
+        }
     }
 
     private func rebuildVisibleSessions() {
         let scoped = scopedSessions
         if hasAnyScopedSessions != !scoped.isEmpty { hasAnyScopedSessions = !scoped.isEmpty }
-        let next = computedVisibleSessions(from: scoped)
-        if !hasBuiltVisibleSessions || next != cachedVisibleSessions {
-            cachedVisibleSessions = next
+        let computed = computedSections(from: scoped)
+        // Pragmatic hybrid freeze: while any visible session is actively
+        // working, preserve the existing visible row order so a streaming
+        // `updatedAt` bump doesn't reshuffle rows live. Only newly-present
+        // rows (typically just-created or this-run-touched sessions surfacing
+        // from the cap) may join the visible list; they're appended in their
+        // natural computed order without re-sorting the frozen rows. Once no
+        // session is working, the next rebuild re-sorts via the exact rule.
+        let next = freezeVisibleOrderDuringActiveWork(computed) ?? computed
+        if !hasBuiltVisibleSessions || next != cachedSections {
+            cachedSections = next
         }
         hasBuiltVisibleSessions = true
+        // Publish the visible row snapshot to the view model so keyboard
+        // navigation (⌘]/⌘[ and in-list ↑/↓) operates on rendered rows only —
+        // no navigation into hidden preview/collapsed rows, no auto-reveal.
+        // Only the active panel reports in, so the collapsed strip's flat
+        // list isn't overwritten while the expanded panel is hidden.
+        if isActive {
+            viewModel.piAgentVisibleSessionsForNavigation = visibleSessions
+        }
     }
 
-    private func computedVisibleSessions(from scoped: [PiAgentSessionRecord]? = nil) -> [PiAgentSessionRecord] {
+    /// Returns a frozen copy of `computed` preserving the prior visible row
+    /// order, or `nil` when no freeze should apply (no working session, or the
+    /// cache isn't populated yet). Frozen sections keep the cached `items`
+    /// order with two adjustments per section: drop rows that are no longer
+    /// present, and append newly-present rows (newly visible this rebuild).
+    /// Structural changes (collapse / Show more toggle) bypass the freeze so
+    /// those user actions take effect immediately.
+    private func freezeVisibleOrderDuringActiveWork(_ computed: [PiAgentSessionListSection]) -> [PiAgentSessionListSection]? {
+        let anyWorking = computed.flatMap(\.items).contains { viewModel.piAgentSessionIsWorking($0) }
+        guard anyWorking, hasBuiltVisibleSessions, !cachedSections.isEmpty else { return nil }
+        var frozeAny = false
+        let frozen = computed.map { newSection -> PiAgentSessionListSection in
+            guard let oldSection = cachedSections.first(where: { $0.id == newSection.id }),
+                  // Skip the freeze when the user's collapse / Show-more state
+                  // changed between rebuilds — let the new section win so the
+                  // structural action takes effect immediately.
+                  oldSection.isCollapsed == newSection.isCollapsed,
+                  oldSection.isShowMoreActive == newSection.isShowMoreActive else {
+                return newSection
+            }
+            let newByID = Dictionary(uniqueKeysWithValues: newSection.items.map { ($0.id, $0) })
+            let oldIDs = Set(oldSection.items.map(\.id))
+            // Preserve prior order, refreshing payloads of rows still present.
+            var merged = oldSection.items.compactMap { newByID[$0.id] }
+            // Insert newly-present rows at their natural computed position
+            // relative to the frozen rows. Appending them made a freshly-created
+            // draft appear at the bottom whenever another session was working,
+            // even though the list sorts newest-first.
+            for newItem in newSection.items where !oldIDs.contains(newItem.id) {
+                let newIndex = newSection.items.firstIndex(where: { item in item.id == newItem.id })
+                let followingFrozenID = newIndex.flatMap { index in
+                    newSection.items[(index + 1)...].first(where: { item in oldIDs.contains(item.id) })?.id
+                }
+                if let followingFrozenID,
+                   let insertIndex = merged.firstIndex(where: { item in item.id == followingFrozenID }) {
+                    merged.insert(newItem, at: insertIndex)
+                } else {
+                    merged.append(newItem)
+                }
+            }
+            if merged == newSection.items { return newSection }
+            frozeAny = true
+            return newSection.withItems(merged)
+        }
+        return frozeAny ? frozen : nil
+    }
+
+    private func computedSections(from scoped: [PiAgentSessionRecord]? = nil) -> [PiAgentSessionListSection] {
         let query = sessionSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let scopedSource = scoped ?? scopedSessions
         let source = viewModel.showPiAgentAttentionOnly ? scopedSource.filter(\.needsAttention) : scopedSource
         let filtered = query.isEmpty ? source : source.filter { $0.matchesSessionSearch(query) }
-        return filtered.sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
+        // Cap previews only in All-Projects browsing — searching or filtering by
+        // attention bypasses the cap (the user is hunting), and a scoped project
+        // keeps its full flat list exactly as before.
+        let capPreviews = isAllProjects && query.isEmpty && !viewModel.showPiAgentAttentionOnly
+        return PiAgentSessionGrouping.sections(
+            from: filtered,
+            projectByPath: viewModel.projectByPath,
+            expandedProjectIDs: viewModel.expandedProjects,
+            collapsedProjectIDs: viewModel.collapsedProjects,
+            capPreviews: capPreviews,
+            isWorking: { viewModel.piAgentSessionIsWorking($0) },
+            selectedSessionID: store.selectedSession?.id,
+            // Expanded/full sidebar uses the strict exact-`updatedAt` comparator
+            // so the most-recently-touched chat leads its project group within
+            // the same day. The hybrid freeze in `rebuildVisibleSessions` keeps
+            // a streaming pulse from reshuffling rows live.
+            exactSort: true,
+            // Surface sessions created or touched during this app run above
+            // the top-N cap, so a freshly-jostled older chat stays reachable.
+            touchedThisRunSessionIDs: viewModel.piAgentSessionsTouchedThisRunIDs
+        )
     }
 
     private var workingVisibleSessionIDs: Set<UUID> {
         Set(visibleSessions.filter { viewModel.piAgentSessionIsWorking($0) }.map(\.id))
     }
 
+    private var uiRequestVisibleSessionIDs: Set<UUID> {
+        Set(visibleSessions.compactMap { session in
+            store.uiRequestsBySessionID[session.id] == nil ? nil : session.id
+        })
+    }
+
     private var visibleSessionActivityByID: [UUID: PiAgentSessionGitActivity] {
         Dictionary(uniqueKeysWithValues: visibleSessions.compactMap { session in
             sessionActivityCache[session.id].map { (session.id, $0) }
+        })
+    }
+
+    private var activeLoopSessionIDs: Set<UUID> {
+        let visibleIDs = Set(visibleSessions.map(\.id))
+        return Set(store.loopRunsBySessionID.compactMap { sessionID, runs in
+            visibleIDs.contains(sessionID) && runs.contains(where: \.isActive) ? sessionID : nil
         })
     }
 
@@ -2726,6 +3713,9 @@ struct PiAgentScreen: View {
     /// The picked slash item — when non-nil, the composer shows it as a glass
     /// capsule chip above the editor and includes it in the send payload.
     @State private var slashSelection: SlashItem?
+    @State private var isLoopLaunchSheetPresented = false
+    @State private var loopLaunchDraft = LoopDraft()
+    @State private var loopLaunchDefinition: LoopDefinition?
     @State private var lastSlashTriggerActive = false
     @State private var inputMode: PiAgentInputMode = .steer
     @State private var selectedSessionTitleDraft = ""
@@ -2768,7 +3758,7 @@ struct PiAgentScreen: View {
     @State private var transcriptPinnedState = TranscriptPinnedState()
     @State private var showArchivedPreCompactionTranscript = false
     @State private var isEarlierTranscriptSheetPresented = false
-    @State private var cachedVisibleSessions: [PiAgentSessionRecord] = []
+    @State private var cachedSections: [PiAgentSessionListSection] = []
     @State private var hasBuiltVisibleSessions = false
     /// Per-session derived git activity (commit/push/merge timestamps), keyed by
     /// session.id. Rebuilt off the body hot path on transcript-revision or
@@ -2828,6 +3818,12 @@ struct PiAgentScreen: View {
         .onChange(of: store.sessionListRevision) { _, _ in rebuildVisibleSessions() }
         .onChange(of: sessionSearchText) { _, _ in rebuildVisibleSessions() }
         .onChange(of: viewModel.showPiAgentAttentionOnly) { _, _ in rebuildVisibleSessions() }
+        .onChange(of: viewModel.expandedProjects) { _, _ in rebuildVisibleSessions() }
+        .onChange(of: viewModel.collapsedProjects) { _, _ in rebuildVisibleSessions() }
+        // Projects load asynchronously after sessions on first launch; without
+        // this trigger the cached sections stayed grouped under "Other" until a
+        // later rebuild.
+        .onChange(of: viewModel.discoveredProjectsRevision) { _, _ in rebuildVisibleSessions() }
         .onDisappear {
             processingMessageUpdateTask?.cancel()
             processingMessageUpdateTask = nil
@@ -2840,6 +3836,44 @@ struct PiAgentScreen: View {
                     onSubmitFreeform: { sentinel, value in viewModel.respondToPiAgentFreeformUIRequest(request, sentinel: sentinel, value: value) },
                     onConfirm: { confirmed in viewModel.confirmPiAgentUIRequest(request, confirmed: confirmed) },
                     onCancel: { viewModel.cancelPiAgentUIRequest(request) }
+                )
+            }
+        }
+        .sheet(isPresented: $isLoopLaunchSheetPresented) {
+            if let session = store.selectedSession {
+                LoopLaunchSheet(
+                    session: session,
+                    activeRun: store.activeLoopRun(for: session.id),
+                    initialDraft: loopLaunchDraft,
+                    sourceDefinition: loopLaunchDefinition,
+                    availableAgents: viewModel.allDisplayAgents,
+                    onCancel: { isLoopLaunchSheetPresented = false },
+                    onLaunch: { request in
+                        if store.activeLoopRun(for: session.id) != nil && !request.stopExistingActive {
+                            store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "This transcript already has an active loop."))
+                            return
+                        }
+                        if let saveRequest = request.saveRequest {
+                            do {
+                                try viewModel.saveLoopDefinitionFromDraft(request.draft, request: saveRequest)
+                            } catch {
+                                store.append(.init(sessionID: session.id, role: .error, title: "Loop Save Failed", text: error.localizedDescription))
+                                return
+                            }
+                        }
+                        Task { @MainActor in
+                            isLoopLaunchSheetPresented = false
+                            let launched = await viewModel.launchLoop(
+                                session: session,
+                                draft: request.draft,
+                                stopExistingActive: request.stopExistingActive
+                            )
+                            guard launched != nil else {
+                                store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "The loop could not be started."))
+                                return
+                            }
+                        }
+                    }
                 )
             }
         }
@@ -2886,14 +3920,6 @@ struct PiAgentScreen: View {
         .onChange(of: store.transcriptRevisionsBySessionID) { _, _ in
             rebuildSessionActivityCache()
         }
-        .onChange(of: viewModel.selectedProjectPath) { _, _ in
-            rebuildVisibleSessions()
-            syncVisibleSessionSelection()
-            Task { @MainActor in
-                await Task.yield()
-                viewModel.acknowledgeVisibleSelectedPiAgentSession()
-            }
-        }
         .task(id: store.selectedTranscriptRevision) {
             await Task.yield()
             scheduleTranscriptCacheUpdate()
@@ -2936,36 +3962,50 @@ struct PiAgentScreen: View {
         }
     }
 
-    private var sessionScopePath: String? {
-        viewModel.selectedProjectPath
-    }
-
     private var scopedSessions: [PiAgentSessionRecord] {
-        guard let sessionScopePath else { return store.sessions }
-        return store.sessions.filter { $0.projectPath == sessionScopePath }
+        store.sessions
     }
 
-    private var visibleSessions: [PiAgentSessionRecord] {
-        hasBuiltVisibleSessions ? cachedVisibleSessions : computedVisibleSessions()
+    private var isAllProjects: Bool { true }
+
+    private var visibleSections: [PiAgentSessionListSection] {
+        hasBuiltVisibleSessions ? cachedSections : computedSections()
     }
+
+    /// Flattened rendered sessions (preview sets only) for helpers that still
+    /// think in terms of a flat list — selection sync, working set, activity
+    /// cache. Hidden sessions are intentionally excluded.
+    private var visibleSessions: [PiAgentSessionRecord] { visibleSections.flatMap(\.items) }
 
     private func rebuildVisibleSessions() {
-        let next = computedVisibleSessions()
+        let next = computedSections()
         // Only write @State when the visible list actually changed. A bare
         // `sessionListRevision` bump (e.g. a background re-sort/refresh while the
         // user is just scrolling the transcript) otherwise re-evaluates the whole
         // screen body and re-runs the transcript's updateNSView for nothing.
-        if !hasBuiltVisibleSessions || next != cachedVisibleSessions {
-            cachedVisibleSessions = next
+        if !hasBuiltVisibleSessions || next != cachedSections {
+            cachedSections = next
         }
         hasBuiltVisibleSessions = true
     }
 
-    private func computedVisibleSessions() -> [PiAgentSessionRecord] {
+    private func computedSections() -> [PiAgentSessionListSection] {
         let query = sessionSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let source = viewModel.showPiAgentAttentionOnly ? scopedSessions.filter(\.needsAttention) : scopedSessions
         let filtered = query.isEmpty ? source : source.filter { sessionMatchesSearch($0, query: query) }
-        return sortedSessions(filtered)
+        // Cap previews only in All-Projects browsing — searching or filtering by
+        // attention bypasses the cap (the user is hunting), and a scoped project
+        // keeps its full flat list exactly as before.
+        let capPreviews = isAllProjects && query.isEmpty && !viewModel.showPiAgentAttentionOnly
+        return PiAgentSessionGrouping.sections(
+            from: filtered,
+            projectByPath: viewModel.projectByPath,
+            expandedProjectIDs: viewModel.expandedProjects,
+            collapsedProjectIDs: viewModel.collapsedProjects,
+            capPreviews: capPreviews,
+            isWorking: { viewModel.piAgentSessionIsWorking($0) },
+            selectedSessionID: store.selectedSession?.id
+        )
     }
 
     private var visibleSessionIDs: [UUID] {
@@ -3099,11 +4139,14 @@ struct PiAgentScreen: View {
                         AppEmptyState("No sessions found", systemImage: "magnifyingglass", description: "Try another search.", layout: .fill)
                     } else {
                         SessionListContent(
-                            visibleSessions: visibleSessions,
+                            sections: visibleSections,
+                            isGrouped: isAllProjects,
                             selectedSessionIDs: selectedSessionIDs,
                             renamingSessionID: renamingSessionID,
                             workingSessionIDs: workingVisibleSessionIDs,
+                            uiRequestSessionIDs: uiRequestVisibleSessionIDs,
                             generatingTitleIDs: viewModel.piAgentTitleGeneratingSessionIDs,
+                            activeLoopSessionIDs: activeLoopSessionIDs,
                             activityByID: visibleSessionActivityByID,
                             selection: $selectedSessionIDs,
                             onSelect: { session in
@@ -3116,13 +4159,28 @@ struct PiAgentScreen: View {
                             },
                             onEndRename: { renamingSessionID = nil },
                             onRename: { viewModel.renamePiAgentSession($0, title: $1) },
-                            onTogglePinned: { viewModel.togglePiAgentSessionPinned($0) },
                             onDelete: { id in
                                 requestDeleteSessions(
                                     selectedSessionIDs.contains(id) && selectedSessionIDs.count > 1
                                         ? selectedSessionIDs
                                         : [id]
                                 )
+                            },
+                            onToggleExpand: { projectID in
+                                if viewModel.expandedProjects.contains(projectID) { viewModel.expandedProjects.remove(projectID) }
+                                else { viewModel.expandedProjects.insert(projectID) }
+                            },
+                            onToggleCollapse: { projectID in
+                                if viewModel.collapsedProjects.contains(projectID) { viewModel.collapsedProjects.remove(projectID) }
+                                else { viewModel.collapsedProjects.insert(projectID) }
+                            },
+                            onCreateSessionForProject: { projectPath in
+                                if let project = viewModel.projectByPath[projectPath] {
+                                    viewModel.createPiAgentDraft(for: project)
+                                }
+                            },
+                            onArrowNavigate: { direction in
+                                viewModel.selectAdjacentPiAgentSession(offset: direction == .down ? 1 : -1, wrap: false)
                             }
                         )
                         .equatable()
@@ -3141,6 +4199,12 @@ struct PiAgentScreen: View {
         Set(visibleSessions.filter { viewModel.piAgentSessionIsWorking($0) }.map(\.id))
     }
 
+    private var uiRequestVisibleSessionIDs: Set<UUID> {
+        Set(visibleSessions.compactMap { session in
+            store.uiRequestsBySessionID[session.id] == nil ? nil : session.id
+        })
+    }
+
     private var visibleSessionActivityByID: [UUID: PiAgentSessionGitActivity] {
         var map: [UUID: PiAgentSessionGitActivity] = [:]
         for session in visibleSessions where sessionActivityCache[session.id] != nil {
@@ -3149,6 +4213,12 @@ struct PiAgentScreen: View {
         return map
     }
 
+    private var activeLoopSessionIDs: Set<UUID> {
+        let visibleIDs = Set(visibleSessions.map(\.id))
+        return Set(store.loopRunsBySessionID.compactMap { sessionID, runs in
+            visibleIDs.contains(sessionID) && runs.contains(where: \.isActive) ? sessionID : nil
+        })
+    }
 
     private var activeSessionColumn: some View {
         VStack(spacing: 0) {
@@ -3366,6 +4436,7 @@ struct PiAgentScreen: View {
         guard !previous.isEmpty else { return }
         let changed = Set(components.keys).union(previous.keys).filter { components[$0] != previous[$0] }.sorted()
         guard !changed.isEmpty else { return }
+        guard TranscriptScrollProfiler.verboseTrace else { return }
         TranscriptScrollProfiler.logger.error("itemsBuild trigger — changed inputs: \(changed.joined(separator: ","), privacy: .public)")
     }
 #endif
@@ -3759,8 +4830,10 @@ struct PiAgentScreen: View {
         case .thinking:
             return Self.nativeReplyPayload(for: child).map { .bubble($0) }
         case .steering(let entry):
-            // Chip-bearing steering messages use the native chip-question card,
-            // re-labeled as "Steering".
+            // Steering messages are user messages, so they render right-aligned
+            // like the initial user question. Chip-bearing ones use the native
+            // chip-question card; plain-text ones use the lighter bubble with
+            // user-message alignment and visual weight.
             let hasChips = PiAgentUserMessageContent.displayChipsNaturalWidth(
                 for: entry, skills: skills, commandSlashNames: commandSlashNames) > 0
             if hasChips {
@@ -3781,10 +4854,52 @@ struct PiAgentScreen: View {
                 markdownSource: text,
                 bodyPrefix: nil,
                 copyText: entry.text,
-                copySide: .trailing,
-                isThreadChild: true
+                copySide: .leading,
+                isThreadChild: false,
+                isUserHugged: true
             ))
         case .status(let entry):
+            if let loopRun = LoopRunTranscriptCodec.decode(from: entry) {
+                let payload = NativeLoopRunPayload.make(
+                    run: loopRun,
+                    onStop: loopRun.isActive ? { [store] in _ = store.stopLoopRun(loopRun.id, sessionID: loopRun.sessionID) } : nil,
+                    onRetry: { [viewModel] in viewModel.retryLoopRun(loopRun) },
+                    onSave: { [viewModel, store] in
+                        do {
+                            _ = try viewModel.saveLoopDefinitionFromRun(loopRun)
+                            store.append(.init(sessionID: loopRun.sessionID, role: .status, title: "Loop Saved", text: "Saved loop to Loop Bank."))
+                        } catch {
+                            store.append(.init(sessionID: loopRun.sessionID, role: .error, title: "Loop Save Failed", text: error.localizedDescription))
+                        }
+                    },
+                    onRevealArtifacts: loopRun.artifactDirectoryPath.map { path in
+                        { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+                    },
+                    onRevealWorktree: loopRun.artifactDirectoryPath.map { path in
+                        { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path).appendingPathComponent("worktree", isDirectory: true)]) }
+                    },
+                    onApplyWorktree: loopRun.writeTarget == .newWorktree && !loopRun.isActive ? { [viewModel] in viewModel.applyLoopWorktree(loopRun) } : nil,
+                    onDiscardWorktree: loopRun.writeTarget == .newWorktree && !loopRun.isActive ? { [viewModel] in
+                        let alert = NSAlert()
+                        alert.messageText = "Discard loop worktree?"
+                        alert.informativeText = "This removes the loop worktree. Loop artifacts are kept, but unapplied worktree changes will be lost."
+                        alert.alertStyle = .warning
+                        alert.addButton(withTitle: "Discard Worktree")
+                        alert.addButton(withTitle: "Cancel")
+                        guard alert.runModal() == .alertFirstButtonReturn else { return }
+                        viewModel.discardLoopWorktree(loopRun)
+                    } : nil,
+                    onApproveHumanApproval: loopRun.structure == .humanApproval && loopRun.stopReason == .humanInputRequired ? { [store] in
+                        _ = store.resolveHumanApprovalLoopRun(loopRun.id, sessionID: loopRun.sessionID, approved: true)
+                    } : nil,
+                    onRejectHumanApproval: loopRun.structure == .humanApproval && loopRun.stopReason == .humanInputRequired ? { [store] in
+                        _ = store.resolveHumanApprovalLoopRun(loopRun.id, sessionID: loopRun.sessionID, approved: false)
+                    } : nil
+                )
+                return .native(.of(PiAgentNativeLoopRunCardView.self) { view, width in
+                    view.configure(payload: payload, width: width)
+                })
+            }
             if let memoryEvent = entry.agentMemoryEvent {
                 let payload = NativeMemoryCardPayload.make(event: memoryEvent)
                 return .native(.of(PiAgentNativeMemoryCardView.self) { view, width in
@@ -3827,8 +4942,9 @@ struct PiAgentScreen: View {
                 view.configure(payload: payload, width: width)
             })
         case .error(let entry):
-            // Fatal model/provider errors get the richer error row (headline +
-            // collapsible italic detail); per-tool failures keep the compact row.
+            // Fatal model/provider errors get the richer error row (fixed "Error"
+            // headline + full message as the detail body); per-tool failures keep
+            // the compact row.
             if entry.isModelError {
                 let payload = NativeErrorPayload.make(for: entry)
                 return .native(.of(PiAgentNativeErrorRowView.self) { view, width in
@@ -4379,7 +5495,21 @@ struct PiAgentScreen: View {
         let title = entry.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard title.hasPrefix("Tool:") else { return "Running tool" }
         let toolName = title.dropFirst("Tool:".count).trimmingCharacters(in: .whitespacesAndNewlines)
-        return toolProcessingMessage(forToolName: toolName)
+        let detail = mcpToolAddress(from: entry.rawJSON)
+        return toolProcessingMessage(forToolName: toolName, detail: detail)
+    }
+
+    /// Resolves the `server/tool` address from an MCP proxy entry's raw JSON,
+    /// so the live status row can say "Running MCP xcode/ListWindows" instead of
+    /// the generic "Running mcp".
+    private func mcpToolAddress(from rawJSON: String?) -> String? {
+        guard let event = PiAgentRPCEventRenderCache.event(from: rawJSON),
+              let args = event.args,
+              let rawTool = args["tool"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawTool.isEmpty,
+              let address = MCPConnectionManager.resolveAddress(rawTool, serverHint: args["server"]?.stringValue)
+        else { return nil }
+        return "\(address.server)/\(address.tool)"
     }
 
     /// Turns a raw Pi tool name (and, when available, its target) into a
@@ -4404,6 +5534,7 @@ struct PiAgentScreen: View {
         case "ask_user": return "Waiting for your input"
         case "agent_deck_memory_write", "agent_deck_memory_mark_stale": return "Updating memory"
         case "list_supervisor_requests", "answer_supervisor_request": return "Coordinating Deck agents"
+        case "mcp": return target.map { "Running MCP \($0)" } ?? "Running MCP tool"
         case "": return "Running tool"
         default: return "Running \(name.replacingOccurrences(of: "_", with: " "))"
         }
@@ -4530,10 +5661,10 @@ struct PiAgentScreen: View {
                 inputMode: $inputMode,
                 isRunning: isRunning,
                 isDisabled: isCompacting,
-                placeholder: !hasSelectedSession ? "Start a new Pi Agent session…" : (isCompacting ? "Compacting context…" : (isRunning ? "Steer the current turn…" : "Ask Pi to implement, inspect, explain, or fix…")),
+                placeholder: !hasSelectedSession ? "Start a new Pi Agent session…" : (isCompacting ? "Compacting context…" : (isRunning ? "Steer the current turn…" : "Ask Pi to implement, inspect, explain, or fix… Type / for skills, loops, and prompts.")),
                 canSend: !isCompacting && store.selectedSession != nil && (!composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composerImages.isEmpty || !composerFiles.isEmpty || !composerFolders.isEmpty || composerIssueAttachment != nil || slashSelection != nil),
                 canCreateSession: !isCompacting && store.selectedSession == nil,
-                createSessionProjects: viewModel.selectedDiscoveredProject == nil ? piAgentNewSessionProjects : [],
+                createSessionProjects: piAgentNewSessionProjects,
                 onFiles: addFileAttachments,
                 onFolders: addFolderAttachments,
                 viewModel: viewModel,
@@ -4627,6 +5758,7 @@ struct PiAgentScreen: View {
             case .command: return "Commands"
             case .prompt: return "Prompts"
             case .skill: return "Skills"
+            case .loop: return "Loops"
             }
         }
     }
@@ -4721,6 +5853,29 @@ struct PiAgentScreen: View {
             composerText.replaceSubrange(token.range, with: "")
         }
         composerText = composerText.trimmingCharacters(in: .whitespaces)
+
+        switch item.payload {
+        case .loopCreateNew:
+            loopLaunchDraft = LoopDraft()
+            loopLaunchDefinition = nil
+            slashSelection = nil
+            slashState = SlashSuggestionState()
+            slashUniverse = .empty
+            composerSuggestionsDismissed = true
+            isLoopLaunchSheetPresented = true
+            return
+        case .loopDefinition(let definition):
+            loopLaunchDraft = definition.makeDraft()
+            loopLaunchDefinition = definition
+            slashSelection = nil
+            slashState = SlashSuggestionState()
+            slashUniverse = .empty
+            composerSuggestionsDismissed = true
+            isLoopLaunchSheetPresented = true
+            return
+        default:
+            break
+        }
 
         // For prompts, seed the editor with the body so the user can edit
         // before sending. Commands and skills leave the editor alone — any
@@ -4957,8 +6112,8 @@ struct PiAgentScreen: View {
         }
         let draft = store.composerDraft(for: sessionID)
         composerText = draft.text
-        composerPasteAttachments = []
-        nextComposerPasteID = 1
+        composerPasteAttachments = draft.pasteAttachments
+        nextComposerPasteID = (draft.pasteAttachments.map(\.id).max() ?? 0) + 1
         composerImages = draft.images
         composerFiles = draft.files
         composerFolders = draft.folders
@@ -4968,8 +6123,7 @@ struct PiAgentScreen: View {
 
     private func saveComposerDraft(for sessionID: UUID?) {
         guard let sessionID else { return }
-        let draftText = PiAgentPasteMarkerCodec.expandMarkers(in: composerText, attachments: composerPasteAttachments)
-        store.saveComposerDraft(text: draftText, images: composerImages, files: composerFiles, folders: composerFolders, for: sessionID)
+        store.saveComposerDraft(text: composerText, pasteAttachments: composerPasteAttachments, images: composerImages, files: composerFiles, folders: composerFolders, for: sessionID)
     }
 
     private func clearComposerInput() {
@@ -5175,12 +6329,40 @@ struct PiAgentScreen: View {
         let existing = Set(store.sessions.map(\.id))
         let deleteIDs = ids.intersection(existing)
         guard !deleteIDs.isEmpty else { return }
+        // Compute the next session to make current before deleting, in the
+        // order the user actually sees (the row below the deleted set; the row
+        // above if it ran to the end). `nil` when the current selection survives.
+        let nextID = PiAgentSessionGrouping.nextSelectionAfterDeletion(
+            visibleSessions: visibleSessions,
+            deletedIDs: deleteIDs,
+            selectedID: store.selectedSession?.id
+        )
         selectedSessionIDs.subtract(deleteIDs)
         withAnimation(.snappy(duration: 0.18)) {
-            cachedVisibleSessions.removeAll { deleteIDs.contains($0.id) }
+            // Optimistically drop deleted rows from the rendered sections so the
+            // removal animates; `rebuildVisibleSessions()` below recomputes
+            // `hiddenCount` and everything else correctly in the same tick.
+            cachedSections = cachedSections.map { section in
+                let remaining = section.items.filter { !deleteIDs.contains($0.id) }
+                let removedInThisSection = section.items.count - remaining.count
+                return PiAgentSessionListSection(
+                    id: section.id,
+                    title: section.title,
+                    subtitle: section.subtitle,
+                    iconFileURL: section.iconFileURL,
+                    fallbackSymbolName: section.fallbackSymbolName,
+                    assetName: section.assetName,
+                    items: remaining,
+                    hiddenCount: section.hiddenCount,
+                    isShowMoreActive: section.isShowMoreActive,
+                    isCollapsed: section.isCollapsed,
+                    totalCount: max(0, section.totalCount - removedInThisSection),
+                    isProjectGroup: section.isProjectGroup
+                )
+            }
             hasBuiltVisibleSessions = true
         }
-        viewModel.deletePiAgentSessions(deleteIDs)
+        viewModel.deletePiAgentSessions(deleteIDs, fallbackSelectionID: nextID)
         rebuildVisibleSessions()
         syncMultiSelectionToSelectedSession()
         syncRuntimeFooterSnapshot()
@@ -5213,10 +6395,6 @@ struct PiAgentScreen: View {
             viewModel.renamePiAgentSession(session.id, title: trimmedTitle)
             selectedSessionTitleDraft = trimmedTitle
         }
-    }
-
-    private func sortedSessions(_ sessions: [PiAgentSessionRecord]) -> [PiAgentSessionRecord] {
-        sessions.sorted { PiAgentSessionRecord.sessionListPrecedes($0, $1) }
     }
 
     private func sessionMatchesSearch(_ session: PiAgentSessionRecord, query: String) -> Bool {
@@ -5270,6 +6448,9 @@ private struct PiAgentComposerPanel: View {
     @State private var slashUniverse: SlashUniverse = .empty
     @State private var slashState = SlashSuggestionState()
     @State private var slashSelection: SlashItem?
+    @State private var isLoopLaunchSheetPresented = false
+    @State private var loopLaunchDraft = LoopDraft()
+    @State private var loopLaunchDefinition: LoopDefinition?
     @State private var lastSlashTriggerActive = false
     @State private var inputMode: PiAgentInputMode = .steer
     @State private var composerPasteAttachments: [PiAgentPasteAttachment] = []
@@ -5332,10 +6513,10 @@ private struct PiAgentComposerPanel: View {
                 inputMode: $inputMode,
                 isRunning: isRunning,
                 isDisabled: isCompacting,
-                placeholder: !hasSelectedSession ? "Start a new Pi Agent session…" : (isCompacting ? "Compacting context…" : (isRunning ? "Steer the current turn…" : "Ask Pi to implement, inspect, explain, or fix…")),
+                placeholder: !hasSelectedSession ? "Start a new Pi Agent session…" : (isCompacting ? "Compacting context…" : (isRunning ? "Steer the current turn…" : "Ask Pi to implement, inspect, explain, or fix… Type / for skills, loops, and prompts.")),
                 canSend: !isCompacting && store.selectedSession != nil && (!composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composerImages.isEmpty || !composerFiles.isEmpty || !composerFolders.isEmpty || composerIssueAttachment != nil || slashSelection != nil),
                 canCreateSession: !isCompacting && store.selectedSession == nil,
-                createSessionProjects: viewModel.selectedDiscoveredProject == nil ? piAgentNewSessionProjects : [],
+                createSessionProjects: piAgentNewSessionProjects,
                 onFiles: addFileAttachments,
                 onFolders: addFolderAttachments,
                 viewModel: viewModel,
@@ -5354,6 +6535,44 @@ private struct PiAgentComposerPanel: View {
             )
         }
         .animation(.easeOut(duration: 0.12), value: hasComposerSuggestions)
+        .sheet(isPresented: $isLoopLaunchSheetPresented) {
+            if let session = store.selectedSession {
+                LoopLaunchSheet(
+                    session: session,
+                    activeRun: store.activeLoopRun(for: session.id),
+                    initialDraft: loopLaunchDraft,
+                    sourceDefinition: loopLaunchDefinition,
+                    availableAgents: viewModel.allDisplayAgents,
+                    onCancel: { isLoopLaunchSheetPresented = false },
+                    onLaunch: { request in
+                        if store.activeLoopRun(for: session.id) != nil && !request.stopExistingActive {
+                            store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "This transcript already has an active loop."))
+                            return
+                        }
+                        if let saveRequest = request.saveRequest {
+                            do {
+                                try viewModel.saveLoopDefinitionFromDraft(request.draft, request: saveRequest)
+                            } catch {
+                                store.append(.init(sessionID: session.id, role: .error, title: "Loop Save Failed", text: error.localizedDescription))
+                                return
+                            }
+                        }
+                        Task { @MainActor in
+                            isLoopLaunchSheetPresented = false
+                            let launched = await viewModel.launchLoop(
+                                session: session,
+                                draft: request.draft,
+                                stopExistingActive: request.stopExistingActive
+                            )
+                            guard launched != nil else {
+                                store.append(.init(sessionID: session.id, role: .error, title: "Loop Launch Failed", text: "The loop could not be started."))
+                                return
+                            }
+                        }
+                    }
+                )
+            }
+        }
         .onChange(of: composerText) { _, _ in
             composerSuggestionIndex = 0
             composerSuggestionsDismissed = false
@@ -5442,6 +6661,7 @@ private struct PiAgentComposerPanel: View {
             case .command: return "Commands"
             case .prompt: return "Prompts"
             case .skill: return "Skills"
+            case .loop: return "Loops"
             }
         }
     }
@@ -5536,6 +6756,29 @@ private struct PiAgentComposerPanel: View {
             composerText.replaceSubrange(token.range, with: "")
         }
         composerText = composerText.trimmingCharacters(in: .whitespaces)
+
+        switch item.payload {
+        case .loopCreateNew:
+            loopLaunchDraft = LoopDraft()
+            loopLaunchDefinition = nil
+            slashSelection = nil
+            slashState = SlashSuggestionState()
+            slashUniverse = .empty
+            composerSuggestionsDismissed = true
+            isLoopLaunchSheetPresented = true
+            return
+        case .loopDefinition(let definition):
+            loopLaunchDraft = definition.makeDraft()
+            loopLaunchDefinition = definition
+            slashSelection = nil
+            slashState = SlashSuggestionState()
+            slashUniverse = .empty
+            composerSuggestionsDismissed = true
+            isLoopLaunchSheetPresented = true
+            return
+        default:
+            break
+        }
 
         // For prompts, seed the editor with the body so the user can edit
         // before sending. Commands and skills leave the editor alone — any
@@ -5681,6 +6924,11 @@ private struct PiAgentComposerPanel: View {
     }
 
     private func loadComposerDraft(for sessionID: UUID?) {
+        // The slash selection is not part of a persisted composer draft. Drop
+        // it whenever a draft is loaded (session switch, window re-key, etc.)
+        // so a skill chip from session A never leaks into session B.
+        slashSelection = nil
+
         if let pending = viewModel.consumePendingPiAgentComposerText() {
             composerText = pending
             composerIssueAttachment = viewModel.consumePendingPiAgentIssueAttachment()
@@ -5700,8 +6948,8 @@ private struct PiAgentComposerPanel: View {
         }
         let draft = store.composerDraft(for: sessionID)
         composerText = draft.text
-        composerPasteAttachments = []
-        nextComposerPasteID = 1
+        composerPasteAttachments = draft.pasteAttachments
+        nextComposerPasteID = (draft.pasteAttachments.map(\.id).max() ?? 0) + 1
         composerImages = draft.images
         composerFiles = draft.files
         composerFolders = draft.folders
@@ -5711,8 +6959,7 @@ private struct PiAgentComposerPanel: View {
 
     private func saveComposerDraft(for sessionID: UUID?) {
         guard let sessionID else { return }
-        let draftText = PiAgentPasteMarkerCodec.expandMarkers(in: composerText, attachments: composerPasteAttachments)
-        store.saveComposerDraft(text: draftText, images: composerImages, files: composerFiles, folders: composerFolders, for: sessionID)
+        store.saveComposerDraft(text: composerText, pasteAttachments: composerPasteAttachments, images: composerImages, files: composerFiles, folders: composerFolders, for: sessionID)
     }
 
     private func clearComposerInput() {

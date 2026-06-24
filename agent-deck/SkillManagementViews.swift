@@ -71,6 +71,13 @@ struct SkillListMetadata {
     /// the active/catalog split. Cached so the split isn't an O(skills) project-
     /// preference scan on every body eval.
     let isActiveForCurrentProject: Bool
+    /// Whether the skill's root path is tracked in `externalSkillPaths`.
+    /// `isImportedSkill(_:)` resolves `URL.standardizedFileURL` (lstat) per
+    /// call, so the context-menu builder — which SwiftUI re-evaluates during
+    /// layout for every visible row — must read this cached flag instead of
+    /// the live method, otherwise scrolling the skills list stalls the main
+    /// thread with stat syscalls.
+    let isImported: Bool
 }
 
 private enum SkillDetailSummaryState: Equatable {
@@ -92,6 +99,9 @@ struct SkillsScreen: View {
     @State private var skillPendingDeletion: SkillRecord?
     @State private var skillPendingRemoval: SkillRecord?
     @State private var skillsPendingBatchRemoval: [SkillRecord]?
+    @State private var skillPendingDuplicateResolution: (kept: SkillRecord, removed: [SkillRecord])?
+    @State private var hoveredWarningID: String?
+    @State private var skillCompareContext: SkillCompareContext?
     @State private var skillPendingRename: SkillRecord?
     @State private var skillEditTarget: MarkdownFileEditTarget?
     @State private var newSkillDraft: NewSkillDraft?
@@ -173,6 +183,15 @@ struct SkillsScreen: View {
             } message: { skills in
                 Text("Remove \(skills.count) skills from the \(AppBrand.displayName) catalog and clear their assignments? The skill files are not deleted.")
             }
+            .alert("Resolve Duplicate Skill?", isPresented: Binding(
+                get: { skillPendingDuplicateResolution != nil },
+                set: { if !$0 { skillPendingDuplicateResolution = nil } }
+            ), presenting: skillPendingDuplicateResolution) { context in
+                Button("Keep This Copy", role: .destructive) { resolveDuplicateSkill(context) }
+                Button("Cancel", role: .cancel) { skillPendingDuplicateResolution = nil }
+            } message: { context in
+                Text("Keep \"\(context.kept.name)\" from \(context.kept.filePath) and remove \(context.removed.count) other duplicate copy(s). Project assignments, global defaults, and agent skills will stay assigned to the kept copy.")
+            }
             .alert("Skill Updates", isPresented: Binding(
                 get: { viewModel.skillBatchActionMessage != nil },
                 set: { if !$0 { viewModel.skillBatchActionMessage = nil } }
@@ -210,7 +229,7 @@ struct SkillsScreen: View {
         .appDebugLayout("Skills.hsplit", logger: Self.layoutLog)
         .onAppear {
             #if DEBUG
-            Self.layoutLog.debug("Skills.state event=appear selectedIDs=\(selectedSkillIDs.count, privacy: .public) selected=\(selectedSkill?.name ?? "nil", privacy: .public) project=\(viewModel.selectedDiscoveredProject?.name ?? "nil", privacy: .public)")
+            Self.layoutLog.debug("Skills.state event=appear selectedIDs=\(selectedSkillIDs.count, privacy: .public) selected=\(selectedSkill?.name ?? "nil", privacy: .public)")
             #endif
             cachedLayout = recomputeLayout()
             scheduleSelectionSynchronization()
@@ -229,9 +248,6 @@ struct SkillsScreen: View {
         .onChange(of: searchText) { _, _ in
             cachedLayout = recomputeLayout()
             scheduleSelectionSynchronization()
-        }
-        .onChange(of: viewModel.selectedDiscoveredProject) { _, _ in
-            cachedLayout = recomputeLayout()
         }
         // Catches repository sync / update-check results (hasKnownUpdate),
         // which change row badges without touching the skill records.
@@ -310,6 +326,15 @@ struct SkillsScreen: View {
                 }
             }
         }
+        .sheet(item: $skillCompareContext) { context in
+            SkillCompareSheet(
+                context: context,
+                isPresented: Binding(
+                    get: { skillCompareContext != nil },
+                    set: { if !$0 { skillCompareContext = nil } }
+                )
+            )
+        }
     }
 
     @ViewBuilder
@@ -332,7 +357,7 @@ struct SkillsScreen: View {
             ) { skill in
                 skillListRow(
                     skill,
-                    metadata: metadataByID[skill.id] ?? SkillListMetadata(isAssigned: false, hasWarnings: false, isActiveForCurrentProject: false),
+                    metadata: metadataByID[skill.id] ?? SkillListMetadata(isAssigned: false, hasWarnings: false, isActiveForCurrentProject: false, isImported: viewModel.isImportedSkill(skill)),
                     inactive: layout.inactiveByID[skill.id]
                 )
             }
@@ -378,9 +403,7 @@ struct SkillsScreen: View {
         managedSkills: [SkillRecord],
         repositoryBySkillID: [SkillRecord.ID: ImportedSkillRepository]
     ) {
-        let metadataByID = viewModel.cachedSkillMetadataByID
         let allRecords = viewModel.allVisibleSkillRecords
-        let project = selectedProject
 
         let grouped = Dictionary(grouping: allRecords, by: \.name)
         let preferred = grouped.values.compactMap(preferredSkillRecord)
@@ -427,16 +450,11 @@ struct SkillsScreen: View {
             }
         }
 
-        // Same fallback as the previous body-time `skillIsActiveForCurrentProject`
-        // — covers the pre-first-scan window where `cachedSkillMetadataByID`
-        // hasn't been populated yet.
-        func isActiveForCurrentProject(_ skill: SkillRecord) -> Bool {
-            if let cached = metadataByID[skill.id] {
-                return cached.isActiveForCurrentProject
-            }
-            if viewModel.skillIsEnabledGlobally(skill) { return true }
-            if let project, viewModel.skill(skill, isEnabledFor: project) { return true }
-            return false
+        // A row is visually active when the skill is Default, assigned to at
+        // least one project, or assigned to at least one Deck agent. Dim only
+        // skills that are present in the catalog but unused everywhere.
+        func isAssignedSomewhere(_ skill: SkillRecord) -> Bool {
+            viewModel.skillIsEnabledGlobally(skill) || !viewModel.assignedProjects(for: skill).isEmpty
         }
 
         var sections: [AppListSection<SkillRecord>] = []
@@ -446,45 +464,24 @@ struct SkillsScreen: View {
             for item in items { inactiveByID[item.id] = inactive }
         }
 
-        if project != nil {
-            let active = managed.filter { isActiveForCurrentProject($0) }
-            let catalog = managed.filter { !isActiveForCurrentProject($0) }
-            mark(active, inactive: false)
+        let global = managed.filter { viewModel.skillIsEnabledGlobally($0) }
+        let catalog = managed.filter { !viewModel.skillIsEnabledGlobally($0) }
+        mark(global, inactive: false)
+        sections.append(AppListSection(
+            id: "global",
+            title: "Default Skills",
+            info: "Injected into every parent Pi Agent session. This is global runtime injection, not per-project assignment.",
+            items: global,
+            emptyMessage: "No default skills."
+        ))
+        if !catalog.isEmpty {
+            for item in catalog { inactiveByID[item.id] = !isAssignedSomewhere(item) }
             sections.append(AppListSection(
-                id: "active",
-                title: "Active",
-                items: active,
-                emptyMessage: "No skills are assigned for this project."
+                id: "catalog",
+                title: "Catalog",
+                info: "Available skills. They are not injected until made Default, assigned to a project runtime, or assigned to a Deck agent.",
+                items: catalog
             ))
-            if !catalog.isEmpty {
-                mark(catalog, inactive: true)
-                sections.append(AppListSection(
-                    id: "catalog",
-                    title: "Catalog",
-                    info: "Available skills. They are not injected until made Default, assigned to a project runtime, or assigned to a Deck agent.",
-                    items: catalog
-                ))
-            }
-        } else {
-            let global = managed.filter { viewModel.skillIsEnabledGlobally($0) }
-            let catalog = managed.filter { !isActiveForCurrentProject($0) }
-            mark(global, inactive: false)
-            sections.append(AppListSection(
-                id: "global",
-                title: "Default Skills",
-                info: "Injected into every parent Pi Agent session. This is global runtime injection, not per-project assignment.",
-                items: global,
-                emptyMessage: "No default skills."
-            ))
-            if !catalog.isEmpty {
-                mark(catalog, inactive: true)
-                sections.append(AppListSection(
-                    id: "catalog",
-                    title: "Catalog",
-                    info: "Available skills. They are not injected until made Default, assigned to a project runtime, or assigned to a Deck agent.",
-                    items: catalog
-                ))
-            }
         }
 
         return (sections, inactiveByID, managed, repositoryBySkillID)
@@ -492,11 +489,21 @@ struct SkillsScreen: View {
 
     /// Selection-aware list context menu. A single right-clicked skill gets the
     /// full action set; a multi-selection gets a batch delete.
+    ///
+    /// `metadataByID` carries the cached `isImported` flag so this builder —
+    /// which SwiftUI re-evaluates during layout for every visible row, not
+    /// only when the menu opens — never calls `viewModel.isImportedSkill`
+    /// (an `lstat` syscall) on the main thread while scrolling.
     @ViewBuilder
-    private func skillContextMenu(for ids: Set<SkillRecord.ID>) -> some View {
+    private func skillContextMenu(
+        for ids: Set<SkillRecord.ID>,
+        metadataByID: [SkillRecord.ID: SkillListMetadata]
+    ) -> some View {
+        // Cache-miss falls back to the live method; in practice the cache is
+        // populated for every skill after the first scan, so this is rare.
         let skills = managedSkills.filter { ids.contains($0.id) }
         if skills.count > 1 {
-            let importable = skills.filter { viewModel.isImportedSkill($0) }
+            let importable = skills.filter { metadataByID[$0.id]?.isImported ?? viewModel.isImportedSkill($0) }
             let deletable = skills.filter { viewModel.canDeleteSkill($0) }
             if !importable.isEmpty {
                 Button {
@@ -550,11 +557,12 @@ struct SkillsScreen: View {
                 }
             }
 
-            if viewModel.isImportedSkill(skill) || viewModel.canDeleteSkill(skill) {
+            let isImported = metadataByID[skill.id]?.isImported ?? viewModel.isImportedSkill(skill)
+            if isImported || viewModel.canDeleteSkill(skill) {
                 Divider()
             }
 
-            if viewModel.isImportedSkill(skill) {
+            if isImported {
                 Button {
                     skillPendingRemoval = skill
                 } label: {
@@ -616,8 +624,7 @@ struct SkillsScreen: View {
 
     private func diagnosticWarningCard(_ warning: DiagnosticWarning) -> some View {
         Button {
-            selectedSkillIDs = []
-            selectedWarning = .diagnostic(warning)
+            selectDiagnosticWarning(warning)
         } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -633,8 +640,17 @@ struct SkillsScreen: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.plain)
-        .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.orange.opacity(0.25), lineWidth: 1))
+        .background(hoveredWarningID == warning.id ? .orange.opacity(0.16) : .orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(hoveredWarningID == warning.id ? .orange.opacity(0.45) : .orange.opacity(0.25), lineWidth: 1))
+        .animation(.easeInOut(duration: 0.15), value: hoveredWarningID == warning.id)
+        .onHover { hovering in
+            hoveredWarningID = hovering ? warning.id : nil
+        }
+    }
+
+    private func selectDiagnosticWarning(_ warning: DiagnosticWarning) {
+        selectedSkillIDs = []
+        selectedWarning = .diagnostic(warning)
     }
 
     @ViewBuilder
@@ -973,13 +989,14 @@ struct SkillsScreen: View {
                 if let duplicate = duplicateSkillWarningDetails(warning) {
                     AppKeyValueList(rows: [
                         ("Skill", duplicate.name),
-                        ("Issue", "Duplicate skill name"),
-                        ("Locations", duplicate.paths.joined(separator: "\n"))
+                        ("Issue", "Duplicate skill name")
                     ])
 
-                    Text("Keep one canonical copy of this skill and remove or rename the duplicate. Agent Deck can only pass a skill reliably when the name resolves to one path.")
+                    Text("Choose one canonical copy to keep. The other copies will be removed; project assignments, global defaults, and agent skills will stay with the kept copy.")
                         .foregroundStyle(AppTheme.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
+
+                    duplicateSkillResolutionList(for: duplicate)
 
                     HStack {
                         Button("Search Catalog") {
@@ -990,6 +1007,11 @@ struct SkillsScreen: View {
                                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
                             }
                         }
+                        if let compareContext = compareContext(for: duplicate) {
+                            Button("Compare") {
+                                skillCompareContext = compareContext
+                            }
+                        }
                     }
                 } else {
                     Text("Review the referenced file or setting, then fix the malformed or conflicting skill definition.")
@@ -997,6 +1019,67 @@ struct SkillsScreen: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func duplicateSkillResolutionList(for duplicate: (name: String, paths: [String])) -> some View {
+        let records = duplicate.paths.compactMap { path in
+            viewModel.allVisibleSkillRecords.first { $0.filePath == path }
+        }
+
+        if records.count > 1 {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(records) { skill in
+                    let removed = records.filter { $0.id != skill.id }
+                    let canKeep = SkillDuplicateResolution.canResolve(
+                        keeping: skill,
+                        removing: removed,
+                        canDelete: viewModel.canDeleteSkill,
+                        isImported: viewModel.isImportedSkill
+                    )
+
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(skillLocationLabel(skill, selectedProjectRoot: viewModel.globalCatalogSnapshot.projectRoot))
+                                .font(.caption.weight(.semibold))
+                                .fontWidth(.expanded)
+                                .foregroundStyle(AppTheme.mutedText)
+                            Text(skill.filePath)
+                                .font(.caption)
+                                .foregroundStyle(AppTheme.mutedText)
+                                .textSelection(.enabled)
+                                .lineLimit(2)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        if canKeep {
+                            Button("Keep This Copy") {
+                                skillPendingDuplicateResolution = (kept: skill, removed: removed)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        } else {
+                            Text("Protected")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.orange)
+                                .help("This copy cannot be chosen because one or more other copies are bundled or package-managed and cannot be removed.")
+                        }
+                    }
+                    .padding(10)
+                    .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+            }
+        }
+    }
+
+    /// Returns a compare context for the first two resolvable duplicate copies,
+    /// or nil if fewer than two copies are currently visible.
+    private func compareContext(for duplicate: (name: String, paths: [String])) -> SkillCompareContext? {
+        let records = duplicate.paths.compactMap { path in
+            viewModel.allVisibleSkillRecords.first { $0.filePath == path }
+        }
+        guard records.count >= 2 else { return nil }
+        return SkillCompareContext(left: records[0], right: records[1])
     }
 
     private func skillWarningSummaryCard(warnings: [DiagnosticWarning]) -> some View {
@@ -1015,10 +1098,6 @@ struct SkillsScreen: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-    }
-
-    private var selectedProject: DiscoveredProject? {
-        viewModel.selectedDiscoveredProject
     }
 
     /// Reads from the `cachedLayout` rebuilt by `recomputeLayout()` on input
@@ -1048,30 +1127,7 @@ struct SkillsScreen: View {
 
     private var skillDetailSubtitle: String? {
         if selectedSkillIDs.count > 1 { return "Batch actions" }
-        return selectedSkill.map { skillLocationLabel($0, selectedProjectRoot: viewModel.snapshot.projectRoot) }
-    }
-
-    private var activeSkills: [SkillRecord] {
-        if selectedProject != nil {
-            return managedSkills.filter { skillIsActiveForCurrentProject($0) }
-        }
-        return globalSkills
-    }
-
-    private var globalSkills: [SkillRecord] {
-        managedSkills.filter { viewModel.skillIsEnabledGlobally($0) }
-    }
-
-    private var catalogSkills: [SkillRecord] {
-        managedSkills.filter { !skillIsActiveForCurrentProject($0) }
-    }
-
-    private var projectAssignedSkills: [SkillRecord] {
-        guard let selectedProject else { return [] }
-        return managedSkills.filter {
-            viewModel.skill($0, isEnabledFor: selectedProject) &&
-            !viewModel.skillIsEnabledGlobally($0)
-        }
+        return selectedSkill.map { skillLocationLabel($0, selectedProjectRoot: viewModel.globalCatalogSnapshot.projectRoot) }
     }
 
     private func preferredSkillRecord(_ records: [SkillRecord]) -> SkillRecord? {
@@ -1080,17 +1136,6 @@ struct SkillsScreen: View {
         ?? records.first { $0.source.kind == .project }
         ?? records.first { $0.source.kind == .legacyProject }
         ?? records.first
-    }
-
-    private func skillIsActiveForCurrentProject(_ skill: SkillRecord) -> Bool {
-        // Precomputed in AppViewModel's cachedSkillMetadataByID, rebuilt on
-        // data rescans. Live fallback covers the pre-first-scan window.
-        if let cached = viewModel.cachedSkillMetadataByID[skill.id] {
-            return cached.isActiveForCurrentProject
-        }
-        if viewModel.skillIsEnabledGlobally(skill) { return true }
-        if let selectedProject, viewModel.skill(skill, isEnabledFor: selectedProject) { return true }
-        return false
     }
 
     private func scheduleSelectionSynchronization() {
@@ -1137,7 +1182,7 @@ struct SkillsScreen: View {
     }
 
     private func skillListRow(_ skill: SkillRecord, metadata: SkillListMetadata, inactive: Bool? = nil) -> some View {
-        let isActive = metadata.isAssigned
+        let isActive = viewModel.skillIsEnabledGlobally(skill) || !viewModel.assignedProjects(for: skill).isEmpty
         let isInactive = inactive ?? !isActive
         let hasWarnings = metadata.hasWarnings
         let iconName = hasWarnings ? "exclamationmark.triangle.fill" : skillIcon(skill)
@@ -1150,6 +1195,7 @@ struct SkillsScreen: View {
             iconName: iconName,
             iconColor: iconColor,
             isInactive: isInactive,
+            isDisabled: viewModel.bundledSkillIsDisabled(skill),
             repositoryDisplayName: repository?.displayName,
             hasUpdate: hasUpdate,
             isUpdating: repository != nil && isUpdatingSkillRepository,
@@ -1159,6 +1205,10 @@ struct SkillsScreen: View {
             },
             onEdit: { skillEditTarget = makeSkillEditTarget(skill) }
         )
+        // Fill the row and give it a hit-testable shape so a right-click anywhere on the
+        // row (not just on the name text) opens the context menu.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .contextMenu {
             // Selection-aware: a multi-selection that includes the right-
             // clicked row gets the batch actions; otherwise the right-clicked
@@ -1167,7 +1217,7 @@ struct SkillsScreen: View {
             let effectiveIDs: Set<SkillRecord.ID> = (selectedSkillIDs.count > 1 && selectedSkillIDs.contains(skill.id))
                 ? selectedSkillIDs
                 : [skill.id]
-            skillContextMenu(for: effectiveIDs)
+            skillContextMenu(for: effectiveIDs, metadataByID: viewModel.cachedSkillMetadataByID)
         }
     }
 
@@ -1261,7 +1311,10 @@ struct SkillsScreen: View {
     }
 
     private func sourcePath(forAgentNamed agentName: String, projectPath: String) -> String? {
-        viewModel.snapshot.effectiveAgents.first {
+        // The warning is about a specific project's skill visibility, so resolve
+        // the agent against that project's effective agents (not the selected
+        // project). Keeps the Skills view global — no `selectedProjectPath` read.
+        viewModel.startupSnapshot(forProjectPath: projectPath).effectiveAgents.first {
             $0.name == agentName && ($0.projectRoot == projectPath || $0.projectRoot == nil)
         }?.sourcePath
     }
@@ -1302,7 +1355,7 @@ struct SkillsScreen: View {
                             .fontWidth(.expanded)
                             .foregroundStyle(AppTheme.mutedText)
                         HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
+                            AppSpinner().controlSize(.small)
                             Text("Summarising with AI…")
                                 .foregroundStyle(AppTheme.mutedText)
                         }
@@ -1345,7 +1398,7 @@ struct SkillsScreen: View {
         ) {
             switch state {
             case .loading:
-                ProgressView().controlSize(.small)
+                AppSpinner().controlSize(.small)
             case .failed:
                 Image(systemName: "arrow.clockwise")
             default:
@@ -1515,6 +1568,17 @@ struct SkillsScreen: View {
 
             Only imported skills can be removed from the catalog.
             """
+        }
+    }
+
+    private func resolveDuplicateSkill(_ context: (kept: SkillRecord, removed: [SkillRecord])) {
+        do {
+            try viewModel.resolveSkillDuplicate(keeping: context.kept, removing: context.removed)
+            skillPendingDuplicateResolution = nil
+            selectedWarning = nil
+        } catch {
+            skillPendingDuplicateResolution = nil
+            presentSkillActionError(error, skill: context.kept, action: "resolve the duplicate skill")
         }
     }
 
@@ -1778,7 +1842,7 @@ private struct SkillAgentAssignmentList: View {
     }
 
     private func recompute() {
-        let active = viewModel.snapshot.effectiveAgents
+        let active = viewModel.globalCatalogSnapshot.effectiveAgents
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         let activeIDs = Set(active.map(\.id))
         let inactive = viewModel.allDisplayAgents
@@ -1841,6 +1905,7 @@ private struct SkillListRowView: View {
     let iconName: String
     let iconColor: Color
     let isInactive: Bool
+    let isDisabled: Bool
     let repositoryDisplayName: String?
     let hasUpdate: Bool
     let isUpdating: Bool
@@ -1851,6 +1916,7 @@ private struct SkillListRowView: View {
     @State private var isHovered = false
 
     var body: some View {
+        let showsRowActions = isHovered || isUpdating
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: iconName)
                 .foregroundStyle(iconColor)
@@ -1860,6 +1926,7 @@ private struct SkillListRowView: View {
                     .font(.headline)
                     .fontWidth(.expanded)
                     .foregroundStyle(.primary)
+                    .strikethrough(isDisabled, color: AppTheme.mutedText)
                     .lineLimit(1)
                 Text(skill.description ?? "No description")
                     .font(.caption)
@@ -1883,34 +1950,35 @@ private struct SkillListRowView: View {
                     .help(AppLocalization.format("Synced from GitHub · %@", default: "Synced from GitHub · %@", repositoryDisplayName))
                 }
             }
+            .layoutPriority(1)
 
             Spacer(minLength: 0)
 
-            if let onUpdate {
-                Button(action: onUpdate) {
-                    if isUpdating {
-                        AppSpinner().controlSize(.small)
-                    } else {
-                        Text("Update")
-                            .font(.caption.weight(.semibold))
+            if showsRowActions {
+                HStack(spacing: 6) {
+                    if let onUpdate {
+                        Button(action: onUpdate) {
+                            if isUpdating {
+                                AppSpinner().controlSize(.small)
+                            } else {
+                                Label("Update Skill", systemImage: "arrow.down.circle")
+                                    .labelStyle(.iconOnly)
+                            }
+                        }
+                        .appSmallSecondaryButton()
+                        .disabled(isUpdating)
+                        .help(hasUpdate ? "Update available — sync this skill from GitHub" : "Sync this skill from GitHub")
+                    }
+
+                    if canRename {
+                        Button(action: onEdit) {
+                            Label("Edit SKILL.md", systemImage: "square.and.pencil")
+                                .labelStyle(.iconOnly)
+                        }
+                        .appSmallSecondaryButton()
+                        .help("Edit SKILL.md")
                     }
                 }
-                .appSmallSecondaryButton()
-                .opacity(isHovered ? 1 : 0)
-                .disabled(isUpdating)
-                .help(hasUpdate ? "Update available — sync this skill from GitHub" : "Sync this skill from GitHub")
-                .animation(.easeInOut(duration: 0.15), value: isHovered)
-            }
-
-            if canRename {
-                Button(action: onEdit) {
-                    Text("Edit")
-                        .font(.caption.weight(.semibold))
-                }
-                .appSmallSecondaryButton()
-                .opacity(isHovered ? 1 : 0)
-                .help("Edit SKILL.md")
-                .animation(.easeInOut(duration: 0.15), value: isHovered)
             }
         }
         .onHover { isHovered = $0 }
