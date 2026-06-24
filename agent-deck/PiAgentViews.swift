@@ -575,6 +575,9 @@ private struct PiAgentAppKitTranscriptItem {
     let id: String
     let kind: PiAgentTranscriptCellKind
     let contentRevision: Int
+    /// Non-nil only for top-level user question rows (`q-<threadID>`). Used by
+    /// the transcript-side navigation rail without affecting row layout.
+    let questionNavigationTitle: String?
     /// Vertical spacing baked into the row, applied as padding inside the cell.
     /// `NSTableView.intercellSpacing` is uniform, but the transcript needs
     /// different gaps (question↔reply, sibling, thread↔thread) — so each gap is
@@ -592,6 +595,7 @@ private struct PiAgentAppKitTranscriptItem {
         id: String,
         kind: PiAgentTranscriptCellKind,
         contentRevision: Int = 0,
+        questionNavigationTitle: String? = nil,
         topInset: CGFloat = 0,
         bottomInset: CGFloat = 0,
         estimatedHeight: @escaping (CGFloat) -> CGFloat = { _ in 120 }
@@ -599,6 +603,7 @@ private struct PiAgentAppKitTranscriptItem {
         self.id = id
         self.kind = kind
         self.contentRevision = contentRevision
+        self.questionNavigationTitle = questionNavigationTitle
         self.topInset = topInset
         self.bottomInset = bottomInset
         self.estimatedHeight = estimatedHeight
@@ -608,6 +613,121 @@ private struct PiAgentAppKitTranscriptItem {
 
 private enum PiAgentTranscriptTableSection: Hashable {
     case main
+}
+
+private struct UserQuestionNavigationRailItem: Equatable {
+    let id: String
+    let title: String
+    let fraction: CGFloat
+    let isActive: Bool
+}
+
+private final class UserQuestionNavigationRailView: NSView {
+    var onSelect: ((String) -> Void)?
+    private var items: [UserQuestionNavigationRailItem] = []
+    private var hoveredID: String?
+    private var trackingArea: NSTrackingArea?
+
+    override var isFlipped: Bool { true }
+
+    func configure(items: [UserQuestionNavigationRailItem]) {
+        guard self.items != items else { return }
+        self.items = items
+        if let hoveredID, !items.contains(where: { $0.id == hoveredID }) {
+            self.hoveredID = nil
+        }
+        isHidden = items.count < 2
+        needsDisplay = true
+    }
+
+    override func updateTrackingAreas() {
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.activeInKeyWindow, .mouseEnteredAndExited, .mouseMoved, .inVisibleRect],
+            owner: self
+        )
+        addTrackingArea(area)
+        trackingArea = area
+        super.updateTrackingAreas()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        item(at: point) == nil ? nil : self
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        alphaValue = 1
+        updateHover(with: event)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        updateHover(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hoveredID = nil
+        alphaValue = 0.62
+        needsDisplay = true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let item = item(at: convert(event.locationInWindow, from: nil)) else { return }
+        onSelect?(item.id)
+    }
+
+    private func updateHover(with event: NSEvent) {
+        let nextID = item(at: convert(event.locationInWindow, from: nil))?.id
+        guard nextID != hoveredID else { return }
+        hoveredID = nextID
+        needsDisplay = true
+    }
+
+    private func item(at point: NSPoint) -> UserQuestionNavigationRailItem? {
+        items.first { item in
+            let y = markY(for: item)
+            let expanded = item.id == hoveredID
+            let hitWidth: CGFloat = expanded ? min(bounds.width, 260) : 28
+            return point.x >= bounds.maxX - hitWidth && abs(point.y - y) <= 12
+        }
+    }
+
+    private func markY(for item: UserQuestionNavigationRailItem) -> CGFloat {
+        let inset: CGFloat = 10
+        return inset + max(0, min(1, item.fraction)) * max(1, bounds.height - inset * 2)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard !items.isEmpty else { return }
+        let accent = AppTheme.ns(AppTheme.brandAccent)
+        let inactive = NSColor.secondaryLabelColor
+        for item in items {
+            let y = markY(for: item)
+            let hovered = item.id == hoveredID
+            let active = item.isActive || hovered
+            let markRect = NSRect(x: bounds.maxX - 14, y: y - (active ? 4 : 3), width: active ? 10 : 8, height: active ? 8 : 6)
+            (active ? accent : inactive.withAlphaComponent(0.34)).setFill()
+            NSBezierPath(roundedRect: markRect, xRadius: 3, yRadius: 3).fill()
+
+            guard hovered else { continue }
+            let textWidth = min(max(96, bounds.width - 26), 240)
+            let bubbleRect = NSRect(x: bounds.maxX - 22 - textWidth, y: y - 13, width: textWidth, height: 26)
+            accent.withAlphaComponent(0.14).setFill()
+            NSBezierPath(roundedRect: bubbleRect, xRadius: 8, yRadius: 8).fill()
+            accent.withAlphaComponent(0.28).setStroke()
+            NSBezierPath(roundedRect: bubbleRect, xRadius: 8, yRadius: 8).stroke()
+
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineBreakMode = .byTruncatingTail
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium),
+                .foregroundColor: accent,
+                .paragraphStyle: paragraph
+            ]
+            (item.title as NSString).draw(in: bubbleRect.insetBy(dx: 9, dy: 6), withAttributes: attributes)
+        }
+    }
 }
 
 /// Floating "scroll to latest" affordance shown when the transcript is not
@@ -686,6 +806,8 @@ private struct PiAgentTranscriptBlockDescriptor {
     let estimatedContentHeight: (CGFloat) -> CGFloat
     /// Thread id this block belongs to, or nil for chrome / plan / anchor rows.
     let threadID: String?
+    /// Truncated navigation title for top-level user-question rows.
+    var questionNavigationTitle: String? = nil
     /// True only for a thread's user-question block (drives the 10pt q↔reply gap).
     let isThreadQuestion: Bool
     var topInset: CGFloat = 0
@@ -814,8 +936,17 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
 
+        let questionRail = UserQuestionNavigationRailView(frame: .zero)
+        questionRail.alphaValue = 0.62
+        questionRail.autoresizingMask = [.minXMargin, .height]
+        scrollView.addSubview(questionRail)
+
         context.coordinator.scrollView = scrollView
         context.coordinator.tableView = tableView
+        context.coordinator.questionRail = questionRail
+        questionRail.onSelect = { [weak coordinator = context.coordinator] id in
+            coordinator?.scrollToUserQuestion(id: id)
+        }
         context.coordinator.onBenchAdvanceSession = onBenchAdvanceSession
         context.coordinator.benchSessionCount = benchSessionCount
         context.coordinator.onScrollingChange = onScrollingChange
@@ -864,6 +995,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTableViewDelegate {
         weak var scrollView: NSScrollView?
         weak var tableView: NSTableView?
+        weak var questionRail: UserQuestionNavigationRailView?
         private var dataSource: NSTableViewDiffableDataSource<PiAgentTranscriptTableSection, String>?
 
         // Render-product cache: one persistent cell per item id, returned to the
@@ -1376,6 +1508,63 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             return result
         }
 
+        private func updateQuestionRail() {
+            guard let scrollView, let tableView, let rail = questionRail else { return }
+            let railWidth = min(max(150, scrollView.bounds.width * 0.28), 280)
+            let railHeight = max(80, scrollView.bounds.height * 0.62)
+            rail.frame = NSRect(
+                x: scrollView.bounds.width - railWidth - 14,
+                y: (scrollView.bounds.height - railHeight) / 2,
+                width: railWidth,
+                height: railHeight
+            )
+
+            let questionRows = orderedIDs.enumerated().compactMap { index, id -> (row: Int, id: String, title: String)? in
+                guard let title = itemByID[id]?.questionNavigationTitle else { return nil }
+                return (index, id, title)
+            }
+            guard questionRows.count >= 2 else {
+                rail.configure(items: [])
+                return
+            }
+
+            let documentHeight = max(tableView.bounds.height, scrollView.contentView.bounds.height, 1)
+            let viewportMidY = scrollView.contentView.bounds.midY
+            let activeID = questionRows.min { lhs, rhs in
+                abs(tableView.rect(ofRow: lhs.row).midY - viewportMidY) < abs(tableView.rect(ofRow: rhs.row).midY - viewportMidY)
+            }?.id
+            rail.configure(items: questionRows.map { row, id, title in
+                let fraction = tableView.rect(ofRow: row).midY / documentHeight
+                return UserQuestionNavigationRailItem(id: id, title: title, fraction: fraction, isActive: id == activeID)
+            })
+        }
+
+        func scrollToUserQuestion(id: String) {
+            guard let scrollView, let tableView, let row = orderedIDs.firstIndex(of: id), row >= 0 else { return }
+            stopFollowGlide()
+            isAutoFollowing = false
+            publishPinnedState(false)
+            let clip = scrollView.contentView
+            let rowRect = tableView.rect(ofRow: row)
+            let maxY = max(0, tableView.bounds.height - clip.bounds.height)
+            let targetY = min(max(0, rowRect.minY - 18), maxY)
+            isProgrammaticScroll = true
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.22
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                clip.animator().setBoundsOrigin(NSPoint(x: 0, y: targetY))
+            } completionHandler: { [weak self, weak scrollView] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.isProgrammaticScroll = false
+                    if let scrollView {
+                        scrollView.reflectScrolledClipView(scrollView.contentView)
+                    }
+                    self.updateQuestionRail()
+                }
+            }
+        }
+
         func setupScrollObservation(_ scrollView: NSScrollView) {
             // queue: nil — synchronous delivery on the posting (main) thread.
             // Required so `isProgrammaticScroll` still reads true when the
@@ -1424,6 +1613,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     // so resync column width here to avoid a one-frame horizontal overflow
                     // when the inspector slides in or the window resizes.
                     self.updateColumnWidthIfNeeded()
+                    self.updateQuestionRail()
                     self.publishPinnedState(self.isAutoFollowing)
                     }
                 }
@@ -1436,6 +1626,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             ) { [weak self] _ in
                 MainActor.assumeIsolated {
                     self?.updateColumnWidthIfNeeded()
+                    self?.updateQuestionRail()
                 }
             }
 
@@ -1749,6 +1940,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             lastAutoScrollTurnRevision = autoScrollTurnRevision
             lastBottomScrollRequest = bottomScrollRequest
             tableView.sizeLastColumnToFit()
+            updateQuestionRail()
             maybeStartScrollBenchmark()
 #if DEBUG
             if isSessionSwitch { buildBenchDone = false; scrollProbeDone = false }
@@ -4775,6 +4967,7 @@ struct PiAgentScreen: View {
                             baseRevision: revision,
                             estimatedContentHeight: { Self.estimatedQuestionHeight(question, width: $0) },
                             threadID: item.id,
+                            questionNavigationTitle: Self.questionNavigationTitle(for: question),
                             isThreadQuestion: true
                         ))
                     }
@@ -4863,6 +5056,7 @@ struct PiAgentScreen: View {
                 id: descriptor.id,
                 kind: kind,
                 contentRevision: revisionHasher.finalize(),
+                questionNavigationTitle: descriptor.questionNavigationTitle,
                 topInset: topInset,
                 bottomInset: bottomInset,
                 estimatedHeight: { width in contentEstimate(width) + topInset + bottomInset }
@@ -4962,6 +5156,14 @@ struct PiAgentScreen: View {
             isUserHugged: true,
             fork: fork
         ))
+    }
+
+    private static func questionNavigationTitle(for entry: PiAgentTranscriptEntry) -> String {
+        let collapsed = entry.text
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !collapsed.isEmpty else { return "User message" }
+        return collapsed
     }
 
     /// Per-block height estimators — character-count math, no SwiftUI pass.
