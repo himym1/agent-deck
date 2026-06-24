@@ -42,6 +42,37 @@ final class LoopExecutionStoreTests: XCTestCase {
         XCTAssertTrue(observedTask.contains("You are completing one implementation/review pass"))
     }
 
+    func testLoopRecapEntriesAreGeneratedAndDeduplicated() async throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = try makeSession(store: store)
+        let draft = LoopDraft(
+            goal: "Recap this",
+            structure: .singleAgent,
+            writeTarget: .artifactMarkdown,
+            validationCommand: "/usr/bin/true",
+            makerChecker: LoopMakerCheckerConfig(makerName: "Explorer")
+        )
+
+        let maybeRun = await store.launchSingleAgentLoop(session: session, draft: draft) { _, agentName, task, _, _, _ in
+            Self.fakeRun(parentSessionID: session.id, agentName: agentName, task: task, status: .completed, summary: "done")
+        }
+        let run = try XCTUnwrap(maybeRun)
+
+        let recaps = (store.transcriptsBySessionID[session.id] ?? []).compactMap { entry -> (PiAgentTranscriptEntry, LoopRunRecapMarker)? in
+            guard let marker = LoopRunRecapCodec.decode(from: entry) else { return nil }
+            return (entry, marker)
+        }
+        XCTAssertEqual(recaps.count, 2)
+        XCTAssertEqual(Set(recaps.map { $0.1.kind }), [.iteration, .final])
+        XCTAssertTrue(recaps.contains { $0.0.text.contains("Iteration 1 recap") })
+        XCTAssertTrue(recaps.contains { $0.0.text.contains("Loop final recap") && $0.0.text.contains("Stop reason: Success") })
+
+        store.hydrateLoopRunsFromTranscript(sessionID: session.id)
+        let afterHydrate = (store.transcriptsBySessionID[session.id] ?? []).compactMap(LoopRunRecapCodec.decode(from:))
+        XCTAssertEqual(afterHydrate.count, 2)
+        XCTAssertEqual(afterHydrate.filter { $0.runID == run.id && $0.kind == .final }.count, 1)
+    }
+
     func testSingleAgentLoopMapsChildFailureAndStop() async throws {
         let failedStore = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
         let failedSession = try makeSession(store: failedStore)

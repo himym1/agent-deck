@@ -504,6 +504,7 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
         case .status:
             return entry.isNativeSubagentCard
                 || entry.isLoopTranscriptCard
+                || entry.isLoopRecapEntry
                 || entry.agentMemoryEvent != nil
                 || entry.title == "Compaction"
                 || entry.title == "Retry"
@@ -3778,6 +3779,7 @@ struct PiAgentScreen: View {
     /// jank (see `[[feedback_performance_sensitive]]`).
     @State private var sessionActivityCache: [UUID: PiAgentSessionGitActivity] = [:]
     @State private var isUIRequestSheetPresented = false
+    @State private var isSupervisorRequestSheetPresented = false
     @State private var frozenRuntimeFooterSession: PiAgentSessionRecord?
     @State private var stabilizedProcessingMessage: String?
     @State private var processingMessageUpdateTask: Task<Void, Never>?
@@ -3810,6 +3812,7 @@ struct PiAgentScreen: View {
             syncRuntimeFooterSnapshot()
             syncSelectedSessionTitleDraft()
             isUIRequestSheetPresented = store.selectedUIRequest != nil
+            isSupervisorRequestSheetPresented = selectedPendingSupervisorRequest != nil && store.selectedUIRequest == nil
             rebuildVisibleSessions()
             resetTranscriptAutoScroll()
             // Kick the load synchronously on appear so `isSelectedTranscriptLoading`
@@ -3848,6 +3851,15 @@ struct PiAgentScreen: View {
                     onSubmitFreeform: { sentinel, value in viewModel.respondToPiAgentFreeformUIRequest(request, sentinel: sentinel, value: value) },
                     onConfirm: { confirmed in viewModel.confirmPiAgentUIRequest(request, confirmed: confirmed) },
                     onCancel: { viewModel.cancelPiAgentUIRequest(request) }
+                )
+            }
+        }
+        .sheet(isPresented: supervisorRequestSheetBinding) {
+            if let request = selectedPendingSupervisorRequest {
+                PiSubagentSupervisorRequestSheet(
+                    request: request,
+                    onRespond: { response in viewModel.respondToSubagentSupervisorRequest(request.id, parentSessionID: request.parentSessionID, response: response) },
+                    onCancel: { viewModel.cancelSubagentSupervisorRequest(request.id, parentSessionID: request.parentSessionID) }
                 )
             }
         }
@@ -3898,6 +3910,12 @@ struct PiAgentScreen: View {
         }
         .onChange(of: store.selectedUIRequest?.id) { _, newID in
             isUIRequestSheetPresented = newID != nil
+            if newID == nil, selectedPendingSupervisorRequest != nil {
+                isSupervisorRequestSheetPresented = true
+            }
+        }
+        .onChange(of: selectedPendingSupervisorRequest?.id) { _, newID in
+            isSupervisorRequestSheetPresented = newID != nil && store.selectedUIRequest == nil
         }
         .onChange(of: store.selectedSession?.id) { oldID, newID in
             renamingSessionID = nil
@@ -3940,8 +3958,7 @@ struct PiAgentScreen: View {
             rebuildSessionActivityCache()
         }
         .task(id: store.selectedTranscriptRevision) {
-            await Task.yield()
-            scheduleTranscriptCacheUpdate()
+            await handleSelectedTranscriptRevisionTask()
         }
         .sheet(item: selectedSubagentTranscriptBinding) { run in
             PiNativeSubagentTranscriptSheet(
@@ -3973,6 +3990,11 @@ struct PiAgentScreen: View {
         } message: {
             Text(deleteSessionsAlertMessage)
         }
+    }
+
+    private func handleSelectedTranscriptRevisionTask() async {
+        await Task.yield()
+        scheduleTranscriptCacheUpdate()
     }
 
     private var piAgentNewSessionProjects: [DiscoveredProject] {
@@ -4088,6 +4110,27 @@ struct PiAgentScreen: View {
                 }
             }
         )
+    }
+
+    private var supervisorRequestSheetBinding: Binding<Bool> {
+        Binding(
+            get: { isSupervisorRequestSheetPresented && selectedPendingSupervisorRequest != nil && store.selectedUIRequest == nil },
+            set: { isPresented in
+                if isPresented {
+                    isSupervisorRequestSheetPresented = true
+                } else {
+                    isSupervisorRequestSheetPresented = false
+                }
+            }
+        )
+    }
+
+    private var selectedPendingSupervisorRequest: PiSubagentSupervisorRequest? {
+        guard let sessionID = store.selectedSession?.id else { return nil }
+        return store.supervisorRequests(for: sessionID)
+            .filter { $0.status == .pending && $0.kind.isBlocking }
+            .sorted { lhs, rhs in lhs.createdAt < rhs.createdAt }
+            .first
     }
 
 
@@ -4282,6 +4325,12 @@ struct PiAgentScreen: View {
                         request: request,
                         onRespond: { isUIRequestSheetPresented = true },
                         onCancel: { viewModel.cancelPiAgentUIRequest(request) }
+                    )
+                } else if let request = selectedPendingSupervisorRequest {
+                    PiSubagentSupervisorRequestInlineNotice(
+                        request: request,
+                        onRespond: { isSupervisorRequestSheetPresented = true },
+                        onCancel: { viewModel.cancelSubagentSupervisorRequest(request.id, parentSessionID: request.parentSessionID) }
                     )
                 }
 
@@ -4520,24 +4569,6 @@ struct PiAgentScreen: View {
             // The final system prompt is no longer a transcript card — it's a
             // toolbar button (next to Plan / Session Resources / Transcript Display)
             // that opens the same text popover. See `piAgentPrimaryToolbarContent`.
-            for request in store.supervisorRequests(for: session.id).filter({ $0.status == .pending }) {
-                let supervisorPayload = NativeSupervisorPayload.make(
-                    request: request,
-                    onRespond: { response in viewModel.respondToSubagentSupervisorRequest(request.id, parentSessionID: session.id, response: response) },
-                    onCancel: { viewModel.cancelSubagentSupervisorRequest(request.id, parentSessionID: session.id) }
-                )
-                descriptors.append(PiAgentTranscriptBlockDescriptor(
-                    id: "supervisor-request-\(request.id)",
-                    view: nil,
-                    kind: .native(.of(PiAgentNativeSupervisorCardView.self) { view, width in
-                        view.configure(payload: supervisorPayload, width: width)
-                    }),
-                    baseRevision: request.hashValue,
-                    estimatedContentHeight: { _ in 180 },
-                    threadID: nil,
-                    isThreadQuestion: false
-                ))
-            }
         }
 
         if let archive = timelineSnapshot.preCompactionArchive {
@@ -6472,6 +6503,7 @@ private struct PiAgentComposerPanel: View {
     @State private var composerIssueAttachment: PiAgentIssueAttachment?
     @State private var composerAttachmentError: String?
     @State private var frozenRuntimeFooterSession: PiAgentSessionRecord?
+    @State private var loopDetailsRun: LoopRun?
 
     private var piAgentNewSessionProjects: [DiscoveredProject] {
         viewModel.enabledProjects.sorted { lhs, rhs in
@@ -6480,6 +6512,7 @@ private struct PiAgentComposerPanel: View {
     }
 
     var body: some View {
+        let activeLoopRun = store.selectedSession.flatMap { store.activeLoopRun(for: $0.id) }
         let isRunning = store.selectedSession?.status.isActive == true
         let isCompacting = store.selectedSession?.isCompacting == true
         let hasSelectedSession = store.selectedSession != nil
@@ -6512,40 +6545,55 @@ private struct PiAgentComposerPanel: View {
                 )
                 .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottom)))
             }
-            PiAgentComposerBox(
-                text: $composerText,
-                pasteAttachments: $composerPasteAttachments,
-                nextPasteID: $nextComposerPasteID,
-                images: $composerImages,
-                files: $composerFiles,
-                folders: $composerFolders,
-                issueAttachment: $composerIssueAttachment,
-                attachmentError: $composerAttachmentError,
-                inputMode: $inputMode,
-                isRunning: isRunning,
-                isDisabled: isCompacting,
-                placeholder: !hasSelectedSession ? "Start a new Pi Agent session…" : (isCompacting ? "Compacting context…" : (isRunning ? "Steer the current turn…" : "Ask Pi to implement, inspect, explain, or fix… Type / for skills, loops, and prompts.")),
-                canSend: !isCompacting && store.selectedSession != nil && (!composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composerImages.isEmpty || !composerFiles.isEmpty || !composerFolders.isEmpty || composerIssueAttachment != nil || slashSelection != nil),
-                canCreateSession: !isCompacting && store.selectedSession == nil,
-                createSessionProjects: piAgentNewSessionProjects,
-                onFiles: addFileAttachments,
-                onFolders: addFolderAttachments,
-                viewModel: viewModel,
-                footerSession: store.selectedSession,
-                transcript: store.selectedTranscript,
-                supportedThinkingLevels: store.selectedSession.map(supportedThinkingLevels(for:)) ?? [],
-                metricsSession: runtimeFooterSession(isRunning: isRunning),
-                slashSelection: slashSelection,
-                onRemoveSlashSelection: { slashSelection = nil },
-                onSend: hasSelectedSession ? sendComposerMessage : createSessionFromComposer,
-                onStop: { viewModel.stopSelectedPiAgentSession() },
-                onCreateSession: createSessionFromComposer,
-                onCreateSessionForProject: createSessionFromComposer,
-                onClear: clearComposerInput,
-                suggestionKeyBridge: composerSuggestionKeyBridge
-            )
+            if let activeLoopRun {
+                PiAgentLoopControlBar(
+                    run: activeLoopRun,
+                    onOpenDetails: { loopDetailsRun = activeLoopRun },
+                    onStop: { _ = store.stopLoopRun(activeLoopRun.id, sessionID: activeLoopRun.sessionID) },
+                    onRevealArtifacts: revealArtifactsAction(for: activeLoopRun)
+                )
+            } else {
+                PiAgentComposerBox(
+                    text: $composerText,
+                    pasteAttachments: $composerPasteAttachments,
+                    nextPasteID: $nextComposerPasteID,
+                    images: $composerImages,
+                    files: $composerFiles,
+                    folders: $composerFolders,
+                    issueAttachment: $composerIssueAttachment,
+                    attachmentError: $composerAttachmentError,
+                    inputMode: $inputMode,
+                    isRunning: isRunning,
+                    isDisabled: isCompacting,
+                    placeholder: !hasSelectedSession ? "Start a new Pi Agent session…" : (isCompacting ? "Compacting context…" : (isRunning ? "Steer the current turn…" : "Ask Pi to implement, inspect, explain, or fix… Type / for skills, loops, and prompts.")),
+                    canSend: !isCompacting && store.selectedSession != nil && activeLoopRun == nil && (!composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composerImages.isEmpty || !composerFiles.isEmpty || !composerFolders.isEmpty || composerIssueAttachment != nil || slashSelection != nil),
+                    canCreateSession: !isCompacting && store.selectedSession == nil,
+                    createSessionProjects: piAgentNewSessionProjects,
+                    onFiles: addFileAttachments,
+                    onFolders: addFolderAttachments,
+                    viewModel: viewModel,
+                    footerSession: store.selectedSession,
+                    transcript: store.selectedTranscript,
+                    supportedThinkingLevels: store.selectedSession.map(supportedThinkingLevels(for:)) ?? [],
+                    metricsSession: runtimeFooterSession(isRunning: isRunning),
+                    slashSelection: slashSelection,
+                    onRemoveSlashSelection: { slashSelection = nil },
+                    onSend: hasSelectedSession ? sendComposerMessage : createSessionFromComposer,
+                    onStop: { viewModel.stopSelectedPiAgentSession() },
+                    onCreateSession: createSessionFromComposer,
+                    onCreateSessionForProject: createSessionFromComposer,
+                    onClear: clearComposerInput,
+                    suggestionKeyBridge: composerSuggestionKeyBridge
+                )
+            }
         }
         .animation(.easeOut(duration: 0.12), value: hasComposerSuggestions)
+        .sheet(item: $loopDetailsRun) { run in
+            PiAgentLoopDetailsSheet(
+                run: run,
+                onRevealArtifacts: revealArtifactsAction(for: run)
+            )
+        }
         .sheet(isPresented: $isLoopLaunchSheetPresented) {
             if let session = store.selectedSession {
                 LoopLaunchSheet(
@@ -6618,6 +6666,11 @@ private struct PiAgentComposerPanel: View {
         .onChange(of: store.selectedSession?.status.isActive) { _, _ in
             syncRuntimeFooterSnapshot()
         }
+    }
+
+    private func revealArtifactsAction(for run: LoopRun) -> (() -> Void)? {
+        guard let path = run.artifactDirectoryPath else { return nil }
+        return { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
     }
 
     private var activeSuggestionToken: (token: String, range: Range<String.Index>)? {
@@ -7012,6 +7065,10 @@ private struct PiAgentComposerPanel: View {
     }
 
     private func sendComposerMessage() {
+        if let session = store.selectedSession, store.activeLoopRun(for: session.id) != nil {
+            store.append(.init(sessionID: session.id, role: .status, title: "Composer Locked", text: "Loop running — use loop controls."))
+            return
+        }
         let activePasteAttachments = PiAgentPasteMarkerCodec.activeAttachments(in: composerText, attachments: composerPasteAttachments)
         let expandedComposerText = PiAgentPasteMarkerCodec.expandMarkers(in: composerText, attachments: activePasteAttachments)
         let baseMessage = expandedComposerText.trimmingCharacters(in: .whitespacesAndNewlines)

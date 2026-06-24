@@ -526,6 +526,120 @@ extension PiAgentTranscriptEntry {
     var isLoopTranscriptCard: Bool {
         LoopRunTranscriptCodec.decode(from: self) != nil
     }
+
+    var isLoopRecapEntry: Bool {
+        LoopRunRecapCodec.decode(from: self) != nil
+    }
+}
+
+enum LoopRunRecapKind: String, Codable, Hashable, Sendable {
+    case iteration
+    case final
+}
+
+struct LoopRunRecapMarker: Codable, Equatable, Sendable {
+    var runID: UUID
+    var kind: LoopRunRecapKind
+    var iterationIndex: Int?
+}
+
+enum LoopRunRecapCodec {
+    static let title = "Loop Recap"
+
+    static func marker(for run: LoopRun, iterationIndex: Int) -> LoopRunRecapMarker {
+        LoopRunRecapMarker(runID: run.id, kind: .iteration, iterationIndex: iterationIndex)
+    }
+
+    static func finalMarker(for run: LoopRun) -> LoopRunRecapMarker {
+        LoopRunRecapMarker(runID: run.id, kind: .final, iterationIndex: nil)
+    }
+
+    static func decode(from entry: PiAgentTranscriptEntry) -> LoopRunRecapMarker? {
+        guard entry.role == .status,
+              entry.title == title,
+              let rawJSON = entry.rawJSON,
+              let data = rawJSON.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(LoopRunRecapMarker.self, from: data)
+    }
+
+    static func rawJSON(for marker: LoopRunRecapMarker) -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(marker) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func iterationText(for run: LoopRun, iteration: LoopIteration) -> String {
+        var parts: [String] = ["∞ Iteration \(iteration.index) recap — \(run.structure.displayName)", iteration.summary]
+        if let checkerResult = iteration.checkerResult {
+            parts.append("Checker: \(checkerResult.displayName)")
+        }
+        if let validation = iteration.validationResult {
+            parts.append("Validation: \(validation.didPass ? "passed" : "failed")\(validation.exitCode.map { " (exit \($0))" } ?? "")")
+        }
+        if !iteration.artifacts.isEmpty {
+            parts.append("Artifacts: \(iteration.artifacts.map(\.filename).joined(separator: ", "))")
+        }
+        if !iteration.changedFiles.isEmpty {
+            parts.append("Changed files: \(iteration.changedFiles.prefix(6).joined(separator: ", "))")
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    static func finalText(for run: LoopRun) -> String {
+        var lines: [String] = [
+            "∞ Loop final recap — \(run.status.displayName)",
+            "Structure: \(run.structure.displayName)",
+            "Iterations: \(run.iterations.count)/\(run.maxIterations)"
+        ]
+        if let stopReason = run.stopReason {
+            lines.append("Stop reason: \(stopReason.displayName)")
+        }
+        if run.structure == .makerChecker {
+            if let checkerResult = run.iterations.last?.checkerResult {
+                lines.append("Final checker result: \(checkerResult.displayName)")
+            }
+            if run.stopReason == .maxIterationsReached {
+                lines.append("Maker + Checker stopped after the configured review rounds without approval.")
+            } else if run.iterations.last?.checkerResult == .reject {
+                lines.append("Maker + Checker ended on a rejection.")
+            }
+        }
+        if let validation = run.iterations.last?.validationResult {
+            lines.append("Validation: \(validation.didPass ? "passed" : "failed")\(validation.exitCode.map { " (exit \($0))" } ?? "")")
+        }
+        let artifacts = run.iterations.flatMap(\.artifacts)
+        if !artifacts.isEmpty {
+            lines.append("Artifacts: \(artifacts.suffix(3).map(\.filename).joined(separator: ", "))")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    static func transcriptEntry(for run: LoopRun, iteration: LoopIteration, id: UUID = UUID()) -> PiAgentTranscriptEntry {
+        let marker = marker(for: run, iterationIndex: iteration.index)
+        return PiAgentTranscriptEntry(
+            id: id,
+            sessionID: run.sessionID,
+            role: .status,
+            title: title,
+            text: iterationText(for: run, iteration: iteration),
+            rawJSON: rawJSON(for: marker),
+            timestamp: iteration.endedAt ?? Date()
+        )
+    }
+
+    static func finalTranscriptEntry(for run: LoopRun, id: UUID = UUID()) -> PiAgentTranscriptEntry {
+        let marker = finalMarker(for: run)
+        return PiAgentTranscriptEntry(
+            id: id,
+            sessionID: run.sessionID,
+            role: .status,
+            title: title,
+            text: finalText(for: run),
+            rawJSON: rawJSON(for: marker),
+            timestamp: run.endedAt ?? Date()
+        )
+    }
 }
 
 enum LoopRunTranscriptCodec {
