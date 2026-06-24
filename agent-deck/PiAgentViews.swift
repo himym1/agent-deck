@@ -4477,10 +4477,13 @@ struct PiAgentScreen: View {
             hasher.combine(session.forkedFromParentTitle)      // fork-origin card
             hasher.combine(session.forkedFromSessionID)
             hasher.combine(session.forkedFromTranscriptSnapshot)
-            // Full run/request records (the chrome revisions only hash a summary):
-            // a card/notice reflects the whole record, so hash all of it.
-            for run in store.subagentRuns(for: session.id) { hasher.combine(run) }
-            for request in store.supervisorRequests(for: session.id) { hasher.combine(request) }
+            // Full run/request records can be large (nested child records, output,
+            // timestamps). Hashing them on every SwiftUI body pass showed up in
+            // itemsBuild hitch stacks. The store revisions are bumped on every
+            // mutation, so they keep descriptor memoization correct without the
+            // per-pass deep Hashable walk.
+            hasher.combine(store.subagentRunsRevision)
+            hasher.combine(store.supervisorRequestsRevision)
         }
         return hasher.finalize()
     }
@@ -4509,8 +4512,8 @@ struct PiAgentScreen: View {
             forkHasher.combine(session.forkedFromSessionID)
             forkHasher.combine(session.forkedFromTranscriptSnapshot)
             components["fork"] = forkHasher.finalize()
-            components["runs"] = store.subagentRuns(for: session.id).hashValue
-            components["requests"] = store.supervisorRequests(for: session.id).hashValue
+            components["runs"] = store.subagentRunsRevision
+            components["requests"] = store.supervisorRequestsRevision
         }
         let previous = transcriptCache.lastItemsBuildComponents
         transcriptCache.lastItemsBuildComponents = components

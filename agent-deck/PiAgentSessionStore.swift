@@ -28,6 +28,9 @@ final class PiAgentSessionStore {
     /// re-evaluate a filtered/sorted layout. Views should `.onChange(of:)` /
     /// `.task(id:)` this counter and re-read the dict in the handler.
     private(set) var subagentRunsRevision: Int = 0
+    /// Same broad revision for supervisor requests. Transcript item memoization
+    /// reads this instead of hashing every full request record on each body pass.
+    private(set) var supervisorRequestsRevision: Int = 0
     private(set) var transcriptsBySessionID: [UUID: [PiAgentTranscriptEntry]] = [:]
     private(set) var transcriptLoadingSessionIDs: Set<UUID> = []
     private(set) var transcriptRevisionsBySessionID: [UUID: Int] = [:]
@@ -43,7 +46,9 @@ final class PiAgentSessionStore {
         didSet { subagentRunsRevision &+= 1 }
     }
     private(set) var subagentTranscriptsByRunID: [UUID: [PiAgentTranscriptEntry]] = [:]
-    private(set) var supervisorRequestsBySessionID: [UUID: [PiSubagentSupervisorRequest]] = [:]
+    private(set) var supervisorRequestsBySessionID: [UUID: [PiSubagentSupervisorRequest]] = [:] {
+        didSet { supervisorRequestsRevision &+= 1 }
+    }
     private(set) var sessionPlansBySessionID: [UUID: PiSessionPlanRecord] = [:]
     private(set) var sessionPlanEventsBySessionID: [UUID: [PiSessionPlanEventRecord]] = [:]
     private(set) var loopRunsBySessionID: [UUID: [LoopRun]] = [:]
