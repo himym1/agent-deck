@@ -1236,7 +1236,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private var pendingRemeasureIDs = Set<String>()
         private var pendingScrollSettle = false
         private var pendingWidthWork: DispatchWorkItem?
+        private var widthReconfigureGeneration = 0
         private var lastWidthChangeTime: CFTimeInterval = 0
+        private let widthChangeSettleWindow: CFTimeInterval = 0.30
         // Smooth auto-follow. The streaming follow doesn't snap to the bottom each
         // batch (that reads as a step every ~130ms); instead a 60fps timer eases
         // the clip origin toward the *current* bottom each frame, continuously
@@ -2549,14 +2551,45 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // char-count estimates (not bucketed) are dropped.
             estimateByID.removeAll()
 
+            scheduleVisibleWidthReconfigure()
+        }
+
+        private func scheduleVisibleWidthReconfigure() {
             pendingWidthWork?.cancel()
+            widthReconfigureGeneration += 1
+            let generation = widthReconfigureGeneration
+            let scheduledWidth = contentWidth
+            let scheduledChangeTime = lastWidthChangeTime
+            let delay = max(0, widthChangeSettleWindow - (CACurrentMediaTime() - scheduledChangeTime))
+#if DEBUG
+            if TranscriptScrollProfiler.verboseTrace {
+                TranscriptScrollProfiler.fileLog("WIDTH reconfig scheduled width=\(String(format: "%.0f", scheduledWidth)) delay=\(String(format: "%.0f", delay * 1000))ms")
+            }
+#endif
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
+                guard generation == self.widthReconfigureGeneration else { return }
                 self.pendingWidthWork = nil
+                let widthChangedAgain = abs(self.contentWidth - scheduledWidth) > 0.5 || self.lastWidthChangeTime != scheduledChangeTime
+                let quietFor = CACurrentMediaTime() - self.lastWidthChangeTime
+                guard !widthChangedAgain, quietFor >= self.widthChangeSettleWindow else {
+#if DEBUG
+                    if TranscriptScrollProfiler.verboseTrace {
+                        TranscriptScrollProfiler.fileLog("WIDTH reconfig reschedule quietFor=\(String(format: "%.0f", quietFor * 1000))ms")
+                    }
+#endif
+                    self.scheduleVisibleWidthReconfigure()
+                    return
+                }
+#if DEBUG
+                if TranscriptScrollProfiler.verboseTrace {
+                    TranscriptScrollProfiler.fileLog("WIDTH reconfig visible width=\(String(format: "%.0f", self.contentWidth))")
+                }
+#endif
                 self.reconfigureAllVisibleCells()
             }
             pendingWidthWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
         }
 
         /// Walk visible rows and reconfigure cells whose content has changed since
@@ -2706,7 +2739,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // detaches the host. That's what keeps multiple visible cells from
             // ever contending for a single shared host (the bug fixed here).
             profiler.noteConfigure()
-            cell.installRootView(item: item, width: width, profiler: profiler, via: via)
+            let deferWidthOnlySettle = CACurrentMediaTime() - lastWidthChangeTime < widthChangeSettleWindow
+            cell.installRootView(item: item, width: width, profiler: profiler, via: via, deferWidthOnlySettle: deferWidthOnlySettle)
             // No measurement here — the cell reports its real height via
             // `onMeasuredHeight` once it lays out. Until then `heightOfRow`
             // serves the char-count estimate (or a cached real height).
@@ -3321,10 +3355,16 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
         /// Configure the cell for an item. Every row is native; the spec's view is
         /// built/reused and pinned to the cell with the row insets.
-        func installRootView(item: PiAgentAppKitTranscriptItem, width: CGFloat, profiler: TranscriptScrollProfiler? = nil, via: String = "scroll-vend") {
+        func installRootView(
+            item: PiAgentAppKitTranscriptItem,
+            width: CGFloat,
+            profiler: TranscriptScrollProfiler? = nil,
+            via: String = "scroll-vend",
+            deferWidthOnlySettle: Bool = false
+        ) {
             self.profiler = profiler
             guard case .native(let spec) = item.kind else { return }
-            installNativeRow(spec: spec, item: item, width: width, via: via)
+            installNativeRow(spec: spec, item: item, width: width, via: via, deferWidthOnlySettle: deferWidthOnlySettle)
         }
 
         /// Tear down the native row view (when a recycled cell switches to a
@@ -3344,7 +3384,13 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// Native render path: build/configure the spec's view pinned to the cell
         /// with the row insets, rebuilding if the recycled cell held a different
         /// view type.
-        private func installNativeRow(spec: NativeRowSpec, item: PiAgentAppKitTranscriptItem, width: CGFloat, via: String = "scroll-vend") {
+        private func installNativeRow(
+            spec: NativeRowSpec,
+            item: PiAgentAppKitTranscriptItem,
+            width: CGFloat,
+            via: String = "scroll-vend",
+            deferWidthOnlySettle: Bool = false
+        ) {
             // A recycled cell holding a different native view type must rebuild it.
             if let existingType = nativeRowTypeID, existingType != spec.typeID {
                 teardownNativeRow()
@@ -3446,8 +3492,17 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // The cell will lay out naturally when it scrolls into view.
             let hasVisibleNativeGeometry = spec.typeID != ObjectIdentifier(PiAgentNativeSpacerView.self)
             let needsInitialSettle = hasVisibleNativeGeometry && (createdNow || itemChanged)
+            let isWidthOnlySettle = !createdNow && !needsInitialSettle && widthChanged && !insetChanged
             if via != "prewarm", needsInitialSettle || (!createdNow && (widthChanged || insetChanged)) {
-                spec.settle(row)
+                if deferWidthOnlySettle && isWidthOnlySettle {
+#if DEBUG
+                    if TranscriptScrollProfiler.verboseTrace {
+                        TranscriptScrollProfiler.fileLog("WIDTH settle skipped row=\(row) via=\(via)")
+                    }
+#endif
+                } else {
+                    spec.settle(row)
+                }
             }
             configuredItemID = item.id
             configuredRevision = item.contentRevision

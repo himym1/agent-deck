@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import os
 
 
 /// Shared animation for the sidebar's Resources ↔ Coding Agent push. A gentle
@@ -554,6 +555,7 @@ struct ContentView: View {
     @State private var isIssuesFilterPopoverPresented = false
     @State private var isAgentsFilterPopoverPresented = false
     #if DEBUG
+    @State private var sidebarExpandBenchTask: Task<Void, Never>?
     /// Flip to `true` when testing onboarding.
     private static let forceOnboardingOnLaunch = false
     #endif
@@ -588,7 +590,106 @@ struct ContentView: View {
                     completeOnboarding()
                 }
             }
+#if DEBUG
+            .onAppear { startSidebarExpandBenchIfEnabled() }
+            .onReceive(NotificationCenter.default.publisher(for: .sidebarExpandBenchShouldStart)) { _ in
+                startSidebarExpandBenchIfEnabled()
+            }
+            .onDisappear {
+                sidebarExpandBenchTask?.cancel()
+                sidebarExpandBenchTask = nil
+            }
+#endif
     }
+
+#if DEBUG
+    /// DEBUG/autoperf bench that reproduces compact↔expanded sidebar toggles while
+    /// the PiAgentTranscript detail remains mounted. Enable with
+    /// `SidebarExpandBenchEnabled` or run through `AGENTDECK_AUTOPERF=1`.
+    private func startSidebarExpandBenchIfEnabled() {
+        guard UserDefaults.standard.bool(forKey: "SidebarExpandBenchEnabled"),
+              sidebarExpandBenchTask == nil else { return }
+        sidebarExpandBenchTask = Task { @MainActor in
+            await runSidebarExpandBench()
+            sidebarExpandBenchTask = nil
+        }
+    }
+
+    @MainActor
+    private func runSidebarExpandBench() async {
+        let defaults = UserDefaults.standard
+        let rounds = max(1, defaults.object(forKey: "SidebarExpandBenchRounds") as? Int ?? 10)
+        let settleMs = max(80, defaults.object(forKey: "SidebarExpandBenchSettleMs") as? Int ?? 650)
+
+        viewModel.openPiAgentScreen()
+        for _ in 0..<20 {
+            guard !Task.isCancelled else { return }
+            if !viewModel.piAgentSessionStore.sessions.isEmpty { break }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+
+        let store = viewModel.piAgentSessionStore
+        let chosen = store.sidebarExpandBenchLargestParentTranscriptCandidate()
+        if let chosen, store.selectedSessionID != chosen.sessionID {
+            store.select(chosen.sessionID)
+        } else if let chosen {
+            store.requestTranscriptLoad(for: chosen.sessionID)
+        }
+        for _ in 0..<40 {
+            guard !Task.isCancelled else { return }
+            let selectedID = store.selectedSessionID
+            if selectedID != nil && !store.isSelectedTranscriptLoading { break }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+
+        let selectedID = store.selectedSessionID
+        let selectedSession = selectedID?.uuidString ?? "none"
+        let fileSize = chosen?.fileSize ?? 0
+        let loadedCount = selectedID.map { store.transcriptsBySessionID[$0]?.count ?? 0 } ?? 0
+        TranscriptScrollProfiler.logger.error("SIDEBAR_EXPANDBENCH PREPARE cycles=\(rounds) settleMs=\(settleMs) chosen=\(selectedSession, privacy: .public) fileSize=\(fileSize) entries=\(loadedCount)")
+        TranscriptScrollProfiler.fileLog("SIDEBAR_EXPANDBENCH PREPARE cycles=\(rounds) settleMs=\(settleMs) chosen=\(selectedSession) fileSize=\(fileSize) entries=\(loadedCount)")
+
+        let originalExpanded = viewModel.isCodingAgentPanelExpanded
+        viewModel.isCodingAgentPanelExpanded = false
+        try? await Task.sleep(for: .milliseconds(settleMs))
+        guard !Task.isCancelled else { return }
+
+        let hitchesAtStart = HangWatchdog.hitchCount
+        let hangsAtStart = HangWatchdog.hangCount
+        let hangMsAtStart = HangWatchdog.hangMsTotal
+        HangWatchdog.worstHitchMs = 0
+        PerfScene.current = "SidebarExpandBench"
+        defer { PerfScene.current = "app" }
+        let ready = "SIDEBAR_EXPANDBENCH START_READY cycles=\(rounds) startState=compact chosen=\(selectedSession) fileSize=\(fileSize) entries=\(loadedCount)"
+        TranscriptScrollProfiler.logger.error("\(ready, privacy: .public)")
+        TranscriptScrollProfiler.fileLog(ready)
+
+        for cycle in 1...rounds {
+            guard !Task.isCancelled else { return }
+            let expandStartedAt = CACurrentMediaTime()
+            viewModel.isCodingAgentPanelExpanded = true
+            try? await Task.sleep(for: .milliseconds(settleMs))
+            let expandElapsedMs = Int((CACurrentMediaTime() - expandStartedAt) * 1000)
+            let expandLine = "SIDEBAR_EXPANDBENCH cycle=\(cycle)/\(rounds) action=expand state=expanded elapsed=\(expandElapsedMs)ms hitches=\(HangWatchdog.hitchCount - hitchesAtStart) hangs=\(HangWatchdog.hangCount - hangsAtStart) worstHitch=\(HangWatchdog.worstHitchMs)ms"
+            TranscriptScrollProfiler.logger.error("\(expandLine, privacy: .public)")
+            TranscriptScrollProfiler.fileLog(expandLine)
+
+            guard !Task.isCancelled else { return }
+            let collapseStartedAt = CACurrentMediaTime()
+            viewModel.isCodingAgentPanelExpanded = false
+            try? await Task.sleep(for: .milliseconds(settleMs))
+            let collapseElapsedMs = Int((CACurrentMediaTime() - collapseStartedAt) * 1000)
+            let collapseLine = "SIDEBAR_EXPANDBENCH cycle=\(cycle)/\(rounds) action=collapse state=compact elapsed=\(collapseElapsedMs)ms hitches=\(HangWatchdog.hitchCount - hitchesAtStart) hangs=\(HangWatchdog.hangCount - hangsAtStart) worstHitch=\(HangWatchdog.worstHitchMs)ms"
+            TranscriptScrollProfiler.logger.error("\(collapseLine, privacy: .public)")
+            TranscriptScrollProfiler.fileLog(collapseLine)
+        }
+
+        viewModel.isCodingAgentPanelExpanded = originalExpanded
+        let summary = "SIDEBAR_EXPANDBENCH COMPLETE cycles=\(rounds) hitches=\(HangWatchdog.hitchCount - hitchesAtStart) hangs=\(HangWatchdog.hangCount - hangsAtStart) hangMs=\(HangWatchdog.hangMsTotal - hangMsAtStart) worstHitch=\(HangWatchdog.worstHitchMs)ms"
+        TranscriptScrollProfiler.logger.error("\(summary, privacy: .public)")
+        TranscriptScrollProfiler.fileLog(summary)
+    }
+#endif
 
     private var sidebarWarningSnapshot: [SidebarItem: Bool] {
         guard viewModel.hasCompletedInitialRefresh else { return [:] }

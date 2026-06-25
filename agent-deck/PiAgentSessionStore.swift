@@ -699,6 +699,20 @@ final class PiAgentSessionStore {
         requestTranscriptLoad(for: selectedSessionID)
     }
 
+#if DEBUG
+    func sidebarExpandBenchLargestParentTranscriptCandidate() -> (sessionID: UUID, fileSize: Int, loadedEntryCount: Int)? {
+        sessions
+            .map { session -> (sessionID: UUID, fileSize: Int, loadedEntryCount: Int) in
+                let fileSize = (try? parentTranscriptURL(session.id).resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                return (session.id, fileSize, transcriptsBySessionID[session.id]?.count ?? 0)
+            }
+            .max { lhs, rhs in
+                if lhs.fileSize != rhs.fileSize { return lhs.fileSize < rhs.fileSize }
+                return lhs.loadedEntryCount < rhs.loadedEntryCount
+            }
+    }
+#endif
+
     func requestTranscriptLoad(for sessionID: UUID) {
         guard lazyTranscriptLoadingEnabled else {
             _ = transcript(for: sessionID)
