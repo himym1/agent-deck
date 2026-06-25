@@ -70,8 +70,8 @@ struct MCPServersScreen: View {
             }
         }
         .alert("Remove MCP server?", isPresented: Binding(get: { pendingDeleteName != nil }, set: { if !$0 { pendingDeleteName = nil } })) {
-            Button("Cancel", role: .cancel) { pendingDeleteName = nil }
-            Button("Remove", role: .destructive) {
+            Button(AppLocalization.string("Cancel", default: "Cancel"), role: .cancel) { pendingDeleteName = nil }
+            Button(AppLocalization.string("Remove", default: "Remove"), role: .destructive) {
                 if let name = pendingDeleteName {
                     if selectedServerID == name { selectedServerID = nil }
                     do { try viewModel.removeMCPServer(named: name); reloadTick += 1 }
@@ -80,7 +80,7 @@ struct MCPServersScreen: View {
                 pendingDeleteName = nil
             }
         } message: {
-            Text("This removes “\(pendingDeleteName ?? "")” from ~/.pi/agent/mcp.json and clears it from any project and agent assignments.")
+            Text(AppLocalization.format("This removes “%@” from ~/.pi/agent/mcp.json and clears it from any project and agent assignments.", default: "This removes “%@” from ~/.pi/agent/mcp.json and clears it from any project and agent assignments.", pendingDeleteName ?? ""))
         }
     }
 
@@ -126,9 +126,9 @@ struct MCPServersScreen: View {
     /// centering, matching the app's other empty screens.
     private var emptyState: some View {
         ContentUnavailableView {
-            Label(isLoading ? "Loading MCP servers…" : "No MCP servers", systemImage: SidebarItem.mcp.systemImage)
+            Label(isLoading ? AppLocalization.string("Loading MCP servers…", default: "Loading MCP servers…") : AppLocalization.string("No MCP servers", default: "No MCP servers"), systemImage: SidebarItem.mcp.systemImage)
         } description: {
-            Text("Add a server from the toolbar — paste a config or fill the form. Servers are read from mcp.json in ~/.config/mcp, ~/.pi/agent, and the project's .mcp.json / .pi/mcp.json.")
+            Text(AppLocalization.string("Add a server from the toolbar — paste a config or fill the form. Servers are read from mcp.json in ~/.config/mcp, ~/.pi/agent, and the project's .mcp.json / .pi/mcp.json.", default: "Add a server from the toolbar — paste a config or fill the form. Servers are read from mcp.json in ~/.config/mcp, ~/.pi/agent, and the project's .mcp.json / .pi/mcp.json."))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -159,14 +159,14 @@ struct MCPServersScreen: View {
         Button {
             Task { await probe(entry) }
         } label: {
-            Label(isServerConnected(entry) ? "Refresh Tools" : "Connect", systemImage: "bolt.horizontal")
+            Label(isServerConnected(entry) ? AppLocalization.string("Refresh Tools", default: "Refresh Tools") : AppLocalization.string("Connect", default: "Connect"), systemImage: "bolt.horizontal")
         }
         .disabled(statusByServer[entry.name] == .probing)
 
         Button {
             revealInFinder(entry)
         } label: {
-            Label("Reveal Config in Finder", systemImage: "finder")
+            Label(AppLocalization.string("Reveal Config in Finder", default: "Reveal Config in Finder"), systemImage: "finder")
         }
 
         if viewModel.mcpServerIsEditable(entry) {
@@ -174,12 +174,12 @@ struct MCPServersScreen: View {
             Button {
                 editorModel = .edit(entry)
             } label: {
-                Label("Edit Server", systemImage: "square.and.pencil")
+                Label(AppLocalization.string("Edit Server", default: "Edit Server"), systemImage: "square.and.pencil")
             }
             Button(role: .destructive) {
                 pendingDeleteName = entry.name
             } label: {
-                Label("Remove Server", systemImage: "trash")
+                Label(AppLocalization.string("Remove Server", default: "Remove Server"), systemImage: "trash")
             }
         }
     }
@@ -212,7 +212,7 @@ struct MCPServersScreen: View {
                 }
             }
         } else {
-            AppPage("MCP", subtitle: "Connect Model Context Protocol servers and assign them to projects and agents") {
+            AppPage(AppLocalization.string("MCP", default: "MCP"), subtitle: AppLocalization.string("Connect Model Context Protocol servers and assign them to projects and agents", default: "Connect Model Context Protocol servers and assign them to projects and agents")) {
                 detailPlaceholder
             }
         }
@@ -220,9 +220,9 @@ struct MCPServersScreen: View {
 
     private var detailPlaceholder: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Select a server")
+            Text(AppLocalization.string("Select a server", default: "Select a server"))
                 .font(.title3.weight(.semibold))
-            Text("Pick a server on the left to see its tools, test the connection, and assign it to projects.")
+            Text(AppLocalization.string("Pick a server on the left to see its tools, test the connection, and assign it to projects.", default: "Pick a server on the left to see its tools, test the connection, and assign it to projects."))
                 .font(.callout).foregroundStyle(AppTheme.mutedText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -243,13 +243,13 @@ struct MCPServersScreen: View {
                     } else if connectedByServer[entry.name] ?? false {
                         // Remote servers authorize via OAuth first; offer a Refresh once
                         // signed in, plus Sign out.
-                        Button("Sign out") { Task { await signOut(entry) } }.controlSize(.small)
+                        Button(AppLocalization.string("Sign out", default: "Sign out")) { Task { await signOut(entry) } }.controlSize(.small)
                         probeButton(entry)
                     } else {
-                        Button("Connect") { Task { await connect(entry) } }.controlSize(.small)
+                        Button(AppLocalization.string("Connect", default: "Connect")) { Task { await connect(entry) } }.controlSize(.small)
                     }
                     if viewModel.mcpServerIsEditable(entry) {
-                        Button("Edit") { editorModel = .edit(entry) }.controlSize(.small)
+                        Button(AppLocalization.string("Edit", default: "Edit")) { editorModel = .edit(entry) }.controlSize(.small)
                     }
                 }
                 detailRow(icon: entry.config.resolvedTransport == .stdio ? "terminal" : "globe", text: transportLabel(entry))
@@ -265,7 +265,7 @@ struct MCPServersScreen: View {
     /// Connect-or-refresh button: "Connect" when the server isn't connected yet, "Refresh"
     /// once it is (re-lists tools over the live connection).
     private func probeButton(_ entry: MCPServerEntry) -> some View {
-        Button(isServerConnected(entry) ? "Refresh" : "Connect") { Task { await probe(entry) } }
+        Button(isServerConnected(entry) ? AppLocalization.string("Refresh", default: "Refresh") : AppLocalization.string("Connect", default: "Connect")) { Task { await probe(entry) } }
             .controlSize(.small)
             .disabled(statusByServer[entry.name] == .probing)
     }
@@ -283,14 +283,20 @@ struct MCPServersScreen: View {
     private func detailStatusTag(_ entry: MCPServerEntry) -> some View {
         switch statusByServer[entry.name] {
         case .probing:
-            HStack(spacing: 6) { AppSpinner().controlSize(.small); Text("Connecting…").font(.caption).foregroundStyle(.secondary) }
+            HStack(spacing: 6) { AppSpinner().controlSize(.small); Text(AppLocalization.string("Connecting…", default: "Connecting…")).font(.caption).foregroundStyle(.secondary) }
         case let .ok(tools):
-            AppLabelTag(text: "Connected · \(tools.count) tool\(tools.count == 1 ? "" : "s")", color: .green)
+            AppLabelTag(text: connectedToolsLabel(tools.count), color: .green)
         case .failed:
-            AppLabelTag(text: "Not reachable", color: .orange)
+            AppLabelTag(text: AppLocalization.string("Not reachable", default: "Not reachable"), color: .orange)
         case nil:
-            AppLabelTag(text: "Not connected", color: .secondary)
+            AppLabelTag(text: AppLocalization.string("Not connected", default: "Not connected"), color: .secondary)
         }
+    }
+    private func connectedToolsLabel(_ count: Int) -> String {
+        let noun = count == 1
+            ? AppLocalization.string("tool", default: "tool")
+            : AppLocalization.string("tools", default: "tools")
+        return AppLocalization.format("Connected · %lld %@", default: "Connected · %lld %@", Int64(count), noun)
     }
 
     /// True when this server currently has a successful (connected) status.
@@ -301,11 +307,11 @@ struct MCPServersScreen: View {
 
     private func toolsCard(_ entry: MCPServerEntry) -> some View {
         let tools = statusByServer[entry.name]?.tools ?? []
-        return AppCard(title: tools.isEmpty ? "Tools" : "Tools (\(tools.count))") {
+        return AppCard(title: tools.isEmpty ? "Tools" : AppLocalization.format("Tools (%lld)", default: "Tools (%lld)", Int64(tools.count))) {
             if tools.isEmpty {
                 Text(statusByServer[entry.name] == .probing
-                     ? "Loading tools…"
-                     : "Connect this server to load its tools.")
+                     ? AppLocalization.string("Loading tools…", default: "Loading tools…")
+                     : AppLocalization.string("Connect this server to load its tools.", default: "Connect this server to load its tools."))
                     .font(.caption).foregroundStyle(AppTheme.mutedText)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
@@ -332,7 +338,7 @@ struct MCPServersScreen: View {
         let isGlobal = viewModel.isMcpServerEnabledForAllProjects(name)
         return AppCard(title: "Project assignment") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Enable this server for every project, or pick specific ones. A session only gets a server assigned to its project (or to a Deck agent's `mcpServers`).")
+                Text(AppLocalization.string("Enable this server for every project, or pick specific ones. A session only gets a server assigned to its project (or to a Deck agent's `mcpServers`).", default: "Enable this server for every project, or pick specific ones. A session only gets a server assigned to its project (or to a Deck agent's `mcpServers`)."))
                     .font(.caption).foregroundStyle(AppTheme.mutedText).fixedSize(horizontal: false, vertical: true)
                 LazyVStack(alignment: .leading, spacing: 0) {
                     AllProjectsAssignmentRow(
@@ -340,7 +346,7 @@ struct MCPServersScreen: View {
                             get: { isGlobal },
                             set: { viewModel.setMcpServerEnabledForAllProjects(name, enabled: $0) }
                         ),
-                        subtitle: "Enable this server for every project"
+                        subtitle: AppLocalization.string("Enable this server for every project", default: "Enable this server for every project")
                     )
                     Divider()
                     ForEach(viewModel.enabledProjects) { project in
@@ -368,13 +374,13 @@ struct MCPServersScreen: View {
         if viewModel.mcpServerIsEditable(entry) {
             AppCard(title: "Remove Server") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Remove “\(entry.name)” from ~/.pi/agent/mcp.json and clear it from every project and agent assignment.")
+                    Text(AppLocalization.format("Remove “%@” from ~/.pi/agent/mcp.json and clear it from every project and agent assignment.", default: "Remove “%@” from ~/.pi/agent/mcp.json and clear it from every project and agent assignment.", entry.name))
                         .font(.callout)
                         .foregroundStyle(AppTheme.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
-                    Button("Remove Server", role: .destructive) {
+                    Button(AppLocalization.string("Remove Server", default: "Remove Server"), role: .destructive) {
                         pendingDeleteName = entry.name
                     }
                     .appDestructiveButton()
@@ -383,13 +389,13 @@ struct MCPServersScreen: View {
         } else {
             AppCard(title: "Read-only") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("This server is defined in a file Agent Deck doesn't own, so it can't be edited or removed here. Open the file to change or delete it.")
+                    Text(AppLocalization.string("This server is defined in a file Agent Deck doesn't own, so it can't be edited or removed here. Open the file to change or delete it.", default: "This server is defined in a file Agent Deck doesn't own, so it can't be edited or removed here. Open the file to change or delete it."))
                         .font(.callout)
                         .foregroundStyle(AppTheme.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     detailRow(icon: "doc", text: URL(fileURLWithPath: entry.sourcePath).path)
-                    Button("Reveal in Finder") { revealInFinder(entry) }
+                    Button(AppLocalization.string("Reveal in Finder", default: "Reveal in Finder")) { revealInFinder(entry) }
                         .appSecondaryButton()
                 }
             }
@@ -420,7 +426,7 @@ struct MCPServersScreen: View {
     }
 
     private func sourceLabel(_ entry: MCPServerEntry) -> String {
-        viewModel.mcpServerIsEditable(entry) ? "~/.pi/agent/mcp.json" : URL(fileURLWithPath: entry.sourcePath).lastPathComponent + " (read-only)"
+        viewModel.mcpServerIsEditable(entry) ? "~/.pi/agent/mcp.json" : AppLocalization.format("%@ (read-only)", default: "%@ (read-only)", URL(fileURLWithPath: entry.sourcePath).lastPathComponent)
     }
 
     // MARK: - Off-main loading
@@ -517,12 +523,12 @@ private struct MCPServerListRowView<Status: View>: View {
 
             if canEdit {
                 Button(action: onEdit) {
-                    Text("Edit")
+                    Text(AppLocalization.string("Edit", default: "Edit"))
                         .font(.caption.weight(.semibold))
                 }
                 .appSmallSecondaryButton()
                 .opacity(isHovered ? 1 : 0)
-                .help("Edit MCP server")
+                .help(AppLocalization.string("Edit MCP server", default: "Edit MCP server"))
                 .animation(.easeInOut(duration: 0.15), value: isHovered)
             }
 
@@ -614,10 +620,10 @@ private struct MCPServerEditorSheet: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(isEditing ? "Edit MCP server" : "Add MCP server")
+                    Text(isEditing ? AppLocalization.string("Edit MCP server", default: "Edit MCP server") : AppLocalization.string("Add MCP server", default: "Add MCP server"))
                         .font(.headline)
                         .fontWidth(.expanded)
-                    Text("Written to ~/.pi/agent/mcp.json")
+                    Text(AppLocalization.string("Written to ~/.pi/agent/mcp.json", default: "Written to ~/.pi/agent/mcp.json"))
                         .font(.caption.monospaced())
                         .foregroundStyle(AppTheme.mutedText)
                 }
@@ -630,9 +636,9 @@ private struct MCPServerEditorSheet: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 16) {
                     if !isEditing {
-                        Picker("Input", selection: $inputMode) {
-                            Text("Manual").tag(InputMode.manual)
-                            Text("Paste").tag(InputMode.paste)
+                        Picker(AppLocalization.string("Input", default: "Input"), selection: $inputMode) {
+                            Text(AppLocalization.string("Manual", default: "Manual")).tag(InputMode.manual)
+                            Text(AppLocalization.string("Paste", default: "Paste")).tag(InputMode.paste)
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
@@ -644,7 +650,7 @@ private struct MCPServerEditorSheet: View {
                         manualSection
                     }
 
-                    Text("Assign this server to your projects or agents after saving.")
+                    Text(AppLocalization.string("Assign this server to your projects or agents after saving.", default: "Assign this server to your projects or agents after saving."))
                         .font(.caption)
                         .foregroundStyle(AppTheme.mutedText)
                 }
@@ -655,9 +661,9 @@ private struct MCPServerEditorSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button(AppLocalization.string("Cancel", default: "Cancel")) { dismiss() }
                     .appSecondaryButton()
-                Button(isEditing ? "Save" : "Add") { save() }
+                Button(isEditing ? AppLocalization.string("Save", default: "Save") : AppLocalization.string("Add", default: "Add")) { save() }
                     .appPrimaryButton()
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSave)
@@ -670,7 +676,7 @@ private struct MCPServerEditorSheet: View {
     @ViewBuilder
     private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title)
+            Text(AppLocalization.string(title, default: title))
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(AppTheme.mutedText)
             content()
@@ -688,7 +694,7 @@ private struct MCPServerEditorSheet: View {
             .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(alignment: .topLeading) {
                 if text.wrappedValue.isEmpty && focusedField != field {
-                    Text(placeholder)
+                    Text(AppLocalization.string(placeholder, default: placeholder))
                         .font(.callout.monospaced())
                         .foregroundStyle(AppTheme.mutedText)
                         .lineLimit(2)
@@ -704,7 +710,7 @@ private struct MCPServerEditorSheet: View {
         field("Paste a server's config, or a `claude mcp add` / `codex mcp add` command") {
             editorBox($pasteText, field: .paste, placeholder: "{ \"mcpServers\": { \"Amplitude\": { \"url\": \"https://mcp.amplitude.com/mcp\" } } }")
         }
-        Text("We parse the config and add the server(s). Switch to Manual to fill the fields yourself.")
+        Text(AppLocalization.string("We parse the config and add the server(s). Switch to Manual to fill the fields yourself.", default: "We parse the config and add the server(s). Switch to Manual to fill the fields yourself."))
             .font(.caption)
             .foregroundStyle(AppTheme.mutedText)
             .fixedSize(horizontal: false, vertical: true)
@@ -718,9 +724,9 @@ private struct MCPServerEditorSheet: View {
                 .disabled(isEditing)
         }
         field("Type") {
-            Picker("Type", selection: $isRemote) {
-                Text("Local (stdio)").tag(false)
-                Text("Remote (HTTP)").tag(true)
+            Picker(AppLocalization.string("Type", default: "Type"), selection: $isRemote) {
+                Text(AppLocalization.string("Local (stdio)", default: "Local (stdio)")).tag(false)
+                Text(AppLocalization.string("Remote (HTTP)", default: "Remote (HTTP)")).tag(true)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -733,7 +739,7 @@ private struct MCPServerEditorSheet: View {
             field("Headers (KEY: VALUE per line, optional)") {
                 editorBox($headersText, field: .headers, placeholder: "Authorization: Bearer …")
             }
-            Text("After saving, use Connect on the server to authorize with OAuth. For token servers, add an Authorization header instead.")
+            Text(AppLocalization.string("After saving, use Connect on the server to authorize with OAuth. For token servers, add an Authorization header instead.", default: "After saving, use Connect on the server to authorize with OAuth. For token servers, add an Authorization header instead."))
                 .font(.caption)
                 .foregroundStyle(AppTheme.mutedText)
                 .fixedSize(horizontal: false, vertical: true)

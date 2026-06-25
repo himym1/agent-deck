@@ -444,7 +444,7 @@ private struct AppListEmptyRow: View {
     let message: String
 
     var body: some View {
-        Text(message)
+        Text(AppLocalization.string(message, default: message))
             .font(.callout)
             .foregroundStyle(AppTheme.mutedText)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -464,8 +464,9 @@ private struct AppListSectionHeaderView: View {
     let accessory: AnyView?
 
     var body: some View {
+        let localizedTitle = AppLocalization.string(title, default: title)
         HStack(spacing: 6) {
-            Text(title.uppercased())
+            Text(localizedTitle.uppercased())
                 .font(.caption2.weight(.semibold))
                 .tracking(0.6)
                 .foregroundStyle(AppTheme.mutedText)

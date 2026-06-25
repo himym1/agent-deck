@@ -65,21 +65,21 @@ struct SystemInstructionsScreen: View {
                     Button {
                         isInfoPresented.toggle()
                     } label: {
-                        Label("Info", systemImage: "info.circle")
+                        Label(AppLocalization.string("Info", default: "Info"), systemImage: "info.circle")
                     }
                     .popover(isPresented: $isInfoPresented, arrowEdge: .bottom) {
                         PiSystemInstructionsInfoPopover()
                     }
                     .toolbarNeutralChrome()
-                    .help("Explain Pi prompt assembly")
+                    .help(AppLocalization.string("Explain Pi prompt assembly", default: "Explain Pi prompt assembly"))
 
                     Button {
                         isPreviewPresented = true
                     } label: {
-                        Label("Preview", systemImage: "doc.text.magnifyingglass")
+                        Label(AppLocalization.string("Preview", default: "Preview"), systemImage: "doc.text.magnifyingglass")
                     }
                     .toolbarPrimaryActionChrome()
-                    .help("Preview the effective prompt from the current editor contents")
+                    .help(AppLocalization.string("Preview the effective prompt from the current editor contents", default: "Preview the effective prompt from the current editor contents"))
                 }
             }
         }
@@ -134,7 +134,7 @@ struct SystemInstructionsScreen: View {
 
     private var projHeaderInfo: String? {
         guard let project else { return nil }
-        return "Project `.pi/` files override their global counterparts for sessions in \(project.repositoryDisplayName)."
+        return AppLocalization.format("Project `.pi/` files override their global counterparts for sessions in %@.", default: "Project `.pi/` files override their global counterparts for sessions in %@.", project.repositoryDisplayName)
     }
 
     private var selectedFile: PiInstructionFile? {
@@ -162,10 +162,10 @@ struct SystemInstructionsScreen: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .contextMenu {
-                Button(file.exists ? "Reveal in Finder" : "Reveal Parent Folder") {
+                Button(file.exists ? AppLocalization.string("Reveal in Finder", default: "Reveal in Finder") : AppLocalization.string("Reveal Parent Folder", default: "Reveal Parent Folder")) {
                     revealInFinder(file)
                 }
-                Button("Copy Path") {
+                Button(AppLocalization.string("Copy Path", default: "Copy Path")) {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(file.url.path, forType: .string)
                 }
@@ -179,9 +179,9 @@ struct SystemInstructionsScreen: View {
 
     private func statusDotHelp(_ file: PiInstructionFile) -> String {
         switch file.status {
-        case .active: return "Active — this is the file Pi loads."
-        case .shadowed: return "Inactive — exists but Pi loads another file for this slot."
-        case .available: return "Not created — select it, start typing, then Create to write it to disk."
+        case .active: return AppLocalization.string("Active — this is the file Pi loads.", default: "Active — this is the file Pi loads.")
+        case .shadowed: return AppLocalization.string("Inactive — exists but Pi loads another file for this slot.", default: "Inactive — exists but Pi loads another file for this slot.")
+        case .available: return AppLocalization.string("Not created — select it, start typing, then Create to write it to disk.", default: "Not created — select it, start typing, then Create to write it to disk.")
         }
     }
 
@@ -259,9 +259,9 @@ struct SystemInstructionsScreen: View {
             originals[file.id] = text
             existingPaths.insert(file.id)
             PiInstructionDraftStore.unsavedDrafts.removeValue(forKey: file.id)
-            statusMessage = "Saved \(file.displayPath)."
+            statusMessage = AppLocalization.format("Saved %@.", default: "Saved %@.", file.displayPath)
         } catch {
-            statusMessage = "Could not save \(file.displayPath): \(error.localizedDescription)"
+            statusMessage = AppLocalization.format("Could not save %@: %@", default: "Could not save %@: %@", file.displayPath, error.localizedDescription)
         }
     }
 
@@ -316,7 +316,7 @@ private struct SystemPromptFileRowView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(file.title)
+                    Text(AppLocalization.string(file.title, default: file.title))
                         .font(.headline)
                         .fontWidth(.expanded)
                         .lineLimit(1)
@@ -324,7 +324,7 @@ private struct SystemPromptFileRowView: View {
                         Circle()
                             .fill(.orange)
                             .frame(width: 6, height: 6)
-                            .help("Unsaved edits")
+                            .help(AppLocalization.string("Unsaved edits", default: "Unsaved edits"))
                     }
                 }
 
@@ -338,13 +338,13 @@ private struct SystemPromptFileRowView: View {
             Spacer(minLength: 0)
 
             Button { onReveal() } label: {
-                Label("Reveal", systemImage: "folder")
+                Label(AppLocalization.string("Reveal", default: "Reveal"), systemImage: "folder")
                     .labelStyle(.titleAndIcon)
             }
             .appSmallSecondaryButton()
             .opacity(isHovered ? 1 : 0)
             .animation(.easeInOut(duration: 0.15), value: isHovered)
-            .help(file.exists ? "Reveal in Finder" : "Reveal parent folder in Finder")
+            .help(file.exists ? AppLocalization.string("Reveal in Finder", default: "Reveal in Finder") : AppLocalization.string("Reveal parent folder in Finder", default: "Reveal parent folder in Finder"))
         }
         .padding(.vertical, 6)
         .opacity(isInactive ? 0.62 : 1)
@@ -376,7 +376,7 @@ struct SystemPromptFileDetail: View {
                     }
                     AppKeyValueList(rows: metadataRows)
                     if let statusMessage {
-                        Text(statusMessage)
+                        Text(AppLocalization.string(statusMessage, default: statusMessage))
                             .font(AppTheme.Font.caption)
                             .foregroundStyle(AppTheme.mutedText)
                             .fixedSize(horizontal: false, vertical: true)
@@ -397,19 +397,19 @@ struct SystemPromptFileDetail: View {
     private var headerActions: some View {
         HStack(spacing: 8) {
             Button { onReveal() } label: {
-                Label("Reveal", systemImage: "folder")
+                Label(AppLocalization.string("Reveal", default: "Reveal"), systemImage: "folder")
                     .labelStyle(.titleAndIcon)
             }
             .appSmallSecondaryButton()
-            .help(file.exists ? "Reveal in Finder" : "Reveal parent folder in Finder")
+            .help(file.exists ? AppLocalization.string("Reveal in Finder", default: "Reveal in Finder") : AppLocalization.string("Reveal parent folder in Finder", default: "Reveal parent folder in Finder"))
 
             Button { onSave() } label: {
-                Label(file.exists ? "Save" : "Create", systemImage: file.exists ? "square.and.arrow.down" : "plus")
+                Label(file.exists ? AppLocalization.string("Save", default: "Save") : AppLocalization.string("Create", default: "Create"), systemImage: file.exists ? "square.and.arrow.down" : "plus")
                     .labelStyle(.titleAndIcon)
             }
             .appPrimaryButton()
             .disabled(!isDirty)
-            .help(file.exists ? "Save changes to disk" : "Create this file on disk")
+            .help(file.exists ? AppLocalization.string("Save changes to disk", default: "Save changes to disk") : AppLocalization.string("Create this file on disk", default: "Create this file on disk"))
             .keyboardShortcut("s", modifiers: .command)
         }
     }
@@ -417,8 +417,8 @@ struct SystemPromptFileDetail: View {
     private var metadataRows: [(String, String)] {
         [
             ("File", file.displayPath),
-            ("Status", file.status.label),
-            ("Scope", file.scopeLabel)
+            ("Status", AppLocalization.string(file.status.label, default: file.status.label)),
+            ("Scope", AppLocalization.string(file.scopeLabel, default: file.scopeLabel))
         ]
     }
 
@@ -442,11 +442,11 @@ struct SystemPromptFileDetail: View {
 
     private var note: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(file.note)
+            Text(AppLocalization.string(file.note, default: file.note))
                 .font(AppTheme.Font.caption)
                 .foregroundStyle(AppTheme.mutedText)
             if !file.exists {
-                Label(createImpactMessage, systemImage: "square.and.pencil")
+                Label(AppLocalization.string(createImpactMessage, default: createImpactMessage), systemImage: "square.and.pencil")
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -460,7 +460,7 @@ struct SystemPromptFileDetail: View {
     private var statusLine: some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
             Image(systemName: file.status.systemImage)
-            Text(file.status.label)
+            Text(AppLocalization.string(file.status.label, default: file.status.label))
         }
         .font(AppTheme.Font.caption.weight(.semibold))
         .foregroundStyle(file.status.color)
@@ -481,10 +481,10 @@ struct SystemPromptFileDetail: View {
                 }
             if text.isEmpty && !isEditorFocused {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(file.exists ? "Empty file" : "Start writing Markdown instructions")
+                    Text(AppLocalization.string(file.exists ? "Empty file" : "Start writing Markdown instructions", default: file.exists ? "Empty file" : "Start writing Markdown instructions"))
                         .font(AppTheme.Font.callout.weight(.semibold))
                         .foregroundStyle(AppTheme.mutedText)
-                    Text(file.exists ? "Add instructions, then Save." : "This file does not exist yet. Type here, then Create writes it to the path above.")
+                    Text(AppLocalization.string(file.exists ? "Add instructions, then Save." : "This file does not exist yet. Type here, then Create writes it to the path above.", default: file.exists ? "Add instructions, then Save." : "This file does not exist yet. Type here, then Create writes it to the path above."))
                         .font(AppTheme.Font.caption)
                         .foregroundStyle(AppTheme.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -499,11 +499,11 @@ struct SystemPromptFileDetail: View {
     private var createImpactMessage: String {
         switch file.role {
         case .base:
-            return "Creating SYSTEM.md overrides Pi’s built-in base prompt here."
+            return AppLocalization.string("Creating SYSTEM.md overrides Pi’s built-in base prompt here.", default: "Creating SYSTEM.md overrides Pi’s built-in base prompt here.")
         case .append:
-            return "Creating APPEND_SYSTEM.md adds extra instructions here."
+            return AppLocalization.string("Creating APPEND_SYSTEM.md adds extra instructions here.", default: "Creating APPEND_SYSTEM.md adds extra instructions here.")
         case .context:
-            return "Creating this file adds fallback context for sessions here."
+            return AppLocalization.string("Creating this file adds fallback context for sessions here.", default: "Creating this file adds fallback context for sessions here.")
         }
     }
 }
@@ -512,11 +512,11 @@ struct SystemPromptFileDetail: View {
 private struct PiSystemInstructionsInfoPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("How the system prompt is built")
+            Text(AppLocalization.string("How the system prompt is built", default: "How the system prompt is built"))
                 .font(.headline)
                 .fontWidth(.expanded)
 
-            Text("Pi assembles every session's system prompt from a handful of Markdown files on disk. Each section below shows the files that can contribute — the first existing file in each slot is the one Pi loads.")
+            Text(AppLocalization.string("Pi assembles every session's system prompt from a handful of Markdown files on disk. Each section below shows the files that can contribute — the first existing file in each slot is the one Pi loads.", default: "Pi assembles every session's system prompt from a handful of Markdown files on disk. Each section below shows the files that can contribute — the first existing file in each slot is the one Pi loads."))
                 .font(.caption)
                 .foregroundStyle(AppTheme.mutedText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -536,10 +536,10 @@ private struct PiSystemInstructionsInfoPopover: View {
 
     private func infoRow(_ title: String, _ description: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(title)
+            Text(AppLocalization.string(title, default: title))
                 .font(.subheadline.weight(.semibold))
                 .fontWidth(.expanded)
-            Text(description)
+            Text(AppLocalization.string(description, default: description))
                 .font(.caption)
                 .foregroundStyle(AppTheme.mutedText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -566,7 +566,7 @@ struct PiPromptPreviewSheet: View {
                 metadata: metadataLine
             ) {
                 AppCopyTextButton(text: preview.fullText, help: "Copy the full assembled system prompt")
-                Button("Done") { dismiss() }
+                Button(AppLocalization.string("Done", default: "Done")) { dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
 
@@ -585,7 +585,9 @@ struct PiPromptPreviewSheet: View {
     private var metadataLine: String {
         let text = preview.fullText
         let lineCount = text.split(separator: "\n", omittingEmptySubsequences: false).count
-        let lines = lineCount == 1 ? "1 line" : "\(lineCount.formatted()) lines"
+        let lines = lineCount == 1
+            ? AppLocalization.string("1 line", default: "1 line")
+            : AppLocalization.format("%lld lines", default: "%lld lines", Int64(lineCount))
         let size = ByteCountFormatter.string(fromByteCount: Int64(text.utf8.count), countStyle: .file)
         return "\(lines) · \(size) · \(tokenEstimate(for: text))"
     }
@@ -594,9 +596,9 @@ struct PiPromptPreviewSheet: View {
     // an exact tokenizer count, hence the "≈".
     private func tokenEstimate(for text: String) -> String {
         let tokens = max(1, text.count / 4)
-        guard tokens >= 1000 else { return "≈\(tokens) tokens" }
+        guard tokens >= 1000 else { return AppLocalization.format("≈%lld tokens", default: "≈%lld tokens", Int64(tokens)) }
         let thousands = (Double(tokens) / 1000).formatted(.number.precision(.fractionLength(0...1)))
-        return "≈\(thousands)k tokens"
+        return AppLocalization.format("≈%@k tokens", default: "≈%@k tokens", thousands)
     }
 }
 
@@ -627,7 +629,7 @@ private struct PiPromptPreviewSectionView: View {
             }
 
             if section.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("(empty file)")
+                Text(AppLocalization.string("(empty file)", default: "(empty file)"))
                     .font(.system(.caption, design: .monospaced))
                     .italic()
                     .foregroundStyle(AppTheme.mutedText)
@@ -670,7 +672,7 @@ private struct PiPromptPreviewSectionView: View {
                     .font(.subheadline.weight(.semibold))
                     .fontWidth(.expanded)
                 Spacer(minLength: 8)
-                Text("Inserted at runtime")
+                Text(AppLocalization.string("Inserted at runtime", default: "Inserted at runtime"))
                     .font(.caption2)
                     .foregroundStyle(AppTheme.mutedText)
             }

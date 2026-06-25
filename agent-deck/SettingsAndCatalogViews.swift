@@ -4,7 +4,7 @@ import SwiftUI
 struct ModelsInfoPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Models catalog")
+            Text(AppLocalization.string("Models catalog", default: "Models catalog"))
                 .font(.headline)
                 .fontWidth(.expanded)
 
@@ -15,7 +15,7 @@ struct ModelsInfoPopover: View {
                 infoRow("Availability", "Disabling a model removes it from default selection, launch controls, and agent editors.")
             }
 
-            Text("Refresh reloads the catalog from Pi and updates supported thinking levels for the current selection.")
+            Text(AppLocalization.string("Refresh reloads the catalog from Pi and updates supported thinking levels for the current selection.", default: "Refresh reloads the catalog from Pi and updates supported thinking levels for the current selection."))
                 .font(.caption)
                 .foregroundStyle(AppTheme.mutedText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -26,10 +26,10 @@ struct ModelsInfoPopover: View {
 
     private func infoRow(_ title: String, _ description: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(title)
+            Text(AppLocalization.string(title, default: title))
                 .font(.subheadline.weight(.semibold))
                 .fontWidth(.expanded)
-            Text(description)
+            Text(AppLocalization.string(description, default: description))
                 .font(.caption)
                 .foregroundStyle(AppTheme.mutedText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -61,7 +61,7 @@ struct ModelsScreen: View {
         AppPage("Models") {
             if displayModels.isEmpty {
                 AppCard(title: "Catalog") {
-                    Text("No models loaded yet. Use the toolbar Refresh action to query Pi.")
+                    Text(AppLocalization.string("No models loaded yet. Use the toolbar Refresh action to query Pi.", default: "No models loaded yet. Use the toolbar Refresh action to query Pi."))
                         .foregroundStyle(AppTheme.mutedText)
                 }
             } else {
@@ -163,7 +163,7 @@ struct ModelsScreen: View {
                     .lineLimit(1)
 
                 if agent.id.hasPrefix("builtin-model::") {
-                    Text("Builtin")
+                    Text(AppLocalization.string("Builtin", default: "Builtin"))
                         .font(.caption2.weight(.bold))
                         .fontWidth(.expanded)
                         .foregroundStyle(AppTheme.mutedText)
@@ -249,7 +249,7 @@ struct ModelsScreen: View {
         nilLabel: String,
         onSelect: @escaping (AvailableModel?) -> Void
     ) -> some View {
-        Picker("Model", selection: Binding(
+        Picker(AppLocalization.string("Model", default: "Model"), selection: Binding(
             get: { selectedIdentifier ?? "" },
             set: { identifier in
                 guard !identifier.isEmpty else {
@@ -260,7 +260,7 @@ struct ModelsScreen: View {
             }
         )) {
             if allowsDefault {
-                Text(nilLabel).tag("")
+                Text(AppLocalization.string(nilLabel, default: nilLabel)).tag("")
             }
             ForEach(models, id: \.identifier) { model in
                 Text(model.identifier).tag(model.identifier)
@@ -303,13 +303,13 @@ struct ModelsScreen: View {
         HStack(spacing: 5) {
             if let model, model.supportsThinking {
                 Image(systemName: "brain.head.profile")
-                    .help("Supports thinking")
-                    .accessibilityLabel("Supports thinking")
+                    .help(AppLocalization.string("Supports thinking", default: "Supports thinking"))
+                    .accessibilityLabel(AppLocalization.string("Supports thinking", default: "Supports thinking"))
             }
             if let model, model.supportsImages {
                 Image(systemName: "photo")
-                    .help("Supports image input")
-                    .accessibilityLabel("Supports image input")
+                    .help(AppLocalization.string("Supports image input", default: "Supports image input"))
+                    .accessibilityLabel(AppLocalization.string("Supports image input", default: "Supports image input"))
             }
         }
         .imageScale(.small)
@@ -321,21 +321,21 @@ struct ModelsScreen: View {
         levels: [String],
         onSelect: @escaping (String) -> Void
     ) -> some View {
-        Picker("Thinking", selection: Binding(
+        Picker(AppLocalization.string("Thinking", default: "Thinking"), selection: Binding(
             get: { selectedLevel },
             set: { level in
                 onSelect(level)
             }
         )) {
             ForEach(levels.isEmpty ? ["off"] : levels, id: \.self) { level in
-                Text(level.capitalized).tag(level)
+                Text(AppLocalization.thinkingLevel(level)).tag(level)
             }
         }
         .labelsHidden()
         .appMenuPicker()
         .frame(width: thinkingControlWidth, alignment: .leading)
         .disabled(levels.isEmpty)
-        .help("Thinking level: \(selectedLevel.capitalized)")
+        .help(AppLocalization.format("Thinking level: %@", default: "Thinking level: %@", AppLocalization.thinkingLevel(selectedLevel)))
     }
 
     /// Visual placeholder for the thinking column when the selected model has
@@ -343,14 +343,14 @@ struct ModelsScreen: View {
     /// "Not available" so rows remain visually consistent with models that do
     /// support thinking (task: no plain "Not supported" text).
     private func disabledThinkingPlaceholder() -> some View {
-        Picker("Thinking", selection: .constant("Not available")) {
-            Text("Not available").tag("Not available")
+        Picker(AppLocalization.string("Thinking", default: "Thinking"), selection: .constant("Not available")) {
+            Text(AppLocalization.string("Not available", default: "Not available")).tag("Not available")
         }
         .labelsHidden()
         .appMenuPicker()
         .frame(width: thinkingControlWidth, alignment: .leading)
         .disabled(true)
-        .help("Thinking is not available for this model")
+        .help(AppLocalization.string("Thinking is not available for this model", default: "Thinking is not available for this model"))
     }
 
     /// Persists one agent's model/thinking immediately. The local draft mirrors
@@ -434,14 +434,14 @@ struct ModelsScreen: View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
-                    Text(item.title)
+                    Text(AppLocalization.string(item.title, default: item.title))
                         .font(.headline)
                         .fontWidth(.expanded)
                     if item.isDisabled {
                         AppLabelTag(text: "Off", color: .secondary)
                     }
                 }
-                Text(item.description)
+                Text(AppLocalization.string(item.description, default: item.description))
                     .font(.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -481,7 +481,7 @@ struct ModelsScreen: View {
                 .foregroundStyle(AppTheme.brandAccent)
                 .font(.title3.weight(.semibold))
                 .accessibilityHidden(true)
-            Text(title)
+            Text(AppLocalization.string(title, default: title))
                 .font(.title3.weight(.bold))
                 .fontWidth(.expanded)
                 .foregroundStyle(.primary)
@@ -524,7 +524,7 @@ struct ModelsScreen: View {
     }
 
     private func emptyModelsCard(_ text: String) -> some View {
-        Text(text)
+        Text(AppLocalization.string(text, default: text))
             .font(.callout)
             .foregroundStyle(AppTheme.mutedText)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -579,7 +579,7 @@ struct ModelsScreen: View {
                     .scaledToFit()
                     .frame(width: 16, height: 16)
                     .accessibilityHidden(true)
-                Text("Pi Default Model")
+                Text(AppLocalization.string("Pi Default Model", default: "Pi Default Model"))
                     .font(.title3.weight(.bold))
                     .fontWidth(.expanded)
                     .foregroundStyle(.primary)
@@ -714,7 +714,7 @@ struct ModelsScreen: View {
                         fastModeTagButton(for: model, isModelEnabled: isEnabled)
                     }
                 }
-                Text("ctx \(model.contextWindow) · out \(model.maxOutput ?? "—")")
+                Text(modelContextSummary(model))
                     .font(.footnote.monospaced())
                     .foregroundStyle(AppTheme.mutedText)
             }
@@ -722,6 +722,14 @@ struct ModelsScreen: View {
         .opacity(isProviderEnabled ? (isEnabled ? 1 : 0.55) : 0.4)
         .allowsHitTesting(isProviderEnabled)
         .padding(.vertical, 10)
+    }
+    private func modelContextSummary(_ model: AvailableModel) -> String {
+        AppLocalization.format(
+            "ctx %@ · out %@",
+            default: "ctx %@ · out %@",
+            model.contextWindow,
+            model.maxOutput ?? "—"
+        )
     }
 
     private func signOutButton(for provider: String) -> some View {
@@ -731,7 +739,7 @@ struct ModelsScreen: View {
             HStack(spacing: 5) {
                 Image(systemName: "rectangle.portrait.and.arrow.right")
                     .font(.caption.weight(.semibold))
-                Text("Sign out")
+                Text(AppLocalization.string("Sign out", default: "Sign out"))
                     .font(.caption.weight(.semibold))
                     .fontWidth(.expanded)
             }
@@ -741,7 +749,7 @@ struct ModelsScreen: View {
             .background(AppTheme.brandAccent.opacity(0.12), in: Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
-        .help("Sign out of \(provider) (removes its credentials from auth.json).")
+        .help(AppLocalization.format("Sign out of %@ (removes its credentials from auth.json).", default: "Sign out of %@ (removes its credentials from auth.json).", provider))
     }
 
     private func providerToggle(for group: (provider: String, models: [AvailableModel])) -> some View {
@@ -759,7 +767,9 @@ struct ModelsScreen: View {
     }
 
     private func providerToggleHelp(for provider: String, isEnabled: Bool) -> String {
-        isEnabled ? "Disable all \(provider) models without changing per-model preferences." : "Enable all \(provider) models and restore prior per-model preferences."
+        isEnabled
+            ? AppLocalization.format("Disable all %@ models without changing per-model preferences.", default: "Disable all %@ models without changing per-model preferences.", provider)
+            : AppLocalization.format("Enable all %@ models and restore prior per-model preferences.", default: "Enable all %@ models and restore prior per-model preferences.", provider)
     }
 
     private func fastModeTagButton(for model: AvailableModel, isModelEnabled: Bool) -> some View {
@@ -771,7 +781,7 @@ struct ModelsScreen: View {
                 Image(systemName: isFastEnabled ? "checkmark.square.fill" : "square")
                     .font(.caption.weight(.semibold))
                     .contentTransition(.symbolEffect(.replace))
-                Text("Fast")
+                Text(AppLocalization.string("Fast", default: "Fast"))
                     .font(.caption.weight(.semibold))
                     .fontWidth(.expanded)
             }
@@ -782,7 +792,7 @@ struct ModelsScreen: View {
         }
         .buttonStyle(.plain)
         .disabled(!isModelEnabled)
-        .help("Use OpenAI priority service tier for this ChatGPT-auth Codex model in parent sessions and Deck agents.")
+        .help(AppLocalization.string("Use OpenAI priority service tier for this ChatGPT-auth Codex model in parent sessions and Deck agents.", default: "Use OpenAI priority service tier for this ChatGPT-auth Codex model in parent sessions and Deck agents."))
         .animation(.snappy(duration: 0.18), value: isFastEnabled)
     }
 
@@ -812,7 +822,7 @@ struct SubagentsScreen: View {
     var viewModel: AppViewModel
 
     var body: some View {
-        AppPage("Deck agents", subtitle: "App-managed delegation and supervision") {
+        AppPage(AppLocalization.string("Deck agents", default: "Deck agents"), subtitle: AppLocalization.string("App-managed delegation and supervision", default: "App-managed delegation and supervision")) {
             nativeRuntimeCard
             sessionDefaultsCard
             availableAgentsCard
@@ -823,9 +833,9 @@ struct SubagentsScreen: View {
     private var nativeRuntimeCard: some View {
         AppCard(title: "Deck Agent Runtime") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("• \(AppBrand.displayName) launches child Pi sessions itself and keeps parent, child, transcript, artifact, and supervisor state in the app.")
-                Text("• Parent sessions receive app-provided managed tools for single and parallel delegation.")
-                Text("• Child sessions can contact the supervisor through \(AppBrand.displayName)'s supervisor request cards.")
+                Text(AppLocalization.format("• %@ launches child Pi sessions itself and keeps parent, child, transcript, artifact, and supervisor state in the app.", default: "• %@ launches child Pi sessions itself and keeps parent, child, transcript, artifact, and supervisor state in the app.", AppBrand.displayName))
+                Text(AppLocalization.string("• Parent sessions receive app-provided managed tools for single and parallel delegation.", default: "• Parent sessions receive app-provided managed tools for single and parallel delegation."))
+                Text(AppLocalization.format("• Child sessions can contact the supervisor through %@'s supervisor request cards.", default: "• Child sessions can contact the supervisor through %@'s supervisor request cards.", AppBrand.displayName))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -834,7 +844,7 @@ struct SubagentsScreen: View {
     private var sessionDefaultsCard: some View {
         AppCard(title: "Session Defaults") {
             AppKeyValueList(rows: [
-                ("New Sessions", viewModel.areSubagentsEnabledForNewSessions ? "Deck agents enabled" : "Deck agents disabled"),
+                ("New Sessions", viewModel.areSubagentsEnabledForNewSessions ? AppLocalization.string("Deck agents enabled", default: "Deck agents enabled") : AppLocalization.string("Deck agents disabled", default: "Deck agents disabled")),
                 ("Selected Session", selectedSessionStatus),
                 ("Available Agents", "\(viewModel.snapshot.effectiveAgents.count(where: { $0.resolved.disabled != true }))")
             ])
@@ -848,7 +858,7 @@ struct SubagentsScreen: View {
                     .filter { $0.resolved.disabled != true }
                     .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
                 if agents.isEmpty {
-                    Text("No enabled agents are available in the current scope.")
+                    Text(AppLocalization.string("No enabled agents are available in the current scope.", default: "No enabled agents are available in the current scope."))
                         .foregroundStyle(AppTheme.mutedText)
                 } else {
                     ForEach(agents.prefix(12)) { agent in
@@ -858,14 +868,14 @@ struct SubagentsScreen: View {
                                 .frame(width: 18)
                             Text(agent.name)
                                 .font(.body.weight(.semibold))
-                            Text(agent.resolved.description.isEmpty ? "No description" : agent.resolved.description)
+                            Text(agent.resolved.description.isEmpty ? AppLocalization.string("No description", default: "No description") : agent.resolved.description)
                                 .foregroundStyle(AppTheme.mutedText)
                                 .lineLimit(1)
                         }
                     }
 
                     if agents.count > 12 {
-                        Text("\(agents.count - 12) more agents are available from the run picker.")
+                        Text(AppLocalization.format("%lld more agents are available from the run picker.", default: "%lld more agents are available from the run picker.", Int64(agents.count - 12)))
                             .font(.caption)
                             .foregroundStyle(AppTheme.mutedText)
                     }
@@ -878,20 +888,20 @@ struct SubagentsScreen: View {
     private var safetyCard: some View {
         AppCard(title: "Safety") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("• Writer-like Deck agent runs use isolated worktrees unless direct project writes are explicitly allowed.")
-                Text("• Parent and child transcript state is persisted by \(AppBrand.displayName).")
-                Text("• Supervisor questions stay scoped to the owning parent session and window.")
+                Text(AppLocalization.string("• Writer-like Deck agent runs use isolated worktrees unless direct project writes are explicitly allowed.", default: "• Writer-like Deck agent runs use isolated worktrees unless direct project writes are explicitly allowed."))
+                Text(AppLocalization.format("• Parent and child transcript state is persisted by %@.", default: "• Parent and child transcript state is persisted by %@.", AppBrand.displayName))
+                Text(AppLocalization.string("• Supervisor questions stay scoped to the owning parent session and window.", default: "• Supervisor questions stay scoped to the owning parent session and window."))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private var selectedSessionStatus: String {
-        guard let session = viewModel.piAgentSessionStore.selectedSession else { return "No session selected" }
-        guard session.subagentsEnabled else { return "Deck agents disabled" }
+        guard let session = viewModel.piAgentSessionStore.selectedSession else { return AppLocalization.string("No session selected", default: "No session selected") }
+        guard session.subagentsEnabled else { return AppLocalization.string("Deck agents disabled", default: "Deck agents disabled") }
         return viewModel.catalogAgents(for: session).isEmpty
-            ? "Deck agents disabled (no agents selected)"
-            : "Deck agents enabled"
+            ? AppLocalization.string("Deck agents disabled (no agents selected)", default: "Deck agents disabled (no agents selected)")
+            : AppLocalization.string("Deck agents enabled", default: "Deck agents enabled")
     }
 }
 
@@ -948,10 +958,10 @@ struct AgentModelQuickEditorSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(context.title)
+                    Text(AppLocalization.string(context.title, default: context.title))
                         .font(.title2.bold())
                         .fontWidth(.expanded)
-                    Text(context.subtitle)
+                    Text(AppLocalization.string(context.subtitle, default: context.subtitle))
                         .foregroundStyle(AppTheme.mutedText)
                 }
                 Spacer()
@@ -974,7 +984,7 @@ struct AgentModelQuickEditorSheet: View {
 
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Default model and thinking can be changed in Sidebar > Models.")
+                    Text(AppLocalization.string("Default model and thinking can be changed in Sidebar > Models.", default: "Default model and thinking can be changed in Sidebar > Models."))
                         .font(.caption)
                         .foregroundStyle(AppTheme.mutedText)
                     if let saveMessage {
@@ -984,11 +994,11 @@ struct AgentModelQuickEditorSheet: View {
                     }
                 }
                 Spacer()
-                Button("Cancel") {
+                Button(AppLocalization.string("Cancel", default: "Cancel")) {
                     dismiss()
                 }
                 .appSecondaryButton()
-                Button("Save All") {
+                Button(AppLocalization.string("Save All", default: "Save All")) {
                     saveAll()
                 }
                 .appPrimaryButton()
@@ -1053,7 +1063,7 @@ struct AgentModelQuickEditSectionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(section.title)
+                Text(AppLocalization.string(section.title, default: section.title))
                     .font(.headline)
                     .fontWidth(.expanded)
                 Spacer()
@@ -1115,7 +1125,7 @@ private struct AgentModelColumnHeader: View {
     }
 
     var body: some View {
-        Text(title)
+        Text(AppLocalization.string(title, default: title))
             .font(.caption.weight(.semibold))
             .foregroundStyle(AppTheme.mutedText)
     }
@@ -1139,8 +1149,8 @@ struct AgentModelQuickEditRow: View {
             }
             .frame(minWidth: 220, maxWidth: .infinity, alignment: .leading)
 
-            Picker("Model", selection: modelSelectionBinding) {
-                Text("Default").tag("")
+            Picker(AppLocalization.string("Model", default: "Model"), selection: modelSelectionBinding) {
+                Text(AppLocalization.string("Default", default: "Default")).tag("")
                 ForEach(availableModels, id: \.identifier) { model in
                     Text(model.identifier).tag(model.identifier)
                 }
@@ -1148,20 +1158,20 @@ struct AgentModelQuickEditRow: View {
             .labelsHidden()
             .appMenuPicker()
             .frame(minWidth: 320, maxWidth: .infinity, alignment: .leading)
-            .help(selectedModelMetadataSummary ?? "Use the default model from Sidebar > Models")
+            .help(selectedModelMetadataSummary ?? AppLocalization.string("Use the default model from Sidebar > Models", default: "Use the default model from Sidebar > Models"))
 
-            Picker("Thinking", selection: thinkingSelectionBinding) {
+            Picker(AppLocalization.string("Thinking", default: "Thinking"), selection: thinkingSelectionBinding) {
                 ForEach(availableThinkingLevels, id: \.self) { level in
-                    Text(level == "off" ? "Default" : level.capitalized).tag(level)
+                    Text(level == "off" ? AppLocalization.string("Default", default: "Default") : AppLocalization.thinkingLevel(level)).tag(level)
                 }
             }
             .labelsHidden()
             .appMenuPicker()
             .frame(width: 130, alignment: .leading)
             .disabled(availableThinkingLevels.isEmpty)
-            .help(usesDefaultModel ? "Override thinking while using Pi's default model" : "Override thinking for the selected model")
+            .help(usesDefaultModel ? AppLocalization.string("Override thinking while using Pi's default model", default: "Override thinking while using Pi's default model") : AppLocalization.string("Override thinking for the selected model", default: "Override thinking for the selected model"))
 
-            Text(selectedModelMetadataSummary ?? "Default")
+            Text(selectedModelMetadataSummary ?? AppLocalization.string("Default", default: "Default"))
                 .font(.caption.monospaced())
                 .foregroundStyle(AppTheme.mutedText)
                 .lineLimit(1)
@@ -1193,7 +1203,7 @@ struct AgentModelQuickEditRow: View {
 
     private var selectedModelMetadataSummary: String? {
         guard let model = selectedModel else { return nil }
-        return "context: \(model.contextWindow)"
+        return AppLocalization.format("context: %@", default: "context: %@", model.contextWindow)
     }
 
     private var availableThinkingLevels: [String] {

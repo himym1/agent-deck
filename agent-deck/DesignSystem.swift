@@ -652,7 +652,7 @@ struct AppSpinner: View {
             .frame(width: size, height: size)
             .rotationEffect(.degrees(isSpinning ? 360 : 0))
             .animation(.linear(duration: 0.9).repeatForever(autoreverses: false), value: isSpinning)
-            .accessibilityLabel("Loading")
+            .accessibilityLabel(AppLocalization.string("Loading", default: "Loading"))
             .onAppear { isSpinning = true }
     }
 }
@@ -898,7 +898,7 @@ struct AppForkIconButton: View {
                 Image(systemName: "arrow.trianglehead.branch")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.primary)
-                    .accessibilityLabel("Fork session")
+                    .accessibilityLabel(AppLocalization.string("Fork session", default: "Fork session"))
             }
             .frame(width: size.width, height: size.height)
             .glassEffect(.regular, in: Capsule(style: .continuous))
@@ -928,10 +928,10 @@ struct AppCopyTextButton: View {
             NSPasteboard.general.setString(text, forType: .string)
             showCopiedFeedback()
         } label: {
-            Label(copied ? "Copied" : title, systemImage: copied ? "checkmark" : "doc.on.doc")
+            Label(copied ? AppLocalization.string("Copied", default: "Copied") : AppLocalization.string(title, default: title), systemImage: copied ? "checkmark" : "doc.on.doc")
                 .contentTransition(.symbolEffect(.replace))
         }
-        .help(copied ? "Copied" : (help ?? title))
+        .help(copied ? AppLocalization.string("Copied", default: "Copied") : AppLocalization.string(help ?? title, default: help ?? title))
     }
 
     private func showCopiedFeedback() {
