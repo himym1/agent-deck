@@ -1719,7 +1719,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 model.isSliding = isSliding
             }
             if isInsideNSViewUpdate {
-                DispatchQueue.main.async(execute: perform)
+                Task { @MainActor in
+                    perform()
+                }
             } else {
                 perform()
             }
