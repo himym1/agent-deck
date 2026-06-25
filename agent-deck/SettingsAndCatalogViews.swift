@@ -37,6 +37,50 @@ struct ModelsInfoPopover: View {
     }
 }
 
+#if DEBUG
+private struct SidebarExpandBenchScrollProbe: NSViewRepresentable {
+    let trigger: Int
+
+    func makeNSView(context: Context) -> ProbeView {
+        ProbeView()
+    }
+
+    func updateNSView(_ nsView: ProbeView, context: Context) {
+        nsView.scrollToBottom(trigger: trigger)
+    }
+
+    final class ProbeView: NSView {
+        private var lastTrigger = 0
+
+        func scrollToBottom(trigger: Int) {
+            guard trigger > 0, trigger != lastTrigger else { return }
+            lastTrigger = trigger
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                self?.performScrollToBottom()
+            }
+        }
+
+        private func performScrollToBottom() {
+            guard let scrollView = enclosingScrollView() else { return }
+            let clipView = scrollView.contentView
+            guard let documentView = scrollView.documentView else { return }
+            let maxY = max(0, documentView.bounds.height - clipView.bounds.height)
+            clipView.scroll(to: NSPoint(x: 0, y: maxY))
+            scrollView.reflectScrolledClipView(clipView)
+        }
+
+        private func enclosingScrollView() -> NSScrollView? {
+            var candidate: NSView? = superview
+            while let view = candidate {
+                if let scrollView = view as? NSScrollView { return scrollView }
+                candidate = view.superview
+            }
+            return nil
+        }
+    }
+}
+#endif
+
 private struct AutomationModelItem: Identifiable {
     let id: String
     let title: String
@@ -56,9 +100,16 @@ struct ModelsScreen: View {
 
     @State private var loginService = PiProviderLoginService()
     @State private var agentDrafts: [EffectiveAgentRecord.ID: AgentEditorDraft] = [:]
+#if DEBUG
+    @State private var sidebarExpandBenchModelsScrollRequest = 0
+#endif
 
     var body: some View {
         AppPage("Models") {
+#if DEBUG
+            SidebarExpandBenchScrollProbe(trigger: sidebarExpandBenchModelsScrollRequest)
+                .frame(width: 0, height: 0)
+#endif
             if displayModels.isEmpty {
                 AppCard(title: "Catalog") {
                     Text("No models loaded yet. Use the toolbar Refresh action to query Pi.")
@@ -88,6 +139,11 @@ struct ModelsScreen: View {
         .onChange(of: viewModel.displayAgentsRevision) { _, _ in
             seedAgentDrafts()
         }
+#if DEBUG
+        .onReceive(NotificationCenter.default.publisher(for: .sidebarExpandBenchModelsScrollRequested)) { _ in
+            sidebarExpandBenchModelsScrollRequest &+= 1
+        }
+#endif
         .sheet(isPresented: Binding(
             get: { viewModel.isAddProviderPresented },
             set: { viewModel.isAddProviderPresented = $0 }

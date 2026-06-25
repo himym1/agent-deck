@@ -2486,6 +2486,13 @@ final class AppViewModel: NSObject {
 
     func openPiAgentScreen() {
         selectedSidebarItem = .agent
+        expandCodingAgentPanel()
+    }
+
+    /// Expands the Coding Agent sidebar panel without changing the selected
+    /// navigation item. Use for the collapsed panel's disclosure/bench path so
+    /// the detail view and toolbar stay stable while the panel animates open.
+    func expandCodingAgentPanel() {
         isCodingAgentPanelExpanded = true
         if piAgentSessionStore.selectedSession?.id != nil {
             ensurePiAgentModelCatalogLoaded()

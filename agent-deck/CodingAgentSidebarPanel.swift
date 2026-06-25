@@ -103,7 +103,7 @@ struct CodingAgentCollapsedPanel: View {
         VStack(alignment: .leading, spacing: 8) {
             CodingAgentPanelHeader(
                 isExpanded: false,
-                onToggle: { viewModel.openPiAgentScreen() }
+                onToggle: { viewModel.expandCodingAgentPanel() }
             ) {
                 CodingAgentNewSessionControls(viewModel: viewModel)
             }
