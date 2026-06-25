@@ -643,12 +643,8 @@ private enum TranscriptFloatingControlGeometry {
 }
 
 struct QuestionRailVisibilityPolicy {
-    static let minimumWindowHeightForOverflowLayout: CGFloat = 420
-
-    func shouldShow(questionCount: Int, windowHeight: CGFloat, evenStackedHeight: CGFloat, railHeight: CGFloat) -> Bool {
-        guard questionCount >= 2 else { return false }
-        let overflowsStack = evenStackedHeight > railHeight
-        return !overflowsStack || windowHeight >= Self.minimumWindowHeightForOverflowLayout
+    func shouldShow(questionCount: Int, evenStackedHeight: CGFloat, railHeight: CGFloat) -> Bool {
+        questionCount >= 2 && evenStackedHeight <= railHeight
     }
 }
 
@@ -1658,7 +1654,6 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
             let shouldShowRail = QuestionRailVisibilityPolicy().shouldShow(
                 questionCount: questionRows.count,
-                windowHeight: scrollView.bounds.height,
                 evenStackedHeight: stackedHeight,
                 railHeight: railHeight
             )
@@ -1676,10 +1671,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             }
             let activeID = self.forcedActiveQuestionID ?? activeQuestionID(in: questionRows, scrollView: scrollView, tableView: tableView)
 
-            // Sliding window kicks in only when the even-spaced stack wouldn't fit.
-            // `isSliding` depends only on window height + question count, so it is
-            // stable across scrolling and never flips mid-scroll (no flicker).
-            let isSliding = stackedHeight > railHeight
+            // Only show the rail when every question mark fits in the stable stack.
+            // The scroll-synced overflow layout proved too sparse/ambiguous at its
+            // transition thresholds, so overflow hides the rail instead.
+            let isSliding = false
 
             var items: [UserQuestionNavigationRailItem] = []
             if isSliding {
