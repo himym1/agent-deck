@@ -615,7 +615,7 @@ private enum PiAgentTranscriptTableSection: Hashable {
     case main
 }
 
-private struct UserQuestionNavigationRailItem: Identifiable, Equatable {
+private struct UserQuestionNavigationRailItem: Identifiable, Equatable, Sendable {
     let id: String
     let title: String
     let isActive: Bool
@@ -1709,7 +1709,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// `ObservableObject` synchronously emits "Publishing changes from within
         /// view updates"). Defer to the next runloop when inside that pass.
         private func applyRailModel(items: [UserQuestionNavigationRailItem], width: CGFloat, railHeight: CGFloat, isSliding: Bool) {
-            let perform = { [weak self] in
+            let perform: @MainActor @Sendable () -> Void = { [weak self] in
                 guard let self, let model = self.questionRailModel else { return }
                 model.items = items
                 model.availableWidth = width
