@@ -611,7 +611,7 @@ struct PiAgentSessionSubagentPickerCard: View {
         return HStack(spacing: 10) {
             Button {
                 guard enabled else { return }
-                withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
+                isExpanded.toggle()
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "paperplane")
@@ -635,7 +635,7 @@ struct PiAgentSessionSubagentPickerCard: View {
             enabledSwitch
             if enabled {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
+                    isExpanded.toggle()
                 } label: {
                     Image(systemName: "chevron.down")
                         .font(.caption.weight(.semibold))
@@ -658,9 +658,7 @@ struct PiAgentSessionSubagentPickerCard: View {
             get: { session.subagentsEnabled },
             set: { newValue in
                 if !newValue { isExpanded = false }
-                withAnimation(.easeOut(duration: 0.22)) {
-                    viewModel.setSubagentsEnabledForSelectedDraftAndNewSessions(newValue)
-                }
+                viewModel.setSubagentsEnabledForSelectedDraftAndNewSessions(newValue)
             }
         ))
         .appSwitch()
