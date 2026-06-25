@@ -642,6 +642,16 @@ private enum TranscriptFloatingControlGeometry {
     }
 }
 
+struct QuestionRailVisibilityPolicy {
+    static let minimumWindowHeightForOverflowLayout: CGFloat = 420
+
+    func shouldShow(questionCount: Int, windowHeight: CGFloat, evenStackedHeight: CGFloat, railHeight: CGFloat) -> Bool {
+        guard questionCount >= 2 else { return false }
+        let overflowsStack = evenStackedHeight > railHeight
+        return !overflowsStack || windowHeight >= Self.minimumWindowHeightForOverflowLayout
+    }
+}
+
 struct QuestionRailScrollLandingResolver {
     let landingOffset: CGFloat
     let visibleHeight: CGFloat
@@ -1642,10 +1652,17 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private func updateQuestionRail() {
             guard let scrollView, let tableView, questionRailModel != nil else { return }
             let questionRows = currentQuestionRows()
+            let stackedHeight = evenStackedHeight(questionCount: questionRows.count)
             let railHeight = questionRailHeight(scrollView: scrollView, questionCount: questionRows.count)
             updateQuestionRailFrame(for: scrollView, railHeight: railHeight)
 
-            guard questionRows.count >= 2 else {
+            let shouldShowRail = QuestionRailVisibilityPolicy().shouldShow(
+                questionCount: questionRows.count,
+                windowHeight: scrollView.bounds.height,
+                evenStackedHeight: stackedHeight,
+                railHeight: railHeight
+            )
+            guard shouldShowRail else {
                 forcedActiveQuestionID = nil
                 questionRail?.isHidden = true
                 applyRailModel(items: [], width: scrollView.bounds.width, railHeight: railHeight, isSliding: false)
@@ -1662,7 +1679,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // Sliding window kicks in only when the even-spaced stack wouldn't fit.
             // `isSliding` depends only on window height + question count, so it is
             // stable across scrolling and never flips mid-scroll (no flicker).
-            let isSliding = evenStackedHeight(questionCount: questionRows.count) > railHeight
+            let isSliding = stackedHeight > railHeight
 
             var items: [UserQuestionNavigationRailItem] = []
             if isSliding {
