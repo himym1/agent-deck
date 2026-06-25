@@ -44,7 +44,7 @@ struct PiSubagentSupervisorRequestInlineNotice: View {
                 .foregroundStyle(AppTheme.brandAccent)
                 .frame(width: 24, alignment: .center)
             VStack(alignment: .leading, spacing: 3) {
-                Text("Supervisor question")
+                Text(AppLocalization.string("Supervisor question", default: "Supervisor question"))
                     .font(AppTheme.Font.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
                 Text(request.title)
@@ -52,9 +52,9 @@ struct PiSubagentSupervisorRequestInlineNotice: View {
                     .lineLimit(2)
             }
             Spacer(minLength: 0)
-            Button("Cancel", action: onCancel)
+            Button(AppLocalization.string("Cancel", default: "Cancel"), action: onCancel)
                 .appSecondaryButton()
-            Button("Respond", action: onRespond)
+            Button(AppLocalization.string("Respond", default: "Respond"), action: onRespond)
                 .appPrimaryButton()
         }
         .padding(12)
@@ -90,7 +90,7 @@ struct PiSubagentSupervisorRequestSheet: View {
             message: supervisorMessage,
             options: [],
             optionDescriptions: [:],
-            placeholder: "Response",
+            placeholder: AppLocalization.string("Response", default: "Response"),
             prefill: nil,
             allowsFreeform: false,
             allowsComment: false,
@@ -256,7 +256,7 @@ struct PiNativeSubagentRunCard: View {
 
     private func parallelHeader(children: [PiSubagentChildRecord]) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("Parallel agents")
+            Text(AppLocalization.string("Parallel agents", default: "Parallel agents"))
                 .font(AppTheme.Font.headline)
             Text("\(children.count)")
                 .font(AppTheme.Font.caption2.monospaced().weight(.bold))
@@ -280,40 +280,40 @@ struct PiNativeSubagentRunCard: View {
         }
         .buttonStyle(.borderless)
         .foregroundStyle(AppTheme.mutedText)
-        .help("Run details")
+        .help(AppLocalization.string("Run details", default: "Run details"))
         .popover(isPresented: $isDetailsPresented, arrowEdge: .trailing) {
             detailsPopover
         }
         if run.children?.isEmpty == false {
-            Button("Graph", action: onOpenGraph)
+            Button(AppLocalization.string("Graph", default: "Graph"), action: onOpenGraph)
                 .appSecondaryButton()
                 .controlSize(.small)
         }
         if !rootInjectedMemories.isEmpty {
             Button {
-                memoryPopover = .init(title: "Injected Memories", memories: rootInjectedMemories)
+                memoryPopover = .init(title: AppLocalization.string("Injected Memories", default: "Injected Memories"), memories: rootInjectedMemories)
             } label: {
-                Label("Memory", systemImage: "brain")
+                Label(AppLocalization.string("Memory", default: "Memory"), systemImage: "brain")
             }
             .appSecondaryButton()
             .controlSize(.small)
-            .help("Show memories injected into this Deck agent")
+            .help(AppLocalization.string("Show memories injected into this Deck agent", default: "Show memories injected into this Deck agent"))
         }
-        Button("System Prompt") {
+        Button(AppLocalization.string("System Prompt", default: "System Prompt")) {
             promptPopover = .init(
-                title: "Final Runtime System Prompt",
+                title: AppLocalization.string("Final Runtime System Prompt", default: "Final Runtime System Prompt"),
                 text: promptFileText(path: artifactURL(named: "final-system-prompt.md").path)
             )
         }
         .appSecondaryButton()
         .controlSize(.small)
         .disabled(!canOpenArtifact(named: "final-system-prompt.md"))
-        .help("Show final runtime system prompt")
-        Button("Transcript", action: onOpenTranscript)
+        .help(AppLocalization.string("Show final runtime system prompt", default: "Show final runtime system prompt"))
+        Button(AppLocalization.string("Transcript", default: "Transcript"), action: onOpenTranscript)
             .appSecondaryButton()
             .controlSize(.small)
         if run.status.isActive {
-            Button("Stop", action: onStop)
+            Button(AppLocalization.string("Stop", default: "Stop"), action: onStop)
                 .buttonStyle(.glass)
                 .controlSize(.small)
                 .tint(.red)
@@ -361,7 +361,7 @@ struct PiNativeSubagentRunCard: View {
 
     private var detailsPopover: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Run details", systemImage: "info.circle")
+            Label(AppLocalization.string("Run details", default: "Run details"), systemImage: "info.circle")
                 .font(AppTheme.Font.headline)
 
             AppKeyValueList(rows: detailRows)
@@ -369,12 +369,12 @@ struct PiNativeSubagentRunCard: View {
             if hasDetailActions {
                 Divider()
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Actions")
+                    Text(AppLocalization.string("Actions", default: "Actions"))
                         .font(AppTheme.Font.caption.weight(.semibold))
                         .foregroundStyle(AppTheme.mutedText)
 
                     if !run.artifactDirectory.isEmpty {
-                        Button("Reveal Run Folder", action: onReveal)
+                        Button(AppLocalization.string("Reveal Run Folder", default: "Reveal Run Folder"), action: onReveal)
                     }
                 }
                 .appSecondaryButton()
@@ -547,19 +547,19 @@ struct PiNativeSubagentRunCard: View {
             let memories = injectedMemories(for: child)
             if !memories.isEmpty {
                 Button {
-                    memoryPopover = .init(title: "Injected Memories · \(child.agentName)", memories: memories)
+                    memoryPopover = .init(title: AppLocalization.format("Injected Memories · %@", default: "Injected Memories · %@", child.agentName), memories: memories)
                 } label: {
-                    Label("Memory", systemImage: "brain")
+                    Label(AppLocalization.string("Memory", default: "Memory"), systemImage: "brain")
                 }
                 .appSecondaryButton()
                 .controlSize(.small)
                 .fixedSize(horizontal: true, vertical: false)
-                .help("Show memories injected into this Deck agent")
+                .help(AppLocalization.string("Show memories injected into this Deck agent", default: "Show memories injected into this Deck agent"))
             }
 
-            Button("System Prompt") {
+            Button(AppLocalization.string("System Prompt", default: "System Prompt")) {
                 promptPopover = .init(
-                    title: "Final Runtime System Prompt",
+                    title: AppLocalization.string("Final Runtime System Prompt", default: "Final Runtime System Prompt"),
                     text: promptFileText(path: childArtifactURL(child, named: "final-system-prompt.md").path)
                 )
             }
@@ -567,10 +567,10 @@ struct PiNativeSubagentRunCard: View {
             .controlSize(.small)
             .fixedSize(horizontal: true, vertical: false)
             .disabled(!canOpenChildArtifact(child, named: "final-system-prompt.md"))
-            .help("Show final runtime system prompt")
+            .help(AppLocalization.string("Show final runtime system prompt", default: "Show final runtime system prompt"))
 
             if let executionRunID = child.executionRunID {
-                Button("Transcript") {
+                Button(AppLocalization.string("Transcript", default: "Transcript")) {
                     onOpenChildTranscript(executionRunID)
                 }
                 .appSecondaryButton()
@@ -578,7 +578,7 @@ struct PiNativeSubagentRunCard: View {
                 .fixedSize(horizontal: true, vertical: false)
 
                 if child.status.isActive {
-                    Button("Stop") {
+                    Button(AppLocalization.string("Stop", default: "Stop")) {
                         onStopChild(executionRunID)
                     }
                     .buttonStyle(.glass)
@@ -784,7 +784,7 @@ private struct PiSubagentTaskPreview: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("Task", systemImage: "list.clipboard")
+            Label(AppLocalization.string("Task", default: "Task"), systemImage: "list.clipboard")
                 .font(AppTheme.Font.caption.weight(.semibold))
                 .fontWidth(.expanded)
                 .foregroundStyle(AppTheme.mutedText)
@@ -827,7 +827,7 @@ struct PiSubagentStatusText: View {
     var font: Font = .caption.weight(.semibold)
 
     var body: some View {
-        Text(status.rawValue.capitalized)
+        Text(AppLocalization.string(status.rawValue.capitalized, default: status.rawValue.capitalized))
             .font(font)
             .foregroundStyle(color)
             .contentTransition(.opacity)
@@ -911,15 +911,15 @@ struct PiNativeSubagentGraphSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Deck agent graph · \(run.agentName)")
+                    Text(AppLocalization.format("Deck agent graph · %@", default: "Deck agent graph · %@", run.agentName))
                         .font(.title3.bold())
-                    Text("\(run.mode.rawValue.capitalized) · \(run.status.rawValue.capitalized) · \(run.children?.count ?? 0) child runs")
+                    Text(AppLocalization.format("%@ · %@ · %lld child runs", default: "%@ · %@ · %lld child runs", AppLocalization.string(run.mode.rawValue.capitalized, default: run.mode.rawValue.capitalized), AppLocalization.string(run.status.rawValue.capitalized, default: run.status.rawValue.capitalized), Int64(run.children?.count ?? 0)))
                         .font(AppTheme.Font.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 if run.status.isActive {
-                    Button("Stop Graph", role: .destructive, action: onStopGraph)
+                    Button(AppLocalization.string("Stop Graph", default: "Stop Graph"), role: .destructive, action: onStopGraph)
                         .appSecondaryButton()
                 }
             }
@@ -954,15 +954,15 @@ struct PiNativeSubagentGraphSheet: View {
                     AppLabelTag(text: child.status.rawValue, color: color(for: child.status))
                     Spacer()
                     if child.status.isActive {
-                        Button("Stop") { onStopChild(child) }
+                        Button(AppLocalization.string("Stop", default: "Stop")) { onStopChild(child) }
                             .controlSize(.small)
                     }
                     if [.failed, .stopped, .disconnected].contains(child.status) {
-                        Button("Retry") { onRetryChild(child) }
+                        Button(AppLocalization.string("Retry", default: "Retry")) { onRetryChild(child) }
                             .controlSize(.small)
                             .appPrimaryButton()
                     }
-                    Button("Artifacts") { onOpenChildArtifacts(child) }
+                    Button(AppLocalization.string("Artifacts", default: "Artifacts")) { onOpenChildArtifacts(child) }
                         .controlSize(.small)
                         .disabled(child.artifactDirectory == nil)
                 }
@@ -994,7 +994,7 @@ struct PiNativeSubagentGraphSheet: View {
 
     private func graphMeta(_ title: String, _ value: String?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text("\(title):")
+            Text(AppLocalization.string(title, default: title) + ":")
                 .font(AppTheme.Font.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
             Text(value ?? "—")
@@ -1026,21 +1026,21 @@ struct PiNativeSubagentTranscriptSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Deck agent transcript")
+                    Text(AppLocalization.string("Deck agent transcript", default: "Deck agent transcript"))
                         .font(.title3.bold())
-                    Text("\(run.agentName) · \(run.status.rawValue.capitalized)")
+                    Text(AppLocalization.format("%@ · %@", default: "%@ · %@", run.agentName, AppLocalization.string(run.status.rawValue.capitalized, default: run.status.rawValue.capitalized)))
                         .font(AppTheme.Font.caption.weight(.semibold))
                         .foregroundStyle(statusColor)
                 }
                 Spacer()
-                Button("Close") { dismiss() }
+                Button(AppLocalization.string("Close", default: "Close")) { dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
 
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(AppTheme.mutedText)
-                AppTextField(text: $query, placeholder: "Search transcript")
+                AppTextField(text: $query, placeholder: AppLocalization.string("Search transcript", default: "Search transcript"))
             }
 
             Divider()
@@ -1103,7 +1103,7 @@ struct PiNativeSubagentTranscriptSheet: View {
             id: run.id,
             sessionID: run.parentSessionID,
             role: .user,
-            title: "Task",
+            title: AppLocalization.string("Task", default: "Task"),
             text: run.task,
             timestamp: run.createdAt
         )
@@ -1196,16 +1196,16 @@ struct PiNativeSubagentRunSheet: View {
                 Image(systemName: "paperplane")
                     .foregroundStyle(AppTheme.brandAccent)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Run Deck Agent")
+                    Text(AppLocalization.string("Run Deck Agent", default: "Run Deck Agent"))
                         .font(.title3.bold())
-                    Text("Launches a separate Pi RPC child session managed by \(AppBrand.displayName). This does not insert or send a raw /run command.")
+                    Text(AppLocalization.format("Launches a separate Pi RPC child session managed by %@. This does not insert or send a raw /run command.", default: "Launches a separate Pi RPC child session managed by %@. This does not insert or send a raw /run command.", AppBrand.displayName))
                         .font(AppTheme.Font.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
             }
 
-            Picker("Agent", selection: $selectedAgentName) {
+            Picker(AppLocalization.string("Agent", default: "Agent"), selection: $selectedAgentName) {
                 ForEach(agentNames, id: \.self) { name in
                     Text(name).tag(name)
                 }
@@ -1218,15 +1218,15 @@ struct PiNativeSubagentRunSheet: View {
                     Text(selectedInfo.description)
                         .font(AppTheme.Font.subheadline)
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 6) {
-                        subagentInfoLine("Model", selectedInfo.model ?? "Default")
-                        subagentInfoLine("Thinking", selectedInfo.thinking ?? "Default")
-                        subagentInfoLine("Assigned Skills", selectedInfo.skills.isEmpty ? "None" : selectedInfo.skills.joined(separator: ", "))
-                        subagentInfoLine("Tools", selectedInfo.tools.isEmpty ? "Default" : selectedInfo.tools.joined(separator: ", "))
-                        subagentInfoLine("Output", selectedInfo.output ?? "App artifact")
-                        subagentInfoLine("Default Outcome", selectedInfo.defaultExpectedOutcome?.displayName ?? "Report only")
+                        subagentInfoLine("Model", selectedInfo.model ?? AppLocalization.string("Default", default: "Default"))
+                        subagentInfoLine("Thinking", selectedInfo.thinking ?? AppLocalization.string("Default", default: "Default"))
+                        subagentInfoLine("Assigned Skills", selectedInfo.skills.isEmpty ? AppLocalization.string("None", default: "None") : selectedInfo.skills.joined(separator: ", "))
+                        subagentInfoLine("Tools", selectedInfo.tools.isEmpty ? AppLocalization.string("Default", default: "Default") : selectedInfo.tools.joined(separator: ", "))
+                        subagentInfoLine("Output", selectedInfo.output ?? AppLocalization.string("App artifact", default: "App artifact"))
+                        subagentInfoLine("Default Outcome", selectedInfo.defaultExpectedOutcome.map { AppLocalization.string($0.displayName, default: $0.displayName) } ?? AppLocalization.string("Report only", default: "Report only"))
                     }
                     if selectedInfo.output != nil {
-                        Label("Deck agent runs save the final response to app artifacts by default. Project-file output should be explicit in the task.", systemImage: "exclamationmark.triangle")
+                        Label(AppLocalization.string("Deck agent runs save the final response to app artifacts by default. Project-file output should be explicit in the task.", default: "Deck agent runs save the final response to app artifacts by default. Project-file output should be explicit in the task."), systemImage: "exclamationmark.triangle")
                             .font(AppTheme.Font.caption)
                             .foregroundStyle(.orange)
                     }
@@ -1236,7 +1236,7 @@ struct PiNativeSubagentRunSheet: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Task")
+                Text(AppLocalization.string("Task", default: "Task"))
                     .font(AppTheme.Font.headline)
                 TextEditor(text: $task)
                     .font(AppTheme.Font.body)
@@ -1247,16 +1247,16 @@ struct PiNativeSubagentRunSheet: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Label("Files to read first", systemImage: "doc.text.magnifyingglass")
+                Label(AppLocalization.string("Files to read first", default: "Files to read first"), systemImage: "doc.text.magnifyingglass")
                     .font(AppTheme.Font.subheadline.weight(.semibold))
                 HStack(alignment: .top, spacing: 8) {
-                    AppTextField(text: $readFirstPathsText, placeholder: "Optional project-relative paths, comma or newline separated", axis: .vertical)
+                    AppTextField(text: $readFirstPathsText, placeholder: AppLocalization.string("Optional project-relative paths, comma or newline separated", default: "Optional project-relative paths, comma or newline separated"), axis: .vertical)
                         .lineLimit(1...4)
                     Button(action: addReadFirstPathsFromOpenPanel) {
                         Image(systemName: "paperclip")
                     }
-                    .help("Add project files to read first")
-                    .accessibilityLabel("Add project files to read first")
+                    .help(AppLocalization.string("Add project files to read first", default: "Add project files to read first"))
+                    .accessibilityLabel(AppLocalization.string("Add project files to read first", default: "Add project files to read first"))
                     .disabled(projectRootPath == nil)
                 }
                 if !readFirstFileSuggestions.isEmpty {
@@ -1276,14 +1276,14 @@ struct PiNativeSubagentRunSheet: View {
                     }
                     .padding(.horizontal, 6)
                     if readFirstFileSuggestions.count > 8 {
-                        Text("Showing top 8 — keep typing to refine")
+                        Text(AppLocalization.string("Showing top 8 — keep typing to refine", default: "Showing top 8 — keep typing to refine"))
                             .font(AppTheme.Font.caption2)
                             .italic()
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 6)
                     }
                 }
-                Text("Use this for files the caller knows are relevant now. Type @ to search project files, use the paperclip, or drag files here. Defaults from the agent are treated as hints only; \(AppBrand.displayName) does not inject stale file contents.")
+                Text(AppLocalization.format("Use this for files the caller knows are relevant now. Type @ to search project files, use the paperclip, or drag files here. Defaults from the agent are treated as hints only; %@ does not inject stale file contents.", default: "Use this for files the caller knows are relevant now. Type @ to search project files, use the paperclip, or drag files here. Defaults from the agent are treated as hints only; %@ does not inject stale file contents.", AppBrand.displayName))
                     .font(AppTheme.Font.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -1306,28 +1306,28 @@ struct PiNativeSubagentRunSheet: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Label("Deck agent run", systemImage: "checkmark.seal")
+                Label(AppLocalization.string("Deck agent run", default: "Deck agent run"), systemImage: "checkmark.seal")
                     .font(AppTheme.Font.subheadline.weight(.semibold))
-                Text("\(AppBrand.displayName) starts and tracks the child session directly, records artifacts under Application Support, and posts a status/result entry back to the parent transcript.")
+                Text(AppLocalization.format("%@ starts and tracks the child session directly, records artifacts under Application Support, and posts a status/result entry back to the parent transcript.", default: "%@ starts and tracks the child session directly, records artifacts under Application Support, and posts a status/result entry back to the parent transcript.", AppBrand.displayName))
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(.secondary)
-                Picker("Expected outcome", selection: $expectedOutcome) {
+                Picker(AppLocalization.string("Expected outcome", default: "Expected outcome"), selection: $expectedOutcome) {
                     ForEach(PiSubagentExpectedOutcome.allCases) { outcome in
-                        Text(outcome.displayName).tag(outcome)
+                        Text(AppLocalization.string(outcome.displayName, default: outcome.displayName)).tag(outcome)
                     }
                 }
                 .appMenuPicker()
-                Toggle("Use git worktree isolation", isOn: $useWorktreeIsolation)
+                Toggle(AppLocalization.string("Use git worktree isolation", default: "Use git worktree isolation"), isOn: $useWorktreeIsolation)
                     .font(AppTheme.Font.caption)
-                Text("Creates a detached git worktree inside the run artifacts so child file edits are isolated from the main checkout.")
+                Text(AppLocalization.string("Creates a detached git worktree inside the run artifacts so child file edits are isolated from the main checkout.", default: "Creates a detached git worktree inside the run artifacts so child file edits are isolated from the main checkout."))
                     .font(AppTheme.Font.caption2)
                     .foregroundStyle(.secondary)
                 if expectedOutcome == .writeProjectFile {
-                    AppTextField(text: $requestedOutputPath, placeholder: "Project-relative output path, e.g. docs/plan.md")
-                    Toggle("Allow overwrite if the file exists", isOn: $allowOverwrite)
+                    AppTextField(text: $requestedOutputPath, placeholder: AppLocalization.string("Project-relative output path, e.g. docs/plan.md", default: "Project-relative output path, e.g. docs/plan.md"))
+                    Toggle(AppLocalization.string("Allow overwrite if the file exists", default: "Allow overwrite if the file exists"), isOn: $allowOverwrite)
                         .font(AppTheme.Font.caption)
                 }
-                Toggle("Allow direct project writes without a worktree", isOn: $allowDirectProjectWrites)
+                Toggle(AppLocalization.string("Allow direct project writes without a worktree", default: "Allow direct project writes without a worktree"), isOn: $allowDirectProjectWrites)
                     .font(AppTheme.Font.caption)
                     .disabled(useWorktreeIsolation || expectedOutcome != .directProjectWrites)
                 if let outputPolicyError {
@@ -1341,10 +1341,10 @@ struct PiNativeSubagentRunSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel", action: onCancel)
+                Button(AppLocalization.string("Cancel", default: "Cancel"), action: onCancel)
                     .appSecondaryButton()
                     .keyboardShortcut(.cancelAction)
-                Button("Run") {
+                Button(AppLocalization.string("Run", default: "Run")) {
                     let trimmedOutputPath = requestedOutputPath.trimmingCharacters(in: .whitespacesAndNewlines)
                     onRun(selectedAgentName, task, useWorktreeIsolation, allowDirectProjectWrites, expectedOutcome, trimmedOutputPath.isEmpty ? nil : trimmedOutputPath, allowOverwrite, parsedReadFirstPaths)
                 }
@@ -1440,11 +1440,11 @@ struct PiNativeSubagentRunSheet: View {
         case .reportOnly:
             return nil
         case .editFilesInWorktree:
-            return useWorktreeIsolation ? nil : "Editing files should use worktree isolation."
+            return useWorktreeIsolation ? nil : AppLocalization.string("Editing files should use worktree isolation.", default: "Editing files should use worktree isolation.")
         case .writeProjectFile:
-            return requestedOutputPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Choose the project-relative file to write or update." : nil
+            return requestedOutputPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? AppLocalization.string("Choose the project-relative file to write or update.", default: "Choose the project-relative file to write or update.") : nil
         case .directProjectWrites:
-            return allowDirectProjectWrites ? nil : "Direct project writes require explicit approval."
+            return allowDirectProjectWrites ? nil : AppLocalization.string("Direct project writes require explicit approval.", default: "Direct project writes require explicit approval.")
         }
     }
 
@@ -1467,7 +1467,7 @@ struct PiNativeSubagentRunSheet: View {
 
     private func subagentInfoLine(_ title: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text("\(title):")
+            Text(AppLocalization.string(title, default: title) + ":")
                 .font(AppTheme.Font.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             Text(value)

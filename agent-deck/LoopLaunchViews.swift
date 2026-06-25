@@ -211,9 +211,9 @@ struct LoopLaunchSheet: View {
                         VStack(alignment: .leading, spacing: 14) {
                             pickerRow("Structure") {
                                 HStack(spacing: 8) {
-                                    Picker("Structure", selection: $draft.structure) {
+                                    Picker(AppLocalization.string("Structure", default: "Structure"), selection: $draft.structure) {
                                         ForEach(LoopStructureKind.allCases) { kind in
-                                            Text(kind.displayName).tag(kind)
+                                            Text(AppLocalization.string(kind.displayName, default: kind.displayName)).tag(kind)
                                         }
                                     }
                                     .labelsHidden()
@@ -235,9 +235,9 @@ struct LoopLaunchSheet: View {
 
                             pickerRow("Write Target") {
                                 HStack(spacing: 8) {
-                                    Picker("Write Target", selection: $draft.writeTarget) {
+                                    Picker(AppLocalization.string("Write Target", default: "Write Target"), selection: $draft.writeTarget) {
                                         ForEach(LoopWriteTarget.allCases) { target in
-                                            Text(target.displayName).tag(target)
+                                            Text(AppLocalization.string(target.displayName, default: target.displayName)).tag(target)
                                         }
                                     }
                                     .labelsHidden()
@@ -271,7 +271,7 @@ struct LoopLaunchSheet: View {
 
                             fieldGroup {
                                 HStack(spacing: 6) {
-                                    Text("Launch context")
+                                    Text(AppLocalization.string("Launch context", default: "Launch context"))
                                         .font(AppTheme.Font.caption.weight(.semibold))
                                         .foregroundStyle(AppTheme.mutedText)
                                     LoopInlineInfoButton(
@@ -291,9 +291,9 @@ struct LoopLaunchSheet: View {
                                             .stroke(AppTheme.contentStroke, lineWidth: 1)
                                     }
                                 if draft.launchContext?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-                                    Picker("Context scope", selection: $draft.launchContextScope) {
+                                    Picker(AppLocalization.string("Context scope", default: "Context scope"), selection: $draft.launchContextScope) {
                                         ForEach(LoopLaunchContextScope.allCases) { scope in
-                                            Text(scope.displayName).tag(scope)
+                                            Text(AppLocalization.string(scope.displayName, default: scope.displayName)).tag(scope)
                                         }
                                     }
                                     .labelsHidden()
@@ -302,7 +302,7 @@ struct LoopLaunchSheet: View {
                             }
 
                             HStack(spacing: 8) {
-                                Text("Max iterations")
+                                Text(AppLocalization.string("Max iterations", default: "Max iterations"))
                                     .font(AppTheme.Font.body)
                                 LoopNumericStepper(value: $draft.maxIterations, range: 1...20)
 
@@ -319,7 +319,7 @@ struct LoopLaunchSheet: View {
                     AppCard(title: "Validation (optional)") {
                         fieldGroup {
                             HStack(spacing: 6) {
-                                Text("Command")
+                                Text(AppLocalization.string("Command", default: "Command"))
                                     .font(AppTheme.Font.caption.weight(.semibold))
                                     .foregroundStyle(AppTheme.mutedText)
                                 LoopInlineInfoButton(
@@ -328,9 +328,9 @@ struct LoopLaunchSheet: View {
                                 )
                             }
                         } content: {
-                            AppTextField(text: $draft.validationCommand, placeholder: "Optional, e.g. swift test")
+                            AppTextField(text: $draft.validationCommand, placeholder: AppLocalization.string("Optional, e.g. swift test", default: "Optional, e.g. swift test"))
                                 .frame(maxWidth: .infinity)
-                            Text("Leave empty to skip automatic validation. The loop can still use checker judgment, logs, artifacts, or commands it runs itself.")
+                            Text(AppLocalization.string("Leave empty to skip automatic validation. The loop can still use checker judgment, logs, artifacts, or commands it runs itself.", default: "Leave empty to skip automatic validation. The loop can still use checker judgment, logs, artifacts, or commands it runs itself."))
                                 .font(AppTheme.Font.caption)
                                 .foregroundStyle(AppTheme.mutedText)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -369,10 +369,10 @@ struct LoopLaunchSheet: View {
                 .background(AppTheme.brandAccent.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(title)
+                Text(AppLocalization.string(title, default: title))
                     .font(.headline.weight(.semibold))
                     .fontWidth(.expanded)
-                Text(sourceDefinition == nil ? "Unsaved loop · \(session.title)" : "Saved loop · \(session.title)")
+                Text(sourceDefinition == nil ? AppLocalization.format("Unsaved loop · %@", default: "Unsaved loop · %@", session.title) : AppLocalization.format("Saved loop · %@", default: "Saved loop · %@", session.title))
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .lineLimit(1)
@@ -383,12 +383,12 @@ struct LoopLaunchSheet: View {
             Button {
                 isInfoPresented.toggle()
             } label: {
-                Label("Info", systemImage: "info.circle")
+                Label(AppLocalization.string("Info", default: "Info"), systemImage: "info.circle")
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(.plain)
             .foregroundStyle(AppTheme.mutedText)
-            .help("Explain loops")
+            .help(AppLocalization.string("Explain loops", default: "Explain loops"))
             .popover(isPresented: $isInfoPresented, arrowEdge: .bottom) {
                 LoopLaunchInfoPopover()
             }
@@ -400,10 +400,10 @@ struct LoopLaunchSheet: View {
     private var sheetFooter: some View {
         HStack(spacing: 12) {
             Spacer(minLength: 0)
-            Button("Cancel", action: onCancel)
+            Button(AppLocalization.string("Cancel", default: "Cancel"), action: onCancel)
                 .appSecondaryButton()
                 .keyboardShortcut(.cancelAction)
-            Button(saveToLoopBank ? "Save & Launch" : "Launch") {
+            Button(AppLocalization.string(saveToLoopBank ? "Save & Launch" : "Launch", default: saveToLoopBank ? "Save & Launch" : "Launch")) {
                 onLaunch(LoopLaunchRequest(
                     draft: draft,
                     stopExistingActive: stopExistingActive,
@@ -420,14 +420,14 @@ struct LoopLaunchSheet: View {
 
     private func activeLoopWarning(_ activeRun: LoopRun) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("This transcript already has an active loop.", systemImage: "exclamationmark.triangle.fill")
+            Label(AppLocalization.string("This transcript already has an active loop.", default: "This transcript already has an active loop."), systemImage: "exclamationmark.triangle.fill")
                 .font(AppTheme.Font.body.weight(.semibold))
                 .foregroundStyle(.orange)
             Text(activeRun.goal)
                 .font(AppTheme.Font.caption)
                 .foregroundStyle(AppTheme.mutedText)
                 .lineLimit(2)
-            Toggle("Stop it and start this loop", isOn: $stopExistingActive)
+            Toggle(AppLocalization.string("Stop it and start this loop", default: "Stop it and start this loop"), isOn: $stopExistingActive)
                 .appSwitch()
         }
         .padding(14)
@@ -443,17 +443,17 @@ struct LoopLaunchSheet: View {
     private var deckAgentsPreflightSection: some View {
         if loopRequiresDeckAgents && !session.subagentsEnabled {
             VStack(alignment: .leading, spacing: 10) {
-                Label("Deck agents are disabled for this session.", systemImage: "paperplane.circle")
+                Label(AppLocalization.string("Deck agents are disabled for this session.", default: "Deck agents are disabled for this session."), systemImage: "paperplane.circle")
                     .font(AppTheme.Font.body.weight(.semibold))
                     .foregroundStyle(.orange)
-                Text("This loop launches child Deck agents. Enable Deck agents for this session before launching.")
+                Text(AppLocalization.string("This loop launches child Deck agents. Enable Deck agents for this session before launching.", default: "This loop launches child Deck agents. Enable Deck agents for this session before launching."))
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
                 Button {
                     onEnableDeckAgents()
                 } label: {
-                    Label("Enable Deck agents", systemImage: "checkmark.circle")
+                    Label(AppLocalization.string("Enable Deck agents", default: "Enable Deck agents"), systemImage: "checkmark.circle")
                 }
                 .appTintedSecondaryButton(.orange)
             }
@@ -471,13 +471,13 @@ struct LoopLaunchSheet: View {
     private var loopPreflightSection: some View {
         if !agentPreflightIssues.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                Label("Fix loop agent configuration before launch.", systemImage: "person.crop.circle.badge.exclamationmark")
+                Label(AppLocalization.string("Fix loop agent configuration before launch.", default: "Fix loop agent configuration before launch."), systemImage: "person.crop.circle.badge.exclamationmark")
                     .font(AppTheme.Font.body.weight(.semibold))
                     .foregroundStyle(.orange)
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(agentPreflightIssues) { issue in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("• \(issue.name) — \(issue.kind.title)")
+                            Text(AppLocalization.format("• %@ — %@", default: "• %@ — %@", issue.name, issue.kind.title))
                                 .font(AppTheme.Font.caption.weight(.semibold))
                                 .foregroundStyle(.primary)
                             Text(issue.kind.remediation)
@@ -486,7 +486,7 @@ struct LoopLaunchSheet: View {
                         }
                     }
                 }
-                Text("Agent Deck will not guess replacements or silently enable disabled agents.")
+                Text(AppLocalization.string("Agent Deck will not guess replacements or silently enable disabled agents.", default: "Agent Deck will not guess replacements or silently enable disabled agents."))
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -494,18 +494,18 @@ struct LoopLaunchSheet: View {
                     Button {
                         onAssignMissingAgents(assignablePreflightAgentNames)
                     } label: {
-                        Label("Assign fixable agents", systemImage: "plus.circle")
+                        Label(AppLocalization.string("Assign fixable agents", default: "Assign fixable agents"), systemImage: "plus.circle")
                     }
                     .appTintedSecondaryButton(.orange)
                     .disabled(session.projectPath.isEmpty || assignablePreflightAgentNames.isEmpty)
-                    .help(assignablePreflightAgentNames.isEmpty ? "No unassigned existing agents can be fixed automatically." : "Assign existing unassigned agents to the current project")
+                    .help(AppLocalization.string(assignablePreflightAgentNames.isEmpty ? "No unassigned existing agents can be fixed automatically." : "Assign existing unassigned agents to the current project", default: assignablePreflightAgentNames.isEmpty ? "No unassigned existing agents can be fixed automatically." : "Assign existing unassigned agents to the current project"))
 
                     if session.projectPath.isEmpty {
-                        Text("No project path available.")
+                        Text(AppLocalization.string("No project path available.", default: "No project path available."))
                             .font(AppTheme.Font.caption2)
                             .foregroundStyle(AppTheme.mutedText)
                     } else if assignablePreflightAgentNames.isEmpty {
-                        Text("Open Agents to enable/create the listed agents, or choose different agents.")
+                        Text(AppLocalization.string("Open Agents to enable/create the listed agents, or choose different agents.", default: "Open Agents to enable/create the listed agents, or choose different agents."))
                             .font(AppTheme.Font.caption2)
                             .foregroundStyle(AppTheme.mutedText)
                     }
@@ -542,7 +542,7 @@ struct LoopLaunchSheet: View {
                     }
                     fieldGroup {
                         HStack(spacing: 6) {
-                            Text("Checker rubric")
+                            Text(AppLocalization.string("Checker rubric", default: "Checker rubric"))
                                 .font(AppTheme.Font.caption.weight(.semibold))
                                 .foregroundStyle(AppTheme.mutedText)
                             LoopInlineInfoButton(
@@ -553,11 +553,11 @@ struct LoopLaunchSheet: View {
                     } content: {
                         AppTextField(
                             text: $draft.makerChecker.checkerRubric,
-                            placeholder: "approve, reject once, ask human, or fail",
+                            placeholder: AppLocalization.string("approve, reject once, ask human, or fail", default: "approve, reject once, ask human, or fail"),
                             axis: .vertical
                         )
                         .lineLimit(2...4)
-                        Text("Checker is report-only. In this deterministic preview runner, the rubric controls the checker result.")
+                        Text(AppLocalization.string("Checker is report-only. In this deterministic preview runner, the rubric controls the checker result.", default: "Checker is report-only. In this deterministic preview runner, the rubric controls the checker result."))
                             .font(AppTheme.Font.caption)
                             .foregroundStyle(AppTheme.mutedText)
                             .fixedSize(horizontal: false, vertical: true)
@@ -565,7 +565,7 @@ struct LoopLaunchSheet: View {
                 case .agentPipeline:
                     fieldGroup {
                         HStack(spacing: 6) {
-                            Text("Stages")
+                            Text(AppLocalization.string("Stages", default: "Stages"))
                                 .font(AppTheme.Font.caption.weight(.semibold))
                                 .foregroundStyle(AppTheme.mutedText)
                             LoopInlineInfoButton(
@@ -575,14 +575,14 @@ struct LoopLaunchSheet: View {
                         }
                     } content: {
                         LoopPipelineStagePicker(stages: pipelineStagesBinding, availableAgents: availableAgents)
-                        Text("Runs selected agents in this fixed order and records the timeline.")
+                        Text(AppLocalization.string("Runs selected agents in this fixed order and records the timeline.", default: "Runs selected agents in this fixed order and records the timeline."))
                             .font(AppTheme.Font.caption)
                             .foregroundStyle(AppTheme.mutedText)
                     }
                 case .parallelAgents:
                     fieldGroup {
                         HStack(spacing: 6) {
-                            Text("Branches")
+                            Text(AppLocalization.string("Branches", default: "Branches"))
                                 .font(AppTheme.Font.caption.weight(.semibold))
                                 .foregroundStyle(AppTheme.mutedText)
                             LoopInlineInfoButton(
@@ -591,8 +591,8 @@ struct LoopLaunchSheet: View {
                             )
                         }
                     } content: {
-                        AppTextField(text: parallelBranchesBinding, placeholder: "Branches, separated by |")
-                        Text("Records branch timeline. Choose New worktree for isolated coding-preview writes.")
+                        AppTextField(text: parallelBranchesBinding, placeholder: AppLocalization.string("Branches, separated by |", default: "Branches, separated by |"))
+                        Text(AppLocalization.string("Records branch timeline. Choose New worktree for isolated coding-preview writes.", default: "Records branch timeline. Choose New worktree for isolated coding-preview writes."))
                             .font(AppTheme.Font.caption)
                             .foregroundStyle(AppTheme.mutedText)
                     }
@@ -602,7 +602,7 @@ struct LoopLaunchSheet: View {
                     }
                     fieldGroup {
                         HStack(spacing: 6) {
-                            Text("Classification prompt")
+                            Text(AppLocalization.string("Classification prompt", default: "Classification prompt"))
                                 .font(AppTheme.Font.caption.weight(.semibold))
                                 .foregroundStyle(AppTheme.mutedText)
                             LoopInlineInfoButton(
@@ -611,13 +611,13 @@ struct LoopLaunchSheet: View {
                             )
                         }
                     } content: {
-                        AppTextField(text: $draft.discoveryTriage.classificationPrompt, placeholder: "Classification prompt", axis: .vertical)
+                        AppTextField(text: $draft.discoveryTriage.classificationPrompt, placeholder: AppLocalization.string("Classification prompt", default: "Classification prompt"), axis: .vertical)
                             .lineLimit(2...4)
                     }
                 case .humanApproval:
                     fieldGroup {
                         HStack(spacing: 6) {
-                            Text("Checkpoint prompt")
+                            Text(AppLocalization.string("Checkpoint prompt", default: "Checkpoint prompt"))
                                 .font(AppTheme.Font.caption.weight(.semibold))
                                 .foregroundStyle(AppTheme.mutedText)
                             LoopInlineInfoButton(
@@ -626,9 +626,9 @@ struct LoopLaunchSheet: View {
                             )
                         }
                     } content: {
-                        AppTextField(text: $draft.humanApproval.checkpointPrompt, placeholder: "Checkpoint prompt", axis: .vertical)
+                        AppTextField(text: $draft.humanApproval.checkpointPrompt, placeholder: AppLocalization.string("Checkpoint prompt", default: "Checkpoint prompt"), axis: .vertical)
                             .lineLimit(2...4)
-                        Text("The deterministic preview runner stops with Human input required at this checkpoint.")
+                        Text(AppLocalization.string("The deterministic preview runner stops with Human input required at this checkpoint.", default: "The deterministic preview runner stops with Human input required at this checkpoint."))
                             .font(AppTheme.Font.caption)
                             .foregroundStyle(AppTheme.mutedText)
                     }
@@ -636,7 +636,7 @@ struct LoopLaunchSheet: View {
                     fieldGroup("Agent") {
                         LoopAgentNameMenu(selection: $draft.makerChecker.makerName, availableAgents: availableAgents, fallbackLabel: "Agent")
                     }
-                    Text("Runs the selected agent against the selected write target.")
+                    Text(AppLocalization.string("Runs the selected agent against the selected write target.", default: "Runs the selected agent against the selected write target."))
                         .font(AppTheme.Font.caption)
                         .foregroundStyle(AppTheme.mutedText)
                 }
@@ -647,17 +647,17 @@ struct LoopLaunchSheet: View {
     private var loopBankSection: some View {
         AppCard(title: "Loop Bank") {
             VStack(alignment: .leading, spacing: 14) {
-                Toggle("Save to Loop Bank before launch", isOn: $saveToLoopBank)
+                Toggle(AppLocalization.string("Save to Loop Bank before launch", default: "Save to Loop Bank before launch"), isOn: $saveToLoopBank)
                     .appSwitch()
                 if saveToLoopBank {
                     fieldGroup("Name") {
-                        AppTextField(text: $saveName, placeholder: "Name")
+                        AppTextField(text: $saveName, placeholder: AppLocalization.string("Name", default: "Name"))
                     }
                     fieldGroup("Description") {
-                        AppTextField(text: $saveDescription, placeholder: "Description", axis: .vertical)
+                        AppTextField(text: $saveDescription, placeholder: AppLocalization.string("Description", default: "Description"), axis: .vertical)
                             .lineLimit(2...4)
                     }
-                    Toggle("Available only in this project", isOn: $saveForCurrentProjectOnly)
+                    Toggle(AppLocalization.string("Available only in this project", default: "Available only in this project"), isOn: $saveForCurrentProjectOnly)
                         .appSwitch()
                         .disabled(session.projectPath.isEmpty)
                 }
@@ -667,7 +667,7 @@ struct LoopLaunchSheet: View {
 
     private func pickerRow<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(label)
+            Text(AppLocalization.string(label, default: label))
                 .font(AppTheme.Font.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
                 .frame(width: 96, alignment: .leading)
@@ -678,7 +678,7 @@ struct LoopLaunchSheet: View {
 
     private func fieldGroup<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
         fieldGroup {
-            Text(label)
+            Text(AppLocalization.string(label, default: label))
                 .font(AppTheme.Font.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
         } content: {
@@ -699,23 +699,23 @@ struct LoopLaunchSheet: View {
     private var writeTargetExplanation: some View {
         switch draft.writeTarget {
         case .artifactMarkdown:
-            Text("Writes only to the loop artifact directory. Project files are not modified.")
+            Text(AppLocalization.string("Writes only to the loop artifact directory. Project files are not modified.", default: "Writes only to the loop artifact directory. Project files are not modified."))
                 .font(AppTheme.Font.caption)
                 .foregroundStyle(AppTheme.mutedText)
         case .newWorktree:
-            Text("Explicit coding target. Agent Deck creates a per-run git worktree and runs validation there; the current checkout remains untouched.")
+            Text(AppLocalization.string("Explicit coding target. Agent Deck creates a per-run git worktree and runs validation there; the current checkout remains untouched.", default: "Explicit coding target. Agent Deck creates a per-run git worktree and runs validation there; the current checkout remains untouched."))
                 .font(AppTheme.Font.caption)
                 .foregroundStyle(AppTheme.mutedText)
         case .currentCheckout:
             VStack(alignment: .leading, spacing: 8) {
-                Label("Direct write target: this loop may edit files in the current checkout.", systemImage: "exclamationmark.triangle.fill")
+                Label(AppLocalization.string("Direct write target: this loop may edit files in the current checkout.", default: "Direct write target: this loop may edit files in the current checkout."), systemImage: "exclamationmark.triangle.fill")
                     .font(AppTheme.Font.caption.weight(.semibold))
                     .foregroundStyle(.orange)
-                Text("Resolved path: \(session.projectPath.isEmpty ? "Unavailable" : session.projectPath)")
+                Text(AppLocalization.format("Resolved path: %@", default: "Resolved path: %@", session.projectPath.isEmpty ? AppLocalization.string("Unavailable", default: "Unavailable") : session.projectPath))
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .textSelection(.enabled)
-                Toggle("I understand this loop may modify the current checkout", isOn: $confirmsCurrentCheckoutWrite)
+                Toggle(AppLocalization.string("I understand this loop may modify the current checkout", default: "I understand this loop may modify the current checkout"), isOn: $confirmsCurrentCheckoutWrite)
                     .appSwitch()
             }
         }
@@ -735,7 +735,7 @@ struct LoopLaunchSheet: View {
     private func defaultSaveName() -> String {
         let firstLine = trimmedGoal.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
         let trimmed = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return "Untitled Loop" }
+        if trimmed.isEmpty { return AppLocalization.string("Untitled Loop", default: "Untitled Loop") }
         return String(trimmed.prefix(64))
     }
 
@@ -761,14 +761,14 @@ struct LoopAgentNameMenu: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Picker(fallbackLabel, selection: $selection) {
-                Text("Select \(fallbackLabel)…").tag("")
+            Picker(AppLocalization.string(fallbackLabel, default: fallbackLabel), selection: $selection) {
+                Text(AppLocalization.format("Select %@…", default: "Select %@…", AppLocalization.string(fallbackLabel, default: fallbackLabel))).tag("")
                 ForEach(names, id: \.self) { Text($0).tag($0) }
             }
             .labelsHidden()
             .appMenuPicker()
             if !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !availableAgents.map(\.name).contains(selection) {
-                Label("Saved role not available in this project", systemImage: "exclamationmark.triangle")
+                Label(AppLocalization.string("Saved role not available in this project", default: "Saved role not available in this project"), systemImage: "exclamationmark.triangle")
                     .font(AppTheme.Font.caption2)
                     .foregroundStyle(.orange)
             }
@@ -806,7 +806,7 @@ struct LoopPipelineStagePicker: View {
                             Image(systemName: "arrow.down")
                                 .font(AppTheme.Font.caption.weight(.semibold))
                                 .foregroundStyle(AppTheme.mutedText)
-                            Text("then")
+                            Text(AppLocalization.string("then", default: "then"))
                                 .font(AppTheme.Font.caption2.weight(.semibold))
                                 .foregroundStyle(AppTheme.mutedText)
                         }
@@ -818,13 +818,13 @@ struct LoopPipelineStagePicker: View {
                 Button {
                     addStage()
                 } label: {
-                    Label("Add stage", systemImage: "plus")
+                    Label(AppLocalization.string("Add stage", default: "Add stage"), systemImage: "plus")
                 }
                 .appSecondaryButton()
                 .disabled(pickerNames.isEmpty)
 
                 if availableAgents.isEmpty {
-                    Text("No agents available yet.")
+                    Text(AppLocalization.string("No agents available yet.", default: "No agents available yet."))
                         .font(AppTheme.Font.caption)
                         .foregroundStyle(AppTheme.mutedText)
                 }
@@ -843,8 +843,8 @@ struct LoopPipelineStagePicker: View {
                 .background(AppTheme.brandAccent.opacity(0.12), in: Circle())
 
             VStack(alignment: .leading, spacing: 3) {
-                Picker("Stage \(index + 1)", selection: stageBinding(index)) {
-                    Text("Select Agent…").tag("")
+                Picker(AppLocalization.format("Stage %lld", default: "Stage %lld", Int64(index + 1)), selection: stageBinding(index)) {
+                    Text(AppLocalization.string("Select Agent…", default: "Select Agent…")).tag("")
                     ForEach(pickerNames, id: \.self) { name in
                         Text(name).tag(name)
                     }
@@ -853,7 +853,7 @@ struct LoopPipelineStagePicker: View {
                 .appMenuPicker()
 
                 if let stageName = stageName(at: index), !stageName.isEmpty, !agentNames.contains(stageName) {
-                    Label("Saved stage not available", systemImage: "exclamationmark.triangle")
+                    Label(AppLocalization.string("Saved stage not available", default: "Saved stage not available"), systemImage: "exclamationmark.triangle")
                         .font(AppTheme.Font.caption2)
                         .foregroundStyle(.orange)
                 }
@@ -863,35 +863,35 @@ struct LoopPipelineStagePicker: View {
             Button {
                 moveStage(from: index, by: -1)
             } label: {
-                Label("Move earlier", systemImage: "arrow.up")
+                Label(AppLocalization.string("Move earlier", default: "Move earlier"), systemImage: "arrow.up")
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(.plain)
             .foregroundStyle(AppTheme.mutedText)
             .disabled(index == 0)
-            .help("Move earlier")
+            .help(AppLocalization.string("Move earlier", default: "Move earlier"))
 
             Button {
                 moveStage(from: index, by: 1)
             } label: {
-                Label("Move later", systemImage: "arrow.down")
+                Label(AppLocalization.string("Move later", default: "Move later"), systemImage: "arrow.down")
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(.plain)
             .foregroundStyle(AppTheme.mutedText)
             .disabled(index >= stages.count - 1)
-            .help("Move later")
+            .help(AppLocalization.string("Move later", default: "Move later"))
 
             Button {
                 removeStage(at: index)
             } label: {
-                Label("Remove stage", systemImage: "minus.circle")
+                Label(AppLocalization.string("Remove stage", default: "Remove stage"), systemImage: "minus.circle")
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(.plain)
             .foregroundStyle(AppTheme.mutedText.opacity(stages.count > 1 ? 1 : 0.45))
             .disabled(stages.count <= 1)
-            .help("Remove stage")
+            .help(AppLocalization.string("Remove stage", default: "Remove stage"))
         }
         .padding(10)
         .background(AppTheme.textContentFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -985,20 +985,20 @@ struct LoopInlineInfoButton: View {
                 .frame(width: 18, height: 18)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Explain \(title)")
-        .help(title)
+        .accessibilityLabel(AppLocalization.format("Explain %@", default: "Explain %@", AppLocalization.string(title, default: title)))
+        .help(AppLocalization.string(title, default: title))
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 10) {
                     Image(systemName: "info.circle")
                         .foregroundStyle(AppTheme.brandAccent)
-                    Text(title)
+                    Text(AppLocalization.string(title, default: title))
                         .font(.headline)
                         .fontWidth(.expanded)
                 }
 
                 if let message {
-                    Text(message)
+                    Text(AppLocalization.string(message, default: message))
                         .font(.caption)
                         .foregroundStyle(AppTheme.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1017,10 +1017,10 @@ struct LoopInlineInfoButton: View {
 
     private func infoRow(_ title: String, _ description: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(title)
+            Text(AppLocalization.string(title, default: title))
                 .font(.subheadline.weight(.semibold))
                 .fontWidth(.expanded)
-            Text(description)
+            Text(AppLocalization.string(description, default: description))
                 .font(.caption)
                 .foregroundStyle(AppTheme.mutedText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1034,7 +1034,7 @@ struct LoopLaunchInfoPopover: View {
             HStack(spacing: 10) {
                 Image(systemName: "infinity")
                     .foregroundStyle(AppTheme.brandAccent)
-                Text("Loops")
+                Text(AppLocalization.string("Loops", default: "Loops"))
                     .font(.headline)
                     .fontWidth(.expanded)
             }
@@ -1052,10 +1052,10 @@ struct LoopLaunchInfoPopover: View {
 
     private func infoRow(_ title: String, _ description: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(title)
+            Text(AppLocalization.string(title, default: title))
                 .font(.subheadline.weight(.semibold))
                 .fontWidth(.expanded)
-            Text(description)
+            Text(AppLocalization.string(description, default: description))
                 .font(.caption)
                 .foregroundStyle(AppTheme.mutedText)
                 .fixedSize(horizontal: false, vertical: true)

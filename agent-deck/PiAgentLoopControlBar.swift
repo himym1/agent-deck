@@ -28,7 +28,7 @@ struct PiAgentLoopControlBar: View {
                         Text(titleText)
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(.primary)
-                        Text(run.displayStatusName)
+                        Text(AppLocalization.string(run.displayStatusName, default: run.displayStatusName))
                             .font(AppTheme.Font.caption.weight(.semibold))
                             .foregroundStyle(run.isActive ? AppTheme.brandAccent : AppTheme.mutedText)
                             .padding(.horizontal, 6)
@@ -55,17 +55,17 @@ struct PiAgentLoopControlBar: View {
             if canResolveHumanApproval || run.isActive {
                 HStack(spacing: 8) {
                     if canResolveHumanApproval {
-                        Button("Approve", action: { onApproveHumanApproval?() })
+                        Button(AppLocalization.string("Approve", default: "Approve"), action: { onApproveHumanApproval?() })
                             .appPrimaryButton()
                             .controlSize(.small)
                             .disabled(onApproveHumanApproval == nil)
-                        Button("Reject", role: .destructive, action: { onRejectHumanApproval?() })
+                        Button(AppLocalization.string("Reject", default: "Reject"), role: .destructive, action: { onRejectHumanApproval?() })
                             .appDestructiveButton()
                             .controlSize(.small)
                             .disabled(onRejectHumanApproval == nil)
                     }
                     if run.isActive {
-                        Button("Stop", role: .destructive, action: onStop)
+                        Button(AppLocalization.string("Stop", default: "Stop"), role: .destructive, action: onStop)
                             .appDestructiveButton()
                             .controlSize(.small)
                     }
@@ -77,15 +77,15 @@ struct PiAgentLoopControlBar: View {
             }
 
             HStack(spacing: 8) {
-                Button("Details", action: onOpenDetails)
+                Button(AppLocalization.string("Details", default: "Details"), action: onOpenDetails)
                     .appSmallSecondaryButton()
                 if canRetry {
-                    Button("Retry Failed Iteration", action: { onRetry?() })
+                    Button(AppLocalization.string("Retry Failed Iteration", default: "Retry Failed Iteration"), action: { onRetry?() })
                         .appSmallSecondaryButton()
                         .disabled(onRetry == nil)
                 }
                 if canSave {
-                    Button("Save Loop", action: { onSave?() })
+                    Button(AppLocalization.string("Save Loop", default: "Save Loop"), action: { onSave?() })
                         .appSmallSecondaryButton()
                         .disabled(onSave == nil)
                 }
@@ -95,22 +95,22 @@ struct PiAgentLoopControlBar: View {
                 actionDivider
                 HStack(spacing: 8) {
                     if canRevealArtifacts {
-                        Button("Reveal Artifacts", action: { onRevealArtifacts?() })
+                        Button(AppLocalization.string("Reveal Artifacts", default: "Reveal Artifacts"), action: { onRevealArtifacts?() })
                             .appSmallSecondaryButton()
                             .disabled(onRevealArtifacts == nil)
                     }
                     if canRevealWorktree {
-                        Button("Reveal Worktree", action: { onRevealWorktree?() })
+                        Button(AppLocalization.string("Reveal Worktree", default: "Reveal Worktree"), action: { onRevealWorktree?() })
                             .appSmallSecondaryButton()
                             .disabled(onRevealWorktree == nil)
                     }
                     if canApplyWorktree {
-                        Button("Apply Worktree", action: { onApplyWorktree?() })
+                        Button(AppLocalization.string("Apply Worktree", default: "Apply Worktree"), action: { onApplyWorktree?() })
                             .appSmallSecondaryButton()
                             .disabled(onApplyWorktree == nil)
                     }
                     if canDiscardWorktree {
-                        Button("Discard Worktree", role: .destructive, action: { onDiscardWorktree?() })
+                        Button(AppLocalization.string("Discard Worktree", default: "Discard Worktree"), role: .destructive, action: { onDiscardWorktree?() })
                             .appDestructiveButton()
                             .controlSize(.small)
                             .disabled(onDiscardWorktree == nil)
@@ -127,13 +127,13 @@ struct PiAgentLoopControlBar: View {
     }
 
     private var titleText: String {
-        run.isActive ? "Loop running" : "Loop: \(run.structure.displayName)"
+        run.isActive ? AppLocalization.string("Loop running", default: "Loop running") : AppLocalization.format("Loop: %@", default: "Loop: %@", AppLocalization.string(run.structure.displayName, default: run.structure.displayName))
     }
 
     private var detailText: String {
-        var parts = [run.structure.displayName, run.iterationProgressText]
+        var parts = [AppLocalization.string(run.structure.displayName, default: run.structure.displayName), run.iterationProgressText]
         if let stopReason = run.stopReason, !run.isActive {
-            parts.append("Stop reason: \(stopReason.displayName)")
+            parts.append(AppLocalization.format("Stop reason: %@", default: "Stop reason: %@", AppLocalization.string(stopReason.displayName, default: stopReason.displayName)))
         } else if let latest = run.iterations.last?.summary, !latest.isEmpty {
             parts.append(trimSummary(latest))
         }
@@ -207,14 +207,14 @@ struct PiAgentLoopDetailsSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Loop Details")
+                    Text(AppLocalization.string("Loop Details", default: "Loop Details"))
                         .font(.title2.weight(.bold))
-                    Text("\(run.structure.displayName) · \(run.displayStatusName) · \(run.iterationProgressText)")
+                    Text(AppLocalization.format("%@ · %@ · %@", default: "%@ · %@ · %@", AppLocalization.string(run.structure.displayName, default: run.structure.displayName), AppLocalization.string(run.displayStatusName, default: run.displayStatusName), run.iterationProgressText))
                         .font(AppTheme.Font.footnote)
                         .foregroundStyle(AppTheme.mutedText)
                 }
                 Spacer()
-                Button("Done") { dismiss() }
+                Button(AppLocalization.string("Done", default: "Done")) { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
 
@@ -224,20 +224,20 @@ struct PiAgentLoopDetailsSheet: View {
                         .font(AppTheme.Font.body)
                         .foregroundStyle(.primary)
                     if let stopReason = run.stopReason {
-                        detailRow("Stop reason", stopReason.displayName)
+                        detailRow("Stop reason", AppLocalization.string(stopReason.displayName, default: stopReason.displayName))
                     }
                     ForEach(run.iterations) { iteration in
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Iteration \(iteration.index)")
+                            Text(AppLocalization.format("Iteration %lld", default: "Iteration %lld", Int64(iteration.index)))
                                 .font(AppTheme.Font.body.weight(.semibold))
                             Text(iteration.summary)
                                 .font(AppTheme.Font.footnote)
                                 .foregroundStyle(.secondary)
                             if let checkerResult = iteration.checkerResult {
-                                detailRow("Checker", checkerResult.displayName)
+                                detailRow("Checker", AppLocalization.string(checkerResult.displayName, default: checkerResult.displayName))
                             }
                             if let validation = iteration.validationResult {
-                                detailRow("Validation", validation.didPass ? "Passed" : "Failed")
+                                detailRow("Validation", AppLocalization.string(validation.didPass ? "Passed" : "Failed", default: validation.didPass ? "Passed" : "Failed"))
                             }
                             if !iteration.artifacts.isEmpty {
                                 detailRow("Artifacts", iteration.artifacts.map(\.filename).joined(separator: ", "))
@@ -252,7 +252,7 @@ struct PiAgentLoopDetailsSheet: View {
 
             HStack {
                 if let onRevealArtifacts {
-                    Button("Reveal Artifacts", action: onRevealArtifacts)
+                    Button(AppLocalization.string("Reveal Artifacts", default: "Reveal Artifacts"), action: onRevealArtifacts)
                 }
                 Spacer()
             }
@@ -263,7 +263,7 @@ struct PiAgentLoopDetailsSheet: View {
 
     private func detailRow(_ label: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(label + ":")
+            Text(AppLocalization.string(label, default: label) + ":")
                 .font(AppTheme.Font.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
             Text(value)
