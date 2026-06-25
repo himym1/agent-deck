@@ -6,6 +6,8 @@ struct LoopDefinitionEditorDraft: Equatable {
     var name: String
     var description: String
     var goalTemplate: String
+    var launchContext: String
+    var launchContextScope: LoopLaunchContextScope
     var structure: LoopStructureKind
     var writeTarget: LoopWriteTarget
     var maxIterations: Int
@@ -13,7 +15,6 @@ struct LoopDefinitionEditorDraft: Equatable {
     var makerName: String
     var checkerName: String
     var checkerRubric: String
-    var maxReviewRounds: Int
     var pipelineStageNames: [String]
     var parallelBranchesText: String
     var triageAgentName: String
@@ -31,6 +32,8 @@ struct LoopDefinitionEditorDraft: Equatable {
         name = definition?.name ?? ""
         description = definition?.description ?? ""
         goalTemplate = definition?.goalTemplate ?? ""
+        launchContext = definition?.launchContext ?? ""
+        launchContextScope = definition?.launchContextScope ?? .firstIterationOnly
         structure = definition?.structure ?? .singleAgent
         writeTarget = definition?.writeTarget ?? .artifactMarkdown
         maxIterations = definition?.maxIterations ?? LoopDraft.defaultMaxIterations
@@ -39,7 +42,6 @@ struct LoopDefinitionEditorDraft: Equatable {
         makerName = makerChecker.makerName
         checkerName = makerChecker.checkerName
         checkerRubric = makerChecker.checkerRubric
-        maxReviewRounds = makerChecker.maxReviewRounds
         pipelineStageNames = definition?.pipeline.stageNames ?? LoopPipelineConfig().stageNames
         parallelBranchesText = (definition?.parallel.branchNames ?? LoopParallelConfig().branchNames).joined(separator: " | ")
         triageAgentName = definition?.discoveryTriage.agentName ?? LoopDiscoveryTriageConfig().agentName
@@ -74,6 +76,8 @@ struct LoopDefinitionEditorDraft: Equatable {
             name: name,
             description: description,
             goalTemplate: goalTemplate,
+            launchContext: launchContext,
+            launchContextScope: launchContextScope,
             structure: structure,
             writeTarget: writeTarget,
             maxIterations: maxIterations,
@@ -81,8 +85,7 @@ struct LoopDefinitionEditorDraft: Equatable {
             makerChecker: LoopMakerCheckerConfig(
                 makerName: makerName,
                 checkerName: checkerName,
-                checkerRubric: checkerRubric,
-                maxReviewRounds: maxReviewRounds
+                checkerRubric: checkerRubric
             ),
             pipeline: LoopPipelineConfig(stageNames: pipelineStageNames),
             parallel: LoopParallelConfig(branchNames: splitList(parallelBranchesText)),
@@ -104,14 +107,22 @@ struct LoopDefinitionEditorDraft: Equatable {
     }
 }
 
+private enum LoopEditTab: String, CaseIterable, Identifiable {
+    case definition = "Definition"
+    case structure = "Structure"
+    case assignment = "Assignment"
+
+    var id: String { rawValue }
+}
+
 struct LoopBankScreen: View {
     var viewModel: AppViewModel
     @Binding var searchText: String
     @State private var editorDraft = LoopDefinitionEditorDraft()
     @State private var errorMessage: String?
     @State private var pendingDelete: LoopDefinition?
-    @State private var launchDefinition: LoopDefinition?
-    @State private var isLaunchSheetPresented = false
+    @State private var isEditorSheetPresented = false
+    @State private var selectedEditTab: LoopEditTab = .definition
     @State private var isCreatingNewLoop = false
     @State private var isDiscardNewLoopDraftAlertPresented = false
 
@@ -131,8 +142,9 @@ struct LoopBankScreen: View {
             viewModel.reloadLoopDefinitions()
             if let pendingDraft = viewModel.pendingNewLoopEditorDraft {
                 isCreatingNewLoop = true
-                viewModel.selectedLoopDefinitionID = nil
                 editorDraft = pendingDraft
+                selectedEditTab = .definition
+                isEditorSheetPresented = true
             } else {
                 if viewModel.selectedLoopDefinitionID == nil, let first = viewModel.loopDefinitions.first {
                     viewModel.selectedLoopDefinitionID = first.id
@@ -144,9 +156,10 @@ struct LoopBankScreen: View {
         }
         .onChange(of: viewModel.selectedLoopDefinitionID) { _, newID in
             if newID != nil {
-                isCreatingNewLoop = false
-                resetEditor(to: viewModel.selectedLoopDefinition)
-            } else if isCreatingNewLoop {
+                if !isCreatingNewLoop {
+                    resetEditor(to: viewModel.selectedLoopDefinition)
+                }
+            } else if !isCreatingNewLoop {
                 resetEditor(to: nil)
             }
         }
@@ -154,7 +167,7 @@ struct LoopBankScreen: View {
             if viewModel.selectedLoopDefinitionID == nil, let first = definitions.first, !isCreatingNewLoop, viewModel.pendingNewLoopEditorDraft == nil {
                 viewModel.selectedLoopDefinitionID = first.id
             }
-            if viewModel.selectedLoopDefinition != nil || isCreatingNewLoop {
+            if viewModel.selectedLoopDefinition != nil, !isCreatingNewLoop {
                 resetEditor(to: viewModel.selectedLoopDefinition)
             }
         }
@@ -166,51 +179,35 @@ struct LoopBankScreen: View {
                 viewModel.pendingNewLoopEditorDraft = draft
             }
         }
-        .alert(AppLocalization.string("Loop Bank", default: "Loop Bank"), isPresented: Binding(
+        .alert("Loop Bank", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
         )) {
-            Button(AppLocalization.string("OK", default: "OK")) { errorMessage = nil }
+            Button("OK") { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
         }
-        .alert(AppLocalization.string("Discard new loop draft?", default: "Discard new loop draft?"), isPresented: $isDiscardNewLoopDraftAlertPresented) {
-            Button(AppLocalization.string("Discard and Create New", default: "Discard and Create New"), role: .destructive) {
+        .alert("Discard new loop draft?", isPresented: $isDiscardNewLoopDraftAlertPresented) {
+            Button("Discard and Create New", role: .destructive) {
                 startNewLoop(discardPendingDraft: true)
             }
-            Button(AppLocalization.string("Keep Editing", default: "Keep Editing"), role: .cancel) { }
+            Button("Keep Editing", role: .cancel) { }
         } message: {
-            Text(AppLocalization.string("You already have an unsaved new loop draft. Discard it and start over?", default: "You already have an unsaved new loop draft. Discard it and start over?"))
+            Text("You already have an unsaved new loop draft. Discard it and start over?")
         }
-        .alert(AppLocalization.string("Delete Loop?", default: "Delete Loop?"), isPresented: Binding(
+        .alert("Delete Loop?", isPresented: Binding(
             get: { pendingDelete != nil },
             set: { if !$0 { pendingDelete = nil } }
         ), presenting: pendingDelete) { definition in
-            Button(AppLocalization.string("Delete", default: "Delete"), role: .destructive) {
+            Button("Delete", role: .destructive) {
                 delete(definition)
             }
-            Button(AppLocalization.string("Cancel", default: "Cancel"), role: .cancel) { pendingDelete = nil }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
         } message: { definition in
-            Text(AppLocalization.format("Delete \"%@\" from the user Loop Bank? Built-in loop resources are never edited.", default: "Delete \"%@\" from the user Loop Bank? Built-in loop resources are never edited.", definition.name))
+            Text("Delete \"\(definition.name)\" from the user Loop Bank? Built-in loop resources are never edited.")
         }
-        .sheet(isPresented: $isLaunchSheetPresented) {
-            if let session = viewModel.piAgentSessionStore.selectedSession,
-               let definition = launchDefinition {
-                LoopLaunchSheet(
-                    session: session,
-                    activeRun: viewModel.piAgentSessionStore.activeLoopRun(for: session.id),
-                    initialDraft: definition.makeDraft(),
-                    sourceDefinition: definition,
-                    availableAgents: viewModel.allDisplayAgents,
-                    onCancel: {
-                        isLaunchSheetPresented = false
-                        launchDefinition = nil
-                    },
-                    onLaunch: { request in
-                        launch(definition, in: session, request: request)
-                    }
-                )
-            }
+        .sheet(isPresented: $isEditorSheetPresented, onDismiss: handleEditorSheetDismiss) {
+            loopEditSheet
         }
     }
 
@@ -219,10 +216,7 @@ struct LoopBankScreen: View {
             sections: listSections,
             selection: .single(Binding(
                 get: { viewModel.selectedLoopDefinitionID },
-                set: {
-                    isCreatingNewLoop = false
-                    viewModel.selectedLoopDefinitionID = $0
-                }
+                set: { selectLoopDefinition($0) }
             )),
             isDisabled: { _ in false },
             keyboardNavigation: true
@@ -233,10 +227,10 @@ struct LoopBankScreen: View {
 
     @ViewBuilder
     private var loopDetailPane: some View {
-        if viewModel.selectedLoopDefinition == nil && !isCreatingNewLoop {
-            emptyLoopDetailPane
+        if let definition = viewModel.selectedLoopDefinition {
+            loopReadOnlyPane(for: definition)
         } else {
-            loopEditorPane
+            emptyLoopDetailPane
         }
     }
 
@@ -244,10 +238,11 @@ struct LoopBankScreen: View {
         AppPage("Loops", subtitle: "No loop selected", constrainsContentToViewport: true) {
             AppCard(title: "Loop Bank") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(AppLocalization.string("No saved loops yet.", default: "No saved loops yet."))
+                    Text("No saved loops yet.")
                         .font(.headline.weight(.semibold))
                         .fontWidth(.expanded)
-                    Text(AppLocalization.string("Use the + button in the toolbar to create a new saved loop.", default: "Use the + button in the toolbar to create a new saved loop."))
+                    Text("Use the + button in the toolbar to create a new saved loop.")
+                        .font(AppTheme.Font.body)
                         .foregroundStyle(AppTheme.mutedText)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -255,33 +250,85 @@ struct LoopBankScreen: View {
         }
     }
 
-    private var loopEditorPane: some View {
-        AppPage(editorDraft.isNew ? "New Loop" : editorDraft.name.nonEmpty ?? "Loop", subtitle: detailSubtitle, constrainsContentToViewport: true) {
-            AppCard(title: "Definition", trailing: {
-                AppLabelTag(text: availabilityLabel(for: editorDraft), color: availabilityColor(for: editorDraft))
-            }) {
+    private func loopReadOnlyPane(for definition: LoopDefinition) -> some View {
+        AppPage(definition.name.nonEmpty ?? "Loop", subtitle: detailSubtitle(for: definition), constrainsContentToViewport: true) {
+            AppCard(title: "Definition", trailing: { loopDetailActions(for: definition) }) {
                 VStack(alignment: .leading, spacing: 0) {
-                        if editorDraft.isBuiltin {
-                            Text(AppLocalization.string("Built-in templates are read-only. Duplicate to create an editable user copy.", default: "Built-in templates are read-only. Duplicate to create an editable user copy."))
-                                .foregroundStyle(AppTheme.mutedText)
-                                .padding(.bottom, 12)
-                            Divider()
-                        }
+                    if definition.source == .builtin {
+                        Text("Built-in templates are read-only. Duplicate to create an editable user copy.")
+                            .font(AppTheme.Font.caption)
+                            .foregroundStyle(AppTheme.mutedText)
+                            .padding(.bottom, 12)
+                        Divider()
+                    }
 
-                        definitionFields
+                    readOnlyDefinitionFields(for: definition)
                 }
-                .disabled(editorDraft.isBuiltin)
             }
 
-            loopStructureSection
-                .disabled(editorDraft.isBuiltin)
+            readOnlyStructureSection(for: definition)
 
-            availabilitySection
-                .disabled(editorDraft.isBuiltin)
+            readOnlyAvailabilitySection(for: definition)
+        }
+    }
 
-            lastRunSection
+    @ViewBuilder
+    private func loopDetailActions(for definition: LoopDefinition) -> some View {
+        HStack(spacing: 8) {
+            Button("Duplicate") { duplicate(definition) }
+                .appSmallSecondaryButton()
+            if definition.source == .user {
+                Button("Delete", role: .destructive) { pendingDelete = definition }
+                    .appSmallSecondaryButton()
+                sectionEditButton(for: definition)
+            }
+        }
+    }
 
-            loopActionsCard
+    private func sectionEditButton(for definition: LoopDefinition) -> some View {
+        Button {
+            resetEditor(to: definition)
+            selectedEditTab = .definition
+            isEditorSheetPresented = true
+        } label: {
+            Label("Edit", systemImage: "square.and.pencil")
+                .font(.caption.weight(.semibold))
+                .labelStyle(.titleAndIcon)
+        }
+        .appSmallSecondaryButton()
+        .help("Edit loop")
+    }
+
+    private var savedEditorDraft: LoopDefinitionEditorDraft {
+        LoopDefinitionEditorDraft(definition: viewModel.selectedLoopDefinition, currentProjectPath: viewModel.selectedProjectPath)
+    }
+
+    private var hasUnsavedEditorChanges: Bool {
+        if editorDraft.isNew {
+            return editorDraft != LoopDefinitionEditorDraft(currentProjectPath: viewModel.selectedProjectPath)
+        }
+        return editorDraft != savedEditorDraft
+    }
+
+    private var canSaveEditorDraft: Bool {
+        hasUnsavedEditorChanges && !editorDraft.trimmedName.isEmpty && !editorDraft.isBuiltin && requiredAgentsAreSelected
+    }
+
+    private func readOnlyDefinitionFields(for definition: LoopDefinition) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            readOnlyFieldRow("Name", value: definition.name, placeholder: "Untitled loop")
+            readOnlyMarkdownFieldRow("Description", value: definition.description, placeholder: "No description")
+            readOnlyFieldRow("Structure", value: definition.structure.displayName)
+            readOnlyFieldRow("Write target", value: definition.writeTarget.displayName)
+            readOnlyFieldRow("Max iterations", value: "\(definition.maxIterations)")
+            readOnlyMarkdownFieldRow("Goal template", value: definition.goalTemplate, placeholder: "No goal template")
+            if let launchContext = definition.launchContext, !launchContext.isEmpty {
+                readOnlyMarkdownFieldRow("Launch context", value: launchContext)
+                readOnlyFieldRow("Context scope", value: definition.launchContextScope.displayName)
+            } else {
+                readOnlyFieldRow("Launch context", value: "None")
+            }
+            readOnlyFieldRow("Validation command", value: definition.validationCommand, placeholder: "None", isLast: true)
         }
     }
 
@@ -295,17 +342,17 @@ struct LoopBankScreen: View {
             }
             detailEditor("Description", text: $editorDraft.description, minHeight: 64, info: "Optional summary for the Loop Bank list. Use it to explain when someone should choose this loop.")
             detailRow("Structure", infoRows: loopStructureInfoRows) {
-                Picker(AppLocalization.string("Structure", default: "Structure"), selection: $editorDraft.structure) {
+                Picker("Structure", selection: $editorDraft.structure) {
                     ForEach(LoopStructureKind.allCases) { kind in
-                        Text(AppLocalization.string(kind.displayName, default: kind.displayName)).tag(kind)
+                        Text(kind.displayName).tag(kind)
                     }
                 }
                 .labelsHidden()
             }
             detailRow("Write target", infoRows: loopWriteTargetInfoRows) {
-                Picker(AppLocalization.string("Write target", default: "Write target"), selection: $editorDraft.writeTarget) {
+                Picker("Write target", selection: $editorDraft.writeTarget) {
                     ForEach(LoopWriteTarget.allCases) { target in
-                        Text(AppLocalization.string(target.displayName, default: target.displayName)).tag(target)
+                        Text(target.displayName).tag(target)
                     }
                 }
                 .labelsHidden()
@@ -314,39 +361,55 @@ struct LoopBankScreen: View {
                 LoopNumericStepper(value: $editorDraft.maxIterations, range: 1...20)
             }
             detailEditor("Goal template", text: $editorDraft.goalTemplate, minHeight: 120, info: "The reusable instruction the loop runs against. Be explicit about the desired outcome, constraints, and what counts as done.")
-            detailRow("Validation command", info: "Optional shell command for checking the result. It runs from the project directory when available and is attached to the loop result.") {
-                TextField("", text: $editorDraft.validationCommand)
-                    .multilineTextAlignment(.trailing)
-                    .textFieldStyle(.plain)
-                    .foregroundStyle(.primary)
+            detailEditor("Launch context (optional)", text: $editorDraft.launchContext, minHeight: 84, infoRows: loopLaunchContextInfoRows)
+            if !editorDraft.launchContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                detailRow("Context scope", info: "First iteration only is the default. Every iteration repeats this context in each child-agent prompt.") {
+                    Picker("Context scope", selection: $editorDraft.launchContextScope) {
+                        ForEach(LoopLaunchContextScope.allCases) { scope in
+                            Text(scope.displayName).tag(scope)
+                        }
+                    }
+                    .labelsHidden()
+                }
+            }
+            detailRow("Validation command (optional)", info: "Agent Deck can run one shell command after each loop iteration, from the project directory when available. Its output is attached as evidence. Leave empty to skip automatic validation.", showsDivider: false) {
+                AppTextField(text: $editorDraft.validationCommand, placeholder: "Optional, e.g. swift test")
+                    .frame(maxWidth: 360)
             }
         }
     }
 
     private var availabilitySection: some View {
-        AppCard(title: "Availability") {
-            VStack(alignment: .leading, spacing: 0) {
-                detailRow("Assignment", infoRows: loopAvailabilityInfoRows) {
-                    HStack(spacing: 8) {
-                        Button(AppLocalization.string("All Projects/default", default: "All Projects/default")) { setAllProjectsAvailability() }
-                            .buttonStyle(.bordered)
-                        if currentProjectPath != nil {
-                            Button(AppLocalization.string("Current Project only", default: "Current Project only")) { setCurrentProjectAvailability() }
-                                .buttonStyle(.bordered)
-                        }
-                        Button(AppLocalization.string("Unassigned/catalog", default: "Unassigned/catalog")) { setUnassignedAvailability() }
-                            .buttonStyle(.bordered)
+        AppCard(title: "Project Assignment") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Enable for every project at once, or pick specific projects below. Assignments are stored in the Loop Bank and do not move loop files.")
+                    .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    AllProjectsAssignmentRow(
+                        isOn: Binding(
+                            get: { editorDraft.availability == .allProjects },
+                            set: { enabled in
+                                if enabled { setAllProjectsAvailability() }
+                                else { setUnassignedAvailability() }
+                            }
+                        ),
+                        subtitle: "Enable this loop for every project"
+                    )
+                    if !availableProjectsForLoopAssignment.isEmpty { Divider() }
+                    ForEach(availableProjectsForLoopAssignment) { project in
+                        ProjectAssignmentToggleRow(
+                            project: project,
+                            isOn: Binding(
+                                get: { editorDraft.availability == .allProjects ? true : editorDraft.projectPaths.contains(project.path) },
+                                set: { setLoopAssigned($0, toProjectPath: project.path) }
+                            )
+                        )
+                        .opacity(editorDraft.availability == .allProjects ? 0.4 : 1)
+                        .allowsHitTesting(editorDraft.availability != .allProjects)
+                        if project.id != availableProjectsForLoopAssignment.last?.id { Divider() }
                     }
                 }
-                detailRow("Current setting") {
-                    Text(AppLocalization.string(availabilityLabel(for: editorDraft), default: availabilityLabel(for: editorDraft)))
-                }
-                detailEditor("Advanced project paths", text: $editorDraft.projectPathsText, minHeight: 72, monospaced: true, info: "Use this only when a loop should be assigned to specific absolute project paths. One path per line.")
-                    .disabled(editorDraft.availability == .allProjects)
-                Text(AppLocalization.string("One absolute path per line. Editing the list uses project-specific assignment; an empty list keeps the loop unassigned in the catalog.", default: "One absolute path per line. Editing the list uses project-specific assignment; an empty list keeps the loop unassigned in the catalog."))
-                    .font(AppTheme.Font.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-                    .padding(.top, 8)
             }
         }
     }
@@ -363,8 +426,22 @@ struct LoopBankScreen: View {
 
     private func setCurrentProjectAvailability() {
         guard let currentProjectPath else { return }
+        setLoopAssigned(true, toProjectPath: currentProjectPath)
+    }
+
+    private var availableProjectsForLoopAssignment: [DiscoveredProject] {
+        viewModel.enabledProjects.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func setLoopAssigned(_ assigned: Bool, toProjectPath projectPath: String) {
+        var paths = editorDraft.projectPaths
+        if assigned {
+            if !paths.contains(projectPath) { paths.append(projectPath) }
+        } else {
+            paths.removeAll { $0 == projectPath }
+        }
         editorDraft.availability = .projectPaths
-        editorDraft.projectPathsText = currentProjectPath
+        editorDraft.projectPathsText = paths.joined(separator: "\n")
     }
 
     private func setUnassignedAvailability() {
@@ -372,96 +449,194 @@ struct LoopBankScreen: View {
         editorDraft.projectPathsText = ""
     }
 
-    private var lastRunSection: some View {
-        AppCard(title: "Last Run") {
-            if let definition = viewModel.selectedLoopDefinition, let run = lastRun(for: definition) {
-                VStack(alignment: .leading, spacing: 8) {
-                    detailRow("Status") { Text(AppLocalization.string(run.status.displayName, default: run.status.displayName)) }
-                    if let stopReason = run.stopReason {
-                        detailRow("Stop reason") { Text(AppLocalization.string(stopReason.displayName, default: stopReason.displayName)) }
+    private var loopEditSheet: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(editorDraft.isNew ? "New Loop" : "Edit Loop")
+                        .font(.headline.weight(.semibold))
+                    Text(editorDraft.name.nonEmpty ?? "Untitled loop")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
+            .padding(.bottom, 14)
+
+            Divider()
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(LoopEditTab.allCases) { tab in
+                        Button {
+                            selectedEditTab = tab
+                        } label: {
+                            Text(tab.rawValue)
+                                .font(.subheadline.weight(.semibold))
+                                .fontWidth(.expanded)
+                                .foregroundStyle(.primary)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(selectedEditTab == tab ? AppTheme.selectionFill : AppTheme.contentSubtleFill)
+                                )
+                        }
+                        .buttonStyle(.plain)
                     }
-                    detailRow("Iterations") { Text("\(run.currentIteration)/\(run.maxIterations)") }
-                    if let latest = run.iterations.last {
-                        detailRow("Latest summary") { Text(latest.summary.nonEmpty ?? AppLocalization.format("Iteration %lld", default: "Iteration %lld", Int64(latest.index))) }
-                        if let checkerResult = latest.checkerResult {
-                            detailRow("Checker result") { Text(AppLocalization.string(checkerResult.displayName, default: checkerResult.displayName)) }
-                        }
-                        if let validation = latest.validationResult {
-                            detailRow("Validation") { Text(AppLocalization.string(validation.didPass ? "Passed" : "Failed", default: validation.didPass ? "Passed" : "Failed")) }
-                        }
-                        if !latest.artifacts.isEmpty {
-                            detailRow("Artifacts") { Text("\(latest.artifacts.count)") }
-                        }
-                        if !latest.changedFiles.isEmpty {
-                            detailRow("Changed files") { Text("\(latest.changedFiles.count)") }
-                        }
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 10)
+            }
+
+            Divider()
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
+                    switch selectedEditTab {
+                    case .definition:
+                        AppCard(title: "Definition") { definitionFields }
+                    case .structure:
+                        loopStructureSection
+                    case .assignment:
+                        availabilitySection
                     }
-                    detailRow("Write target") { Text(AppLocalization.string(run.writeTarget.displayName, default: run.writeTarget.displayName)) }
-                    if let projectPath = run.projectPath, !projectPath.isEmpty {
-                        detailRow("Project") { Text(URL(fileURLWithPath: projectPath).lastPathComponent.nonEmpty ?? projectPath) }
+                }
+                .padding(24)
+            }
+
+            Divider()
+
+            HStack(spacing: 12) {
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 0)
+                Button("Discard") {
+                    if editorDraft.isNew {
+                        discardNewLoopDraft()
+                    } else {
+                        resetEditor(to: viewModel.selectedLoopDefinition)
                     }
-                    detailRow("Ended") { Text((run.endedAt ?? run.startedAt).formatted(date: .abbreviated, time: .shortened)) }
-                    if let session = session(for: run) {
-                        detailRow("Transcript") {
-                            Button(session.displayTitle) { viewModel.selectPiAgentSession(session.id) }
-                                .buttonStyle(.link)
-                                .help(AppLocalization.string("Open the transcript that owns this loop run", default: "Open the transcript that owns this loop run"))
-                        }
+                    isEditorSheetPresented = false
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Button("Save") {
+                    if save() {
+                        isEditorSheetPresented = false
                     }
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.glassProminent)
+                .tint(AppTheme.brandAccent)
+                .disabled(!canSaveEditorDraft)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
+        }
+        .frame(width: 700, height: 640)
+    }
+
+    @ViewBuilder
+    private func readOnlyStructureSection(for definition: LoopDefinition) -> some View {
+        switch definition.structure {
+        case .makerChecker:
+            AppCard(title: "Maker + Checker") {
+                VStack(alignment: .leading, spacing: 10) {
+                    readOnlyFieldRow("Maker agent", value: definition.makerChecker.makerName, placeholder: "Not selected")
+                    readOnlyFieldRow("Checker agent", value: definition.makerChecker.checkerName, placeholder: "Not selected")
+                    readOnlyMarkdownFieldRow("Checker rubric", value: definition.makerChecker.checkerRubric, isLast: true)
+                }
+            }
+        case .agentPipeline:
+            AppCard(title: "Agent Pipeline") {
+                readOnlyFieldRow("Stages", value: definition.pipeline.stageNames.isEmpty ? "No stages" : definition.pipeline.stageNames.joined(separator: " → "), isLast: true)
+            }
+        case .parallelAgents:
+            AppCard(title: "Parallel Agents") {
+                readOnlyFieldRow("Branches", value: definition.parallel.branchNames.joined(separator: " | "), placeholder: "No branches", isLast: true)
+            }
+        case .discoveryTriage:
+            AppCard(title: "Discovery / Triage") {
+                VStack(alignment: .leading, spacing: 10) {
+                    readOnlyFieldRow("Triage agent", value: definition.discoveryTriage.agentName, placeholder: "Not selected")
+                    readOnlyMarkdownFieldRow("Classification prompt", value: definition.discoveryTriage.classificationPrompt, isLast: true)
+                }
+            }
+        case .humanApproval:
+            AppCard(title: "Human Approval") {
+                readOnlyMarkdownFieldRow("Checkpoint prompt", value: definition.humanApproval.checkpointPrompt, isLast: true)
+            }
+        case .singleAgent:
+            AppCard(title: "Single Agent") {
+                readOnlyFieldRow("Agent", value: definition.makerChecker.makerName, placeholder: "Not selected", isLast: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func readOnlyAvailabilitySection(for definition: LoopDefinition) -> some View {
+        AppCard(title: "Project Assignment") {
+            if definition.source == .builtin {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Built-in loops are bundled with \(AppBrand.displayName). Duplicate this loop to create an editable user copy and assign it to projects.")
+                        .foregroundStyle(AppTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    readOnlyFieldRow("Availability", value: availabilityLabel(for: definition))
+                    readOnlyFieldRow("Projects", value: projectAssignmentSummary(for: definition), isLast: true)
                 }
             } else {
-                Text(AppLocalization.string("No exact matching loop runs yet.", default: "No exact matching loop runs yet."))
-                    .font(AppTheme.Font.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-            }
-        }
-    }
+                let isGlobal = definition.availability == .allProjects
+                let assignedProjectPaths = Set(definition.projectPaths)
+                let projects = availableProjectsForLoopAssignment
 
-    private func session(for run: LoopRun) -> PiAgentSessionRecord? {
-        viewModel.piAgentSessionStore.sessions.first { $0.id == run.sessionID }
-    }
-
-    private func lastRun(for definition: LoopDefinition) -> LoopRun? {
-        let goal = definition.goalTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !goal.isEmpty else { return nil }
-        let runs = viewModel.piAgentSessionStore.sessions
-            .flatMap { viewModel.piAgentSessionStore.loopRuns(for: $0.id) }
-            .filter { run in
-                run.goal == goal &&
-                run.structure == definition.structure &&
-                run.writeTarget == definition.writeTarget &&
-                run.maxIterations == definition.maxIterations &&
-                run.validationCommand == definition.validationCommand.trimmingCharacters(in: .whitespacesAndNewlines) &&
-                run.makerChecker == definition.makerChecker &&
-                run.pipeline == definition.pipeline &&
-                run.parallel == definition.parallel &&
-                run.discoveryTriage == definition.discoveryTriage &&
-                run.humanApproval == definition.humanApproval
-            }
-        if let selectedProjectPath = viewModel.selectedProjectPath?.trimmingCharacters(in: .whitespacesAndNewlines), !selectedProjectPath.isEmpty,
-           let projectRun = runs.filter({ $0.projectPath == selectedProjectPath }).max(by: { $0.startedAt < $1.startedAt }) {
-            return projectRun
-        }
-        return runs.max { $0.startedAt < $1.startedAt }
-    }
-
-    private var loopActionsCard: some View {
-        AppCard {
-            HStack {
-                if let selected = viewModel.selectedLoopDefinition, !editorDraft.isNew {
-                    Button(AppLocalization.string("Launch", default: "Launch")) { presentLaunch(selected) }
-                        .disabled(viewModel.piAgentSessionStore.selectedSession == nil || !selected.isAvailable(in: viewModel.piAgentSessionStore.selectedSession?.projectPath))
-                        .help(launchHelp(for: selected))
-                    Button(AppLocalization.string("Duplicate", default: "Duplicate")) { duplicate(selected) }
-                    if selected.source == .user {
-                        Button(AppLocalization.string("Delete", default: "Delete"), role: .destructive) { pendingDelete = selected }
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Enable for every project at once, or pick specific projects below. Assignments are stored in the Loop Bank and do not move loop files.")
+                        .foregroundStyle(AppTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        AllProjectsAssignmentRow(
+                            isOn: Binding(
+                                get: { isGlobal },
+                                set: { enabled in
+                                    updateLoopAvailability(
+                                        definition,
+                                        availability: enabled ? .allProjects : .projectPaths,
+                                        projectPaths: []
+                                    )
+                                }
+                            ),
+                            subtitle: "Enable this loop for every project"
+                        )
+                        if !projects.isEmpty { Divider() }
+                        ForEach(projects) { project in
+                            ProjectAssignmentToggleRow(
+                                project: project,
+                                isOn: Binding(
+                                    get: { isGlobal ? true : assignedProjectPaths.contains(project.path) },
+                                    set: { enabled in
+                                        var paths = definition.projectPaths
+                                        if enabled {
+                                            if !paths.contains(project.path) { paths.append(project.path) }
+                                        } else {
+                                            paths.removeAll { $0 == project.path }
+                                        }
+                                        updateLoopAvailability(definition, availability: .projectPaths, projectPaths: paths)
+                                    }
+                                )
+                            )
+                            .opacity(isGlobal ? 0.4 : 1)
+                            .allowsHitTesting(!isGlobal)
+                            if project.id != projects.last?.id { Divider() }
+                        }
                     }
                 }
-                Spacer()
-                Button(AppLocalization.string("Revert", default: "Revert")) { resetEditor(to: viewModel.selectedLoopDefinition) }
-                    .disabled(editorDraft.isNew && editorDraft.trimmedName.isEmpty && editorDraft.goalTemplate.isEmpty)
-                Button(AppLocalization.string("Save", default: "Save")) { save() }
-                    .disabled(editorDraft.trimmedName.isEmpty || editorDraft.isBuiltin || !requiredAgentsAreSelected)
             }
         }
     }
@@ -472,23 +647,21 @@ struct LoopBankScreen: View {
         case .makerChecker:
             AppCard(title: "Maker + Checker") {
                 VStack(alignment: .leading, spacing: 0) {
-                    detailRow("Maker agent", info: "The agent that produces the work for each review round.") {
+                    detailRow("Maker agent", info: "The agent that produces the work for each iteration.") {
                         LoopAgentNameMenu(selection: $editorDraft.makerName, availableAgents: availableLoopAgents, fallbackLabel: "Maker")
                     }
                     detailRow("Checker agent", info: "The agent that reviews the maker output and decides whether another round is needed.") {
                         LoopAgentNameMenu(selection: $editorDraft.checkerName, availableAgents: availableLoopAgents, fallbackLabel: "Checker")
                     }
                     detailEditor("Checker rubric", text: $editorDraft.checkerRubric, minHeight: 84, info: "Instructions for the checker. Keep the approval criteria concrete so the loop knows when to stop retrying.")
-                    detailRow("Max review rounds", info: "Limits maker/checker retries inside an iteration before the loop stops asking for another review pass.") {
-                        LoopNumericStepper(value: $editorDraft.maxReviewRounds, range: 1...20)
-                    }
                 }
             }
         case .agentPipeline:
             AppCard(title: "Agent Pipeline") {
                 VStack(alignment: .leading, spacing: 10) {
                     LoopPipelineStagePicker(stages: $editorDraft.pipelineStageNames, availableAgents: availableLoopAgents)
-                    Text(AppLocalization.string("Stages are saved as an ordered agent list. The current runner records this order; child agent execution is the next runner slice.", default: "Stages are saved as an ordered agent list. The current runner records this order; child agent execution is the next runner slice."))
+                    Text("Stages are saved as an ordered agent list. The current runner records this order; child agent execution is the next runner slice.")
+                        .font(AppTheme.Font.caption)
                         .foregroundStyle(AppTheme.mutedText)
                 }
             }
@@ -513,7 +686,7 @@ struct LoopBankScreen: View {
             }
         case .singleAgent:
             AppCard(title: "Single Agent") {
-                detailRow("Agent", info: "The agent that will run each iteration. Choose the role best matched to the goal, such as explorer, coder, or reviewer.") {
+                detailRow("Agent", info: "The agent that will run each iteration. Choose the role best matched to the goal, such as explorer, coder, or reviewer.", showsDivider: false) {
                     LoopAgentNameMenu(selection: $editorDraft.makerName, availableAgents: availableLoopAgents, fallbackLabel: "Agent")
                 }
             }
@@ -540,7 +713,7 @@ struct LoopBankScreen: View {
     private var loopStructureInfoRows: [LoopInlineInfoButton.Row] {
         [
             .init("Single Agent", "Repeats one selected agent against the goal."),
-            .init("Maker + Checker", "A maker produces work, a checker reviews it, and review rounds can retry."),
+            .init("Maker + Checker", "A maker produces work, a checker reviews it, and iterations can retry."),
             .init("Agent Pipeline", "Records ordered stages such as Explorer → Implementer → Verifier."),
             .init("Parallel Agents", "Names independent branches or hypotheses in the same loop run."),
             .init("Discovery / Triage", "Collects findings and classifies them by severity or next action."),
@@ -556,6 +729,14 @@ struct LoopBankScreen: View {
         ]
     }
 
+    private var loopLaunchContextInfoRows: [LoopInlineInfoButton.Row] {
+        [
+            .init("What it is", "Optional background or arguments added to child-agent launch prompts, kept separate from the goal template."),
+            .init("Good uses", "Paste repro steps, observed hitches or hangs, logs, device state, or constraints such as report-only or avoid API changes."),
+            .init("Scope", "First iteration only seeds the loop once. Every iteration repeats this context in each prompt when constraints must stay visible.")
+        ]
+    }
+
     private var loopAvailabilityInfoRows: [LoopInlineInfoButton.Row] {
         [
             .init("All Projects/default", "Available as a default saved loop everywhere."),
@@ -568,6 +749,7 @@ struct LoopBankScreen: View {
         _ title: String,
         info: String? = nil,
         infoRows: [LoopInlineInfoButton.Row] = [],
+        showsDivider: Bool = true,
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(spacing: 0) {
@@ -575,17 +757,17 @@ struct LoopBankScreen: View {
                 detailLabel(title, info: info, infoRows: infoRows)
                 Spacer(minLength: AppTheme.contentSpacing)
                 content()
-                    .foregroundStyle(AppTheme.mutedText)
+                    .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .padding(.vertical, 11)
-            Divider()
+            if showsDivider { Divider() }
         }
     }
 
-    private func detailEditor(_ title: String, text: Binding<String>, minHeight: CGFloat, monospaced: Bool = false, info: String? = nil) -> some View {
+    private func detailEditor(_ title: String, text: Binding<String>, minHeight: CGFloat, monospaced: Bool = false, info: String? = nil, infoRows: [LoopInlineInfoButton.Row] = []) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            detailLabel(title, info: info)
+            detailLabel(title, info: info, infoRows: infoRows)
             TextEditor(text: text)
                 .font(monospaced ? .body.monospaced() : AppTheme.Font.body)
                 .scrollContentBackground(.hidden)
@@ -600,9 +782,56 @@ struct LoopBankScreen: View {
         .padding(.vertical, 11)
     }
 
+    @ViewBuilder
+    private func readOnlyFieldRow(_ title: String, value: String, placeholder: String? = nil, isLast: Bool = false) -> some View {
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isPlaceholder = trimmedValue.isEmpty
+        VStack(alignment: .leading, spacing: 4) {
+            readOnlyFieldLabel(title)
+            Text(isPlaceholder ? (placeholder ?? "None") : value)
+                .font(AppTheme.Font.body)
+                .foregroundStyle(isPlaceholder ? AppTheme.mutedText : .primary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        if !isLast {
+            Divider()
+        }
+    }
+
+    @ViewBuilder
+    private func readOnlyMarkdownFieldRow(_ title: String, value: String, placeholder: String? = nil, isLast: Bool = false) -> some View {
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isPlaceholder = trimmedValue.isEmpty
+        VStack(alignment: .leading, spacing: 4) {
+            readOnlyFieldLabel(title)
+            if isPlaceholder {
+                Text(placeholder ?? "None")
+                    .font(AppTheme.Font.body)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                MarkdownDocumentView(source: value, minimumHeight: 24)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        if !isLast {
+            Divider()
+        }
+    }
+
+    private func readOnlyFieldLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .fontWidth(.expanded)
+            .foregroundStyle(AppTheme.mutedText)
+    }
+
     private func detailLabel(_ title: String, info: String? = nil, infoRows: [LoopInlineInfoButton.Row] = []) -> some View {
         HStack(spacing: 6) {
-            Text(AppLocalization.string(title, default: title))
+            Text(title)
                 .font(.subheadline.weight(.semibold))
                 .fontWidth(.expanded)
                 .foregroundStyle(AppTheme.mutedText)
@@ -614,10 +843,9 @@ struct LoopBankScreen: View {
         }
     }
 
-    private var detailSubtitle: String {
-        if editorDraft.isNew { return AppLocalization.string("Create a saved user loop without editing bundled resources", default: "Create a saved user loop without editing bundled resources") }
-        if editorDraft.isBuiltin { return AppLocalization.string("Built-in template · duplicate to customize", default: "Built-in template · duplicate to customize") }
-        return AppLocalization.string("Edit explicit fields and save changes to the user Loop Bank", default: "Edit explicit fields and save changes to the user Loop Bank")
+    private func detailSubtitle(for definition: LoopDefinition) -> String {
+        if definition.source == .builtin { return "Built-in template · duplicate to customize" }
+        return "Read-only details · edit in the sheet"
     }
 
     private var listSections: [AppListSection<LoopDefinition>] {
@@ -683,17 +911,63 @@ struct LoopBankScreen: View {
         LoopListRow(
             definition: definition,
             tint: availabilityColor(for: definition),
-            availabilityText: availabilityLabel(for: definition),
             isMuted: loopIsInactive(definition)
         )
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+        .contextMenu {
+            if definition.source == .user {
+                Button("Make All Projects/default") {
+                    updateLoopAvailability(definition, availability: .allProjects, projectPaths: [])
+                }
+                if let currentProjectPath {
+                    Button(definition.projectPaths.contains(currentProjectPath) ? "Remove Current Project" : "Assign to Current Project") {
+                        var paths = definition.projectPaths
+                        if paths.contains(currentProjectPath) { paths.removeAll { $0 == currentProjectPath } }
+                        else { paths.append(currentProjectPath) }
+                        updateLoopAvailability(definition, availability: .projectPaths, projectPaths: paths)
+                    }
+                }
+                Button("Disable / Move to Catalog") {
+                    updateLoopAvailability(definition, availability: .projectPaths, projectPaths: [])
+                }
+                Divider()
+                Button("Duplicate") { duplicate(definition) }
+                Button("Delete", role: .destructive) { pendingDelete = definition }
+            } else {
+                Button("Duplicate") { duplicate(definition) }
+            }
+        }
     }
 
     private func loopIsInactive(_ definition: LoopDefinition) -> Bool {
-        guard definition.source == .user, definition.availability == .projectPaths else { return false }
-        guard let selectedProjectPath = viewModel.selectedProjectPath else { return definition.projectPaths.isEmpty }
-        return !definition.projectPaths.contains(selectedProjectPath)
+        definition.source == .user && definition.availability == .projectPaths && definition.projectPaths.isEmpty
+    }
+
+    private func updateLoopAvailability(_ definition: LoopDefinition, availability: LoopDefinitionAvailability, projectPaths: [String]) {
+        var draft = LoopDefinitionEditorDraft(definition: definition, currentProjectPath: viewModel.selectedProjectPath)
+        draft.availability = availability
+        draft.projectPathsText = availability == .projectPaths ? projectPaths.joined(separator: "\n") : ""
+        do {
+            let saved = try viewModel.saveLoopDefinition(draft.makeDefinition())
+            if editorDraft.id == saved.id { resetEditor(to: saved) }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func selectLoopDefinition(_ id: String?) {
+        if isCreatingNewLoop {
+            isCreatingNewLoop = false
+            viewModel.pendingNewLoopEditorDraft = nil
+        }
+        viewModel.selectedLoopDefinitionID = id
+    }
+
+    private func handleEditorSheetDismiss() {
+        if isCreatingNewLoop {
+            discardNewLoopDraft()
+        }
     }
 
     private func createNewLoop() {
@@ -706,26 +980,37 @@ struct LoopBankScreen: View {
 
     private func startNewLoop(discardPendingDraft: Bool) {
         isCreatingNewLoop = true
-        viewModel.selectedLoopDefinitionID = nil
         if discardPendingDraft {
             viewModel.pendingNewLoopEditorDraft = nil
         }
         editorDraft = viewModel.pendingNewLoopEditorDraft ?? LoopDefinitionEditorDraft(currentProjectPath: viewModel.selectedProjectPath)
+        selectedEditTab = .definition
+        isEditorSheetPresented = true
     }
 
     private func resetEditor(to definition: LoopDefinition?) {
         editorDraft = LoopDefinitionEditorDraft(definition: definition, currentProjectPath: viewModel.selectedProjectPath)
     }
 
-    private func save() {
-        guard !editorDraft.isBuiltin else { return }
+    private func discardNewLoopDraft() {
+        guard editorDraft.isNew else { return }
+        viewModel.pendingNewLoopEditorDraft = nil
+        isCreatingNewLoop = false
+        resetEditor(to: viewModel.selectedLoopDefinition)
+    }
+
+    @discardableResult
+    private func save() -> Bool {
+        guard !editorDraft.isBuiltin else { return false }
         do {
             let saved = try viewModel.saveLoopDefinition(editorDraft.makeDefinition())
             isCreatingNewLoop = false
             viewModel.pendingNewLoopEditorDraft = nil
             resetEditor(to: saved)
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
 
@@ -747,85 +1032,38 @@ struct LoopBankScreen: View {
         }
     }
 
-    private func presentLaunch(_ definition: LoopDefinition) {
-        guard let session = viewModel.piAgentSessionStore.selectedSession else {
-            errorMessage = AppLocalization.string("Select a Pi session before launching a saved loop.", default: "Select a Pi session before launching a saved loop.")
-            return
-        }
-        guard definition.isAvailable(in: session.projectPath) else {
-            errorMessage = AppLocalization.string("This loop is not available for the selected session project. Assign it to the project or duplicate it before launching.", default: "This loop is not available for the selected session project. Assign it to the project or duplicate it before launching.")
-            return
-        }
-        launchDefinition = definition
-        isLaunchSheetPresented = true
-    }
-
-    private func launchHelp(for definition: LoopDefinition) -> String {
-        guard let session = viewModel.piAgentSessionStore.selectedSession else {
-            return AppLocalization.string("Select a Pi session before launching a saved loop.", default: "Select a Pi session before launching a saved loop.")
-        }
-        guard definition.isAvailable(in: session.projectPath) else {
-            return AppLocalization.string("This loop is not available for the selected session project.", default: "This loop is not available for the selected session project.")
-        }
-        return AppLocalization.string("Launch this saved loop in the selected Pi session.", default: "Launch this saved loop in the selected Pi session.")
-    }
-
-    private func launch(_ definition: LoopDefinition, in session: PiAgentSessionRecord, request: LoopLaunchRequest) {
-        let store = viewModel.piAgentSessionStore
-        if store.activeLoopRun(for: session.id) != nil && !request.stopExistingActive {
-            store.append(.init(sessionID: session.id, role: .error, title: AppLocalization.string("Loop Launch Failed", default: "Loop Launch Failed"), text: AppLocalization.string("This transcript already has an active loop.", default: "This transcript already has an active loop.")))
-            return
-        }
-        if let saveRequest = request.saveRequest {
-            do {
-                try viewModel.saveLoopDefinitionFromDraft(request.draft, request: saveRequest)
-            } catch {
-                store.append(.init(sessionID: session.id, role: .error, title: AppLocalization.string("Loop Save Failed", default: "Loop Save Failed"), text: error.localizedDescription))
-                return
-            }
-        }
-        Task { @MainActor in
-            isLaunchSheetPresented = false
-            launchDefinition = nil
-            let launched = await viewModel.launchLoop(
-                session: session,
-                draft: request.draft,
-                stopExistingActive: request.stopExistingActive
-            )
-            guard launched != nil else {
-                store.append(.init(sessionID: session.id, role: .error, title: AppLocalization.string("Loop Launch Failed", default: "Loop Launch Failed"), text: AppLocalization.format("\"%@\" could not be started.", default: "\"%@\" could not be started.", definition.name)))
-                return
-            }
-        }
-    }
-
     private func availabilityLabel(for definition: LoopDefinition) -> String {
-        if definition.source == .builtin { return AppLocalization.string("Built-in", default: "Built-in") }
+        if definition.source == .builtin { return "Built-in" }
         switch definition.availability {
         case .allProjects:
-            return AppLocalization.string("All Projects/default", default: "All Projects/default")
+            return "All Projects/default"
         case .projectPaths:
-            if definition.projectPaths.isEmpty { return AppLocalization.string("Unassigned", default: "Unassigned") }
+            if definition.projectPaths.isEmpty { return "Unassigned" }
             if let selectedProjectPath = viewModel.selectedProjectPath,
                definition.projectPaths.contains(selectedProjectPath) {
-                return AppLocalization.string("Current Project", default: "Current Project")
+                return "Current Project"
             }
-            return definition.projectPaths.count == 1
-                ? AppLocalization.string("1 Project", default: "1 Project")
-                : AppLocalization.format("%lld Projects", default: "%lld Projects", Int64(definition.projectPaths.count))
+            return definition.projectPaths.count == 1 ? "1 Project" : "\(definition.projectPaths.count) Projects"
+        }
+    }
+
+    private func projectAssignmentSummary(for definition: LoopDefinition) -> String {
+        switch definition.availability {
+        case .allProjects:
+            return "Every project"
+        case .projectPaths:
+            return definition.projectPaths.isEmpty ? "None" : definition.projectPaths.joined(separator: ", ")
         }
     }
 
     private func availabilityLabel(for draft: LoopDefinitionEditorDraft) -> String {
         switch draft.availability {
         case .allProjects:
-            return AppLocalization.string("All Projects/default", default: "All Projects/default")
+            return "All Projects/default"
         case .projectPaths:
-            if draft.projectPaths.isEmpty { return AppLocalization.string("Unassigned/catalog", default: "Unassigned/catalog") }
-            if let currentProjectPath, draft.projectPaths == [currentProjectPath] { return AppLocalization.string("Current Project only", default: "Current Project only") }
-            return draft.projectPaths.count == 1
-                ? AppLocalization.string("1 Project", default: "1 Project")
-                : AppLocalization.format("%lld Projects", default: "%lld Projects", Int64(draft.projectPaths.count))
+            if draft.projectPaths.isEmpty { return "Unassigned/catalog" }
+            if let currentProjectPath, draft.projectPaths == [currentProjectPath] { return "Current Project only" }
+            return draft.projectPaths.count == 1 ? "1 Project" : "\(draft.projectPaths.count) Projects"
         }
     }
 
@@ -848,7 +1086,6 @@ struct LoopBankScreen: View {
 private struct LoopListRow: View {
     let definition: LoopDefinition
     let tint: Color
-    let availabilityText: String
     let isMuted: Bool
 
     var body: some View {
@@ -875,12 +1112,6 @@ private struct LoopListRow: View {
                     .font(.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .lineLimit(2)
-
-                HStack(spacing: 6) {
-                    AppLabelTag(text: definition.structure.displayName, color: .secondary)
-                    AppLabelTag(text: definition.writeTarget.displayName, color: .secondary)
-                    AppLabelTag(text: availabilityText, color: tint)
-                }
             }
 
             Spacer(minLength: 0)

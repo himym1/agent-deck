@@ -24,6 +24,12 @@ final class AgentDeckAppDelegate: NSObject, NSApplicationDelegate, UNUserNotific
         // it auto-captures the hung backtrace via the external `sample` tool to
         // /tmp/agentdeck-hang-<n>.txt. Disable with HangWatchdogEnabled=NO.
         HangWatchdog.shared.start()
+        // Autonomous perf collection: when launched with AGENTDECK_AUTOPERF=1
+        // the app runs accessory/offscreen, self-drives ScrollBench + STREAMSIM,
+        // writes a rollup, and quits. DEBUG-only; no-op otherwise.
+        #if DEBUG
+        AutoPerfCoordinator.shared.start()
+        #endif
         // Debug: render sample native transcript bubbles for visual verification
         // without loading a real session. Off unless NativeBubblePreview=YES.
         NativeBubblePreviewDebug.showIfEnabled()

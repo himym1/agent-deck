@@ -106,15 +106,11 @@ nonisolated struct LoopMakerCheckerConfig: Codable, Equatable, Hashable, Sendabl
     var makerName: String
     var checkerName: String
     var checkerRubric: String
-    var maxReviewRounds: Int
 
-    static let defaultMaxReviewRounds = 3
-
-    init(makerName: String = "", checkerName: String = "", checkerRubric: String = "approve", maxReviewRounds: Int = Self.defaultMaxReviewRounds) {
+    init(makerName: String = "", checkerName: String = "", checkerRubric: String = "approve") {
         self.makerName = makerName.trimmingCharacters(in: .whitespacesAndNewlines)
         self.checkerName = checkerName.trimmingCharacters(in: .whitespacesAndNewlines)
         self.checkerRubric = checkerRubric
-        self.maxReviewRounds = max(1, maxReviewRounds)
     }
 }
 
@@ -141,7 +137,8 @@ nonisolated struct LoopDiscoveryTriageConfig: Codable, Equatable, Hashable, Send
 
     init(agentName: String = "", classificationPrompt: String = "Classify findings by severity and summarize recommended next action.") {
         self.agentName = agentName.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.classificationPrompt = classificationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Classify findings by severity and summarize recommended next action." : classificationPrompt
+        let trimmedPrompt = classificationPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.classificationPrompt = trimmedPrompt.isEmpty ? "Classify findings by severity and summarize recommended next action." : classificationPrompt
     }
 
     enum CodingKeys: String, CodingKey { case agentName, classificationPrompt }
@@ -205,8 +202,24 @@ nonisolated struct LoopTimelineEvent: Identifiable, Codable, Equatable, Sendable
     }
 }
 
+nonisolated enum LoopLaunchContextScope: String, Codable, CaseIterable, Identifiable, Sendable {
+    case firstIterationOnly
+    case everyIteration
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .firstIterationOnly: return "First iteration only"
+        case .everyIteration: return "Every iteration"
+        }
+    }
+}
+
 nonisolated struct LoopDraft: Codable, Equatable, Sendable {
     var goal: String
+    var launchContext: String?
+    var launchContextScope: LoopLaunchContextScope
     var structure: LoopStructureKind
     var writeTarget: LoopWriteTarget
     var maxIterations: Int
@@ -219,8 +232,23 @@ nonisolated struct LoopDraft: Codable, Equatable, Sendable {
 
     static let defaultMaxIterations = 3
 
-    init(goal: String = "", structure: LoopStructureKind = .singleAgent, writeTarget: LoopWriteTarget = .artifactMarkdown, maxIterations: Int = Self.defaultMaxIterations, validationCommand: String = "", makerChecker: LoopMakerCheckerConfig = LoopMakerCheckerConfig(), pipeline: LoopPipelineConfig = LoopPipelineConfig(), parallel: LoopParallelConfig = LoopParallelConfig(), discoveryTriage: LoopDiscoveryTriageConfig = LoopDiscoveryTriageConfig(), humanApproval: LoopHumanApprovalConfig = LoopHumanApprovalConfig()) {
+    init(
+        goal: String = "",
+        launchContext: String? = nil,
+        launchContextScope: LoopLaunchContextScope = .firstIterationOnly,
+        structure: LoopStructureKind = .singleAgent,
+        writeTarget: LoopWriteTarget = .artifactMarkdown,
+        maxIterations: Int = Self.defaultMaxIterations,
+        validationCommand: String = "",
+        makerChecker: LoopMakerCheckerConfig = LoopMakerCheckerConfig(),
+        pipeline: LoopPipelineConfig = LoopPipelineConfig(),
+        parallel: LoopParallelConfig = LoopParallelConfig(),
+        discoveryTriage: LoopDiscoveryTriageConfig = LoopDiscoveryTriageConfig(),
+        humanApproval: LoopHumanApprovalConfig = LoopHumanApprovalConfig()
+    ) {
         self.goal = goal
+        self.launchContext = launchContext?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        self.launchContextScope = launchContextScope
         self.structure = structure
         self.writeTarget = writeTarget
         self.maxIterations = max(1, maxIterations)
@@ -230,6 +258,28 @@ nonisolated struct LoopDraft: Codable, Equatable, Sendable {
         self.parallel = parallel
         self.discoveryTriage = discoveryTriage
         self.humanApproval = humanApproval
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case goal, launchContext, launchContextScope, structure, writeTarget, maxIterations, validationCommand, makerChecker, pipeline, parallel, discoveryTriage, humanApproval
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            goal: try container.decodeIfPresent(String.self, forKey: .goal) ?? "",
+            launchContext: try container.decodeIfPresent(String.self, forKey: .launchContext),
+            launchContextScope: try container.decodeIfPresent(LoopLaunchContextScope.self, forKey: .launchContextScope) ?? .firstIterationOnly,
+            structure: try container.decodeIfPresent(LoopStructureKind.self, forKey: .structure) ?? .singleAgent,
+            writeTarget: try container.decodeIfPresent(LoopWriteTarget.self, forKey: .writeTarget) ?? .artifactMarkdown,
+            maxIterations: try container.decodeIfPresent(Int.self, forKey: .maxIterations) ?? Self.defaultMaxIterations,
+            validationCommand: try container.decodeIfPresent(String.self, forKey: .validationCommand) ?? "",
+            makerChecker: try container.decodeIfPresent(LoopMakerCheckerConfig.self, forKey: .makerChecker) ?? LoopMakerCheckerConfig(),
+            pipeline: try container.decodeIfPresent(LoopPipelineConfig.self, forKey: .pipeline) ?? LoopPipelineConfig(),
+            parallel: try container.decodeIfPresent(LoopParallelConfig.self, forKey: .parallel) ?? LoopParallelConfig(),
+            discoveryTriage: try container.decodeIfPresent(LoopDiscoveryTriageConfig.self, forKey: .discoveryTriage) ?? LoopDiscoveryTriageConfig(),
+            humanApproval: try container.decodeIfPresent(LoopHumanApprovalConfig.self, forKey: .humanApproval) ?? LoopHumanApprovalConfig()
+        )
     }
 }
 
@@ -259,6 +309,8 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
     var name: String
     var description: String
     var goalTemplate: String
+    var launchContext: String?
+    var launchContextScope: LoopLaunchContextScope
     var structure: LoopStructureKind
     var writeTarget: LoopWriteTarget
     var maxIterations: Int
@@ -280,6 +332,8 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
         name: String,
         description: String = "",
         goalTemplate: String = "",
+        launchContext: String? = nil,
+        launchContextScope: LoopLaunchContextScope = .firstIterationOnly,
         structure: LoopStructureKind = .singleAgent,
         writeTarget: LoopWriteTarget = .artifactMarkdown,
         maxIterations: Int = LoopDraft.defaultMaxIterations,
@@ -300,6 +354,8 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
         self.name = name
         self.description = description
         self.goalTemplate = goalTemplate
+        self.launchContext = launchContext?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        self.launchContextScope = launchContextScope
         self.structure = structure
         self.writeTarget = writeTarget
         self.maxIterations = max(1, maxIterations)
@@ -330,6 +386,8 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
     func makeDraft() -> LoopDraft {
         LoopDraft(
             goal: goalTemplate,
+            launchContext: launchContext,
+            launchContextScope: launchContextScope,
             structure: structure,
             writeTarget: writeTarget,
             maxIterations: maxIterations,
@@ -340,6 +398,21 @@ nonisolated struct LoopDefinition: Identifiable, Codable, Equatable, Hashable, S
             discoveryTriage: discoveryTriage,
             humanApproval: humanApproval
         )
+    }
+
+    func exactlyMatches(run: LoopRun) -> Bool {
+        run.goal == goalTemplate.trimmingCharacters(in: .whitespacesAndNewlines) &&
+        run.launchContext == launchContext?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty &&
+        run.launchContextScope == launchContextScope &&
+        run.structure == structure &&
+        run.writeTarget == writeTarget &&
+        run.maxIterations == maxIterations &&
+        run.validationCommand == validationCommand.trimmingCharacters(in: .whitespacesAndNewlines) &&
+        run.makerChecker == makerChecker &&
+        run.pipeline == pipeline &&
+        run.parallel == parallel &&
+        run.discoveryTriage == discoveryTriage &&
+        run.humanApproval == humanApproval
     }
 }
 
@@ -408,7 +481,18 @@ nonisolated struct LoopIteration: Identifiable, Codable, Equatable, Sendable {
     var timeline: [LoopTimelineEvent]
     var changedFiles: [String]
 
-    init(id: UUID = UUID(), index: Int, startedAt: Date = Date(), endedAt: Date? = nil, summary: String = "", artifacts: [LoopArtifact] = [], validationResult: LoopValidationResult? = nil, checkerResult: LoopCheckerResult? = nil, timeline: [LoopTimelineEvent] = [], changedFiles: [String] = []) {
+    init(
+        id: UUID = UUID(),
+        index: Int,
+        startedAt: Date = Date(),
+        endedAt: Date? = nil,
+        summary: String = "",
+        artifacts: [LoopArtifact] = [],
+        validationResult: LoopValidationResult? = nil,
+        checkerResult: LoopCheckerResult? = nil,
+        timeline: [LoopTimelineEvent] = [],
+        changedFiles: [String] = []
+    ) {
         self.id = id
         self.index = index
         self.startedAt = startedAt
@@ -445,6 +529,8 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
     var sessionID: UUID
     var projectPath: String?
     var goal: String
+    var launchContext: String?
+    var launchContextScope: LoopLaunchContextScope
     var structure: LoopStructureKind
     var status: LoopRunStatus
     var writeTarget: LoopWriteTarget
@@ -469,6 +555,8 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
         self.sessionID = sessionID
         self.projectPath = projectPath
         self.goal = draft.goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.launchContext = draft.launchContext?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        self.launchContextScope = draft.launchContextScope
         self.structure = draft.structure
         self.status = .running
         self.writeTarget = draft.writeTarget
@@ -490,7 +578,9 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, sessionID, projectPath, goal, structure, status, writeTarget, currentIteration, maxIterations, validationCommand, makerChecker, pipeline, parallel, discoveryTriage, humanApproval, startedAt, endedAt, stopReason, iterations, artifactDirectoryPath, worktreeState, transcriptEntryID
+        case id, sessionID, projectPath, goal, launchContext, launchContextScope, structure, status, writeTarget, currentIteration
+        case maxIterations, validationCommand, makerChecker, pipeline, parallel, discoveryTriage, humanApproval
+        case startedAt, endedAt, stopReason, iterations, artifactDirectoryPath, worktreeState, transcriptEntryID
     }
 
     init(from decoder: Decoder) throws {
@@ -499,6 +589,8 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
         sessionID = try container.decode(UUID.self, forKey: .sessionID)
         projectPath = try container.decodeIfPresent(String.self, forKey: .projectPath)
         goal = try container.decode(String.self, forKey: .goal)
+        launchContext = try container.decodeIfPresent(String.self, forKey: .launchContext)?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        launchContextScope = try container.decodeIfPresent(LoopLaunchContextScope.self, forKey: .launchContextScope) ?? .firstIterationOnly
         structure = try container.decode(LoopStructureKind.self, forKey: .structure)
         status = try container.decode(LoopRunStatus.self, forKey: .status)
         writeTarget = try container.decode(LoopWriteTarget.self, forKey: .writeTarget)
@@ -520,11 +612,231 @@ nonisolated struct LoopRun: Identifiable, Codable, Equatable, Sendable {
     }
 
     var isActive: Bool { status.isActive }
+
+    var presentsGoalNotMetOutcome: Bool {
+        structure == .makerChecker &&
+        stopReason == .maxIterationsReached &&
+        iterations.last?.checkerResult == .reject
+    }
+
+    var displayStatusName: String {
+        presentsGoalNotMetOutcome ? "Goal not met" : status.displayName
+    }
+
+    var effectiveIterationLimit: Int {
+        maxIterations
+    }
+
+    var iterationProgressText: String {
+        iterationProgressText(currentIteration)
+    }
+
+    func iterationProgressText(_ iteration: Int) -> String {
+        "Iteration \(iteration)/\(maxIterations)"
+    }
 }
 
 extension PiAgentTranscriptEntry {
     var isLoopTranscriptCard: Bool {
         LoopRunTranscriptCodec.decode(from: self) != nil
+    }
+
+    var isLoopRecapEntry: Bool {
+        LoopRunRecapCodec.decode(from: self) != nil
+    }
+}
+
+enum LoopRunRecapKind: String, Codable, Hashable, Sendable {
+    case iteration
+    case final
+}
+
+struct LoopRunRecapMarker: Codable, Equatable, Sendable {
+    var runID: UUID
+    var kind: LoopRunRecapKind
+    var iterationIndex: Int?
+}
+
+enum LoopIterationSeparatorCodec {
+    static let title = "Loop Round"
+
+    static func decode(from entry: PiAgentTranscriptEntry) -> LoopRunRecapMarker? {
+        guard entry.role == .status,
+              entry.title == title,
+              let rawJSON = entry.rawJSON,
+              let data = rawJSON.data(using: .utf8),
+              let marker = try? JSONDecoder().decode(LoopRunRecapMarker.self, from: data),
+              marker.kind == .iteration else { return nil }
+        return marker
+    }
+
+    static func transcriptEntry(for run: LoopRun, iterationIndex: Int, id: UUID = UUID(), timestamp: Date = Date()) -> PiAgentTranscriptEntry {
+        let marker = LoopRunRecapCodec.marker(for: run, iterationIndex: iterationIndex)
+        return PiAgentTranscriptEntry(
+            id: id,
+            sessionID: run.sessionID,
+            role: .status,
+            title: title,
+            text: "Iteration \(iterationIndex) of \(run.maxIterations) — \(run.structure.displayName)",
+            rawJSON: LoopRunRecapCodec.rawJSON(for: marker),
+            timestamp: timestamp
+        )
+    }
+
+    static func dividerEntry(from legacyRecapEntry: PiAgentTranscriptEntry, marker: LoopRunRecapMarker) -> PiAgentTranscriptEntry {
+        PiAgentTranscriptEntry(
+            id: legacyRecapEntry.id,
+            sessionID: legacyRecapEntry.sessionID,
+            role: .status,
+            title: title,
+            text: marker.iterationIndex.map { "Iteration \($0)" } ?? "Loop iteration",
+            rawJSON: legacyRecapEntry.rawJSON,
+            timestamp: legacyRecapEntry.timestamp
+        )
+    }
+}
+
+enum LoopRunRecapCodec {
+    static let title = "Loop Recap"
+
+    static func marker(for run: LoopRun, iterationIndex: Int) -> LoopRunRecapMarker {
+        LoopRunRecapMarker(runID: run.id, kind: .iteration, iterationIndex: iterationIndex)
+    }
+
+    static func finalMarker(for run: LoopRun) -> LoopRunRecapMarker {
+        LoopRunRecapMarker(runID: run.id, kind: .final, iterationIndex: nil)
+    }
+
+    static func decode(from entry: PiAgentTranscriptEntry) -> LoopRunRecapMarker? {
+        guard entry.role == .status,
+              entry.title == title,
+              let rawJSON = entry.rawJSON,
+              let data = rawJSON.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(LoopRunRecapMarker.self, from: data)
+    }
+
+    static func rawJSON(for marker: LoopRunRecapMarker) -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(marker) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func iterationText(for run: LoopRun, iteration: LoopIteration) -> String {
+        var parts: [String] = ["∞ Round \(iteration.index) recap — \(run.structure.displayName)"]
+        if !iteration.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append(iteration.summary)
+        }
+        if let checkerResult = iteration.checkerResult,
+           !iteration.summary.localizedCaseInsensitiveContains("Checker outcome:") {
+            parts.append("Checker outcome: \(checkerResult.displayName)")
+        }
+        if let validation = iteration.validationResult {
+            parts.append("Validation: \(validation.didPass ? "passed" : "did not pass")\(validation.exitCode.map { " (exit \($0))" } ?? "")")
+        }
+        if !iteration.artifacts.isEmpty {
+            parts.append("Artifacts: \(iteration.artifacts.map(\.filename).joined(separator: ", "))")
+        }
+        if run.artifactDirectoryPath != nil {
+            parts.append("Shared progress artifact: loop-progress.md")
+        }
+        if !iteration.changedFiles.isEmpty {
+            parts.append("Changed files: \(iteration.changedFiles.prefix(6).joined(separator: ", "))")
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    static func finalText(for run: LoopRun, progressMarkdown: String? = nil) -> String {
+        let iterationLine = "Iterations: \(run.iterations.count)/\(run.maxIterations)"
+        var lines: [String] = [
+            "∞ Loop final recap — \(run.displayStatusName)",
+            "Structure: \(run.structure.displayName)",
+            iterationLine
+        ]
+        if let stopReason = run.stopReason {
+            lines.append("Outcome: \(stopReason.displayName)")
+        }
+        if run.structure == .makerChecker {
+            if let checkerResult = run.iterations.last?.checkerResult {
+                lines.append("Final checker result: \(checkerResult.displayName)")
+            }
+            if run.stopReason == .maxIterationsReached {
+                lines.append("Maker + Checker used all configured iterations without approval; treat this as goal not fully met, not an agent error.")
+            } else if run.iterations.last?.checkerResult == .reject {
+                lines.append("Maker + Checker ended on a rejection.")
+            }
+        }
+        if let validation = run.iterations.last?.validationResult {
+            lines.append("Latest validation: \(validation.didPass ? "passed" : "failed")\(validation.exitCode.map { " (exit \($0))" } ?? "")")
+        }
+        if let progressSummary = finalProgressSummary(from: progressMarkdown) {
+            lines.append("")
+            lines.append("Loop outcome summary:")
+            lines.append(contentsOf: progressSummary)
+        }
+        let artifacts = run.iterations.flatMap(\.artifacts)
+        if !artifacts.isEmpty {
+            lines.append("Artifacts: \(artifacts.suffix(3).map(\.filename).joined(separator: ", "))")
+        }
+        if run.artifactDirectoryPath != nil {
+            lines.append("Shared progress artifact: loop-progress.md")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func finalProgressSummary(from markdown: String?) -> [String]? {
+        guard let markdown, !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let sections = markdownSections(markdown)
+        let wanted = ["Current Understanding", "What Worked", "What Did Not Work", "Current Evidence", "Avoid Repeating", "Next Recommended Move"]
+        var lines: [String] = []
+        for title in wanted {
+            guard let body = sections[title]?.filter({ !$0.contains("None yet") && !$0.contains("Not established yet") }), !body.isEmpty else { continue }
+            lines.append("\(title):")
+            lines.append(contentsOf: body.prefix(3))
+        }
+        return lines.isEmpty ? nil : Array(lines.prefix(18))
+    }
+
+    private static func markdownSections(_ markdown: String) -> [String: [String]] {
+        var result: [String: [String]] = [:]
+        var currentTitle: String?
+        for rawLine in markdown.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            if line.hasPrefix("## ") {
+                currentTitle = String(line.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if let currentTitle { result[currentTitle, default: []] = [] }
+            } else if let currentTitle {
+                result[currentTitle, default: []].append(line)
+            }
+        }
+        return result
+    }
+
+    static func transcriptEntry(for run: LoopRun, iteration: LoopIteration, id: UUID = UUID()) -> PiAgentTranscriptEntry {
+        let marker = marker(for: run, iterationIndex: iteration.index)
+        return PiAgentTranscriptEntry(
+            id: id,
+            sessionID: run.sessionID,
+            role: .status,
+            title: title,
+            text: iterationText(for: run, iteration: iteration),
+            rawJSON: rawJSON(for: marker),
+            timestamp: iteration.endedAt ?? Date()
+        )
+    }
+
+    static func finalTranscriptEntry(for run: LoopRun, id: UUID = UUID(), progressMarkdown: String? = nil) -> PiAgentTranscriptEntry {
+        let marker = finalMarker(for: run)
+        return PiAgentTranscriptEntry(
+            id: id,
+            sessionID: run.sessionID,
+            role: .status,
+            title: title,
+            text: finalText(for: run, progressMarkdown: progressMarkdown),
+            rawJSON: rawJSON(for: marker),
+            timestamp: run.endedAt ?? Date()
+        )
     }
 }
 
@@ -546,12 +858,15 @@ enum LoopRunTranscriptCodec {
 
     static func transcriptText(for run: LoopRun) -> String {
         var lines: [String] = [
-            "∞ Loop \(run.status.displayName)",
+            "∞ Loop \(run.displayStatusName)",
             "Structure: \(run.structure.displayName)",
             "Write target: \(run.writeTarget.displayName)",
             "Goal: \(run.goal)",
-            "Iterations: \(run.currentIteration)/\(run.maxIterations)"
+            "Progress: \(run.iterationProgressText)"
         ]
+        if run.launchContext?.isEmpty == false {
+            lines.append("Launch context: present (\(run.launchContextScope.displayName.lowercased()))")
+        }
         if !run.validationCommand.isEmpty {
             lines.append("Validation command: \(run.validationCommand)")
         }

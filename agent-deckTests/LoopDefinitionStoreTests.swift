@@ -32,6 +32,25 @@ final class LoopDefinitionStoreTests: XCTestCase {
         XCTAssertEqual(loaded.projectPaths, ["/tmp/project-a"])
     }
 
+    func testLaunchContextRoundTripsWithMultilineSafeEncoding() throws {
+        let directory = PiTestSupport.temporaryStateFile().deletingLastPathComponent().appendingPathComponent("loops", isDirectory: true)
+        let store = LoopDefinitionStore(directoryURL: directory)
+        let context = "Line one\nLine two with --- and | delimiters\nLine three"
+
+        _ = try store.saveUserDefinition(LoopDefinition(
+            name: "Context Loop",
+            goalTemplate: "Goal",
+            launchContext: context,
+            launchContextScope: .everyIteration
+        ))
+
+        let loaded = try XCTUnwrap(store.loadUserDefinitions().first)
+        XCTAssertEqual(loaded.launchContext, context)
+        XCTAssertEqual(loaded.launchContextScope, .everyIteration)
+        XCTAssertEqual(loaded.makeDraft().launchContext, context)
+        XCTAssertEqual(loaded.makeDraft().launchContextScope, .everyIteration)
+    }
+
     func testProjectPathsWithFrontmatterDelimitersRoundTrip() throws {
         let directory = PiTestSupport.temporaryStateFile().deletingLastPathComponent().appendingPathComponent("loops", isDirectory: true)
         let store = LoopDefinitionStore(directoryURL: directory)
@@ -125,8 +144,7 @@ final class LoopDefinitionStoreTests: XCTestCase {
         let makerChecker = LoopMakerCheckerConfig(
             makerName: "Builder",
             checkerName: "Reviewer",
-            checkerRubric: "reject once then approve",
-            maxReviewRounds: 4
+            checkerRubric: "reject once then approve"
         )
 
         _ = try viewModel.saveLoopDefinitionFromDraft(
@@ -207,6 +225,8 @@ final class LoopDefinitionStoreTests: XCTestCase {
         let definition = LoopDefinition(
             name: "Reusable",
             goalTemplate: "Use this saved goal",
+            launchContext: "Keep this context",
+            launchContextScope: .everyIteration,
             maxIterations: 7,
             validationCommand: "swift test"
         )
@@ -217,6 +237,30 @@ final class LoopDefinitionStoreTests: XCTestCase {
         XCTAssertEqual(draft.writeTarget, .artifactMarkdown)
         XCTAssertEqual(draft.maxIterations, 7)
         XCTAssertEqual(draft.validationCommand, "swift test")
+        XCTAssertEqual(draft.launchContext, "Keep this context")
+        XCTAssertEqual(draft.launchContextScope, .everyIteration)
+    }
+
+    func testLoopDefinitionExactRunMatchIncludesLaunchContextAndScope() {
+        let definition = LoopDefinition(
+            name: "Context Sensitive",
+            goalTemplate: "Same goal",
+            launchContext: "Use these notes",
+            launchContextScope: .everyIteration,
+            validationCommand: "swift test"
+        )
+        let matchingRun = LoopRun(sessionID: UUID(), projectPath: nil, draft: definition.makeDraft())
+        var differentContext = matchingRun
+        differentContext.launchContext = "Different notes"
+        var missingContext = matchingRun
+        missingContext.launchContext = nil
+        var differentScope = matchingRun
+        differentScope.launchContextScope = .firstIterationOnly
+
+        XCTAssertTrue(definition.exactlyMatches(run: matchingRun))
+        XCTAssertFalse(definition.exactlyMatches(run: differentContext))
+        XCTAssertFalse(definition.exactlyMatches(run: missingContext))
+        XCTAssertFalse(definition.exactlyMatches(run: differentScope))
     }
 
     func testNoBuiltInTemplatesLoadIntoLoopBankAndSlashUniverse() throws {

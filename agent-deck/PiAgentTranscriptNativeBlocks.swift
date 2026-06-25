@@ -987,7 +987,7 @@ extension NativeDividerPayload {
             .replacingOccurrences(of: "\n", with: " ")
         let isCompacting = normalized.localizedCaseInsensitiveContains("compacting")
             && !normalized.localizedCaseInsensitiveContains("compacted")
-        let icon = PiAgentGitEventKind.from(title: entry.title)?.icon ?? "arrow.triangle.2.circlepath"
+        let icon = entry.title == LoopIterationSeparatorCodec.title ? "infinity" : (PiAgentGitEventKind.from(title: entry.title)?.icon ?? "arrow.triangle.2.circlepath")
         return NativeDividerPayload(
             icon: icon,
             detail: normalized,
@@ -1055,6 +1055,218 @@ private extension NSLayoutConstraint {
     }
 }
 
+// MARK: - Loop recap card
+
+struct NativeLoopRecapPayload {
+    var title: String
+    var label: String
+    var outcomeText: String
+    var summaryText: String
+    var detailsText: String
+    var timeText: String
+    var icon: String
+    var accent: NSColor
+    var copyText: String
+
+    static func make(entry: PiAgentTranscriptEntry, marker: LoopRunRecapMarker) -> NativeLoopRecapPayload {
+        let lines = entry.text
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+        let bodyLines = Array(lines.dropFirst())
+        let metadataPrefixes = ["Checker:", "Validation:", "Artifacts:", "Changed files:", "Structure:", "Iterations:", "Stop reason:", "Outcome:", "Final checker result:", "Latest validation:", "Shared progress artifact:"]
+        let firstSummaryIndex = bodyLines.firstIndex { line in
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return false }
+            return !metadataPrefixes.contains { trimmed.hasPrefix($0) }
+        }
+        let summary: String
+        let details: [String]
+        if let firstSummaryIndex {
+            summary = bodyLines[firstSummaryIndex]
+            details = bodyLines.enumerated().compactMap { index, line in index == firstSummaryIndex ? nil : line }
+        } else {
+            summary = marker.kind == .final ? "Loop finished with the recorded status below." : "Iteration finished with the recorded status below."
+            details = bodyLines
+        }
+        let outcome = outcomeText(lines: bodyLines, marker: marker, headline: lines.first)
+        let label: String = {
+            switch marker.kind {
+            case .iteration: return marker.iterationIndex.map { "Iteration \($0)" } ?? "Iteration recap"
+            case .final: return "Final recap"
+            }
+        }()
+        return NativeLoopRecapPayload(
+            title: marker.kind == .final ? "Final loop recap" : "Loop iteration recap",
+            label: label,
+            outcomeText: outcome,
+            summaryText: summary.trimmingCharacters(in: .whitespacesAndNewlines),
+            detailsText: details.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines),
+            timeText: entry.timestamp.formatted(date: .omitted, time: .shortened),
+            icon: marker.kind == .final ? "checkmark.seal.fill" : "arrow.triangle.2.circlepath.circle.fill",
+            accent: marker.kind == .final ? AppTheme.ns(AppTheme.brandAccent) : AppTheme.ns(AppTheme.roleStatus),
+            copyText: entry.text
+        )
+    }
+
+    private static func outcomeText(lines: [String], marker: LoopRunRecapMarker, headline: String?) -> String {
+        if marker.kind == .final {
+            if let outcome = lines.first(where: { $0.hasPrefix("Outcome:") }) { return outcome }
+            if let stopReason = lines.first(where: { $0.hasPrefix("Stop reason:") }) { return stopReason }
+            if let headline, let status = headline.components(separatedBy: "—").last?.trimmingCharacters(in: .whitespacesAndNewlines), !status.isEmpty { return "Status: \(status)" }
+            return "Status: Final"
+        }
+        if let validation = lines.first(where: { $0.hasPrefix("Validation:") }) { return validation }
+        if let checker = lines.first(where: { $0.hasPrefix("Checker:") }) { return checker }
+        return "Status: Iteration complete"
+    }
+}
+
+final class PiAgentNativeLoopRecapCardView: PiAgentNativeCardRowView {
+    private let iconView = NSImageView()
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let labelField = NSTextField(labelWithString: "")
+    private let outcomeField = NSTextField(labelWithString: "")
+    private let timeLabel = NSTextField(labelWithString: "")
+    private let summaryField = NSTextField(wrappingLabelWithString: "")
+    private let detailsField = NSTextField(wrappingLabelWithString: "")
+    private let headerRight = NSStackView()
+    private let textStack = NSStackView()
+
+    override func commonSetup() {
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        iconView.setContentHuggingPriority(.required, for: .horizontal)
+
+        titleLabel.font = NativeTranscriptFont.header
+        titleLabel.textColor = .labelColor
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.maximumNumberOfLines = 1
+
+        labelField.font = NativeTranscriptFont.caption(.semibold)
+        labelField.textColor = AppTheme.ns(AppTheme.mutedText)
+        outcomeField.font = NativeTranscriptFont.caption(.medium)
+        outcomeField.textColor = AppTheme.ns(AppTheme.mutedText)
+        timeLabel.font = NativeTranscriptFont.caption2()
+        timeLabel.textColor = AppTheme.ns(AppTheme.mutedText)
+
+        summaryField.font = NativeTranscriptFont.callout()
+        summaryField.textColor = .labelColor
+        summaryField.maximumNumberOfLines = 0
+        detailsField.font = NativeTranscriptFont.caption()
+        detailsField.textColor = AppTheme.ns(AppTheme.mutedText)
+        detailsField.maximumNumberOfLines = 0
+
+        headerRight.translatesAutoresizingMaskIntoConstraints = false
+        headerRight.orientation = .horizontal
+        headerRight.alignment = .centerY
+        headerRight.spacing = 6
+        headerRight.setContentHuggingPriority(.required, for: .horizontal)
+        headerRight.addArrangedSubview(labelField)
+        headerRight.addArrangedSubview(timeLabel)
+
+        textStack.translatesAutoresizingMaskIntoConstraints = false
+        textStack.orientation = .vertical
+        textStack.alignment = .leading
+        textStack.spacing = 6
+        textStack.addArrangedSubview(titleLabel)
+        textStack.addArrangedSubview(outcomeField)
+        textStack.addArrangedSubview(summaryField)
+        textStack.addArrangedSubview(detailsField)
+
+        cardContent.addSubview(iconView)
+        cardContent.addSubview(textStack)
+        cardContent.addSubview(headerRight)
+
+        NSLayoutConstraint.activate([
+            iconView.leadingAnchor.constraint(equalTo: cardContent.leadingAnchor),
+            iconView.topAnchor.constraint(equalTo: cardContent.topAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: NativeTranscriptFont.headerIconSize),
+            iconView.heightAnchor.constraint(equalToConstant: NativeTranscriptFont.headerIconSize),
+
+            textStack.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 8),
+            textStack.topAnchor.constraint(equalTo: cardContent.topAnchor),
+            textStack.bottomAnchor.constraint(equalTo: cardContent.bottomAnchor),
+
+            headerRight.leadingAnchor.constraint(greaterThanOrEqualTo: textStack.trailingAnchor, constant: 10),
+            headerRight.trailingAnchor.constraint(equalTo: cardContent.trailingAnchor),
+            headerRight.topAnchor.constraint(equalTo: cardContent.topAnchor)
+        ])
+    }
+
+    func configure(payload: NativeLoopRecapPayload, width rowWidth: CGFloat) {
+        iconView.image = NativeTranscriptFont.headerIcon(payload.icon)
+        iconView.contentTintColor = payload.accent
+        titleLabel.stringValue = payload.title
+        labelField.stringValue = payload.label
+        outcomeField.stringValue = payload.outcomeText
+        timeLabel.stringValue = payload.timeText
+        summaryField.attributedStringValue = Self.inlineMarkdown(payload.summaryText, font: NativeTranscriptFont.callout(), color: .labelColor)
+        detailsField.attributedStringValue = Self.inlineMarkdown(payload.detailsText, font: NativeTranscriptFont.caption(), color: AppTheme.ns(AppTheme.mutedText))
+        detailsField.isHidden = payload.detailsText.isEmpty
+        applyCard(
+            fill: payload.accent.withAlphaComponent(AppTheme.roleFillStrongOpacity),
+            stroke: payload.accent.withAlphaComponent(AppTheme.roleStrokeOpacity),
+            cornerRadius: AppTheme.Chat.bubbleCornerRadius,
+            hPad: AppTheme.Chat.bubbleHPadding,
+            vPad: AppTheme.Chat.bubbleVPadding,
+            placement: .leftAtCap,
+            copyText: payload.copyText,
+            width: rowWidth
+        )
+    }
+
+    private static func inlineMarkdown(_ source: String, font: NSFont, color: NSColor) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 1
+        let base: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color, .paragraphStyle: paragraph]
+        guard !source.isEmpty,
+              let attributed = try? AttributedString(
+                markdown: source,
+                options: AttributedString.MarkdownParsingOptions(
+                    interpretedSyntax: .inlineOnlyPreservingWhitespace,
+                    failurePolicy: .returnPartiallyParsedIfPossible
+                )
+              ) else {
+            return NSAttributedString(string: source, attributes: base)
+        }
+        let mutable = NSMutableAttributedString(attributedString: NSAttributedString(attributed))
+        let fullRange = NSRange(location: 0, length: mutable.length)
+        mutable.addAttribute(.foregroundColor, value: color, range: fullRange)
+        mutable.addAttribute(.paragraphStyle, value: paragraph, range: fullRange)
+        mutable.enumerateAttribute(.font, in: fullRange) { value, range, _ in
+            guard let current = value as? NSFont else {
+                mutable.addAttribute(.font, value: font, range: range)
+                return
+            }
+            let traits = NSFontManager.shared.traits(of: current)
+            var replacement = font
+            if traits.contains(.boldFontMask) {
+                replacement = NSFont.systemFont(ofSize: font.pointSize, weight: .semibold)
+            }
+            if traits.contains(.italicFontMask) {
+                replacement = NSFontManager.shared.convert(replacement, toHaveTrait: .italicFontMask)
+            }
+            mutable.addAttribute(.font, value: replacement, range: range)
+        }
+        return mutable
+    }
+
+    override func contentHeight(forInnerWidth innerWidth: CGFloat) -> CGFloat {
+        let textWidth = max(40, innerWidth - NativeTranscriptFont.headerIconSize - 8 - 90)
+        titleLabel.preferredMaxLayoutWidth = textWidth
+        outcomeField.preferredMaxLayoutWidth = textWidth
+        summaryField.preferredMaxLayoutWidth = textWidth
+        detailsField.preferredMaxLayoutWidth = textWidth
+        var height = ceil(titleLabel.intrinsicContentSize.height)
+        height += 6 + ceil(outcomeField.intrinsicContentSize.height)
+        height += 6 + ceil(summaryField.intrinsicContentSize.height)
+        if !detailsField.isHidden {
+            height += 6 + ceil(detailsField.intrinsicContentSize.height)
+        }
+        return max(NativeTranscriptFont.headerIconSize, height)
+    }
+}
+
 // MARK: - Loop run card
 
 private func loopTimelineStepDisplayName(_ step: LoopTimelineStepKind) -> String {
@@ -1071,16 +1283,25 @@ private func loopTimelineStepDisplayName(_ step: LoopTimelineStepKind) -> String
 private func loopRunDetailsText(for run: LoopRun) -> String {
     var sections: [String] = []
     var overview: [String] = [
-        "Status: \(run.status.displayName)",
+        "Status: \(run.displayStatusName)",
         "Structure: \(run.structure.displayName)",
         "Write target: \(run.writeTarget.displayName)",
         "Goal: \(run.goal)",
-        "Iterations: \(run.currentIteration)/\(run.maxIterations)"
+        "Progress: \(run.iterationProgressText)"
     ]
     if let stopReason = run.stopReason { overview.append("Stop reason: \(stopReason.displayName)") }
     if !run.validationCommand.isEmpty { overview.append("Validation command: \(run.validationCommand)") }
     if let directoryPath = run.artifactDirectoryPath { overview.append("Artifact directory: \(directoryPath)") }
     sections.append((["Overview"] + overview.map { "• \($0)" }).joined(separator: "\n"))
+
+    if let launchContext = run.launchContext?.trimmingCharacters(in: .whitespacesAndNewlines), !launchContext.isEmpty {
+        sections.append([
+            "Launch Context",
+            "• Scope: \(run.launchContextScope.displayName)",
+            "",
+            launchContext
+        ].joined(separator: "\n"))
+    }
 
     if run.iterations.isEmpty {
         sections.append("Iterations\n• No iterations recorded yet.")
@@ -1153,6 +1374,7 @@ struct NativeLoopRunPayload {
 
     static func make(run: LoopRun, onStop: (() -> Void)?, onRetry: (() -> Void)?, onSave: (() -> Void)?, onRevealArtifacts: (() -> Void)?, onRevealWorktree: (() -> Void)?, onApplyWorktree: (() -> Void)? = nil, onDiscardWorktree: (() -> Void)? = nil, onApproveHumanApproval: (() -> Void)? = nil, onRejectHumanApproval: (() -> Void)? = nil) -> NativeLoopRunPayload {
         let details = loopRunDetailsText(for: run)
+        let statusText = visibleStatusText(for: run)
         let worktreeURL = run.artifactDirectoryPath.map { URL(fileURLWithPath: $0).appendingPathComponent("worktree", isDirectory: true) }
         let hasWorktree = worktreeURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
         let hasAppliedMarker = run.artifactDirectoryPath.map { FileManager.default.fileExists(atPath: URL(fileURLWithPath: $0).appendingPathComponent("worktree.applied").path) } ?? false
@@ -1161,8 +1383,8 @@ struct NativeLoopRunPayload {
         let canOperateOnWorktree = run.writeTarget == .newWorktree && !run.isActive && hasWorktree && !worktreeAlreadyHandled
         let canResolveHumanApproval = run.structure == .humanApproval && run.status == .stopped && run.stopReason == .humanInputRequired
         return NativeLoopRunPayload(
-            title: run.status == .completed ? "Loop completed" : "Loop: \(run.structure.displayName)",
-            statusText: "Status: \(run.status.displayName)",
+            title: run.presentsGoalNotMetOutcome ? "Loop goal not met" : (run.status == .completed ? "Loop completed" : "Loop: \(run.structure.displayName)"),
+            statusText: statusText,
             detailText: details,
             isActive: run.isActive,
             canRevealArtifacts: run.artifactDirectoryPath != nil,
@@ -1171,7 +1393,7 @@ struct NativeLoopRunPayload {
             canDiscardWorktree: canOperateOnWorktree,
             canApproveHumanApproval: canResolveHumanApproval,
             canRejectHumanApproval: canResolveHumanApproval,
-            canRetry: !run.isActive && run.status == .failed,
+            canRetry: !run.isActive && run.status == .failed && !run.presentsGoalNotMetOutcome,
             canSave: !run.isActive,
             onStop: onStop,
             onRetry: onRetry,
@@ -1183,6 +1405,17 @@ struct NativeLoopRunPayload {
             onApproveHumanApproval: onApproveHumanApproval,
             onRejectHumanApproval: onRejectHumanApproval
         )
+    }
+
+    private static func visibleStatusText(for run: LoopRun) -> String {
+        var lines = ["Status: \(run.displayStatusName)"]
+        if !run.isActive, let stopReason = run.stopReason {
+            lines.append("Stop reason: \(stopReason.displayName)")
+        }
+        if run.presentsGoalNotMetOutcome {
+            lines.append("Last checker: Reject — all iterations rejected")
+        }
+        return lines.joined(separator: "\n")
     }
 }
 
@@ -1230,6 +1463,7 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
         statusField.translatesAutoresizingMaskIntoConstraints = false
         statusField.font = NativeTranscriptFont.caption(.semibold)
         statusField.textColor = AppTheme.ns(AppTheme.mutedText)
+        statusField.maximumNumberOfLines = 0
         detailField.translatesAutoresizingMaskIntoConstraints = false
         detailField.font = NativeTranscriptFont.caption()
         detailField.textColor = AppTheme.ns(AppTheme.mutedText)
@@ -1338,7 +1572,8 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
     func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat {
         let cardWidth = Self.cardWidth(for: rowWidth)
         let rowCount = packedActionRows(forCardWidth: cardWidth, visibleButtons: visibleActionButtons).count
-        return AppTheme.Chat.bubbleVPadding * 2 + 18 + 6 + 16 + 10 + CGFloat(max(1, rowCount)) * 26 + CGFloat(max(0, rowCount - 1)) * 6
+        let statusLineCount = CGFloat(max(1, payload?.statusText.split(separator: "\n", omittingEmptySubsequences: false).count ?? 1))
+        return AppTheme.Chat.bubbleVPadding * 2 + 18 + 6 + statusLineCount * 16 + 10 + CGFloat(max(1, rowCount)) * 26 + CGFloat(max(0, rowCount - 1)) * 6
     }
 
     private var actionButtons: [NSButton] {
@@ -1382,7 +1617,7 @@ final class PiAgentNativeLoopRunCardView: NSView, PiAgentNativeRowContent {
     }
 
     private static func cardWidth(for rowWidth: CGFloat) -> CGFloat {
-        min(max(rowWidth * 0.78, min(rowWidth, 240)), rowWidth)
+        max(1, rowWidth)
     }
 
     @objc private func openDetails() {

@@ -880,7 +880,7 @@ extension NativeSubagentParallelPayload {
                 outcomePill: child.expectedOutcome?.displayName,
                 task: task,
                 durationText: child.durationMs.map { NativeSubagentFactory.formattedDuration($0) },
-                modelText: NativeSubagentFactory.modelChipText(model: child.model, thinking: run.thinking),
+                modelText: NativeSubagentFactory.modelChipText(model: child.model, thinking: child.thinking),
                 tokensText: NativeSubagentFactory.tokensText(child.totalTokens),
                 actions: actions
             )

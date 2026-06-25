@@ -1531,12 +1531,14 @@ private final class AutoSizingMarkdownTextView: NSTextView {
     /// `ensureLayout`/`usedRect` pass entirely — the dominant per-vend scroll cost.
     private var contentVersion = 0
     private var cachedIntrinsic: (width: CGFloat, version: Int, height: CGFloat)?
+    private var lastIntrinsicInvalidationWidth: CGFloat = -1
 
     /// Set the rendered text. Routes every content change through one place so the
     /// memo is invalidated exactly when (and only when) the content changes.
     func applyContent(_ attributed: NSAttributedString) {
         contentVersion &+= 1
         cachedIntrinsic = nil
+        lastIntrinsicInvalidationWidth = -1
         if let storage = textStorage {
             storage.beginEditing()
             storage.setAttributedString(attributed)
@@ -1577,6 +1579,9 @@ private final class AutoSizingMarkdownTextView: NSTextView {
 
     override func layout() {
         super.layout()
+        let width = max(bounds.width, 1)
+        guard abs(width - lastIntrinsicInvalidationWidth) >= 0.5 else { return }
+        lastIntrinsicInvalidationWidth = width
         invalidateIntrinsicContentSize()
     }
 

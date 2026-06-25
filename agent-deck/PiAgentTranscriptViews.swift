@@ -1210,7 +1210,10 @@ struct PiAgentTranscriptThreadCard: View {
 
     @ViewBuilder
     private func statusRowView(_ entry: PiAgentTranscriptEntry) -> some View {
-        if let memoryEvent = entry.agentMemoryEvent {
+        if let recapMarker = LoopRunRecapCodec.decode(from: entry) {
+            PiAgentLoopRecapTranscriptCard(entry: entry, marker: recapMarker)
+                .id(entry.id)
+        } else if let memoryEvent = entry.agentMemoryEvent {
             PiAgentMemoryActivityCard(event: memoryEvent)
                 .id(entry.id)
         } else if let runID = entry.nativeSubagentRunID, let run = nativeSubagentRunsByID[runID] {
@@ -1379,12 +1382,17 @@ struct PiAgentTranscriptThreadCard: View {
 extension PiAgentTranscriptEntry {
     var agentMemoryEvent: AgentMemoryTranscriptEvent? {
         guard let rawJSON,
-              let data = rawJSON.data(using: .utf8),
-              let event = try? transcriptJSONDecoder.decode(AgentMemoryTranscriptEvent.self, from: data),
-              event.type == AgentMemoryTranscriptEvent.rawType else {
+              rawJSON.contains(AgentMemoryTranscriptEvent.rawType) else {
             return nil
         }
-        return event
+        return JSONParseMemo.value("agentMemoryEvent\(JSONParseMemo.separator)\(rawJSON)") {
+            guard let data = rawJSON.data(using: .utf8),
+                  let event = try? transcriptJSONDecoder.decode(AgentMemoryTranscriptEvent.self, from: data),
+                  event.type == AgentMemoryTranscriptEvent.rawType else {
+                return nil
+            }
+            return event
+        }
     }
 }
 
@@ -2281,6 +2289,67 @@ struct PiAgentActivityDetailView: View {
     }
 }
 
+struct PiAgentLoopRecapTranscriptCard: View {
+    let entry: PiAgentTranscriptEntry
+    let marker: LoopRunRecapMarker
+
+    @Environment(\.transcriptContentWidth) private var transcriptContentWidth
+
+    private var payload: NativeLoopRecapPayload {
+        NativeLoopRecapPayload.make(entry: entry, marker: marker)
+    }
+
+    private func inlineMarkdown(_ source: String) -> AttributedString {
+        (try? AttributedString(
+            markdown: source,
+            options: AttributedString.MarkdownParsingOptions(
+                interpretedSyntax: .inlineOnlyPreservingWhitespace,
+                failurePolicy: .returnPartiallyParsedIfPossible
+            )
+        )) ?? AttributedString(source)
+    }
+
+    var body: some View {
+        let payload = payload
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .center, spacing: 8) {
+                Image(systemName: payload.icon)
+                    .font(AppTheme.Font.footnote.weight(.semibold))
+                    .foregroundStyle(Color(nsColor: payload.accent))
+                Text(payload.title)
+                    .font(AppTheme.Font.footnote.weight(.semibold))
+                Text(payload.label)
+                    .font(AppTheme.Font.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.mutedText)
+                Text(payload.timeText)
+                    .font(AppTheme.Font.caption2)
+                    .foregroundStyle(AppTheme.mutedText)
+            }
+            Text(payload.outcomeText)
+                .font(AppTheme.Font.caption.weight(.medium))
+                .foregroundStyle(AppTheme.mutedText)
+            Text(inlineMarkdown(payload.summaryText))
+                .font(AppTheme.Font.callout)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !payload.detailsText.isEmpty {
+                Text(inlineMarkdown(payload.detailsText))
+                    .font(AppTheme.Font.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, AppTheme.Chat.bubbleHPadding)
+        .padding(.vertical, AppTheme.Chat.bubbleVPadding)
+        .frame(maxWidth: PiAgentBubbleWidth.replyCap(for: transcriptContentWidth), alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: AppTheme.Chat.bubbleCornerRadius, style: .continuous)
+                .fill(Color(nsColor: payload.accent).opacity(AppTheme.roleFillStrongOpacity))
+                .stroke(Color(nsColor: payload.accent).opacity(AppTheme.roleStrokeOpacity), lineWidth: 1)
+        )
+    }
+}
+
 struct PiAgentStatusTranscriptRow: View {
     let entry: PiAgentTranscriptEntry
     @State private var promptPopover: PromptPopover?
@@ -2430,7 +2499,7 @@ struct PiAgentStatusTranscriptRow: View {
     }
 
     private var dividerIcon: String {
-        PiAgentGitEventKind.from(title: entry.title)?.icon ?? "arrow.triangle.2.circlepath"
+        entry.title == LoopIterationSeparatorCodec.title ? "infinity" : (PiAgentGitEventKind.from(title: entry.title)?.icon ?? "arrow.triangle.2.circlepath")
     }
 
     private var color: Color {
@@ -2648,7 +2717,7 @@ extension PiAgentTranscriptEntry {
     /// not be inset to the assistant bubble width.
     var isDividerStatus: Bool {
         guard role == .status else { return false }
-        if title == "Compaction" { return true }
+        if title == "Compaction" || title == LoopIterationSeparatorCodec.title { return true }
         return PiAgentGitEventKind.from(title: title) != nil
     }
 }

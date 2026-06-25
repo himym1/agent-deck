@@ -33,6 +33,69 @@ final class LoopSkeletonTests: XCTestCase {
         XCTAssertEqual(item.materialize(userText: "do not send"), "do not send")
     }
 
+    func testLoopCardPayloadShowsStopReasonAndCheckerRejectionOutcome() throws {
+        let draft = LoopDraft(
+            goal: "Fix until checker approves",
+            structure: .makerChecker,
+            maxIterations: 2,
+            makerChecker: LoopMakerCheckerConfig(makerName: "Maker", checkerName: "Checker", checkerRubric: "approve")
+        )
+        var run = LoopRun(sessionID: UUID(), projectPath: nil, draft: draft)
+        run.status = .failed
+        run.currentIteration = 2
+        run.endedAt = Date()
+        run.stopReason = .maxIterationsReached
+        run.iterations = [
+            LoopIteration(index: 1, checkerResult: .reject),
+            LoopIteration(index: 2, checkerResult: .reject)
+        ]
+
+        let payload = NativeLoopRunPayload.make(
+            run: run,
+            onStop: nil,
+            onRetry: nil,
+            onSave: nil,
+            onRevealArtifacts: nil,
+            onRevealWorktree: nil
+        )
+
+        XCTAssertTrue(payload.statusText.contains("Status: Goal not met"))
+        XCTAssertFalse(payload.statusText.contains("Status: Failed"))
+        XCTAssertFalse(payload.canRetry)
+        XCTAssertTrue(payload.statusText.contains("Stop reason: Max iterations reached"))
+        XCTAssertTrue(payload.statusText.contains("Last checker: Reject — all iterations rejected"))
+    }
+
+    func testLoopCardDetailsExposeLaunchContextButMainTranscriptStaysConcise() throws {
+        let draft = LoopDraft(
+            goal: "Use launch notes",
+            launchContext: "Sensitive repro notes\nSecond line",
+            launchContextScope: .everyIteration,
+            validationCommand: "/usr/bin/true"
+        )
+        var run = LoopRun(sessionID: UUID(), projectPath: nil, draft: draft)
+        run.status = .completed
+        run.currentIteration = 1
+        run.endedAt = Date()
+        run.stopReason = .success
+
+        let payload = NativeLoopRunPayload.make(
+            run: run,
+            onStop: nil,
+            onRetry: nil,
+            onSave: nil,
+            onRevealArtifacts: nil,
+            onRevealWorktree: nil
+        )
+        let transcriptText = LoopRunTranscriptCodec.transcriptText(for: run)
+
+        XCTAssertTrue(payload.detailText.contains("Launch Context"))
+        XCTAssertTrue(payload.detailText.contains("Scope: Every iteration"))
+        XCTAssertTrue(payload.detailText.contains("Sensitive repro notes\nSecond line"))
+        XCTAssertTrue(transcriptText.contains("Launch context: present (every iteration)"))
+        XCTAssertFalse(transcriptText.contains("Sensitive repro notes"))
+    }
+
     func testSmokeLoopLaunchCompletesAndWritesFileBackedTranscriptCard() throws {
         let stateFile = PiTestSupport.temporaryStateFile()
         let projectURL = try PiTestSupport.temporaryProjectURL()
@@ -247,6 +310,34 @@ final class LoopSkeletonTests: XCTestCase {
         XCTAssertEqual(decoded.validationCommand, "")
     }
 
+    func testLegacyLoopRunJSONWithoutLaunchContextFieldsStillDecodes() throws {
+        let sessionID = UUID()
+        let run = LoopRun(
+            sessionID: sessionID,
+            projectPath: nil,
+            draft: LoopDraft(goal: "Legacy context", launchContext: "Context", launchContextScope: .everyIteration)
+        )
+        let rawJSON = try XCTUnwrap(LoopRunTranscriptCodec.rawJSON(for: run))
+        let data = try XCTUnwrap(rawJSON.data(using: .utf8))
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "launchContext")
+        object.removeValue(forKey: "launchContextScope")
+        let legacyData = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        let legacyRawJSON = try XCTUnwrap(String(data: legacyData, encoding: .utf8))
+        let entry = PiAgentTranscriptEntry(
+            sessionID: sessionID,
+            role: .status,
+            title: LoopRunTranscriptCodec.title,
+            text: "Loop",
+            rawJSON: legacyRawJSON
+        )
+
+        let decoded = try XCTUnwrap(LoopRunTranscriptCodec.decode(from: entry))
+        XCTAssertEqual(decoded.id, run.id)
+        XCTAssertNil(decoded.launchContext)
+        XCTAssertEqual(decoded.launchContextScope, .firstIterationOnly)
+    }
+
     func testPassingValidationCommandStopsFirstIteration() throws {
         let stateFile = PiTestSupport.temporaryStateFile()
         let projectURL = try PiTestSupport.temporaryProjectURL()
@@ -352,7 +443,7 @@ final class LoopSkeletonTests: XCTestCase {
         let run = try XCTUnwrap(store.launchSmokeLoop(
             sessionID: session.id,
             projectPath: session.projectPath,
-            draft: LoopDraft(goal: "Revise once", structure: .makerChecker, maxIterations: 3, makerChecker: LoopMakerCheckerConfig(checkerRubric: "reject once then approve", maxReviewRounds: 3))
+            draft: LoopDraft(goal: "Revise once", structure: .makerChecker, maxIterations: 3, makerChecker: LoopMakerCheckerConfig(checkerRubric: "reject once then approve"))
         ))
 
         XCTAssertEqual(run.status, .completed)

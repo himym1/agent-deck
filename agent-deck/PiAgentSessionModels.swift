@@ -308,6 +308,7 @@ struct PiSubagentChildRecord: Identifiable, Codable, Hashable {
     var task: String?
     var status: PiSubagentRunStatus
     var model: String?
+    var thinking: String?
     var expectedOutcome: PiSubagentExpectedOutcome?
     var requestedOutputPath: String?
     var allowOverwrite: Bool?

@@ -60,9 +60,19 @@ extension PiAgentNativeRowContent {
 /// its measured height. Using a spec (instead of one enum case + cell branch per
 /// view type) keeps the cell's native path uniform as more row types go native.
 final class NativeRowSpec {
+    enum PrewarmPolicy {
+        /// Cheap enough for the normal idle prewarm window.
+        case immediate
+        /// May build AppKit/Markdown subtrees; only speculate after a longer idle window.
+        case extendedIdle
+        /// Never build speculatively offscreen.
+        case disabled
+    }
+
     /// Identifies the concrete view class so a recycled cell can reuse a view of
     /// the same type and only swap content rather than rebuild it.
     let typeID: ObjectIdentifier
+    let prewarmPolicy: PrewarmPolicy
     let make: () -> NSView
     let configure: (NSView, CGFloat) -> Void
     let measure: (NSView, CGFloat) -> CGFloat
@@ -72,6 +82,7 @@ final class NativeRowSpec {
 
     private init(
         typeID: ObjectIdentifier,
+        prewarmPolicy: PrewarmPolicy,
         make: @escaping () -> NSView,
         configure: @escaping (NSView, CGFloat) -> Void,
         measure: @escaping (NSView, CGFloat) -> CGFloat,
@@ -80,6 +91,7 @@ final class NativeRowSpec {
         setHeightCallback: @escaping (NSView, (() -> Void)?) -> Void
     ) {
         self.typeID = typeID
+        self.prewarmPolicy = prewarmPolicy
         self.make = make
         self.configure = configure
         self.measure = measure
@@ -92,10 +104,12 @@ final class NativeRowSpec {
     /// the typed view and the row width; height comes from `measuredHeight`.
     static func of<V: PiAgentNativeRowContent>(
         _ type: V.Type,
+        prewarmPolicy: PrewarmPolicy = .extendedIdle,
         configure: @escaping (V, CGFloat) -> Void
     ) -> NativeRowSpec {
         NativeRowSpec(
             typeID: ObjectIdentifier(V.self),
+            prewarmPolicy: prewarmPolicy,
             make: { V() },
             configure: { view, width in configure(view as! V, width) },
             measure: { view, width in (view as! V).measuredHeight(forWidth: width) },

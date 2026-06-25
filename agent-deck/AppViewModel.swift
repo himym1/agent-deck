@@ -2377,15 +2377,14 @@ final class AppViewModel: NSObject {
             repository: project.gitHubRemote?.nameWithOwner
         )
         // Settle selection synchronously: createSession already inserts, sorts,
-        // and assigns `selectedSessionID`; revealSessionGroup expands the
-        // target's group so the row is on screen; selectPiAgentSession commits
-        // the sidebar tab. A second re-assertion on the next runloop was only
-        // here to win the fight against the per-project `selectedProjectPath`
-        // reconciler, which is gone now (see
-        // `reconcileSelectedSessionWithProjectScope`). Re-running it a frame
-        // later rebuilt the cached sections a second time and visibly jumped
-        // the freshly-created row — so it has been removed.
-        revealSessionGroup(session)
+        // and assigns `selectedSessionID`; uncollapse the target's group so the
+        // new row can render, but do not activate "Show more". New sessions are
+        // already in the preview set, and expanding here makes the 5-row
+        // "Show less" list unexpectedly become the full list when pressing +.
+        // selectPiAgentSession commits the sidebar tab. A second re-assertion on
+        // the next runloop was only here to win the fight against the old
+        // per-project `selectedProjectPath` reconciler, which is gone now.
+        uncollapseSessionGroup(session)
         selectPiAgentSession(session.id)
     }
 
@@ -2618,6 +2617,19 @@ final class AppViewModel: NSObject {
         ).flatMap(\.items)
     }
 
+    private func sessionGroupID(for session: PiAgentSessionRecord) -> String {
+        projectByPath[session.projectPath] != nil
+            ? session.projectPath
+            : PiAgentSessionGrouping.otherSectionID
+    }
+
+    /// Ensure the group owning `session` is not disclosure-collapsed without
+    /// changing its Show more/less state. Used for newly-created sessions, which
+    /// are already visible in the capped preview.
+    private func uncollapseSessionGroup(_ session: PiAgentSessionRecord) {
+        collapsedProjects.remove(sessionGroupID(for: session))
+    }
+
     /// Auto-reveal the group owning `session` so it lands on a rendered row:
     /// expand a disclosure-collapsed group and activate "Show more" for a
     /// capped one. State is shared on the view model so every mounted session
@@ -2625,9 +2637,7 @@ final class AppViewModel: NSObject {
     /// a hidden target visible (e.g. notification tap); keyboard navigation no
     /// longer calls this.
     private func revealSessionGroup(_ session: PiAgentSessionRecord) {
-        let groupID = projectByPath[session.projectPath] != nil
-            ? session.projectPath
-            : PiAgentSessionGrouping.otherSectionID
+        let groupID = sessionGroupID(for: session)
         collapsedProjects.remove(groupID)
         expandedProjects.insert(groupID)
     }
@@ -3383,6 +3393,7 @@ final class AppViewModel: NSObject {
 
     @discardableResult
     func launchLoop(session: PiAgentSessionRecord, draft: LoopDraft, stopExistingActive: Bool) async -> LoopRun? {
+        prepareSessionForLoopLaunch(session: session, draft: draft)
         switch draft.structure {
         case .singleAgent:
             return await launchSingleAgentLoop(session: session, draft: draft, stopExistingActive: stopExistingActive)
@@ -3397,6 +3408,16 @@ final class AppViewModel: NSObject {
         case .humanApproval:
             return piAgentSessionStore.launchSmokeLoop(sessionID: session.id, projectPath: session.projectPath, draft: draft, stopExistingActive: stopExistingActive)
         }
+    }
+
+    private func prepareSessionForLoopLaunch(session: PiAgentSessionRecord, draft: LoopDraft) {
+        piAgentSessionStore.updateSession(session.id, bumpUpdatedAt: false) { record in
+            // A loop uses its own configured child agents; the composer-time Deck
+            // agent picker should not continue to advertise a draft-only launch
+            // selection once the loop has started.
+            record.agentSelection = nil
+        }
+        schedulePiAgentTitleGenerationIfNeeded(for: session, firstMessage: draft.goal)
     }
 
     @discardableResult
@@ -3574,7 +3595,7 @@ final class AppViewModel: NSObject {
             let expectedOutcome = forcedExpectedOutcome ?? (useWorktreeIsolation ? PiSubagentExpectedOutcome.editFilesInWorktree : (defaultOutcomeByAgent[item.0] ?? .reportOnly))
             return PiSubagentChildRecord(
                 id: UUID(), runID: runID, index: index, agentName: item.0, task: item.1,
-                status: .queued, model: nil,
+                status: .queued, model: nil, thinking: nil,
                 expectedOutcome: expectedOutcome, requestedOutputPath: nil, allowOverwrite: false,
                 currentTool: nil, inputTokens: nil, outputTokens: nil, totalTokens: nil, toolCount: nil, durationMs: nil,
                 artifactDirectory: nil, sessionFile: nil, outputPath: nil, worktreePath: nil, launchCommand: nil, executionRunID: nil,
@@ -3712,6 +3733,8 @@ final class AppViewModel: NSObject {
         updateNativeGraphChild(graphRunID, parentSessionID: parentSessionID, index: index) { child in
             child.status = childResult.status
             child.executionRunID = childResult.id
+            child.model = childResult.model ?? childResult.child?.model
+            child.thinking = childResult.thinking ?? childResult.child?.thinking
             child.artifactDirectory = childResult.artifactDirectory
             child.outputPath = childResult.outputPath
             child.worktreePath = childResult.worktreePath
@@ -3815,7 +3838,6 @@ final class AppViewModel: NSObject {
     /// the (mcpEnabled, project) key changes. No-op otherwise so file-watch refreshes
     /// don't churn server processes. Pass `forced: true` after the user edits config.
     func refreshMCPConfigurationIfNeeded(projectURL: URL?, forced: Bool = false) {
-        configureMCPBrandIcon()
         let enabled = appSettings.mcpEnabled
         let key = "\(enabled)#\(projectURL?.path ?? "")"
         if !forced, key == mcpLastRefreshKey { return }
@@ -3883,6 +3905,7 @@ final class AppViewModel: NSObject {
     /// Runs the OAuth Connect flow for a remote server (opens the browser). Returns an
     /// error message on failure, or nil on success.
     func connectMCPServer(_ entry: MCPServerEntry) async -> String? {
+        configureMCPBrandIcon()
         guard let url = entry.config.url, !url.isEmpty else { return "This server has no URL to connect to." }
         do {
             try await MCPOAuthService.shared.connect(serverName: entry.name, serverURLString: url)
@@ -3905,7 +3928,8 @@ final class AppViewModel: NSObject {
     }
 
     /// Renders the app icon to a small base64 PNG once, so the OAuth loopback success
-    /// page can show the brand mark. Cheap + idempotent (runs on the main actor).
+    /// page can show the brand mark. Idempotent; run lazily only when OAuth is starting
+    /// so startup/file-watch refreshes don't spend main-thread time encoding the icon.
     private func configureMCPBrandIcon() {
         guard MCPLoopbackServer.brandIconDataURI == nil else { return }
         guard let icon = NSApp.applicationIconImage ?? NSImage(named: NSImage.applicationIconName) else { return }
@@ -6573,7 +6597,11 @@ final class AppViewModel: NSObject {
 
     func setSubagentsEnabledForSelectedSession(_ isEnabled: Bool) {
         guard let session = piAgentSessionStore.selectedSession else { return }
-        piAgentSessionStore.updateSession(session.id, bumpUpdatedAt: false) { session in
+        setSubagentsEnabled(isEnabled, forSessionID: session.id)
+    }
+
+    func setSubagentsEnabled(_ isEnabled: Bool, forSessionID sessionID: UUID) {
+        piAgentSessionStore.updateSession(sessionID, bumpUpdatedAt: false) { session in
             session.subagentsEnabled = isEnabled
         }
     }
@@ -8268,6 +8296,18 @@ final class AppViewModel: NSObject {
         reconcileSnapshotsFromPreferences()
     }
 
+    func assignAgentNames(_ names: [String], toProjectPath projectPath: String) {
+        let cleaned = names
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !projectPath.isEmpty, !cleaned.isEmpty else { return }
+        for name in Set(cleaned) {
+            projectPreferencesStore.setAssignedAgent(name, assigned: true, for: projectPath)
+        }
+        applyProjectPreferenceChanges()
+        reconcileSnapshotsFromPreferences()
+    }
+
     func enableAgentGlobally(_ agent: AgentRecord) throws {
         guard appSettingsController.setDefaultAgent(agent.name, enabled: true) else { return }
         appSettings = appSettingsController.settings
@@ -8895,7 +8935,6 @@ final class AppViewModel: NSObject {
     }
 
     func requestNewLoopDefinition() {
-        selectedLoopDefinitionID = nil
         newLoopRequestID = UUID()
     }
 
@@ -8934,7 +8973,7 @@ final class AppViewModel: NSObject {
     }
 
     func retryLoopRun(_ run: LoopRun) {
-        guard !run.isActive, run.status == .failed else { return }
+        guard !run.isActive, run.status == .failed, !run.presentsGoalNotMetOutcome else { return }
         guard let session = piAgentSessionStore.sessions.first(where: { $0.id == run.sessionID }) else { return }
         let draft = loopDraft(from: run)
         Task { @MainActor in
@@ -8945,6 +8984,8 @@ final class AppViewModel: NSObject {
     private func loopDraft(from run: LoopRun) -> LoopDraft {
         LoopDraft(
             goal: run.goal,
+            launchContext: run.launchContext,
+            launchContextScope: run.launchContextScope,
             structure: run.structure,
             writeTarget: run.writeTarget,
             maxIterations: run.maxIterations,
@@ -8970,6 +9011,8 @@ final class AppViewModel: NSObject {
             name: request.name,
             description: request.description,
             goalTemplate: draft.goal,
+            launchContext: draft.launchContext,
+            launchContextScope: draft.launchContextScope,
             structure: draft.structure,
             writeTarget: draft.writeTarget,
             maxIterations: draft.maxIterations,
