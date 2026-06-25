@@ -4426,6 +4426,10 @@ struct PiAgentScreen: View {
     @State private var sessionActivityCache: [UUID: PiAgentSessionGitActivity] = [:]
     @State private var isUIRequestSheetPresented = false
     @State private var isSupervisorRequestSheetPresented = false
+#if DEBUG
+    @State private var didStartPickerStress = false
+    @State private var pickerStressExpansionRequest = false
+#endif
     @State private var frozenRuntimeFooterSession: PiAgentSessionRecord?
     @State private var stabilizedProcessingMessage: String?
     @State private var processingMessageUpdateTask: Task<Void, Never>?
@@ -4471,6 +4475,9 @@ struct PiAgentScreen: View {
             updateStabilizedProcessingMessage(selectedSessionProcessingMessage)
             Task { @MainActor in
                 await Task.yield()
+#if DEBUG
+                await runPickerStressIfRequested()
+#endif
                 viewModel.acknowledgeVisibleSelectedPiAgentSession()
                 scheduleTranscriptCacheUpdate()
                 viewModel.prepareRepoChangesForSelectedPiAgentSession()
@@ -4913,6 +4920,60 @@ struct PiAgentScreen: View {
         })
     }
 
+#if DEBUG
+    private var isPickerStressRequested: Bool {
+        ProcessInfo.processInfo.environment["AGENTDECK_PICKER_STRESS"] != nil
+    }
+
+    @MainActor
+    private func runPickerStressIfRequested() async {
+        guard isPickerStressRequested, !didStartPickerStress else { return }
+        didStartPickerStress = true
+
+        viewModel.openPiAgentScreen()
+        let selected = store.selectedSession
+        let needsDraft = selected?.status != .draft
+            || selected?.isAgentBound == true
+            || selected.flatMap({ store.activeLoopRun(for: $0.id) }) != nil
+        if needsDraft {
+            pickerStressLog("PICKER_STRESS PREPARE creating draft selected=\(selected?.id.uuidString ?? "none") status=\(selected?.status.rawValue ?? "none")")
+            viewModel.createPiAgentDraftForSelectedProject()
+        } else {
+            pickerStressLog("PICKER_STRESS PREPARE reusing draft session=\(selected?.id.uuidString ?? "none")")
+        }
+
+        if store.selectedSession?.subagentsEnabled == false {
+            viewModel.setSubagentsEnabledForSelectedDraftAndNewSessions(true)
+            pickerStressLog("PICKER_STRESS PREPARE enabled subagents session=\(store.selectedSession?.id.uuidString ?? "none")")
+        }
+
+        let sessionID = store.selectedSession?.id.uuidString ?? "none"
+        let rounds = 24
+        pickerStressLog("PICKER_STRESS START session=\(sessionID) rounds=\(rounds)")
+        try? await Task.sleep(for: .milliseconds(500))
+
+        for index in 0..<rounds {
+            guard !Task.isCancelled else {
+                pickerStressLog("PICKER_STRESS CANCELLED round=\(index)")
+                return
+            }
+            let expanded = index.isMultiple(of: 2)
+            pickerStressExpansionRequest = expanded
+            pickerStressLog("PICKER_STRESS TOGGLE round=\(index + 1)/\(rounds) expanded=\(expanded)")
+            try? await Task.sleep(for: .milliseconds(260))
+        }
+
+        try? await Task.sleep(for: .milliseconds(500))
+        pickerStressLog("PICKER_STRESS COMPLETE rounds=\(rounds)")
+        NSApp.terminate(nil)
+    }
+
+    private func pickerStressLog(_ line: String) {
+        fputs(line + "\n", stderr)
+        TranscriptScrollProfiler.fileLog(line)
+    }
+#endif
+
     private var visibleSessionActivityByID: [UUID: PiAgentSessionGitActivity] {
         var map: [UUID: PiAgentSessionGitActivity] = [:]
         for session in visibleSessions where sessionActivityCache[session.id] != nil {
@@ -4962,8 +5023,17 @@ struct PiAgentScreen: View {
                 if let session = store.selectedSession,
                    session.status == .draft,
                    store.activeLoopRun(for: session.id) == nil {
+#if DEBUG
+                    PiAgentSessionSubagentPickerCard(
+                        viewModel: viewModel,
+                        session: session,
+                        stressExpansionRequest: isPickerStressRequested ? pickerStressExpansionRequest : nil
+                    )
+                    .id(session.id)
+#else
                     PiAgentSessionSubagentPickerCard(viewModel: viewModel, session: session)
                         .id(session.id)
+#endif
                 }
 
                 if let request = store.selectedUIRequest {

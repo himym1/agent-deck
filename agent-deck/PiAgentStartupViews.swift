@@ -474,9 +474,14 @@ struct PiAgentSessionSubagentPickerCard: View {
     let session: PiAgentSessionRecord
 
     @State private var isExpanded = false
-    @State private var isExpandedContentVisible = false
+    @State private var isExpansionOverlayVisible = false
+    @State private var visualExpansion: CGFloat = 0
+    @State private var collapsedCardHeight: CGFloat = 0
     @State private var expansionGeneration = 0
     @State private var isAddSheetPresented = false
+#if DEBUG
+    var stressExpansionRequest: Bool? = nil
+#endif
 
     static let accent = Color.teal
 
@@ -565,7 +570,11 @@ struct PiAgentSessionSubagentPickerCard: View {
             // which reads as the card reloading.
             let enabled = session.subagentsEnabled
             let data = enabled ? resolve() : nil
+#if DEBUG
+            let isHidden = stressExpansionRequest == nil && enabled && data?.rows.isEmpty == true && data?.addable.isEmpty == true
+#else
             let isHidden = enabled && data?.rows.isEmpty == true && data?.addable.isEmpty == true
+#endif
             // Fade in on cold start: the universe is briefly empty while the
             // first project scan runs, then populates. Softens that handoff.
             Group {
@@ -580,6 +589,24 @@ struct PiAgentSessionSubagentPickerCard: View {
                             }
                         }
                     }
+                    .background(PiAgentPickerHeightReader { height in
+                        guard !isExpanded else { return }
+                        DispatchQueue.main.async {
+                            guard !isExpanded else { return }
+                            collapsedCardHeight = height
+                        }
+                    })
+                    .overlay(alignment: .top) {
+                        if isExpansionOverlayVisible, let data {
+                            expansionOverlay(data)
+                        }
+                    }
+#if DEBUG
+                    .onChange(of: stressExpansionRequest) { _, expanded in
+                        guard let expanded else { return }
+                        setExpanded(expanded)
+                    }
+#endif
                     .sheet(isPresented: $isAddSheetPresented) {
                         if let data {
                             PiAgentAddAgentsSheet(
@@ -672,26 +699,70 @@ struct PiAgentSessionSubagentPickerCard: View {
     }
 
     private func setExpanded(_ expanded: Bool) {
+        guard expanded != isExpanded || isExpansionOverlayVisible else { return }
         expansionGeneration += 1
         let generation = expansionGeneration
         if expanded {
-            isExpanded = true
-            isExpandedContentVisible = false
+            setLayoutExpanded(false)
+            isExpansionOverlayVisible = true
+            visualExpansion = 0
             DispatchQueue.main.async {
-                guard generation == expansionGeneration, isExpanded else { return }
-                withAnimation(.easeOut(duration: 0.18)) {
-                    isExpandedContentVisible = true
+                guard generation == expansionGeneration else { return }
+                withAnimation(.easeOut(duration: 0.22)) {
+                    visualExpansion = 1
                 }
             }
-        } else {
-            withAnimation(.easeIn(duration: 0.12)) {
-                isExpandedContentVisible = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                guard generation == expansionGeneration else { return }
+                setLayoutExpanded(true)
+                isExpansionOverlayVisible = false
+                visualExpansion = 0
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                guard generation == expansionGeneration, !isExpandedContentVisible else { return }
-                isExpanded = false
+        } else {
+            isExpansionOverlayVisible = true
+            visualExpansion = 1
+            setLayoutExpanded(false)
+            DispatchQueue.main.async {
+                guard generation == expansionGeneration else { return }
+                withAnimation(.easeIn(duration: 0.16)) {
+                    visualExpansion = 0
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+                guard generation == expansionGeneration else { return }
+                isExpansionOverlayVisible = false
             }
         }
+    }
+
+    private func setLayoutExpanded(_ expanded: Bool) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            isExpanded = expanded
+        }
+    }
+
+    private func expansionOverlay(_ data: Resolved) -> some View {
+        AppRowCard {
+            VStack(alignment: .leading, spacing: 0) {
+                header(data)
+                expandedContent(data)
+            }
+        }
+        .mask(alignment: .top) {
+            GeometryReader { proxy in
+                let fullHeight = proxy.size.height
+                let collapsedHeight = collapsedCardHeight > 0 ? min(collapsedCardHeight, fullHeight) : min(64, fullHeight)
+                let revealedHeight = collapsedHeight + ((fullHeight - collapsedHeight) * visualExpansion)
+                Rectangle()
+                    .frame(height: revealedHeight, alignment: .top)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+        }
+        .opacity(visualExpansion == 0 ? 0.01 : 1)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private func expandedContent(_ data: Resolved) -> some View {
@@ -699,10 +770,6 @@ struct PiAgentSessionSubagentPickerCard: View {
             Divider().padding(.vertical, 10)
             agentList(data)
         }
-        .opacity(isExpandedContentVisible ? 1 : 0)
-        .offset(y: isExpandedContentVisible ? 0 : -4)
-        .allowsHitTesting(isExpandedContentVisible)
-        .accessibilityHidden(!isExpandedContentVisible)
     }
 
     private func agentList(_ data: Resolved) -> some View {
@@ -870,6 +937,18 @@ struct PiAgentSessionSubagentPickerCard: View {
             try viewModel.saveAgentDraft(draft, for: agent)
         } catch {
             NSSound.beep()
+        }
+    }
+}
+
+private struct PiAgentPickerHeightReader: View {
+    var onChange: (CGFloat) -> Void
+
+    var body: some View {
+        GeometryReader { proxy in
+            Color.clear
+                .onAppear { onChange(proxy.size.height) }
+                .onChange(of: proxy.size.height) { _, height in onChange(height) }
         }
     }
 }
