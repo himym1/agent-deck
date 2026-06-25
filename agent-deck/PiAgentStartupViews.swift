@@ -868,10 +868,11 @@ private struct PiAgentPickerAvatar: View {
 
 /// One agent in the picker card: check + avatar + name + inline launch
 /// (model + thinking) chips, with a soft hover fill. The 1:1 action is a small
-/// button revealed on row hover only, labeled so it doesn't rely on the
-/// paperplane glyph alone. Unchecked rows render desaturated and dimmed,
-/// matching the session list's "seen" treatment. The row has a FIXED height so
-/// nothing shifts when hovering or when launch chips change state.
+/// glass capsule revealed on row hover only — same treatment as the session
+/// rows' hover delete — labeled so it doesn't rely on the paperplane glyph
+/// alone. Unchecked rows render desaturated and dimmed, matching the session
+/// list's "seen" treatment. The row has a FIXED height so nothing shifts when
+/// hovering or when launch chips change state.
 private struct PiAgentSubagentPickerRow: View {
     let agent: EffectiveAgentRecord
     let checked: Bool
@@ -942,6 +943,7 @@ private struct PiAgentSubagentPickerRow: View {
                 .fill(AppTheme.contentSubtleFill)
                 .opacity(isHovered ? 1 : 0)
         )
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
         .onHover { isHovered = $0 }
     }
 
@@ -1024,7 +1026,7 @@ private struct PiAgentPickerLaunchControls: View {
             .foregroundStyle(.primary)
             .padding(.horizontal, 8)
             .frame(maxWidth: .infinity, minHeight: Self.chipHeight, maxHeight: Self.chipHeight, alignment: .leading)
-            .background(chipBackground)
+            .glassEffect(.regular, in: Capsule(style: .continuous))
             .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
@@ -1051,7 +1053,7 @@ private struct PiAgentPickerLaunchControls: View {
             .foregroundStyle(.primary)
             .padding(.horizontal, 8)
             .frame(maxWidth: .infinity, minHeight: Self.chipHeight, maxHeight: Self.chipHeight, alignment: .leading)
-            .background(chipBackground)
+            .glassEffect(.regular, in: Capsule(style: .continuous))
             .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
@@ -1059,12 +1061,6 @@ private struct PiAgentPickerLaunchControls: View {
         .popover(isPresented: $isThinkingPresented) {
             thinkingPopover
         }
-    }
-
-    private var chipBackground: some View {
-        Capsule(style: .continuous)
-            .fill(AppTheme.contentSubtleFill.opacity(0.72))
-            .stroke(AppTheme.contentStroke.opacity(0.85), lineWidth: 0.5)
     }
 
     private var modelPopover: some View {
