@@ -474,9 +474,7 @@ struct PiAgentSessionSubagentPickerCard: View {
     let session: PiAgentSessionRecord
 
     @State private var isExpanded = false
-    @State private var isExpansionOverlayVisible = false
-    @State private var visualExpansion: CGFloat = 0
-    @State private var collapsedCardHeight: CGFloat = 0
+    @State private var isExpandedContentVisible = false
     @State private var expansionGeneration = 0
     @State private var isAddSheetPresented = false
 #if DEBUG
@@ -484,6 +482,9 @@ struct PiAgentSessionSubagentPickerCard: View {
 #endif
 
     static let accent = Color.teal
+    private static let expandContentAnimation = Animation.easeOut(duration: 0.16)
+    private static let collapseContentAnimation = Animation.easeInOut(duration: 0.12)
+    private static let collapseSnapDelay: TimeInterval = 0.12
 
     /// All render-time data, resolved once per `body` evaluation so the
     /// catalog scan in `selectableAgentUniverse` runs exactly once — not once
@@ -586,19 +587,11 @@ struct PiAgentSessionSubagentPickerCard: View {
                             header(data)
                             if isExpanded, let data {
                                 expandedContent(data)
+                                    .opacity(isExpandedContentVisible ? 1 : 0)
+                                    .offset(y: isExpandedContentVisible ? 0 : -6)
+                                    .allowsHitTesting(isExpandedContentVisible)
+                                    .accessibilityHidden(!isExpandedContentVisible)
                             }
-                        }
-                    }
-                    .background(PiAgentPickerHeightReader { height in
-                        guard !isExpanded else { return }
-                        DispatchQueue.main.async {
-                            guard !isExpanded else { return }
-                            collapsedCardHeight = height
-                        }
-                    })
-                    .overlay(alignment: .top) {
-                        if isExpansionOverlayVisible, let data {
-                            expansionOverlay(data)
                         }
                     }
 #if DEBUG
@@ -699,38 +692,25 @@ struct PiAgentSessionSubagentPickerCard: View {
     }
 
     private func setExpanded(_ expanded: Bool) {
-        guard expanded != isExpanded || isExpansionOverlayVisible else { return }
+        guard expanded != isExpanded || expanded != isExpandedContentVisible else { return }
         expansionGeneration += 1
         let generation = expansionGeneration
         if expanded {
-            setLayoutExpanded(false)
-            isExpansionOverlayVisible = true
-            visualExpansion = 0
+            isExpandedContentVisible = false
+            setLayoutExpanded(true)
             DispatchQueue.main.async {
                 guard generation == expansionGeneration else { return }
-                withAnimation(.easeOut(duration: 0.22)) {
-                    visualExpansion = 1
+                withAnimation(Self.expandContentAnimation) {
+                    isExpandedContentVisible = true
                 }
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-                guard generation == expansionGeneration else { return }
-                setLayoutExpanded(true)
-                isExpansionOverlayVisible = false
-                visualExpansion = 0
             }
         } else {
-            isExpansionOverlayVisible = true
-            visualExpansion = 1
-            setLayoutExpanded(false)
-            DispatchQueue.main.async {
-                guard generation == expansionGeneration else { return }
-                withAnimation(.easeIn(duration: 0.16)) {
-                    visualExpansion = 0
-                }
+            withAnimation(Self.collapseContentAnimation) {
+                isExpandedContentVisible = false
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.collapseSnapDelay) {
                 guard generation == expansionGeneration else { return }
-                isExpansionOverlayVisible = false
+                setLayoutExpanded(false)
             }
         }
     }
@@ -741,28 +721,6 @@ struct PiAgentSessionSubagentPickerCard: View {
         withTransaction(transaction) {
             isExpanded = expanded
         }
-    }
-
-    private func expansionOverlay(_ data: Resolved) -> some View {
-        AppRowCard {
-            VStack(alignment: .leading, spacing: 0) {
-                header(data)
-                expandedContent(data)
-            }
-        }
-        .mask(alignment: .top) {
-            GeometryReader { proxy in
-                let fullHeight = proxy.size.height
-                let collapsedHeight = collapsedCardHeight > 0 ? min(collapsedCardHeight, fullHeight) : min(64, fullHeight)
-                let revealedHeight = collapsedHeight + ((fullHeight - collapsedHeight) * visualExpansion)
-                Rectangle()
-                    .frame(height: revealedHeight, alignment: .top)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            }
-        }
-        .opacity(visualExpansion == 0 ? 0.01 : 1)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 
     private func expandedContent(_ data: Resolved) -> some View {
@@ -937,18 +895,6 @@ struct PiAgentSessionSubagentPickerCard: View {
             try viewModel.saveAgentDraft(draft, for: agent)
         } catch {
             NSSound.beep()
-        }
-    }
-}
-
-private struct PiAgentPickerHeightReader: View {
-    var onChange: (CGFloat) -> Void
-
-    var body: some View {
-        GeometryReader { proxy in
-            Color.clear
-                .onAppear { onChange(proxy.size.height) }
-                .onChange(of: proxy.size.height) { _, height in onChange(height) }
         }
     }
 }
