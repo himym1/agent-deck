@@ -1728,19 +1728,20 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// `ObservableObject` synchronously emits "Publishing changes from within
         /// view updates"). Defer to the next runloop when inside that pass.
         private func applyRailModel(items: [UserQuestionNavigationRailItem], width: CGFloat, railHeight: CGFloat, isSliding: Bool) {
-            let perform: @MainActor @Sendable () -> Void = { [weak self] in
-                guard let self, let model = self.questionRailModel else { return }
+            if isInsideNSViewUpdate {
+                Task { @MainActor [weak self, items] in
+                    guard let self, let model = self.questionRailModel else { return }
+                    model.items = items
+                    model.availableWidth = width
+                    model.railHeight = railHeight
+                    model.isSliding = isSliding
+                }
+            } else {
+                guard let model = questionRailModel else { return }
                 model.items = items
                 model.availableWidth = width
                 model.railHeight = railHeight
                 model.isSliding = isSliding
-            }
-            if isInsideNSViewUpdate {
-                Task { @MainActor in
-                    perform()
-                }
-            } else {
-                perform()
             }
         }
 
