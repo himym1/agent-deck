@@ -474,6 +474,8 @@ struct PiAgentSessionSubagentPickerCard: View {
     let session: PiAgentSessionRecord
 
     @State private var isExpanded = false
+    @State private var isExpandedContentVisible = false
+    @State private var expansionGeneration = 0
     @State private var isAddSheetPresented = false
 
     static let accent = Color.teal
@@ -574,8 +576,7 @@ struct PiAgentSessionSubagentPickerCard: View {
                         VStack(alignment: .leading, spacing: 0) {
                             header(data)
                             if isExpanded, let data {
-                                Divider().padding(.vertical, 10)
-                                agentList(data)
+                                expandedContent(data)
                             }
                         }
                     }
@@ -611,7 +612,7 @@ struct PiAgentSessionSubagentPickerCard: View {
         return HStack(spacing: 10) {
             Button {
                 guard enabled else { return }
-                isExpanded.toggle()
+                setExpanded(!isExpanded)
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "paperplane")
@@ -635,12 +636,13 @@ struct PiAgentSessionSubagentPickerCard: View {
             enabledSwitch
             if enabled {
                 Button {
-                    isExpanded.toggle()
+                    setExpanded(!isExpanded)
                 } label: {
                     Image(systemName: "chevron.down")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppTheme.mutedText)
                         .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                        .animation(.easeInOut(duration: 0.18), value: isExpanded)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -657,7 +659,7 @@ struct PiAgentSessionSubagentPickerCard: View {
         Toggle("Deck agents", isOn: Binding(
             get: { session.subagentsEnabled },
             set: { newValue in
-                if !newValue { isExpanded = false }
+                if !newValue { setExpanded(false) }
                 viewModel.setSubagentsEnabledForSelectedDraftAndNewSessions(newValue)
             }
         ))
@@ -667,6 +669,40 @@ struct PiAgentSessionSubagentPickerCard: View {
         .help(session.subagentsEnabled
             ? "Deck agents are on. Applies to this session and as the default for new sessions"
             : "Deck agents are off. Applies to this session and as the default for new sessions")
+    }
+
+    private func setExpanded(_ expanded: Bool) {
+        expansionGeneration += 1
+        let generation = expansionGeneration
+        if expanded {
+            isExpanded = true
+            isExpandedContentVisible = false
+            DispatchQueue.main.async {
+                guard generation == expansionGeneration, isExpanded else { return }
+                withAnimation(.easeOut(duration: 0.18)) {
+                    isExpandedContentVisible = true
+                }
+            }
+        } else {
+            withAnimation(.easeIn(duration: 0.12)) {
+                isExpandedContentVisible = false
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                guard generation == expansionGeneration, !isExpandedContentVisible else { return }
+                isExpanded = false
+            }
+        }
+    }
+
+    private func expandedContent(_ data: Resolved) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Divider().padding(.vertical, 10)
+            agentList(data)
+        }
+        .opacity(isExpandedContentVisible ? 1 : 0)
+        .offset(y: isExpandedContentVisible ? 0 : -4)
+        .allowsHitTesting(isExpandedContentVisible)
+        .accessibilityHidden(!isExpandedContentVisible)
     }
 
     private func agentList(_ data: Resolved) -> some View {
