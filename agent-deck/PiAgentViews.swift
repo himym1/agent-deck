@@ -777,21 +777,21 @@ private struct UserQuestionNavigationRail: View {
             onSelect(item.id)
         } label: {
             HStack(spacing: 8) {
-                Text(displayText(for: item))
-                    .font(AppTheme.Font.caption.weight(.medium))
-                    .foregroundStyle(textColor(isActive: isActive, isHovered: isHovered))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .opacity(isHovered ? 1 : 0)
-                    .offset(x: isHovered ? 0 : 8)
-                    .accessibilityHidden(!isHovered)
+                if isHovered {
+                    Text(displayText(for: item))
+                        .font(AppTheme.Font.caption.weight(.medium))
+                        .foregroundStyle(textColor(isActive: isActive, isHovered: isHovered))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: expandedRowWidth - 44, alignment: .trailing)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
 
                 mark(isActive: isActive, isHovered: isHovered, isRailHovered: hoveredID != nil)
             }
-            // Constant height: hover changes width/color only, never the row's
-            // vertical metrics, so neighboring marks never shift under the pointer.
-            .frame(width: isHovered ? expandedRowWidth : collapsedMarkWidth, alignment: .trailing)
+            // The host remains fixed-width to avoid hover/layout feedback loops,
+            // but the visible hover pill hugs its content inside that stable host.
+            .frame(maxWidth: isHovered ? expandedRowWidth : collapsedMarkWidth, alignment: .trailing)
             .frame(height: TranscriptFloatingControlGeometry.questionRailRowHeight)
             .padding(.leading, isHovered ? 11 : 0)
             .padding(.trailing, isHovered ? 7 : 0)
