@@ -474,8 +474,6 @@ struct PiAgentSessionSubagentPickerCard: View {
     let session: PiAgentSessionRecord
 
     @State private var isExpanded = false
-    @State private var isExpandedContentVisible = false
-    @State private var expansionGeneration = 0
     @State private var isAddSheetPresented = false
 
     static let accent = Color.teal
@@ -577,6 +575,13 @@ struct PiAgentSessionSubagentPickerCard: View {
                             header(data)
                             if isExpanded, let data {
                                 expandedContent(data)
+                                    .transition(.asymmetric(
+                                        insertion: .opacity
+                                            .combined(with: .scale(scale: 0.985, anchor: .top))
+                                            .combined(with: .move(edge: .top)),
+                                        removal: .opacity
+                                            .combined(with: .scale(scale: 0.985, anchor: .top))
+                                    ))
                             }
                         }
                     }
@@ -672,25 +677,8 @@ struct PiAgentSessionSubagentPickerCard: View {
     }
 
     private func setExpanded(_ expanded: Bool) {
-        expansionGeneration += 1
-        let generation = expansionGeneration
-        if expanded {
-            isExpanded = true
-            isExpandedContentVisible = false
-            DispatchQueue.main.async {
-                guard generation == expansionGeneration, isExpanded else { return }
-                withAnimation(.easeOut(duration: 0.18)) {
-                    isExpandedContentVisible = true
-                }
-            }
-        } else {
-            withAnimation(.easeIn(duration: 0.12)) {
-                isExpandedContentVisible = false
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                guard generation == expansionGeneration, !isExpandedContentVisible else { return }
-                isExpanded = false
-            }
+        withAnimation(.easeInOut(duration: 0.18)) {
+            isExpanded = expanded
         }
     }
 
@@ -699,10 +687,7 @@ struct PiAgentSessionSubagentPickerCard: View {
             Divider().padding(.vertical, 10)
             agentList(data)
         }
-        .opacity(isExpandedContentVisible ? 1 : 0)
-        .offset(y: isExpandedContentVisible ? 0 : -4)
-        .allowsHitTesting(isExpandedContentVisible)
-        .accessibilityHidden(!isExpandedContentVisible)
+        .clipped()
     }
 
     private func agentList(_ data: Resolved) -> some View {
