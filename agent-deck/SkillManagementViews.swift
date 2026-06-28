@@ -2355,6 +2355,7 @@ private struct SkillCollectionEditorSheet: View {
     @State private var draftName = ""
     @State private var draftDescription = ""
     @State private var selectedSkillIDs: Set<SkillRecord.ID> = []
+    @State private var skillSearchText = ""
     @State private var pendingDelete: SkillCollectionRecord?
 
     private var collections: [SkillCollectionRecord] {
@@ -2375,6 +2376,25 @@ private struct SkillCollectionEditorSheet: View {
             ?? records.first
         }
         .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var filteredCatalogSkills: [SkillRecord] {
+        let query = skillSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return catalogSkills }
+        return catalogSkills.filter { skill in
+            [
+                skill.name,
+                skill.description ?? "",
+                skill.source.displayName,
+                skill.source.path,
+                skill.filePath
+            ]
+            .contains { $0.lowercased().contains(query) }
+        }
+    }
+
+    private var isSkillSearchActive: Bool {
+        !skillSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var canSave: Bool {
@@ -2436,33 +2456,33 @@ private struct SkillCollectionEditorSheet: View {
 
     private var collectionSidebar: some View {
         let memberCountsByID = collectionMemberCountsByID
-        return AppSidebarPane(title: "Collections") {
-            VStack(alignment: .leading, spacing: 0) {
-                NewCollectionSidebarButton(action: beginNewCollection)
-                    .padding(.horizontal, 8)
-                    .padding(.top, 10)
-                    .padding(.bottom, 6)
+        return VStack(alignment: .leading, spacing: 0) {
+            NewCollectionSidebarButton(action: beginNewCollection)
+                .padding(.horizontal, 8)
+                .padding(.top, 10)
+                .padding(.bottom, 6)
 
-                AppList(
-                    sections: [AppListSection(
-                        id: "collections",
-                        title: "Collections",
-                        items: collections,
-                        emptyMessage: "No collections yet — use New Collection to create one."
-                    )],
-                    selection: .single(Binding(
-                        get: { selectedCollectionID },
-                        set: { id in
-                            guard let id, let collection = collections.first(where: { $0.id == id }) else { return }
-                            load(collection)
-                        }
-                    )),
-                    bottomContentInset: 12
-                ) { collection in
-                    collectionSidebarRowContent(collection, skillCount: memberCountsByID[collection.id] ?? 0)
-                }
+            AppList(
+                sections: [AppListSection(
+                    id: "collections",
+                    title: "Collections",
+                    items: collections,
+                    emptyMessage: "No collections yet — use New Collection to create one."
+                )],
+                selection: .single(Binding(
+                    get: { selectedCollectionID },
+                    set: { id in
+                        guard let id, let collection = collections.first(where: { $0.id == id }) else { return }
+                        load(collection)
+                    }
+                )),
+                bottomContentInset: 12
+            ) { collection in
+                collectionSidebarRowContent(collection, skillCount: memberCountsByID[collection.id] ?? 0)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(AppTheme.windowBackground)
     }
 
     private func collectionSidebarRowContent(_ collection: SkillCollectionRecord, skillCount: Int) -> some View {
@@ -2510,12 +2530,39 @@ private struct SkillCollectionEditorSheet: View {
         }
     }
 
+    private var skillSearchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(AppTheme.mutedText)
+            TextField("Search skills by name, description, source, or path", text: $skillSearchText)
+                .textFieldStyle(.plain)
+                .appBrandTint()
+            if isSkillSearchActive {
+                Button {
+                    skillSearchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(AppTheme.mutedText)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear skill search")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(AppTheme.contentStroke.opacity(0.8), lineWidth: 1)
+        )
+    }
+
     private var editorContent: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
                 AppCard(title: selectedCollection == nil ? "New Collection" : "Collection") {
                     VStack(alignment: .leading, spacing: 12) {
-                        AppTextField(text: $draftName, placeholder: "Collection name", font: .title3.weight(.semibold))
+                        AppTextField(text: $draftName, placeholder: "Collection name")
                         AppTextField(text: $draftDescription, placeholder: "Description", axis: .vertical)
                             .lineLimit(2...4)
                         Text("Collections are explicit user-organized resources. Imported repository skills are not included unless you add them here or enable Import as collection during import.")
@@ -2526,32 +2573,44 @@ private struct SkillCollectionEditorSheet: View {
                 }
 
                 AppCard(title: "Skills") {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(catalogSkills) { skill in
-                                Toggle(isOn: Binding(
-                                    get: { selectedSkillIDs.contains(skill.id) },
-                                    set: { enabled in
-                                        if enabled { selectedSkillIDs.insert(skill.id) }
-                                        else { selectedSkillIDs.remove(skill.id) }
-                                    }
-                                )) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(skill.name)
-                                            .font(.callout.weight(.semibold))
-                                        Text(skill.description ?? skill.filePath)
-                                            .font(.caption)
-                                            .foregroundStyle(AppTheme.mutedText)
-                                            .lineLimit(1)
-                                    }
+                    VStack(alignment: .leading, spacing: 12) {
+                        skillSearchField
+
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                if filteredCatalogSkills.isEmpty {
+                                    Text(isSkillSearchActive ? "No skills match your search." : "No catalog skills available.")
+                                        .font(.caption)
+                                        .foregroundStyle(AppTheme.mutedText)
+                                        .frame(maxWidth: .infinity, minHeight: 120)
                                 }
-                                .appCheckbox()
-                                .padding(.vertical, 7)
-                                if skill.id != catalogSkills.last?.id { Divider() }
+
+                                ForEach(Array(filteredCatalogSkills.enumerated()), id: \.element.id) { index, skill in
+                                    Toggle(isOn: Binding(
+                                        get: { selectedSkillIDs.contains(skill.id) },
+                                        set: { enabled in
+                                            if enabled { selectedSkillIDs.insert(skill.id) }
+                                            else { selectedSkillIDs.remove(skill.id) }
+                                        }
+                                    )) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(skill.name)
+                                                .font(.callout.weight(.semibold))
+                                            Text(skill.description ?? skill.filePath)
+                                                .font(.caption)
+                                                .foregroundStyle(AppTheme.mutedText)
+                                                .lineLimit(1)
+                                        }
+                                    }
+                                    .appCheckbox()
+                                    .padding(.vertical, 7)
+
+                                    if index < filteredCatalogSkills.count - 1 { Divider() }
+                                }
                             }
                         }
+                        .frame(minHeight: 260)
                     }
-                    .frame(minHeight: 260)
                 }
             }
             .padding(18)
