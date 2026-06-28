@@ -169,7 +169,7 @@ private enum QuestionChipExtractor {
         }
         // Issue chip.
         if let issue = payload?.issue {
-            chips.append(.init(kind: .issue, systemImage: "exclamationmark.circle", label: "#\(issue.number) \(issue.title)",
+            chips.append(.init(kind: .issue, systemImage: "exclamationmark.circle", label: "\(issue.kindShortTitle) #\(issue.number) \(issue.title)",
                                attachment: .issue(issue)))
         }
 

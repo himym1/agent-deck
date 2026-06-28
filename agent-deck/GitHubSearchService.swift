@@ -11,6 +11,7 @@ struct GitHubSearchService {
         repos: [GitHubRemote],
         state: GitHubIssueStateFilter,
         closeReason: GitHubIssueCloseReason? = nil,
+        includePullRequests: Bool = false,
         bypassCache: Bool = false
     ) async throws -> GitHubBoardSnapshot {
         guard !repos.isEmpty else {
@@ -25,25 +26,27 @@ struct GitHubSearchService {
             )
         }
 
-        let query = buildIssuesQuery(repos: repos, state: state, closeReason: closeReason)
-        return try await fetchBoard(query: query, description: queryDescription(state: state, closeReason: closeReason), bypassCache: bypassCache)
+        let query = buildIssuesQuery(repos: repos, state: state, closeReason: closeReason, includePullRequests: includePullRequests)
+        return try await fetchBoard(query: query, description: queryDescription(state: state, closeReason: closeReason, includePullRequests: includePullRequests), bypassCache: bypassCache)
     }
 
     func fetchRepositoryIssues(
         repo: GitHubRemote,
         state: GitHubIssueStateFilter,
         closeReason: GitHubIssueCloseReason? = nil,
+        includePullRequests: Bool = false,
         bypassCache: Bool = false
     ) async throws -> GitHubBoardSnapshot {
-        let query = buildIssuesQuery(repos: [repo], state: state, closeReason: closeReason)
-        return try await fetchBoard(query: query, description: "\(queryDescription(state: state, closeReason: closeReason)) · \(repo.nameWithOwner)", bypassCache: bypassCache)
+        let query = buildIssuesQuery(repos: [repo], state: state, closeReason: closeReason, includePullRequests: includePullRequests)
+        return try await fetchBoard(query: query, description: "\(queryDescription(state: state, closeReason: closeReason, includePullRequests: includePullRequests)) · \(repo.nameWithOwner)", bypassCache: bypassCache)
     }
 
-    private func queryDescription(state: GitHubIssueStateFilter, closeReason: GitHubIssueCloseReason?) -> String {
+    private func queryDescription(state: GitHubIssueStateFilter, closeReason: GitHubIssueCloseReason?, includePullRequests: Bool) -> String {
+        let subject = includePullRequests ? "Issues and pull requests" : "Issues"
         if let closeReason {
-            return "Issues · \(state.rawValue) · \(closeReason.title)"
+            return "\(subject) · \(state.rawValue) · \(closeReason.title)"
         }
-        return "Issues · \(state.rawValue)"
+        return "\(subject) · \(state.rawValue)"
     }
 
     private func fetchBoard(query: String, description: String, bypassCache: Bool) async throws -> GitHubBoardSnapshot {
@@ -137,8 +140,8 @@ struct GitHubSearchService {
         }
     }
 
-    private func buildIssuesQuery(repos: [GitHubRemote], state: GitHubIssueStateFilter, closeReason: GitHubIssueCloseReason?) -> String {
-        var parts: [String] = ["is:issue"]
+    private func buildIssuesQuery(repos: [GitHubRemote], state: GitHubIssueStateFilter, closeReason: GitHubIssueCloseReason?, includePullRequests: Bool) -> String {
+        var parts: [String] = includePullRequests ? [] : ["is:issue"]
         if let stateQualifier = state.searchQualifier {
             parts.append(stateQualifier)
         }

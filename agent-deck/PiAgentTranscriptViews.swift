@@ -2836,7 +2836,7 @@ struct PiAgentUserMessageContent: View {
                         attachmentChip(name: commandUse.name, systemImage: "terminal", attachment: .command(commandUse))
                     }
                     if let issueAttachment {
-                        attachmentChip(name: "#\(issueAttachment.number) \(issueAttachment.title)", systemImage: "exclamationmark.circle", attachment: .issue(issueAttachment))
+                        attachmentChip(name: "\(issueAttachment.kindShortTitle) #\(issueAttachment.number) \(issueAttachment.title)", systemImage: "exclamationmark.circle", attachment: .issue(issueAttachment))
                     }
                     ForEach(imageAttachments.prefix(6)) { image in
                         attachmentChip(name: image.name, systemImage: "photo", attachment: .image(image))
@@ -2912,7 +2912,7 @@ struct PiAgentUserMessageContent: View {
             labels.append(name)
         }
         if let issue = parsed.issueAttachment {
-            labels.append("#\(issue.number) \(issue.title)")
+            labels.append("\(issue.kindShortTitle) #\(issue.number) \(issue.title)")
         }
         let imageNames = parsed.imageAttachments.prefix(6).map(\.name)
         labels.append(contentsOf: imageNames)
@@ -3455,7 +3455,7 @@ private struct AttachmentPreviewPopover: View {
                 Text(issue.repository)
                     .font(AppTheme.Font.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
-                Text("#\(issue.number) \(issue.title)")
+                Text("\(issue.kindTitle) #\(issue.number) \(issue.title)")
                     .font(AppTheme.Font.body.weight(.semibold))
                 if let author = issue.author, !author.isEmpty {
                     Text("Author: \(author)")
@@ -3560,7 +3560,7 @@ private struct AttachmentPreviewPopover: View {
         case .file(let file): return file.name
         case .folder(let folder): return folder.name
         case .paste(let paste): return paste.marker
-        case .issue(let issue): return "#\(issue.number) \(issue.title)"
+        case .issue(let issue): return "\(issue.kindShortTitle) #\(issue.number) \(issue.title)"
         case .missing(let name): return name
         case .skill(let use): return use.skill?.name ?? use.name
         case .command(let use): return "/\(use.name)"

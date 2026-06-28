@@ -344,8 +344,8 @@ struct PiAgentComposerBox: View {
                         .appGlassCircle()
                 }
                 .buttonStyle(.plain)
-                .help("Attach GitHub issue")
-                .accessibilityLabel("Attach GitHub issue")
+                .help("Attach GitHub issue or pull request")
+                .accessibilityLabel("Attach GitHub issue or pull request")
                 .popover(isPresented: $isIssuePickerPresented, arrowEdge: .bottom) {
                     PiAgentIssuePickerPopover(
                         viewModel: viewModel,
@@ -813,7 +813,7 @@ struct PiAgentIssueAttachmentChip: View {
                 .scaledToFit()
                 .frame(width: 13, height: 13)
                 .foregroundStyle(AppTheme.mutedText)
-            Text("#\(issue.number) \(issue.title)")
+            Text("\(issue.kindShortTitle) #\(issue.number) \(issue.title)")
                 .lineLimit(1)
                 .truncationMode(.head)
             Button(action: onRemove) {
@@ -842,20 +842,21 @@ private struct PiAgentIssuePickerPopover: View {
     private var items: [GitHubWorkItem] {
         let source = viewModel.githubComposerIssueItems
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return source }
-        let needle = query.lowercased()
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return source.filter { item in
-            item.title.lowercased().contains(needle)
-            || item.repository.lowercased().contains(needle)
+            item.searchableHaystack.contains(needle)
             || "#\(item.number)".contains(needle)
+            || item.kindTitle.lowercased().contains(needle)
+            || item.kindShortTitle.lowercased().contains(needle)
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Attach GitHub Issue")
+            Text("Attach GitHub Issue or Pull Request")
                 .font(AppTheme.Font.headline)
 
-            AppTextField(text: $query, placeholder: "Search visible issues")
+            AppTextField(text: $query, placeholder: "Search visible issues and pull requests")
 
             if let errorText {
                 Text(errorText)
@@ -876,7 +877,8 @@ private struct PiAgentIssuePickerPopover: View {
                                 GitHubIssueListRow(
                                     item: item,
                                     isSelected: false,
-                                    onSelect: { attach(item) }
+                                    onSelect: { attach(item) },
+                                    showsKindBadge: true
                                 )
                                 if loadingIssueID == item.id && isLoading {
                                     AppSpinner()
@@ -900,17 +902,17 @@ private struct PiAgentIssuePickerPopover: View {
 
     private var emptyStateText: String {
         if !viewModel.githubConnectionState.isConnected {
-            return "Connect GitHub first to attach an issue."
+            return "Connect GitHub first to attach an issue or pull request."
         }
         if viewModel.selectedGitHubProject?.gitHubRemote != nil {
-            return viewModel.githubIsLoadingProjectBoard
-                ? "Loading issues for the selected repository…"
-                : "No issues loaded for the selected repository yet."
+            return viewModel.githubIsLoadingComposerBoard
+                ? "Loading issues and pull requests for the selected repository…"
+                : "No issues or pull requests loaded for the selected repository yet."
         }
         if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "No matching issues."
+            return "No matching issues or pull requests."
         }
-        return "Select a GitHub project to attach one of its issues."
+        return "Select a GitHub project to attach one of its issues or pull requests."
     }
 
     private func attach(_ item: GitHubWorkItem) {

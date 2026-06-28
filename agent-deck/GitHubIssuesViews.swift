@@ -15,6 +15,7 @@ struct GitHubIssueListRow: View {
     var onOpenInPi: (() -> Void)? = nil
     var onClose: ((GitHubIssueCloseReason) -> Void)? = nil
     var onReopen: (() -> Void)? = nil
+    var showsKindBadge = false
 
     @State private var isHovering = false
 
@@ -24,7 +25,8 @@ struct GitHubIssueListRow: View {
                 item: item,
                 onOpenInPi: onOpenInPi,
                 onClose: onClose,
-                onReopen: onReopen
+                onReopen: onReopen,
+                showsKindBadge: showsKindBadge
             )
             .padding(14)
             // Make the entire padded card — gaps included — a single hit target.
@@ -58,6 +60,7 @@ struct GitHubIssueRowContent: View {
     var onOpenInPi: (() -> Void)? = nil
     var onClose: ((GitHubIssueCloseReason) -> Void)? = nil
     var onReopen: (() -> Void)? = nil
+    var showsKindBadge = false
 
     // isOpen / closedReason come from the cached fields on GitHubWorkItem,
     // computed once at snapshot time.
@@ -128,6 +131,15 @@ struct GitHubIssueRowContent: View {
                 .multilineTextAlignment(.leading)
                 .lineLimit(2, reservesSpace: true)
             Spacer(minLength: 4)
+            if showsKindBadge {
+                Text(item.kindShortTitle)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(AppTheme.mutedText)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(AppTheme.contentSubtleFill))
+                    .help(item.kindTitle)
+            }
             Text("#\(item.number)")
                 .font(.caption.weight(.semibold).monospacedDigit())
                 .foregroundStyle(AppTheme.mutedText)
@@ -180,12 +192,12 @@ struct GitHubIssueRowContent: View {
                     }
                 }
             } label: {
-                Label("Close Issue", systemImage: "checkmark.circle")
+                Label("Close \(item.kindTitle)", systemImage: "checkmark.circle")
             }
         } else if !isOpen, let onReopen {
             Divider()
             Button(action: onReopen) {
-                Label("Reopen Issue", systemImage: "arrow.counterclockwise.circle")
+                Label("Reopen \(item.kindTitle)", systemImage: "arrow.counterclockwise.circle")
             }
         }
         Divider()
@@ -197,7 +209,7 @@ struct GitHubIssueRowContent: View {
         Button {
             copyToPasteboard("#\(item.number)")
         } label: {
-            Label("Copy Issue Number", systemImage: "number")
+            Label("Copy \(item.kindTitle) Number", systemImage: "number")
         }
     }
 

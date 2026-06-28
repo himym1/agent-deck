@@ -161,6 +161,10 @@ final class AppViewModel: NSObject {
     var githubTypeFilter: String?
     var githubLabelFilters: Set<String> = []
     var githubAggregateBoard: GitHubBoardSnapshot?
+    var githubComposerBoard: GitHubBoardSnapshot?
+    var githubComposerBoardCacheKey: String?
+    var githubComposerBoardFetchedAt: Date?
+    var githubIsLoadingComposerBoard = false
     var githubProjectBoard: GitHubBoardSnapshot? {
         didSet { githubProjectBoardRevision &+= 1 }
     }
@@ -1953,6 +1957,9 @@ final class AppViewModel: NSObject {
 
     var githubComposerIssueItems: [GitHubWorkItem] {
         if let remote = selectedGitHubProject?.gitHubRemote {
+            if let githubComposerBoard {
+                return filteredBoardItems(from: githubComposerBoard)
+            }
             if let githubProjectBoard {
                 return filteredBoardItems(from: githubProjectBoard)
             }
@@ -2409,9 +2416,74 @@ final class AppViewModel: NSObject {
             await prepareGitHubScreen()
             await MainActor.run {
                 if selectedGitHubProject?.gitHubRemote != nil {
-                    refreshProjectBoard(force: false)
+                    refreshComposerBoard(force: false)
                 } else if githubAggregateBoard == nil, !gitHubProjects.isEmpty {
                     refreshAggregateBoard()
+                }
+            }
+        }
+    }
+
+    func refreshComposerBoard(force: Bool = false) {
+        guard let session = gitHubSession else {
+            githubIsLoadingComposerBoard = false
+            githubComposerBoard = nil
+            githubComposerBoardCacheKey = nil
+            githubComposerBoardFetchedAt = nil
+            return
+        }
+
+        guard let remote = selectedGitHubProject?.gitHubRemote else {
+            githubIsLoadingComposerBoard = false
+            githubComposerBoard = nil
+            githubComposerBoardCacheKey = nil
+            githubComposerBoardFetchedAt = nil
+            return
+        }
+
+        let state = githubIssueStateFilter
+        let closeReason = effectiveCloseReasonFilter
+        let cacheKey = "composer|\(boardCacheKey(for: remote, state: state, closeReason: closeReason))"
+        if !force,
+           githubComposerBoard != nil,
+           githubComposerBoardCacheKey == cacheKey,
+           !isGitHubBoardCacheStale(fetchedAt: githubComposerBoardFetchedAt) {
+            return
+        }
+
+        githubIsLoadingComposerBoard = true
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let service = GitHubSearchService(apiClient: GitHubAPIClient(session: session))
+                let snapshot = try await service.fetchRepositoryIssues(
+                    repo: remote,
+                    state: state,
+                    closeReason: closeReason,
+                    includePullRequests: true,
+                    bypassCache: force
+                )
+
+                await MainActor.run {
+                    guard self.selectedGitHubProject?.gitHubRemote == remote,
+                          self.githubIssueStateFilter == state,
+                          self.effectiveCloseReasonFilter == closeReason else { return }
+                    self.githubComposerBoard = snapshot
+                    self.githubComposerBoardCacheKey = cacheKey
+                    self.githubComposerBoardFetchedAt = Date()
+                    self.githubIsLoadingComposerBoard = false
+                }
+            } catch {
+                await MainActor.run {
+                    guard self.selectedGitHubProject?.gitHubRemote == remote,
+                          self.githubIssueStateFilter == state,
+                          self.effectiveCloseReasonFilter == closeReason else { return }
+                    self.githubComposerBoard = nil
+                    self.githubComposerBoardCacheKey = nil
+                    self.githubComposerBoardFetchedAt = nil
+                    self.githubIsLoadingComposerBoard = false
+                    self.githubLastError = error.localizedDescription
                 }
             }
         }
@@ -5706,6 +5778,9 @@ final class AppViewModel: NSObject {
                     if let board = self.githubProjectBoard {
                         self.githubProjectBoard = board.replacing(updated)
                     }
+                    if let board = self.githubComposerBoard {
+                        self.githubComposerBoard = board.replacing(updated)
+                    }
                     if self.githubSelectedWorkItem?.id == updated.id {
                         self.githubSelectedWorkItem = updated
                     }
@@ -5729,6 +5804,9 @@ final class AppViewModel: NSObject {
         githubProjectBoardRequestID += 1
         githubIssueDetailRequestID += 1
         githubAggregateBoard = nil
+        githubComposerBoard = nil
+        githubComposerBoardCacheKey = nil
+        githubComposerBoardFetchedAt = nil
         githubProjectBoard = nil
         githubProjectBoardCacheKey = nil
         githubProjectBoardFetchedAt = nil
@@ -5736,6 +5814,7 @@ final class AppViewModel: NSObject {
         githubIssueDetail = nil
         githubCommentDraft = ""
         githubIsLoadingAggregateBoard = false
+        githubIsLoadingComposerBoard = false
         githubIsLoadingProjectBoard = false
         githubIsLoadingIssueDetail = false
         githubIsSubmittingComment = false
@@ -5749,6 +5828,9 @@ final class AppViewModel: NSObject {
         githubProjectBoard = nil
         githubProjectBoardCacheKey = nil
         githubProjectBoardFetchedAt = nil
+        githubComposerBoard = nil
+        githubComposerBoardCacheKey = nil
+        githubComposerBoardFetchedAt = nil
         githubRepositoryChanges = nil
         githubRepositoryChangesProjectPath = nil
         repositoryChangesCache.removeAll()
@@ -5762,6 +5844,7 @@ final class AppViewModel: NSObject {
         githubIssueDetail = nil
         githubCommentDraft = ""
         githubIsLoadingProjectBoard = false
+        githubIsLoadingComposerBoard = false
         githubIsLoadingRepositoryChanges = false
         githubIsLoadingIssueDetail = false
         githubIsSubmittingComment = false

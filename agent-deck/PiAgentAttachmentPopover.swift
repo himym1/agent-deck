@@ -308,7 +308,7 @@ final class PiAgentAttachmentPopoverController: NSViewController {
     private func issueText(_ issue: PiAgentIssueAttachment) -> String {
         var lines: [String] = []
         lines.append(issue.repository)
-        lines.append("#\(issue.number) \(issue.title)")
+        lines.append("\(issue.kindTitle) #\(issue.number) \(issue.title)")
         if let author = issue.author, !author.isEmpty { lines.append("Author: \(author)") }
         lines.append("State: \(issue.state)")
         if !issue.labels.isEmpty { lines.append("Labels: \(issue.labels.joined(separator: ", "))") }
@@ -332,7 +332,7 @@ final class PiAgentAttachmentPopoverController: NSViewController {
         case .file(let name, _): return name
         case .folder(let path): return URL(fileURLWithPath: path, isDirectory: true).lastPathComponent
         case .paste(let paste): return paste.marker
-        case .issue(let issue): return "#\(issue.number) \(issue.title)"
+        case .issue(let issue): return "\(issue.kindShortTitle) #\(issue.number) \(issue.title)"
         case .skill(let name, let record): return record?.name ?? name
         case .command(let name): return "/\(name)"
         case .missing(let name): return name
