@@ -126,8 +126,9 @@ struct SkillsScreen: View {
         sections: [AppListSection<SkillRecord>],
         inactiveByID: [SkillRecord.ID: Bool],
         managedSkills: [SkillRecord],
-        repositoryBySkillID: [SkillRecord.ID: ImportedSkillRepository]
-    ) = ([], [:], [], [:])
+        repositoryBySkillID: [SkillRecord.ID: ImportedSkillRepository],
+        collectionCountBySkillID: [SkillRecord.ID: Int]
+    ) = ([], [:], [], [:], [:])
 
     var body: some View {
         skillsScreenWithSheets
@@ -249,9 +250,12 @@ struct SkillsScreen: View {
             cachedLayout = recomputeLayout()
             scheduleSelectionSynchronization()
         }
-        // Catches repository sync / update-check results (hasKnownUpdate),
-        // which change row badges without touching the skill records.
+        // Catches repository sync / update-check results (hasKnownUpdate) and
+        // collection changes, which change row badges without touching skill records.
         .onChange(of: viewModel.appSettings.importedSkillRepositories) { _, _ in
+            cachedLayout = recomputeLayout()
+        }
+        .onChange(of: viewModel.appSettings.skillCollections) { _, _ in
             cachedLayout = recomputeLayout()
         }
         .onChange(of: viewModel.selectedSkillID) { _, _ in scheduleSelectionSynchronization() }
@@ -347,9 +351,6 @@ struct SkillsScreen: View {
             if !viewModel.skillReferenceWarnings.isEmpty || !viewModel.skillWarnings.isEmpty {
                 skillWarningStrip
             }
-            if !viewModel.appSettings.skillCollections.isEmpty {
-                skillCollectionsStrip
-            }
             AppList(
                 sections: layout.sections,
                 selection: .multi($selectedSkillIDs),
@@ -360,60 +361,10 @@ struct SkillsScreen: View {
             ) { skill in
                 skillListRow(
                     skill,
-                    metadata: metadataByID[skill.id] ?? SkillListMetadata(isAssigned: false, hasWarnings: false, isActiveForCurrentProject: false, isImported: viewModel.isImportedSkill(skill)),
+                    metadata: metadataByID[skill.id] ?? SkillListMetadata(isAssigned: false, hasWarnings: false, isActiveForCurrentProject: false, isImported: false),
                     inactive: layout.inactiveByID[skill.id]
                 )
             }
-        }
-    }
-
-    @ViewBuilder
-    private var skillCollectionsStrip: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("COLLECTIONS")
-                .font(.caption2.weight(.semibold))
-                .tracking(0.6)
-                .foregroundStyle(AppTheme.mutedText)
-                .padding(.horizontal, 18)
-                .padding(.top, 10)
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(viewModel.appSettings.skillCollections) { collection in
-                    Button {
-                        if let first = viewModel.skillRecords(in: collection, forProjectPath: viewModel.selectedProjectPath).first {
-                            selectedSkillIDs = [first.id]
-                            viewModel.selectedSkillID = first.id
-                        }
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "folder.badge.gearshape")
-                                .foregroundStyle(AppTheme.brandAccent)
-                                .frame(width: 16)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(collection.name)
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-                                Text("\(viewModel.skillRecords(in: collection, forProjectPath: viewModel.selectedProjectPath).count) skills")
-                                    .font(.caption2)
-                                    .foregroundStyle(AppTheme.mutedText)
-                            }
-                            Spacer(minLength: 0)
-                            if viewModel.skillCollectionIsEnabledGlobally(collection) {
-                                Text("All")
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(AppTheme.brandAccent)
-                            }
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 8)
-                }
-            }
-            .padding(.bottom, 6)
         }
     }
 
@@ -454,7 +405,8 @@ struct SkillsScreen: View {
         sections: [AppListSection<SkillRecord>],
         inactiveByID: [SkillRecord.ID: Bool],
         managedSkills: [SkillRecord],
-        repositoryBySkillID: [SkillRecord.ID: ImportedSkillRepository]
+        repositoryBySkillID: [SkillRecord.ID: ImportedSkillRepository],
+        collectionCountBySkillID: [SkillRecord.ID: Int]
     ) {
         let allRecords = viewModel.allVisibleSkillRecords
 
@@ -483,6 +435,27 @@ struct SkillsScreen: View {
             if let repository = repository(for: skill) { repositoryBySkillID[skill.id] = repository }
         }
 
+        let nameCounts = Dictionary(grouping: allRecords, by: \.name).mapValues(\.count)
+        let collections = viewModel.appSettings.skillCollections
+        let collectionRootPathSets = collections.map { Set($0.skillRootPaths) }
+        var collectionCountBySkillID: [SkillRecord.ID: Int] = [:]
+        if !collections.isEmpty {
+            for skill in preferred {
+                let rootPath = skillRootPath(for: skill)
+                let filePath = URL(fileURLWithPath: skill.filePath).standardizedFileURL.path
+                var count = 0
+                for (index, collection) in collections.enumerated() {
+                    let rootPaths = collectionRootPathSets[index]
+                    if rootPaths.contains(rootPath) || rootPaths.contains(filePath) {
+                        count += 1
+                    } else if collection.skillNames.contains(skill.name), nameCounts[skill.name] == 1 {
+                        count += 1
+                    }
+                }
+                if count > 0 { collectionCountBySkillID[skill.id] = count }
+            }
+        }
+
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let managed: [SkillRecord]
         if query.isEmpty {
@@ -506,10 +479,11 @@ struct SkillsScreen: View {
         // A row is visually active when the skill is Default, assigned to at
         // least one project, or assigned to at least one Deck agent. Dim only
         // skills that are present in the catalog but unused everywhere.
+        let activeParentNames = viewModel.activeParentSkillNames(forProjectPath: viewModel.selectedProjectPath)
         func isAssignedSomewhere(_ skill: SkillRecord) -> Bool {
-            viewModel.activeParentSkillNames(forProjectPath: viewModel.selectedProjectPath).contains(skill.name)
+            activeParentNames.contains(skill.name)
                 || !viewModel.assignedProjects(for: skill).isEmpty
-                || !viewModel.skillCollections(containing: skill).isEmpty
+                || (collectionCountBySkillID[skill.id] ?? 0) > 0
         }
 
         var sections: [AppListSection<SkillRecord>] = []
@@ -539,7 +513,14 @@ struct SkillsScreen: View {
             ))
         }
 
-        return (sections, inactiveByID, managed, repositoryBySkillID)
+        return (sections, inactiveByID, managed, repositoryBySkillID, collectionCountBySkillID)
+    }
+
+    private func skillRootPath(for skill: SkillRecord) -> String {
+        let fileURL = URL(fileURLWithPath: skill.filePath).standardizedFileURL
+        return fileURL.lastPathComponent == "SKILL.md"
+            ? fileURL.deletingLastPathComponent().path
+            : fileURL.path
     }
 
     /// Selection-aware list context menu. A single right-clicked skill gets the
@@ -554,11 +535,9 @@ struct SkillsScreen: View {
         for ids: Set<SkillRecord.ID>,
         metadataByID: [SkillRecord.ID: SkillListMetadata]
     ) -> some View {
-        // Cache-miss falls back to the live method; in practice the cache is
-        // populated for every skill after the first scan, so this is rare.
         let skills = managedSkills.filter { ids.contains($0.id) }
         if skills.count > 1 {
-            let importable = skills.filter { metadataByID[$0.id]?.isImported ?? viewModel.isImportedSkill($0) }
+            let importable = skills.filter { metadataByID[$0.id]?.isImported ?? false }
             let deletable = skills.filter { viewModel.canDeleteSkill($0) }
             if !importable.isEmpty {
                 Button {
@@ -1313,7 +1292,7 @@ struct SkillsScreen: View {
         let iconName = hasWarnings ? "exclamationmark.triangle.fill" : skillIcon(skill)
         let iconColor: Color = hasWarnings ? .orange : skillColor(isAssigned: isActive)
         let repository = cachedLayout.repositoryBySkillID[skill.id]
-        let collectionCount = viewModel.skillCollections(containing: skill).count
+        let collectionCount = cachedLayout.collectionCountBySkillID[skill.id] ?? 0
         let hasUpdate = repository?.hasKnownUpdate == true
         let canRename = viewModel.canRenameSkill(skill)
         return SkillListRowView(

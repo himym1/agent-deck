@@ -1674,35 +1674,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // Only show the rail when every question mark fits in the stable stack.
             // The scroll-synced overflow layout proved too sparse/ambiguous at its
             // transition thresholds, so overflow hides the rail instead.
-            let isSliding = false
-
-            var items: [UserQuestionNavigationRailItem] = []
-            if isSliding {
-                let clipView = scrollView.contentView
-                let clipHeight = clipView.bounds.height
-                let viewportMid = clipView.bounds.origin.y + clipHeight / 2
-                // Map a document window of ±viewWindow px around the viewport
-                // center onto the rail. Questions within that band are visible;
-                // the rest are clipped + edge-faded. window >= ~1.5 viewports so
-                // a healthy span of nearby questions shows at once.
-                let viewWindow = max(clipHeight * 1.5, 560)
-                let scale = railHeight / (2 * viewWindow)
-                let halfRail = railHeight / 2
-                // Small overshoot so marks fully fade out before being clipped
-                // (hard cut would look jarring as they enter/exit).
-                let margin = TranscriptFloatingControlGeometry.questionRailRowHeight
-                for (row, id, title) in questionRows {
-                    let qY = tableView.rect(ofRow: row).midY
-                    let centerOffset = (qY - viewportMid) * scale
-                    guard abs(centerOffset) <= halfRail + margin else { continue }
-                    items.append(UserQuestionNavigationRailItem(id: id, title: title, isActive: id == activeID, centerOffset: centerOffset))
-                }
-            } else {
-                items = questionRows.map { _, id, title in
-                    UserQuestionNavigationRailItem(id: id, title: title, isActive: id == activeID)
-                }
+            let items = questionRows.map { _, id, title in
+                UserQuestionNavigationRailItem(id: id, title: title, isActive: id == activeID)
             }
-            applyRailModel(items: items, width: scrollView.bounds.width, railHeight: railHeight, isSliding: isSliding)
+            applyRailModel(items: items, width: scrollView.bounds.width, railHeight: railHeight, isSliding: false)
         }
 
         private func evenStackedHeight(questionCount: Int) -> CGFloat {
