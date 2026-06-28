@@ -347,6 +347,9 @@ struct SkillsScreen: View {
             if !viewModel.skillReferenceWarnings.isEmpty || !viewModel.skillWarnings.isEmpty {
                 skillWarningStrip
             }
+            if !viewModel.appSettings.skillCollections.isEmpty {
+                skillCollectionsStrip
+            }
             AppList(
                 sections: layout.sections,
                 selection: .multi($selectedSkillIDs),
@@ -361,6 +364,56 @@ struct SkillsScreen: View {
                     inactive: layout.inactiveByID[skill.id]
                 )
             }
+        }
+    }
+
+    @ViewBuilder
+    private var skillCollectionsStrip: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("COLLECTIONS")
+                .font(.caption2.weight(.semibold))
+                .tracking(0.6)
+                .foregroundStyle(AppTheme.mutedText)
+                .padding(.horizontal, 18)
+                .padding(.top, 10)
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(viewModel.appSettings.skillCollections) { collection in
+                    Button {
+                        if let first = viewModel.skillRecords(in: collection, forProjectPath: viewModel.selectedProjectPath).first {
+                            selectedSkillIDs = [first.id]
+                            viewModel.selectedSkillID = first.id
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "folder.badge.gearshape")
+                                .foregroundStyle(AppTheme.brandAccent)
+                                .frame(width: 16)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(collection.name)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                Text("\(viewModel.skillRecords(in: collection, forProjectPath: viewModel.selectedProjectPath).count) skills")
+                                    .font(.caption2)
+                                    .foregroundStyle(AppTheme.mutedText)
+                            }
+                            Spacer(minLength: 0)
+                            if viewModel.skillCollectionIsEnabledGlobally(collection) {
+                                Text("All")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(AppTheme.brandAccent)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 8)
+                }
+            }
+            .padding(.bottom, 6)
         }
     }
 
@@ -454,7 +507,9 @@ struct SkillsScreen: View {
         // least one project, or assigned to at least one Deck agent. Dim only
         // skills that are present in the catalog but unused everywhere.
         func isAssignedSomewhere(_ skill: SkillRecord) -> Bool {
-            viewModel.skillIsEnabledGlobally(skill) || !viewModel.assignedProjects(for: skill).isEmpty
+            viewModel.activeParentSkillNames(forProjectPath: viewModel.selectedProjectPath).contains(skill.name)
+                || !viewModel.assignedProjects(for: skill).isEmpty
+                || !viewModel.skillCollections(containing: skill).isEmpty
         }
 
         var sections: [AppListSection<SkillRecord>] = []
@@ -678,6 +733,8 @@ struct SkillsScreen: View {
 
             syncedRepositoryCard(for: skill)
 
+            skillCollectionsCard(for: skill)
+
             AppCard(title: "Project Runtime Assignment") {
                 projectAssignmentList(for: skill)
             }
@@ -776,6 +833,74 @@ struct SkillsScreen: View {
             AppCard {
                 ContentUnavailableView("No Skill Selected", systemImage: "wand.and.stars")
                     .frame(maxWidth: .infinity, minHeight: 240)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func skillCollectionsCard(for skill: SkillRecord) -> some View {
+        let collections = viewModel.skillCollections(containing: skill)
+        if !collections.isEmpty {
+            AppCard(title: "Skill Collections") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Collections expand to their member skills at launch; Pi still receives one --skill argument per skill.")
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    ForEach(collections) { collection in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                Label(collection.name, systemImage: "folder.badge.gearshape")
+                                    .font(.subheadline.weight(.semibold))
+                                Text("\(viewModel.skillRecords(in: collection, forProjectPath: viewModel.selectedProjectPath).count) skills")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(AppTheme.mutedText)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 2)
+                                    .background(.secondary.opacity(0.12), in: Capsule())
+                                if let sourceLabel = collection.sourceLabel {
+                                    Text(sourceLabel)
+                                        .font(.caption2)
+                                        .foregroundStyle(AppTheme.mutedText)
+                                        .lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            collectionAssignmentList(for: collection)
+                        }
+                        .padding(10)
+                        .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                }
+            }
+        }
+    }
+
+    private func collectionAssignmentList(for collection: SkillCollectionRecord) -> some View {
+        let isGlobal = viewModel.skillCollectionIsEnabledGlobally(collection)
+        return LazyVStack(alignment: .leading, spacing: 0) {
+            AllProjectsAssignmentRow(
+                isOn: Binding(
+                    get: { isGlobal },
+                    set: { enabled in
+                        if enabled { viewModel.enableSkillCollectionGlobally(collection) }
+                        else { viewModel.disableSkillCollectionGlobally(collection) }
+                    }
+                ),
+                subtitle: "Enable this collection for every project"
+            )
+            Divider()
+            ForEach(viewModel.enabledProjects) { project in
+                ProjectAssignmentToggleRow(
+                    project: project,
+                    isOn: Binding(
+                        get: { isGlobal ? true : viewModel.skillCollection(collection, isEnabledFor: project) },
+                        set: { enabled in viewModel.setSkillCollection(collection, enabled: enabled, for: project) }
+                    )
+                )
+                .opacity(isGlobal ? 0.4 : 1)
+                .allowsHitTesting(!isGlobal)
+                if project.id != viewModel.enabledProjects.last?.id { Divider() }
             }
         }
     }
@@ -1182,12 +1307,13 @@ struct SkillsScreen: View {
     }
 
     private func skillListRow(_ skill: SkillRecord, metadata: SkillListMetadata, inactive: Bool? = nil) -> some View {
-        let isActive = viewModel.skillIsEnabledGlobally(skill) || !viewModel.assignedProjects(for: skill).isEmpty
+        let isActive = viewModel.activeParentSkillNames(forProjectPath: viewModel.selectedProjectPath).contains(skill.name) || !viewModel.assignedProjects(for: skill).isEmpty
         let isInactive = inactive ?? !isActive
         let hasWarnings = metadata.hasWarnings
         let iconName = hasWarnings ? "exclamationmark.triangle.fill" : skillIcon(skill)
         let iconColor: Color = hasWarnings ? .orange : skillColor(isAssigned: isActive)
         let repository = cachedLayout.repositoryBySkillID[skill.id]
+        let collectionCount = viewModel.skillCollections(containing: skill).count
         let hasUpdate = repository?.hasKnownUpdate == true
         let canRename = viewModel.canRenameSkill(skill)
         return SkillListRowView(
@@ -1197,6 +1323,7 @@ struct SkillsScreen: View {
             isInactive: isInactive,
             isDisabled: viewModel.bundledSkillIsDisabled(skill),
             repositoryDisplayName: repository?.displayName,
+            collectionCount: collectionCount,
             hasUpdate: hasUpdate,
             isUpdating: repository != nil && isUpdatingSkillRepository,
             canRename: canRename,
@@ -1905,6 +2032,7 @@ private struct SkillListRowView: View {
     let isInactive: Bool
     let isDisabled: Bool
     let repositoryDisplayName: String?
+    let collectionCount: Int
     let hasUpdate: Bool
     let isUpdating: Bool
     let canRename: Bool
@@ -1932,20 +2060,27 @@ private struct SkillListRowView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
 
-                if let repositoryDisplayName {
+                if collectionCount > 0 || repositoryDisplayName != nil {
                     HStack(spacing: 6) {
-                        Image("github")
-                            .resizable()
-                            .renderingMode(.template)
-                            .scaledToFit()
-                            .frame(width: 11, height: 11)
-                        Text(repositoryDisplayName)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                        if collectionCount > 0 {
+                            Label("\(collectionCount) collection\(collectionCount == 1 ? "" : "s")", systemImage: "folder.badge.gearshape")
+                                .labelStyle(.titleAndIcon)
+                                .lineLimit(1)
+                        }
+                        if let repositoryDisplayName {
+                            Image("github")
+                                .resizable()
+                                .renderingMode(.template)
+                                .scaledToFit()
+                                .frame(width: 11, height: 11)
+                            Text(repositoryDisplayName)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
                     }
                     .font(.caption2)
                     .foregroundStyle(AppTheme.mutedText)
-                    .help("Synced from GitHub · \(repositoryDisplayName)")
+                    .help(repositoryDisplayName.map { "Synced from GitHub · \($0)" } ?? "Member of a skill collection")
                 }
             }
             .layoutPriority(1)

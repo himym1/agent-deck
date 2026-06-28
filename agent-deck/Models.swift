@@ -136,6 +136,40 @@ nonisolated struct SkillRecord: Identifiable, Hashable, Sendable {
     let body: String
 }
 
+nonisolated struct SkillCollectionRecord: Codable, Hashable, Identifiable, Sendable {
+    let id: UUID
+    var name: String
+    var description: String?
+    /// Stable root paths for the skills that belong to this collection. Paths are
+    /// standardized when written, and resolved against the current skill catalog
+    /// so launch still emits individual `--skill <path>` arguments.
+    var skillRootPaths: Set<String>
+    /// Name fallback used when a member path no longer resolves (for example, a
+    /// user moved a local imported skill but kept the same catalog entry).
+    var skillNames: Set<String>
+    /// The imported git repository this collection mirrors, when applicable.
+    var importedRepositoryID: UUID?
+    var sourceLabel: String?
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        description: String? = nil,
+        skillRootPaths: Set<String>,
+        skillNames: Set<String>,
+        importedRepositoryID: UUID? = nil,
+        sourceLabel: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.skillRootPaths = Set(skillRootPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+        self.skillNames = skillNames
+        self.importedRepositoryID = importedRepositoryID
+        self.sourceLabel = sourceLabel
+    }
+}
+
 nonisolated struct ProjectSkillRecap: Hashable, Sendable {
     let defaultSkills: [SkillRecord]
     let projectSkills: [SkillRecord]

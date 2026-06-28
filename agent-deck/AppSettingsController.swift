@@ -187,6 +187,14 @@ final class AppSettingsController {
         settings.defaultSkillNames
     }
 
+    var defaultSkillCollectionIDs: Set<UUID> {
+        settings.defaultSkillCollectionIDs
+    }
+
+    var skillCollections: [SkillCollectionRecord] {
+        settings.skillCollections
+    }
+
     var externalSkillPaths: Set<String> {
         settings.externalSkillPaths
     }
@@ -538,6 +546,54 @@ final class AppSettingsController {
         names.remove(oldName)
         names.insert(newName)
         settings.defaultSkillNames = names
+        persist()
+        return true
+    }
+
+    @discardableResult
+    func setDefaultSkillCollection(_ collectionID: UUID, enabled: Bool) -> Bool {
+        var ids = settings.defaultSkillCollectionIDs
+        if enabled {
+            ids.insert(collectionID)
+        } else {
+            ids.remove(collectionID)
+        }
+        guard ids != settings.defaultSkillCollectionIDs else { return false }
+        settings.defaultSkillCollectionIDs = ids
+        persist()
+        return true
+    }
+
+    @discardableResult
+    func upsertSkillCollection(_ collection: SkillCollectionRecord) -> Bool {
+        var collections = settings.skillCollections
+        if let index = collections.firstIndex(where: { $0.id == collection.id }) {
+            guard collections[index] != collection else { return false }
+            collections[index] = collection
+        } else {
+            collections.append(collection)
+        }
+        settings.skillCollections = collections.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        persist()
+        return true
+    }
+
+    @discardableResult
+    func removeSkillCollection(id: UUID) -> Bool {
+        let updated = settings.skillCollections.filter { $0.id != id }
+        guard updated.count != settings.skillCollections.count else { return false }
+        settings.skillCollections = updated
+        settings.defaultSkillCollectionIDs.remove(id)
+        persist()
+        return true
+    }
+
+    @discardableResult
+    func replaceSkillCollections(_ collections: [SkillCollectionRecord]) -> Bool {
+        guard collections != settings.skillCollections else { return false }
+        settings.skillCollections = collections.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let known = Set(settings.skillCollections.map(\.id))
+        settings.defaultSkillCollectionIDs.formIntersection(known)
         persist()
         return true
     }

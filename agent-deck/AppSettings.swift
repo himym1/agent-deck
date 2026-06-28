@@ -200,7 +200,9 @@ struct AppSettings: Codable, Hashable {
     var enabledLibraryCommandIDs: Set<String> = []
     var defaultAgentNames: Set<String> = []
     var defaultSkillNames: Set<String> = []
+    var defaultSkillCollectionIDs: Set<UUID> = []
     var externalSkillPaths: Set<String> = []
+    var skillCollections: [SkillCollectionRecord] = []
     var importedSkillRepositories: [ImportedSkillRepository] = []
     var defaultPromptTemplateNames: Set<String> = []
     var disabledBundledPromptNames: Set<String> = []
@@ -255,7 +257,9 @@ struct AppSettings: Codable, Hashable {
         case enabledLibraryCommandIDs
         case defaultAgentNames
         case defaultSkillNames
+        case defaultSkillCollectionIDs
         case externalSkillPaths
+        case skillCollections
         case importedSkillRepositories
         case defaultPromptTemplateNames
         case disabledBundledPromptNames
@@ -314,8 +318,23 @@ struct AppSettings: Codable, Hashable {
         enabledLibraryCommandIDs = try container.decodeIfPresent(Set<String>.self, forKey: .enabledLibraryCommandIDs) ?? []
         defaultAgentNames = try container.decodeIfPresent(Set<String>.self, forKey: .defaultAgentNames) ?? []
         defaultSkillNames = try container.decodeIfPresent(Set<String>.self, forKey: .defaultSkillNames) ?? []
+        defaultSkillCollectionIDs = try container.decodeIfPresent(Set<UUID>.self, forKey: .defaultSkillCollectionIDs) ?? []
         externalSkillPaths = try container.decodeIfPresent(Set<String>.self, forKey: .externalSkillPaths) ?? []
+        skillCollections = try container.decodeIfPresent([SkillCollectionRecord].self, forKey: .skillCollections) ?? []
         importedSkillRepositories = try container.decodeIfPresent([ImportedSkillRepository].self, forKey: .importedSkillRepositories) ?? []
+        if skillCollections.isEmpty && !importedSkillRepositories.isEmpty {
+            skillCollections = importedSkillRepositories.map { repository in
+                SkillCollectionRecord(
+                    id: UUID(),
+                    name: repository.displayName,
+                    description: "Synced Git skill collection",
+                    skillRootPaths: Set(repository.syncedSkillRootPaths),
+                    skillNames: [],
+                    importedRepositoryID: repository.id,
+                    sourceLabel: "GitHub · \(repository.displayName)"
+                )
+            }
+        }
         defaultPromptTemplateNames = try container.decodeIfPresent(Set<String>.self, forKey: .defaultPromptTemplateNames) ?? []
         disabledBundledPromptNames = try container.decodeIfPresent(Set<String>.self, forKey: .disabledBundledPromptNames) ?? []
         disabledBundledSkillNames = try container.decodeIfPresent(Set<String>.self, forKey: .disabledBundledSkillNames) ?? []

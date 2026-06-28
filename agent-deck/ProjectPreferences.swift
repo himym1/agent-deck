@@ -9,26 +9,28 @@ struct ProjectPreference: Codable, Hashable, Identifiable, Sendable {
     var customIconPath: String?
     var assignedAgentNames: Set<String>
     var assignedSkillNames: Set<String>
+    var assignedSkillCollectionIDs: Set<UUID>
     var assignedPromptTemplateNames: Set<String>
     var assignedMcpServerNames: Set<String>
 
     var id: String { path }
 
     static func `default`(for path: String) -> ProjectPreference {
-        ProjectPreference(path: path, isEnabled: false, isHidden: false, customIconPath: nil, assignedAgentNames: [], assignedSkillNames: [], assignedPromptTemplateNames: [])
+        ProjectPreference(path: path, isEnabled: false, isHidden: false, customIconPath: nil, assignedAgentNames: [], assignedSkillNames: [], assignedSkillCollectionIDs: [], assignedPromptTemplateNames: [])
     }
 
     enum CodingKeys: String, CodingKey {
-        case path, isEnabled, isHidden, customIconPath, assignedAgentNames, assignedSkillNames, assignedPromptTemplateNames, assignedMcpServerNames
+        case path, isEnabled, isHidden, customIconPath, assignedAgentNames, assignedSkillNames, assignedSkillCollectionIDs, assignedPromptTemplateNames, assignedMcpServerNames
     }
 
-    init(path: String, isEnabled: Bool, isHidden: Bool, customIconPath: String?, assignedAgentNames: Set<String> = [], assignedSkillNames: Set<String> = [], assignedPromptTemplateNames: Set<String> = [], assignedMcpServerNames: Set<String> = []) {
+    init(path: String, isEnabled: Bool, isHidden: Bool, customIconPath: String?, assignedAgentNames: Set<String> = [], assignedSkillNames: Set<String> = [], assignedSkillCollectionIDs: Set<UUID> = [], assignedPromptTemplateNames: Set<String> = [], assignedMcpServerNames: Set<String> = []) {
         self.path = path
         self.isEnabled = isEnabled
         self.isHidden = isHidden
         self.customIconPath = customIconPath
         self.assignedAgentNames = assignedAgentNames
         self.assignedSkillNames = assignedSkillNames
+        self.assignedSkillCollectionIDs = assignedSkillCollectionIDs
         self.assignedPromptTemplateNames = assignedPromptTemplateNames
         self.assignedMcpServerNames = assignedMcpServerNames
     }
@@ -41,6 +43,7 @@ struct ProjectPreference: Codable, Hashable, Identifiable, Sendable {
         customIconPath = try container.decodeIfPresent(String.self, forKey: .customIconPath)
         assignedAgentNames = try container.decodeIfPresent(Set<String>.self, forKey: .assignedAgentNames) ?? []
         assignedSkillNames = try container.decodeIfPresent(Set<String>.self, forKey: .assignedSkillNames) ?? []
+        assignedSkillCollectionIDs = try container.decodeIfPresent(Set<UUID>.self, forKey: .assignedSkillCollectionIDs) ?? []
         assignedPromptTemplateNames = try container.decodeIfPresent(Set<String>.self, forKey: .assignedPromptTemplateNames) ?? []
         assignedMcpServerNames = try container.decodeIfPresent(Set<String>.self, forKey: .assignedMcpServerNames) ?? []
     }
@@ -106,6 +109,16 @@ final class ProjectPreferencesStore {
                 preference.assignedSkillNames.insert(skillName)
             } else {
                 preference.assignedSkillNames.remove(skillName)
+            }
+        }
+    }
+
+    func setAssignedSkillCollection(_ collectionID: UUID, assigned: Bool, for path: String) {
+        update(path) { preference in
+            if assigned {
+                preference.assignedSkillCollectionIDs.insert(collectionID)
+            } else {
+                preference.assignedSkillCollectionIDs.remove(collectionID)
             }
         }
     }
@@ -279,6 +292,7 @@ final class ProjectPreferencesStore {
                 customIconPath: preference.customIconPath,
                 assignedAgentNames: preference.assignedAgentNames,
                 assignedSkillNames: preference.assignedSkillNames,
+                assignedSkillCollectionIDs: preference.assignedSkillCollectionIDs,
                 assignedPromptTemplateNames: preference.assignedPromptTemplateNames,
                 assignedMcpServerNames: preference.assignedMcpServerNames
             ))

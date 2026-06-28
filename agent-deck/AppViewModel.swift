@@ -462,6 +462,9 @@ final class AppViewModel: NSObject {
         nativeSubagentRunner.childMemoryArgumentsProvider = { [weak self] parentSession, agent, task in
             await self?.childMemoryLaunchContext(for: parentSession, agent: agent, task: task) ?? .empty
         }
+        nativeSubagentRunner.childSkillArgumentsProvider = { [weak self] agent, snapshot in
+            try self?.childSkillArguments(for: agent, snapshot: snapshot) ?? PiSkillLaunchResolver.childSkillArguments(agent: agent, snapshot: snapshot)
+        }
         nativeSubagentRunner.childMCPArgumentsProvider = { [weak self] parentSession, agent in
             await self?.childMCPArguments(for: parentSession, agent: agent) ?? []
         }
@@ -1129,6 +1132,7 @@ final class AppViewModel: NSObject {
         var importedNames: [String] = []
         var skippedNames: [String] = []
         var importedPaths: [String] = []
+        var importedCandidates: [ExternalSkillCandidate] = []
         let existingPaths = appSettings.externalSkillPaths
 
         for candidate in candidates {
@@ -1139,9 +1143,24 @@ final class AppViewModel: NSObject {
             }
             importedPaths.append(sourcePath)
             importedNames.append(candidate.name)
+            importedCandidates.append(candidate)
         }
 
         if appSettingsController.addExternalSkillPaths(importedPaths) {
+            appSettings = appSettingsController.settings
+        }
+        if !importedPaths.isEmpty {
+            let sourceRoots = Set(importedCandidates.map { URL(fileURLWithPath: $0.sourceRootPath).standardizedFileURL.path })
+            let commonRoot = commonAncestorPath(for: Array(sourceRoots))
+            let collectionName = commonRoot.map { URL(fileURLWithPath: $0, isDirectory: true).lastPathComponent }.flatMap { $0.isEmpty ? nil : $0 } ?? "Imported Skills"
+            upsertSkillCollection(
+                name: collectionName,
+                description: "Local skill collection",
+                skillRootPaths: importedPaths,
+                skillNames: Set(importedNames),
+                importedRepositoryID: nil,
+                sourceLabel: commonRoot.map { "Local · \($0)" }
+            )
             appSettings = appSettingsController.settings
         }
         refresh(includeModels: false, scanAllProjects: true)
@@ -1149,6 +1168,46 @@ final class AppViewModel: NSObject {
             selectedSkillID = allVisibleSkillRecords.first { $0.name == firstImported }?.id ?? selectedSkillID
         }
         return SkillImportResult(importedNames: importedNames, skippedNames: skippedNames)
+    }
+
+    private func commonAncestorPath(for paths: [String]) -> String? {
+        guard var components = paths.first.map({ URL(fileURLWithPath: $0).standardizedFileURL.pathComponents }) else { return nil }
+        for path in paths.dropFirst() {
+            let next = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+            components = Array(zip(components, next).prefix { $0 == $1 }.map(\.0))
+            if components.isEmpty { return nil }
+        }
+        return NSString.path(withComponents: components)
+    }
+
+    private func upsertSkillCollection(
+        name: String,
+        description: String?,
+        skillRootPaths: [String],
+        skillNames: Set<String>,
+        importedRepositoryID: UUID?,
+        sourceLabel: String?
+    ) {
+        let standardizedPaths = Set(skillRootPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+        guard !standardizedPaths.isEmpty || !skillNames.isEmpty else { return }
+        let existing = appSettingsController.settings.skillCollections.first { collection in
+            if let importedRepositoryID, collection.importedRepositoryID == importedRepositoryID { return true }
+            return collection.importedRepositoryID == nil && collection.name == name && collection.sourceLabel == sourceLabel
+        }
+        var collection = existing ?? SkillCollectionRecord(
+            name: name,
+            description: description,
+            skillRootPaths: [],
+            skillNames: [],
+            importedRepositoryID: importedRepositoryID,
+            sourceLabel: sourceLabel
+        )
+        collection.description = description ?? collection.description
+        collection.skillRootPaths.formUnion(standardizedPaths)
+        collection.skillNames.formUnion(skillNames)
+        collection.importedRepositoryID = importedRepositoryID ?? collection.importedRepositoryID
+        collection.sourceLabel = sourceLabel ?? collection.sourceLabel
+        appSettingsController.upsertSkillCollection(collection)
     }
 
     // MARK: - Remote skill repositories
@@ -1227,8 +1286,9 @@ final class AppViewModel: NSObject {
         var syncedDirectories = Set(context.existingRepository?.syncedSkillRelativePaths ?? [])
         syncedDirectories.formUnion(selectedCandidates.map(\.repoRelativeDirectory))
 
+        let repositoryID = context.existingRepository?.id ?? UUID()
         let record = ImportedSkillRepository(
-            id: context.existingRepository?.id ?? UUID(),
+            id: repositoryID,
             remoteURL: context.source.remoteURL,
             owner: context.source.owner,
             repo: context.source.repo,
@@ -1241,6 +1301,14 @@ final class AppViewModel: NSObject {
             latestKnownRemoteCommit: context.existingRepository?.latestKnownRemoteCommit
         )
         appSettingsController.upsertImportedSkillRepository(record)
+        upsertSkillCollection(
+            name: record.displayName,
+            description: "Synced Git skill collection",
+            skillRootPaths: rootPaths,
+            skillNames: Set(selectedCandidates.map(\.name)),
+            importedRepositoryID: repositoryID,
+            sourceLabel: "GitHub · \(record.displayName)"
+        )
         appSettings = appSettingsController.settings
 
         refresh(includeModels: false, scanAllProjects: true)
@@ -6748,7 +6816,15 @@ final class AppViewModel: NSObject {
     /// universe it would as a delegated child.
     func boundAgentSkillArguments(for agent: EffectiveAgentRecord) throws -> [String] {
         let snap = startupSnapshot(forProjectPath: agent.projectRoot ?? snapshot.projectRoot ?? "")
-        return try PiSkillLaunchResolver.childSkillArguments(agent: agent, snapshot: snap)
+        return try childSkillArguments(for: agent, snapshot: snap)
+    }
+
+    private func childSkillArguments(for agent: EffectiveAgentRecord, snapshot: ScanSnapshot) throws -> [String] {
+        let collectionNames = Set(appSettings.skillCollections.map(\.name))
+        let directNames = Set(agent.resolved.skills.filter { !collectionNames.contains($0) })
+        let collectionIDs = Set(appSettings.skillCollections.filter { agent.resolved.skills.contains($0.name) }.map(\.id))
+        let expandedNames = effectiveSkillNames(directNames: directNames, collectionIDs: collectionIDs, catalog: PiSkillLaunchResolver.catalog(from: snapshot))
+        return try PiSkillLaunchResolver.childSkillArguments(agent: agent, snapshot: snapshot, expandedSkillNames: expandedNames)
     }
 
     /// Popover entry point: build the session and launch Pi. Switches the
@@ -8590,14 +8666,30 @@ final class AppViewModel: NSObject {
             // Nothing left synced from this repository — fully un-register it so
             // it is no longer checked for updates, and drop its app-managed clone.
             appSettingsController.removeImportedSkillRepository(id: repository.id)
+            removeSkillCollection(forRepositoryID: repository.id)
             try? FileManager.default.removeItem(at: cloneURL)
         } else {
             var updated = repository
             updated.syncedSkillRelativePaths = remaining
             appSettingsController.upsertImportedSkillRepository(updated)
+            updateSkillCollection(for: updated)
             reconcileSparseCheckout(for: updated)
         }
         appSettings = appSettingsController.settings
+    }
+
+    private func removeSkillCollection(forRepositoryID repositoryID: UUID) {
+        guard let collection = appSettingsController.settings.skillCollections.first(where: { $0.importedRepositoryID == repositoryID }) else { return }
+        appSettingsController.removeSkillCollection(id: collection.id)
+        for projectPath in projectPreferencesStore.preferencesByPath.keys {
+            projectPreferencesStore.setAssignedSkillCollection(collection.id, assigned: false, for: projectPath)
+        }
+    }
+
+    private func updateSkillCollection(for repository: ImportedSkillRepository) {
+        guard var collection = appSettingsController.settings.skillCollections.first(where: { $0.importedRepositoryID == repository.id }) else { return }
+        collection.skillRootPaths = Set(repository.syncedSkillRootPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+        appSettingsController.upsertSkillCollection(collection)
     }
 
     /// Keep Git's sparse-checkout patterns aligned with Agent Deck's tracked
@@ -8786,7 +8878,11 @@ final class AppViewModel: NSObject {
 
     private func parentSkillArguments(for projectURL: URL) throws -> [String] {
         let projectPath = projectURL.standardizedFileURL.path
-        let names = Array(appSettings.defaultSkillNames.union(projectPreference(for: projectPath).assignedSkillNames))
+        let names = effectiveSkillNames(
+            directNames: appSettings.defaultSkillNames.union(projectPreference(for: projectPath).assignedSkillNames),
+            collectionIDs: appSettings.defaultSkillCollectionIDs.union(projectPreference(for: projectPath).assignedSkillCollectionIDs),
+            catalog: skillCatalog(forProjectPath: projectPath)
+        )
         return try PiSkillLaunchResolver.skillArguments(for: names, catalog: skillCatalog(forProjectPath: projectPath))
     }
 
@@ -8826,17 +8922,94 @@ final class AppViewModel: NSObject {
             .filter { seen.insert($0.id).inserted }
     }
 
+    func skillRecords(in collection: SkillCollectionRecord, forProjectPath projectPath: String? = nil) -> [SkillRecord] {
+        let catalog: [SkillRecord]
+        if let projectPath {
+            catalog = skillCatalog(forProjectPath: projectPath)
+        } else {
+            catalog = allVisibleSkillRecords
+        }
+        var records: [SkillRecord] = []
+        var seenIDs = Set<String>()
+        for skill in catalog where skillBelongsToCollection(skill, collection: collection, catalog: catalog) {
+            if seenIDs.insert(skill.id).inserted { records.append(skill) }
+        }
+        return records.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    func skillCollections(containing skill: SkillRecord) -> [SkillCollectionRecord] {
+        let catalog = selectedProjectPath.map { skillCatalog(forProjectPath: $0) } ?? allVisibleSkillRecords
+        return appSettings.skillCollections.filter { collection in
+            skillBelongsToCollection(skill, collection: collection, catalog: catalog)
+        }
+    }
+
+    private func skillBelongsToCollection(_ skill: SkillRecord, collection: SkillCollectionRecord, catalog: [SkillRecord]) -> Bool {
+        let rootPaths = Set(collection.skillRootPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+        let rootPath = skillDeletionTargetURL(for: skill).standardizedFileURL.path
+        let filePath = URL(fileURLWithPath: skill.filePath).standardizedFileURL.path
+        if rootPaths.contains(rootPath) || rootPaths.contains(filePath) { return true }
+        guard collection.skillNames.contains(skill.name) else { return false }
+        // Name fallback is only safe when the catalog has a single matching name;
+        // otherwise a stale collection member would accidentally expand to every
+        // duplicate and turn an unrelated duplicate into a launch blocker.
+        return catalog.filter { $0.name == skill.name }.count == 1
+    }
+
+    func skillCollectionIsEnabledGlobally(_ collection: SkillCollectionRecord) -> Bool {
+        appSettings.defaultSkillCollectionIDs.contains(collection.id)
+    }
+
+    func skillCollection(_ collection: SkillCollectionRecord, isEnabledFor project: DiscoveredProject) -> Bool {
+        projectPreference(for: project.path).assignedSkillCollectionIDs.contains(collection.id)
+    }
+
+    func setSkillCollection(_ collection: SkillCollectionRecord, enabled: Bool, for project: DiscoveredProject) {
+        projectPreferencesStore.setAssignedSkillCollection(collection.id, assigned: enabled, for: project.path)
+        applyProjectPreferenceChanges()
+        reconcileSnapshotsFromPreferences()
+    }
+
+    func enableSkillCollectionGlobally(_ collection: SkillCollectionRecord) {
+        guard appSettingsController.setDefaultSkillCollection(collection.id, enabled: true) else { return }
+        appSettings = appSettingsController.settings
+        refresh(includeModels: false, scanAllProjects: true)
+    }
+
+    func disableSkillCollectionGlobally(_ collection: SkillCollectionRecord) {
+        guard appSettingsController.setDefaultSkillCollection(collection.id, enabled: false) else { return }
+        appSettings = appSettingsController.settings
+        refresh(includeModels: false)
+    }
+
+    private func effectiveSkillNames(directNames: Set<String>, collectionIDs: Set<UUID>, catalog: [SkillRecord]) -> [String] {
+        var names = directNames
+        let collectionsByID = Dictionary(uniqueKeysWithValues: appSettings.skillCollections.map { ($0.id, $0) })
+        for id in collectionIDs {
+            guard let collection = collectionsByID[id] else { continue }
+            for skill in catalog where skillBelongsToCollection(skill, collection: collection, catalog: catalog) {
+                names.insert(skill.name)
+            }
+        }
+        return names.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
     /// Names of the skills actually loaded into the parent session for
     /// `projectPath`: global defaults ∪ project-assigned. This is the exact set
     /// `parentSkillArguments` launches the orchestrator with — the single source
     /// of truth shared by the composer `/` browser's `isActive` flag and the
     /// session-resources popover, so neither recomputes it independently.
     func activeParentSkillNames(forProjectPath projectPath: String?) -> Set<String> {
-        var names = appSettings.defaultSkillNames
-        if let path = projectPath ?? selectedProjectPath {
-            names.formUnion(projectPreference(for: path).assignedSkillNames)
+        let path = projectPath ?? selectedProjectPath
+        var directNames = appSettings.defaultSkillNames
+        var collectionIDs = appSettings.defaultSkillCollectionIDs
+        if let path {
+            let preference = projectPreference(for: path)
+            directNames.formUnion(preference.assignedSkillNames)
+            collectionIDs.formUnion(preference.assignedSkillCollectionIDs)
         }
-        return names
+        let catalog = path.map { skillCatalog(forProjectPath: $0) } ?? (globalSnapshot.skills + globalSnapshot.librarySkills)
+        return Set(effectiveSkillNames(directNames: directNames, collectionIDs: collectionIDs, catalog: catalog))
     }
 
     /// The resolved `SkillRecord`s actually available to the parent session for
@@ -9140,8 +9313,36 @@ final class AppViewModel: NSObject {
             let url = URL(fileURLWithPath: rawPath).standardizedFileURL
             return url.path == fileURL.path || url.path == deletedTargetPath
         }
+        let removedPaths = Set(pathsToRemove.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
         guard appSettingsController.removeExternalSkillPaths(pathsToRemove) else { return }
+        pruneSkillCollections(removingSkillName: skill.name, rootPath: deletedTargetPath, filePath: fileURL.path, extraPaths: removedPaths)
         appSettings = appSettingsController.settings
+    }
+
+    private func pruneSkillCollections(removingSkillName skillName: String, rootPath: String, filePath: String, extraPaths: Set<String> = []) {
+        var updatedCollections: [SkillCollectionRecord] = []
+        var didChange = false
+        let removalPaths = extraPaths.union([rootPath, filePath].map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+        for var collection in appSettingsController.settings.skillCollections {
+            let before = collection
+            collection.skillNames.remove(skillName)
+            collection.skillRootPaths.subtract(removalPaths)
+            if collection.skillRootPaths.isEmpty && collection.skillNames.isEmpty {
+                didChange = true
+                continue
+            }
+            if collection != before { didChange = true }
+            updatedCollections.append(collection)
+        }
+        guard didChange else { return }
+        appSettingsController.replaceSkillCollections(updatedCollections)
+        let known = Set(updatedCollections.map(\.id))
+        for projectPath in projectPreferencesStore.preferencesByPath.keys {
+            let preference = projectPreferencesStore.preference(for: projectPath)
+            for id in preference.assignedSkillCollectionIDs where !known.contains(id) {
+                projectPreferencesStore.setAssignedSkillCollection(id, assigned: false, for: projectPath)
+            }
+        }
     }
 
     private func ensureLibraryAgent(for agent: AgentRecord) throws -> URL {

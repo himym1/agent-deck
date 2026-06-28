@@ -38,6 +38,9 @@ final class PiSubagentRunService {
     var onMemoryWrite: ((UUID, UUID, String?, AgentMemoryWriteBridgeRequest) async -> String)?
     var onMemoryMarkStale: ((UUID, UUID, String?, AgentMemoryStaleBridgeRequest) async -> String)?
     var onMemorySearch: ((UUID, UUID, String?, AgentMemorySearchBridgeRequest) async -> String)?
+    /// Expands app-managed skill collection assignments before delegated child
+    /// launch. Runtime still receives individual `--skill` arguments.
+    var childSkillArgumentsProvider: ((EffectiveAgentRecord, ScanSnapshot) throws -> [String])?
     /// Injects the native MCP bridge + scoped catalog into a delegated Deck agent
     /// (mirrors `childMemoryArgumentsProvider`). Returns `[]` when the agent has no
     /// assigned MCP servers or MCP is off.
@@ -65,7 +68,8 @@ final class PiSubagentRunService {
         let isContinuation = continuingRun != nil
         let runID = continuingRun?.id ?? UUID()
         let artifactDirectory = try isContinuation ? continuationArtifactDirectory(for: runID) : artifactDirectory(for: runID)
-        let skillArguments = try PiSkillLaunchResolver.childSkillArguments(agent: agent, snapshot: snapshot)
+        let skillArguments = try childSkillArgumentsProvider?(agent, snapshot)
+            ?? PiSkillLaunchResolver.childSkillArguments(agent: agent, snapshot: snapshot)
         let missingSkillNames: [String] = []
         let worktreeURL = isContinuation ? nil : (useWorktreeIsolation ? try await createWorktree(for: parentSession, artifactDirectory: artifactDirectory) : nil)
         let resolvedBaseCommit: String? = useWorktreeIsolation

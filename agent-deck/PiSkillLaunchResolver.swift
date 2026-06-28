@@ -46,8 +46,8 @@ struct PiSkillLaunchResolver {
         return try skillArguments(for: names, catalog: catalog(from: snapshot))
     }
 
-    static func childSkillArguments(agent: EffectiveAgentRecord, snapshot: ScanSnapshot) throws -> [String] {
-        let names = normalizedNames(agent.resolved.skills)
+    static func childSkillArguments(agent: EffectiveAgentRecord, snapshot: ScanSnapshot, expandedSkillNames: [String]? = nil) throws -> [String] {
+        let names = normalizedNames(expandedSkillNames ?? agent.resolved.skills)
         guard !names.isEmpty else { return [] }
         try validateReadToolAccess(agent: agent, skillNames: names)
         return try skillArguments(for: names, catalog: catalog(from: snapshot))
