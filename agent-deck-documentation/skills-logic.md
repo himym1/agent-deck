@@ -31,7 +31,7 @@ The Skills view import sheet lets a user choose either a skill root or a broader
 
 Importing selected skills stores the selected skill root paths in Agent Deck settings. It does not store the broad search folder, copy files, or automatically assign the skills. The selected roots become catalog entries and are injected only when assigned as Default, Project, or Agent skills.
 
-When a local-folder import or Git import contains selected skills, Agent Deck also records a first-class Skill Collection for that source. A collection is assignment metadata, not a runtime primitive: enabling a collection for All Projects or a project expands the collection to its member skill names, then launch resolution still emits one `--skill <path>` argument for each resolved skill. Removing a skill from the catalog removes it from collection membership; Git-backed collections continue to share the repository record and sparse-checkout metadata used for updates.
+When a local-folder import or Git import contains selected skills and the user enables **Import as collection**, Agent Deck also records a first-class Skill Collection with the chosen name for that source. A collection is assignment metadata, not a runtime primitive: enabling a collection for All Projects or a project expands the collection to its member skill names, then launch resolution still emits one `--skill <path>` argument for each resolved skill. Removing a skill from the catalog removes it from collection membership; Git-backed collections continue to share the repository record and sparse-checkout metadata used for updates.
 
 ## Bundled authoring skills
 

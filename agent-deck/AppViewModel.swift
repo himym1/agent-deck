@@ -1128,11 +1128,15 @@ final class AppViewModel: NSObject {
         }
     }
 
-    func importExternalSkills(_ candidates: [ExternalSkillCandidate]) throws -> SkillImportResult {
+    func importExternalSkills(
+        _ candidates: [ExternalSkillCandidate],
+        collectionName: String?
+    ) throws -> SkillImportResult {
         var importedNames: [String] = []
         var skippedNames: [String] = []
         var importedPaths: [String] = []
         var importedCandidates: [ExternalSkillCandidate] = []
+        let requestedCollectionName = collectionName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let existingPaths = appSettings.externalSkillPaths
 
         for candidate in candidates {
@@ -1149,10 +1153,9 @@ final class AppViewModel: NSObject {
         if appSettingsController.addExternalSkillPaths(importedPaths) {
             appSettings = appSettingsController.settings
         }
-        if !importedPaths.isEmpty {
+        if !importedPaths.isEmpty, let collectionName = requestedCollectionName, !collectionName.isEmpty {
             let sourceRoots = Set(importedCandidates.map { URL(fileURLWithPath: $0.sourceRootPath).standardizedFileURL.path })
             let commonRoot = commonAncestorPath(for: Array(sourceRoots))
-            let collectionName = commonRoot.map { URL(fileURLWithPath: $0, isDirectory: true).lastPathComponent }.flatMap { $0.isEmpty ? nil : $0 } ?? "Imported Skills"
             upsertSkillCollection(
                 name: collectionName,
                 description: "Local skill collection",
@@ -1268,11 +1271,14 @@ final class AppViewModel: NSObject {
     /// catalog, and record (or extend) the synced-repository entry.
     func importRemoteSkills(
         context: RemoteSkillImportContext,
-        selectedCandidates: [RemoteSkillCandidate]
+        selectedCandidates: [RemoteSkillCandidate],
+        collectionName: String?
     ) async throws -> SkillImportResult {
         guard !selectedCandidates.isEmpty else {
             return SkillImportResult(importedNames: [], skippedNames: [])
         }
+
+        let requestedCollectionName = collectionName?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         try await skillRepositorySyncService.checkout(
             selectedCandidates,
@@ -1301,14 +1307,16 @@ final class AppViewModel: NSObject {
             latestKnownRemoteCommit: context.existingRepository?.latestKnownRemoteCommit
         )
         appSettingsController.upsertImportedSkillRepository(record)
-        upsertSkillCollection(
-            name: record.displayName,
-            description: "Synced Git skill collection",
-            skillRootPaths: rootPaths,
-            skillNames: Set(selectedCandidates.map(\.name)),
-            importedRepositoryID: repositoryID,
-            sourceLabel: "GitHub · \(record.displayName)"
-        )
+        if let collectionName = requestedCollectionName, !collectionName.isEmpty {
+            upsertSkillCollection(
+                name: collectionName,
+                description: "Synced Git skill collection",
+                skillRootPaths: rootPaths,
+                skillNames: Set(selectedCandidates.map(\.name)),
+                importedRepositoryID: repositoryID,
+                sourceLabel: "GitHub · \(record.displayName)"
+            )
+        }
         appSettings = appSettingsController.settings
 
         refresh(includeModels: false, scanAllProjects: true)

@@ -47,6 +47,10 @@ struct SkillImportSheet: View {
     /// Per-row hover state is stored in a dictionary so hover only invalidates
     /// the affected row, not the whole list.
     @State private var hoveredCandidateIDs: Set<String> = []
+    @State private var importAsCollection = false
+    @State private var collectionName = ""
+    @State private var didManuallySetImportAsCollection = false
+    @State private var didEditCollectionName = false
     /// Cancellation handle for the search debounce task.
     @State private var searchDebounceTask: Task<Void, Never>?
 
@@ -85,10 +89,12 @@ struct SkillImportSheet: View {
             searchText = ""
             filteredCandidates = []
             selectedIDs = []
+            resetCollectionOptions()
             summariesByID = [:]
             hoveredCandidateIDs.removeAll()
         }
         .onChange(of: searchText) { _, _ in scheduleFilterUpdate() }
+        .onChange(of: selectedIDs) { _, _ in updateCollectionDefaultsForCurrentSelection() }
         .onChange(of: localCandidates) { _, _ in scheduleFilterUpdate(immediate: true) }
         .onChange(of: remoteContext) { _, _ in scheduleFilterUpdate(immediate: true) }
         .onAppear { scheduleFilterUpdate(immediate: true) }
@@ -371,6 +377,8 @@ struct SkillImportSheet: View {
                 .font(.caption2)
                 .foregroundStyle(AppTheme.mutedText)
 
+            collectionOptionsView
+
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if filteredCandidates.isEmpty {
@@ -565,13 +573,105 @@ struct SkillImportSheet: View {
         return parts.joined(separator: " • ")
     }
 
+    @ViewBuilder
+    private var collectionOptionsView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(isOn: Binding(
+                get: { importAsCollection },
+                set: { newValue in
+                    didManuallySetImportAsCollection = true
+                    importAsCollection = newValue
+                    if newValue, collectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        collectionName = suggestedCollectionName
+                    }
+                }
+            )) {
+                Text("Import as collection")
+                    .font(.caption.weight(.semibold))
+            }
+            .appCheckbox()
+            .disabled(isBusy || selectedIDs.isEmpty)
+
+            HStack(spacing: 8) {
+                Text("Collection name")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(AppTheme.mutedText)
+                TextField("Collection name", text: Binding(
+                    get: { collectionName },
+                    set: { newValue in
+                        didEditCollectionName = true
+                        collectionName = newValue
+                    }
+                ))
+                .textFieldStyle(.plain)
+                .appBrandTint()
+                .disabled(!importAsCollection || isBusy || selectedIDs.isEmpty)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(AppTheme.contentStroke.opacity(importAsCollection ? 0.8 : 0.35), lineWidth: 1)
+            )
+            .opacity(importAsCollection ? 1 : 0.55)
+
+            Text(importAsCollection
+                 ? "Creates a reusable collection for the selected skills; skills are still imported as individual catalog entries."
+                 : "Imports the selected skills as flat catalog entries only.")
+                .font(.caption2)
+                .foregroundStyle(AppTheme.mutedText)
+        }
+        .padding(10)
+        .background(AppTheme.panelFill.opacity(0.55), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(AppTheme.contentStroke.opacity(0.5), lineWidth: 1)
+        )
+    }
+
+    private var trimmedCollectionName: String {
+        collectionName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var selectedImportableCount: Int {
+        selectedIDs.intersection(Set(importableCandidates.map(\.id))).count
+    }
+
+    private var suggestedCollectionName: String {
+        switch mode {
+        case .localFolder:
+            let name = localSourceURL?.lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return name.isEmpty ? "Imported Skills" : name
+        case .gitRepository:
+            let name = remoteContext?.source.displayName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return name.isEmpty ? "Imported Skills" : name
+        }
+    }
+
     private var isBusy: Bool {
         isScanningLocal || isFetchingRemote || isImporting
     }
 
     private var canImport: Bool {
-        guard !isBusy else { return false }
-        return !selectedIDs.isEmpty
+        guard !isBusy, !selectedIDs.isEmpty else { return false }
+        return !importAsCollection || !trimmedCollectionName.isEmpty
+    }
+
+    private func resetCollectionOptions() {
+        importAsCollection = false
+        collectionName = ""
+        didManuallySetImportAsCollection = false
+        didEditCollectionName = false
+    }
+
+    private func updateCollectionDefaultsForCurrentSelection() {
+        if !didManuallySetImportAsCollection {
+            importAsCollection = selectedImportableCount > 1
+        }
+        if !didEditCollectionName || trimmedCollectionName.isEmpty {
+            collectionName = suggestedCollectionName
+        }
     }
 
     // MARK: - Local folder actions
@@ -590,6 +690,7 @@ struct SkillImportSheet: View {
         localSourceURL = url
         localCandidates = []
         selectedIDs = []
+        resetCollectionOptions()
         localScanProgress = nil
         isScanningLocal = true
 
@@ -618,6 +719,7 @@ struct SkillImportSheet: View {
         }
         // Pre-select only skills that are not already in the catalog.
         selectedIDs = Set(importableCandidates.map(\.id))
+        updateCollectionDefaultsForCurrentSelection()
     }
 
     // MARK: - Git repository actions
@@ -633,6 +735,7 @@ struct SkillImportSheet: View {
         }
         remoteContext = nil
         selectedIDs = []
+        resetCollectionOptions()
         searchText = ""
         isFetchingRemote = true
         remoteFetchPhase = "Cloning repository…"
@@ -674,6 +777,7 @@ struct SkillImportSheet: View {
         } else {
             selectedIDs = Set(importable.map(\.id))
         }
+        updateCollectionDefaultsForCurrentSelection()
     }
 
     private func matches(_ candidate: RemoteSkillCandidate, slug: String) -> Bool {
@@ -695,7 +799,10 @@ struct SkillImportSheet: View {
             let selected = localCandidates.filter { selectedIDs.contains($0.sourceRootPath) }
             guard !selected.isEmpty else { return }
             do {
-                let result = try viewModel.importExternalSkills(selected)
+                let result = try viewModel.importExternalSkills(
+                    selected,
+                    collectionName: importAsCollection ? trimmedCollectionName : nil
+                )
                 finish(result)
             } catch {
                 importErrorMessage = error.localizedDescription
@@ -708,7 +815,11 @@ struct SkillImportSheet: View {
             isImporting = true
             Task {
                 do {
-                    let result = try await viewModel.importRemoteSkills(context: context, selectedCandidates: selected)
+                    let result = try await viewModel.importRemoteSkills(
+                        context: context,
+                        selectedCandidates: selected,
+                        collectionName: importAsCollection ? trimmedCollectionName : nil
+                    )
                     isImporting = false
                     finish(result)
                 } catch {
