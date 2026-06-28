@@ -50,6 +50,14 @@ private enum SkillLibraryItem: Identifiable, Hashable {
     }
 }
 
+private enum CollectionMembershipFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case included = "Included"
+    case available = "Available"
+
+    var id: String { rawValue }
+}
+
 private enum SkillWarningSelection: Identifiable, Hashable {
     case missing(SkillReferenceWarning)
     case diagnostic(DiagnosticWarning)
@@ -130,6 +138,8 @@ struct SkillsScreen: View {
     @FocusState private var isSkillNameFocused: Bool
     @State private var skillRenameErrorMessage: String?
     @State private var detailSummariesBySkillID: [SkillRecord.ID: SkillDetailSummaryState] = [:]
+    @State private var collectionMembershipSearchText = ""
+    @State private var collectionMembershipFilter: CollectionMembershipFilter = .all
     // Cached sectioning + filtered list + per-row inactive map. The full
     // build runs `Dictionary(grouping:)` + sort + multi-field search +
     // sectioning over `viewModel.allVisibleSkillRecords` — recomputing it on
@@ -141,10 +151,11 @@ struct SkillsScreen: View {
         sections: [AppListSection<SkillLibraryItem>],
         inactiveByID: [SkillRecord.ID: Bool],
         managedSkills: [SkillRecord],
+        catalogSkills: [SkillRecord],
         repositoryBySkillID: [SkillRecord.ID: ImportedSkillRepository],
         collectionCountBySkillID: [SkillRecord.ID: Int],
         collectionMembersByID: [UUID: [SkillRecord]]
-    ) = ([], [:], [], [:], [:], [:])
+    ) = ([], [:], [], [], [:], [:], [:])
 
     var body: some View {
         skillsScreenWithSheets
@@ -447,6 +458,7 @@ struct SkillsScreen: View {
         sections: [AppListSection<SkillLibraryItem>],
         inactiveByID: [SkillRecord.ID: Bool],
         managedSkills: [SkillRecord],
+        catalogSkills: [SkillRecord],
         repositoryBySkillID: [SkillRecord.ID: ImportedSkillRepository],
         collectionCountBySkillID: [SkillRecord.ID: Int],
         collectionMembersByID: [UUID: [SkillRecord]]
@@ -586,7 +598,7 @@ struct SkillsScreen: View {
             ))
         }
 
-        return (sections, inactiveByID, managed, repositoryBySkillID, collectionCountBySkillID, collectionMembersByID)
+        return (sections, inactiveByID, managed, preferred, repositoryBySkillID, collectionCountBySkillID, collectionMembersByID)
     }
 
     private func skillRootPath(for skill: SkillRecord) -> String {
@@ -942,40 +954,8 @@ struct SkillsScreen: View {
             collectionAssignmentList(for: collection)
         }
 
-        AppCard(title: "Skills") {
-            if members.isEmpty {
-                ContentUnavailableView("No Skills", systemImage: "wand.and.stars", description: Text("Use the Collections toolbar button to add skills to this collection."))
-                    .frame(maxWidth: .infinity, minHeight: 160)
-            } else {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(members) { skill in
-                        Button {
-                            selectedCollectionID = nil
-                            selectedSkillIDs = [skill.id]
-                            syncLibrarySelectionFromState()
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: skillIcon(skill))
-                                    .foregroundStyle(skillColor(isAssigned: viewModel.cachedSkillMetadataByID[skill.id]?.isAssigned ?? false))
-                                    .frame(width: 18)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(skill.name)
-                                        .font(.callout.weight(.semibold))
-                                    Text(skill.description ?? skillLocationLabel(skill, selectedProjectRoot: viewModel.globalCatalogSnapshot.projectRoot))
-                                        .font(.caption)
-                                        .foregroundStyle(AppTheme.mutedText)
-                                        .lineLimit(1)
-                                }
-                                Spacer()
-                            }
-                            .padding(.vertical, 8)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        if skill.id != members.last?.id { Divider() }
-                    }
-                }
-            }
+        AppCard(title: "Collection Membership") {
+            collectionMembershipList(for: collection, members: members)
         }
     }
 
@@ -994,7 +974,7 @@ struct SkillsScreen: View {
                             HStack(spacing: 8) {
                                 Label(collection.name, systemImage: "folder.badge.gearshape")
                                     .font(.subheadline.weight(.semibold))
-                                Text("\(viewModel.skillRecords(in: collection, forProjectPath: viewModel.selectedProjectPath).count) skills")
+                                Text("\(cachedLayout.collectionMembersByID[collection.id]?.count ?? 0) skills")
                                     .font(.caption2.weight(.semibold))
                                     .foregroundStyle(AppTheme.mutedText)
                                     .padding(.horizontal, 7)
@@ -2359,6 +2339,11 @@ private struct SkillCollectionEditorSheet: View {
     @State private var pendingDelete: SkillCollectionRecord?
     @State private var originalSnapshot = CollectionDraftSnapshot.empty
     @State private var saveFeedbackToken: UUID?
+    @State private var cachedCollections: [SkillCollectionRecord] = []
+    @State private var cachedCatalogSkills: [SkillRecord] = []
+    @State private var cachedFilteredCatalogSkills: [SkillRecord] = []
+    @State private var cachedCollectionMemberCountsByID: [UUID: Int] = [:]
+    @State private var cachedCollectionMemberIDsByID: [UUID: Set<SkillRecord.ID>] = [:]
 
     private struct CollectionDraftSnapshot: Equatable {
         var name: String
@@ -2368,39 +2353,11 @@ private struct SkillCollectionEditorSheet: View {
         static let empty = CollectionDraftSnapshot(name: "", description: nil, skillIDs: [])
     }
 
-    private var collections: [SkillCollectionRecord] {
-        viewModel.appSettings.skillCollections.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
+    private var collections: [SkillCollectionRecord] { cachedCollections }
 
     private var selectedCollection: SkillCollectionRecord? {
         guard let selectedCollectionID else { return nil }
         return collections.first { $0.id == selectedCollectionID }
-    }
-
-    private var catalogSkills: [SkillRecord] {
-        let grouped = Dictionary(grouping: viewModel.allVisibleSkillRecords, by: \.name)
-        return grouped.values.compactMap { records in
-            records.first { $0.source.kind == .library }
-            ?? records.first { $0.source.kind == .global }
-            ?? records.first { $0.source.kind == .project }
-            ?? records.first
-        }
-        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-
-    private var filteredCatalogSkills: [SkillRecord] {
-        let query = skillSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return catalogSkills }
-        return catalogSkills.filter { skill in
-            [
-                skill.name,
-                skill.description ?? "",
-                skill.source.displayName,
-                skill.source.path,
-                skill.filePath
-            ]
-            .contains { $0.lowercased().contains(query) }
-        }
     }
 
     private var isSkillSearchActive: Bool {
@@ -2423,12 +2380,6 @@ private struct SkillCollectionEditorSheet: View {
         !currentSnapshot.name.isEmpty && hasUnsavedChanges
     }
 
-    private var collectionMemberCountsByID: [UUID: Int] {
-        Dictionary(uniqueKeysWithValues: collections.map { collection in
-            (collection.id, viewModel.skillRecords(in: collection, forProjectPath: viewModel.selectedProjectPath).count)
-        })
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -2446,11 +2397,27 @@ private struct SkillCollectionEditorSheet: View {
         .frame(width: 760, height: 620)
         .background(AppTheme.windowBackground)
         .onAppear {
+            refreshCollectionEditorCaches()
             if let first = collections.first {
                 load(first)
             } else {
                 beginNewCollection()
             }
+        }
+        .onChange(of: skillSearchText) { _, _ in
+            refreshFilteredCatalogSkills()
+        }
+        .onChange(of: viewModel.allVisibleSkillRecords) { _, _ in
+            refreshCollectionEditorCaches()
+            reloadSelectedCollectionIfNeeded()
+        }
+        .onChange(of: viewModel.appSettings.skillCollections) { _, _ in
+            refreshCollectionEditorCaches()
+            reloadSelectedCollectionIfNeeded()
+        }
+        .onChange(of: viewModel.selectedProjectPath) { _, _ in
+            refreshCollectionEditorCaches()
+            reloadSelectedCollectionIfNeeded()
         }
         .alert("Delete Collection?", isPresented: Binding(
             get: { pendingDelete != nil },
@@ -2477,7 +2444,7 @@ private struct SkillCollectionEditorSheet: View {
     }
 
     private var collectionSidebar: some View {
-        let memberCountsByID = collectionMemberCountsByID
+        let memberCountsByID = cachedCollectionMemberCountsByID
         return VStack(alignment: .leading, spacing: 0) {
             NewCollectionSidebarButton(action: beginNewCollection)
                 .padding(.horizontal, 8)
@@ -2580,7 +2547,8 @@ private struct SkillCollectionEditorSheet: View {
     }
 
     private var editorContent: some View {
-        ScrollView(showsIndicators: false) {
+        let filteredSkills = cachedFilteredCatalogSkills
+        return ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
                 AppCard(title: selectedCollection == nil ? "New Collection" : "Collection") {
                     VStack(alignment: .leading, spacing: 12) {
@@ -2600,14 +2568,14 @@ private struct SkillCollectionEditorSheet: View {
 
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 0) {
-                                if filteredCatalogSkills.isEmpty {
+                                if filteredSkills.isEmpty {
                                     Text(isSkillSearchActive ? "No skills match your search." : "No catalog skills available.")
                                         .font(.caption)
                                         .foregroundStyle(AppTheme.mutedText)
                                         .frame(maxWidth: .infinity, minHeight: 120)
                                 }
 
-                                ForEach(Array(filteredCatalogSkills.enumerated()), id: \.element.id) { index, skill in
+                                ForEach(Array(filteredSkills.enumerated()), id: \.element.id) { index, skill in
                                     Toggle(isOn: Binding(
                                         get: { selectedSkillIDs.contains(skill.id) },
                                         set: { enabled in
@@ -2627,7 +2595,7 @@ private struct SkillCollectionEditorSheet: View {
                                     .appCheckbox()
                                     .padding(.vertical, 7)
 
-                                    if index < filteredCatalogSkills.count - 1 { Divider() }
+                                    if index < filteredSkills.count - 1 { Divider() }
                                 }
                             }
                         }
@@ -2664,6 +2632,61 @@ private struct SkillCollectionEditorSheet: View {
         .padding(16)
     }
 
+    private func refreshCollectionEditorCaches() {
+        cachedCollections = viewModel.appSettings.skillCollections.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        cachedCatalogSkills = dedupedSortedCatalogSkills(from: viewModel.allVisibleSkillRecords)
+        cachedCollectionMemberIDsByID = viewModel.skillCollectionMemberIDsByCollectionID(
+            for: cachedCollections,
+            forProjectPath: viewModel.selectedProjectPath
+        )
+        cachedCollectionMemberCountsByID = cachedCollectionMemberIDsByID.mapValues(\.count)
+        refreshFilteredCatalogSkills()
+    }
+
+    private func dedupedSortedCatalogSkills(from records: [SkillRecord]) -> [SkillRecord] {
+        let grouped = Dictionary(grouping: records, by: \.name)
+        return grouped.values.compactMap { records in
+            records.first { $0.source.kind == .library }
+            ?? records.first { $0.source.kind == .global }
+            ?? records.first { $0.source.kind == .project }
+            ?? records.first
+        }
+        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func refreshFilteredCatalogSkills() {
+        let query = skillSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else {
+            cachedFilteredCatalogSkills = cachedCatalogSkills
+            return
+        }
+        cachedFilteredCatalogSkills = cachedCatalogSkills.filter { skill in
+            [
+                skill.name,
+                skill.description ?? "",
+                skill.source.displayName,
+                skill.source.path,
+                skill.filePath
+            ]
+            .contains { $0.lowercased().contains(query) }
+        }
+    }
+
+    private func cachedMemberIDs(for collection: SkillCollectionRecord) -> Set<SkillRecord.ID> {
+        if let memberIDs = cachedCollectionMemberIDsByID[collection.id] {
+            return memberIDs
+        }
+        return Set(viewModel.skillRecords(in: collection, forProjectPath: viewModel.selectedProjectPath).map(\.id))
+    }
+
+    private func reloadSelectedCollectionIfNeeded() {
+        if let selectedCollectionID, let collection = collections.first(where: { $0.id == selectedCollectionID }) {
+            load(collection)
+        } else if selectedCollectionID != nil {
+            beginNewCollection()
+        }
+    }
+
     private func beginNewCollection() {
         selectedCollectionID = nil
         draftName = ""
@@ -2677,8 +2700,7 @@ private struct SkillCollectionEditorSheet: View {
         selectedCollectionID = collection.id
         draftName = collection.name
         draftDescription = collection.description ?? ""
-        let members = viewModel.skillRecords(in: collection, forProjectPath: viewModel.selectedProjectPath)
-        let memberIDs = Set(members.map(\.id))
+        let memberIDs = cachedMemberIDs(for: collection)
         selectedSkillIDs = memberIDs
         originalSnapshot = CollectionDraftSnapshot(
             name: collection.name.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -2690,7 +2712,7 @@ private struct SkillCollectionEditorSheet: View {
 
     private func saveCollection() {
         guard canSave else { return }
-        let selectedSkills = catalogSkills.filter { selectedSkillIDs.contains($0.id) }
+        let selectedSkills = cachedCatalogSkills.filter { selectedSkillIDs.contains($0.id) }
         let snapshot = currentSnapshot
         let collection = SkillCollectionRecord(
             id: selectedCollectionID ?? UUID(),
@@ -2702,6 +2724,7 @@ private struct SkillCollectionEditorSheet: View {
             sourceLabel: selectedCollection?.sourceLabel
         )
         viewModel.saveSkillCollection(collection)
+        refreshCollectionEditorCaches()
         load(collection)
         onSelect(collection)
         showSavedFeedback()
@@ -2729,6 +2752,7 @@ private struct SkillCollectionEditorSheet: View {
     private func delete(_ collection: SkillCollectionRecord) {
         viewModel.removeSkillCollection(collection)
         pendingDelete = nil
+        refreshCollectionEditorCaches()
         if let first = collections.first(where: { $0.id != collection.id }) {
             load(first)
             onSelect(first)

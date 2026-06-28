@@ -8945,6 +8945,47 @@ final class AppViewModel: NSObject {
         return records.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
+    func skillCollectionMemberIDsByCollectionID(for collections: [SkillCollectionRecord], forProjectPath projectPath: String? = nil) -> [UUID: Set<SkillRecord.ID>] {
+        let catalog: [SkillRecord]
+        if let projectPath {
+            catalog = skillCatalog(forProjectPath: projectPath)
+        } else {
+            catalog = allVisibleSkillRecords
+        }
+        guard !collections.isEmpty, !catalog.isEmpty else {
+            return Dictionary(uniqueKeysWithValues: collections.map { ($0.id, Set<SkillRecord.ID>()) })
+        }
+
+        let nameCounts = Dictionary(grouping: catalog, by: \.name).mapValues(\.count)
+        let normalizedCollections = collections.map { collection in
+            (
+                id: collection.id,
+                rootPaths: Set(collection.skillRootPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path }),
+                skillNames: collection.skillNames
+            )
+        }
+        let normalizedSkills = catalog.map { skill in
+            (
+                id: skill.id,
+                name: skill.name,
+                rootPath: skillDeletionTargetURL(for: skill).path,
+                filePath: URL(fileURLWithPath: skill.filePath).standardizedFileURL.path
+            )
+        }
+
+        var memberIDsByCollectionID = Dictionary(uniqueKeysWithValues: collections.map { ($0.id, Set<SkillRecord.ID>()) })
+        for normalizedSkill in normalizedSkills {
+            for collection in normalizedCollections {
+                let isRootMatch = collection.rootPaths.contains(normalizedSkill.rootPath) || collection.rootPaths.contains(normalizedSkill.filePath)
+                let isUniqueNameFallback = collection.skillNames.contains(normalizedSkill.name) && nameCounts[normalizedSkill.name] == 1
+                if isRootMatch || isUniqueNameFallback {
+                    memberIDsByCollectionID[collection.id, default: []].insert(normalizedSkill.id)
+                }
+            }
+        }
+        return memberIDsByCollectionID
+    }
+
     func skillCollections(containing skill: SkillRecord) -> [SkillCollectionRecord] {
         let catalog = selectedProjectPath.map { skillCatalog(forProjectPath: $0) } ?? allVisibleSkillRecords
         return appSettings.skillCollections.filter { collection in
