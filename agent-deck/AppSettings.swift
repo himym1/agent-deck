@@ -322,19 +322,6 @@ struct AppSettings: Codable, Hashable {
         externalSkillPaths = try container.decodeIfPresent(Set<String>.self, forKey: .externalSkillPaths) ?? []
         skillCollections = try container.decodeIfPresent([SkillCollectionRecord].self, forKey: .skillCollections) ?? []
         importedSkillRepositories = try container.decodeIfPresent([ImportedSkillRepository].self, forKey: .importedSkillRepositories) ?? []
-        if skillCollections.isEmpty && !importedSkillRepositories.isEmpty {
-            skillCollections = importedSkillRepositories.map { repository in
-                SkillCollectionRecord(
-                    id: UUID(),
-                    name: repository.displayName,
-                    description: "Synced Git skill collection",
-                    skillRootPaths: Set(repository.syncedSkillRootPaths),
-                    skillNames: [],
-                    importedRepositoryID: repository.id,
-                    sourceLabel: "GitHub · \(repository.displayName)"
-                )
-            }
-        }
         defaultPromptTemplateNames = try container.decodeIfPresent(Set<String>.self, forKey: .defaultPromptTemplateNames) ?? []
         disabledBundledPromptNames = try container.decodeIfPresent(Set<String>.self, forKey: .disabledBundledPromptNames) ?? []
         disabledBundledSkillNames = try container.decodeIfPresent(Set<String>.self, forKey: .disabledBundledSkillNames) ?? []

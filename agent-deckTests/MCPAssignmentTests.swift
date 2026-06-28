@@ -91,7 +91,7 @@ final class MCPAssignmentTests: XCTestCase {
     }
 
     @MainActor
-    func testAppSettingsMigratesImportedSkillRepositoriesToCollections() throws {
+    func testAppSettingsDoesNotInferCollectionsFromImportedRepositories() throws {
         let repository = ImportedSkillRepository(
             id: UUID(),
             remoteURL: "https://github.com/PostHog/ai-plugin.git",
@@ -110,9 +110,7 @@ final class MCPAssignmentTests: XCTestCase {
         let json = "{\"importedSkillRepositories\":\(repositoriesJSON)}"
         let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
 
-        XCTAssertEqual(settings.skillCollections.count, 1)
-        XCTAssertEqual(settings.skillCollections.first?.importedRepositoryID, repository.id)
-        XCTAssertEqual(settings.skillCollections.first?.name, "PostHog/ai-plugin")
-        XCTAssertEqual(settings.skillCollections.first?.skillRootPaths, Set(repository.syncedSkillRootPaths))
+        XCTAssertEqual(settings.importedSkillRepositories, [repository])
+        XCTAssertTrue(settings.skillCollections.isEmpty)
     }
 }

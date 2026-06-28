@@ -8952,6 +8952,29 @@ final class AppViewModel: NSObject {
         }
     }
 
+    func saveSkillCollection(_ collection: SkillCollectionRecord) {
+        guard appSettingsController.upsertSkillCollection(collection) else { return }
+        appSettings = appSettingsController.settings
+        refresh(includeModels: false, scanAllProjects: true)
+    }
+
+    func removeSkillCollection(_ collection: SkillCollectionRecord) {
+        guard appSettingsController.removeSkillCollection(id: collection.id) else { return }
+        for projectPath in projectPreferencesStore.preferencesByPath.keys {
+            projectPreferencesStore.setAssignedSkillCollection(collection.id, assigned: false, for: projectPath)
+        }
+        appSettings = appSettingsController.settings
+        applyProjectPreferenceChanges()
+        refresh(includeModels: false, scanAllProjects: true)
+    }
+
+    func skillRootPath(forCollectionMembership skill: SkillRecord) -> String {
+        let fileURL = URL(fileURLWithPath: skill.filePath).standardizedFileURL
+        return fileURL.lastPathComponent == "SKILL.md"
+            ? fileURL.deletingLastPathComponent().path
+            : fileURL.path
+    }
+
     private func skillBelongsToCollection(_ skill: SkillRecord, collection: SkillCollectionRecord, catalog: [SkillRecord]) -> Bool {
         let rootPaths = Set(collection.skillRootPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
         let rootPath = skillDeletionTargetURL(for: skill).standardizedFileURL.path

@@ -666,9 +666,6 @@ struct SkillImportSheet: View {
     }
 
     private func updateCollectionDefaultsForCurrentSelection() {
-        if !didManuallySetImportAsCollection {
-            importAsCollection = selectedImportableCount > 1
-        }
         if !didEditCollectionName || trimmedCollectionName.isEmpty {
             collectionName = suggestedCollectionName
         }
