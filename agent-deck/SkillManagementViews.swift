@@ -563,7 +563,7 @@ struct SkillsScreen: View {
             sections.append(AppListSection(
                 id: "collections",
                 title: "Collections",
-                info: "User-organized skill groups. Assigning a collection expands to its member skills at launch.",
+                info: "User-organized skill groups. Assigning a collection expands to its skills at launch.",
                 items: filteredCollections.map { .collection($0) },
                 emptyMessage: "No matching collections."
             ))
@@ -932,7 +932,7 @@ struct SkillsScreen: View {
                     }
                     .appSecondaryButton()
                 }
-                Text("Assigning this collection expands to its member skills at launch; Pi still receives explicit --skill arguments for each resolved skill.")
+                Text("Assigning this collection expands to its skills at launch; Pi still receives explicit --skill arguments for each resolved skill.")
                     .font(.caption)
                     .foregroundStyle(AppTheme.mutedText)
             }
@@ -942,9 +942,9 @@ struct SkillsScreen: View {
             collectionAssignmentList(for: collection)
         }
 
-        AppCard(title: "Member Skills") {
+        AppCard(title: "Skills") {
             if members.isEmpty {
-                ContentUnavailableView("No Member Skills", systemImage: "wand.and.stars", description: Text("Use the Collections toolbar button to add skills to this collection."))
+                ContentUnavailableView("No Skills", systemImage: "wand.and.stars", description: Text("Use the Collections toolbar button to add skills to this collection."))
                     .frame(maxWidth: .infinity, minHeight: 160)
             } else {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -985,7 +985,7 @@ struct SkillsScreen: View {
         if !collections.isEmpty {
             AppCard(title: "Skill Collections") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Collections expand to their member skills at launch; Pi still receives one --skill argument per skill.")
+                    Text("Collections expand to their skills at launch; Pi still receives one --skill argument per skill.")
                         .font(.caption)
                         .foregroundStyle(AppTheme.mutedText)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2388,7 +2388,9 @@ private struct SkillCollectionEditorSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider()
             HStack(spacing: 0) {
                 collectionSidebar
                     .frame(width: 230)
@@ -2396,140 +2398,160 @@ private struct SkillCollectionEditorSheet: View {
                 editorContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(width: 760, height: 620)
-            .navigationTitle("Skill Collections")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { saveCollection() }
-                        .disabled(!canSave)
-                }
-            }
-            .onAppear {
-                if let first = collections.first {
-                    load(first)
-                } else {
-                    beginNewCollection()
-                }
-            }
-            .alert("Delete Collection?", isPresented: Binding(
-                get: { pendingDelete != nil },
-                set: { if !$0 { pendingDelete = nil } }
-            ), presenting: pendingDelete) { collection in
-                Button("Delete", role: .destructive) { delete(collection) }
-                Button("Cancel", role: .cancel) { pendingDelete = nil }
-            } message: { collection in
-                Text("Delete \"\(collection.name)\" and clear its All Projects and project assignments? Member skills remain in the catalog.")
+            Divider()
+            footer
+        }
+        .frame(width: 760, height: 620)
+        .background(AppTheme.windowBackground)
+        .onAppear {
+            if let first = collections.first {
+                load(first)
+            } else {
+                beginNewCollection()
             }
         }
+        .alert("Delete Collection?", isPresented: Binding(
+            get: { pendingDelete != nil },
+            set: { if !$0 { pendingDelete = nil } }
+        ), presenting: pendingDelete) { collection in
+            Button("Delete", role: .destructive) { delete(collection) }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: { collection in
+            Text("Delete \"\(collection.name)\" and clear its All Projects and project assignments? Skills remain in the catalog.")
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Skill Collections")
+                .font(.headline)
+                .fontWidth(.expanded)
+            Text("Create explicit user-organized groups of skills.")
+                .font(.caption)
+                .foregroundStyle(AppTheme.mutedText)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
     }
 
     private var collectionSidebar: some View {
         let memberCountsByID = collectionMemberCountsByID
-        return VStack(alignment: .leading, spacing: 10) {
-            Button {
-                beginNewCollection()
-            } label: {
-                Label("New Collection", systemImage: "plus")
-                    .frame(maxWidth: .infinity)
-            }
-            .appSecondaryButton()
-            .padding([.horizontal, .top], 12)
-
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 4) {
-                    ForEach(collections) { collection in
-                        Button {
-                            load(collection)
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "folder.badge.gearshape")
-                                    .foregroundStyle(AppTheme.brandAccent)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(collection.name)
-                                        .font(.callout.weight(.semibold))
-                                        .lineLimit(1)
-                                    Text("\(memberCountsByID[collection.id] ?? 0) skills")
-                                        .font(.caption2)
-                                        .foregroundStyle(AppTheme.mutedText)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(selectedCollectionID == collection.id ? AppTheme.brandAccent.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        }
-                        .buttonStyle(.plain)
-                    }
+        return AppSidebarPane(title: "Collections") {
+            VStack(alignment: .leading, spacing: 12) {
+                Button {
+                    beginNewCollection()
+                } label: {
+                    Label("New Collection", systemImage: "plus")
+                        .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 12)
+                .appSecondaryButton()
+                .padding([.horizontal, .top], 12)
+
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(collections) { collection in
+                            collectionSidebarRow(collection, skillCount: memberCountsByID[collection.id] ?? 0)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 12)
+                }
             }
         }
-        .background(AppTheme.panelFill.opacity(0.45))
+    }
+
+    private func collectionSidebarRow(_ collection: SkillCollectionRecord, skillCount: Int) -> some View {
+        let isSelected = selectedCollectionID == collection.id
+        return Button {
+            load(collection)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "folder.badge.gearshape")
+                    .foregroundStyle(isSelected ? AppTheme.brandAccent : AppTheme.mutedText)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(collection.name)
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(1)
+                    Text("\(skillCount) skills")
+                        .font(.caption2)
+                        .foregroundStyle(AppTheme.mutedText)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .appContentSurface(cornerRadius: 10, isSelected: isSelected)
+        }
+        .buttonStyle(.plain)
     }
 
     private var editorContent: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            AppCard(title: selectedCollection == nil ? "New Collection" : "Collection") {
-                VStack(alignment: .leading, spacing: 12) {
-                    TextField("Collection name", text: $draftName)
-                        .textFieldStyle(.plain)
-                        .font(.title3.weight(.semibold))
-                        .appBrandTint()
-                    TextField("Description", text: $draftDescription)
-                        .textFieldStyle(.plain)
-                        .appBrandTint()
-                    Text("Collections are explicit user-organized resources. Imported repository skills are not members unless you add them here or enable Import as collection during import.")
-                        .font(.caption)
-                        .foregroundStyle(AppTheme.mutedText)
-                        .fixedSize(horizontal: false, vertical: true)
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
+                AppCard(title: selectedCollection == nil ? "New Collection" : "Collection") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        AppTextField(text: $draftName, placeholder: "Collection name", font: .title3.weight(.semibold))
+                        AppTextField(text: $draftDescription, placeholder: "Description", axis: .vertical)
+                            .lineLimit(2...4)
+                        Text("Collections are explicit user-organized resources. Imported repository skills are not included unless you add them here or enable Import as collection during import.")
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.mutedText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-            }
 
-            AppCard(title: "Member Skills") {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(catalogSkills) { skill in
-                            Toggle(isOn: Binding(
-                                get: { selectedSkillIDs.contains(skill.id) },
-                                set: { enabled in
-                                    if enabled { selectedSkillIDs.insert(skill.id) }
-                                    else { selectedSkillIDs.remove(skill.id) }
+                AppCard(title: "Skills") {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(catalogSkills) { skill in
+                                Toggle(isOn: Binding(
+                                    get: { selectedSkillIDs.contains(skill.id) },
+                                    set: { enabled in
+                                        if enabled { selectedSkillIDs.insert(skill.id) }
+                                        else { selectedSkillIDs.remove(skill.id) }
+                                    }
+                                )) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(skill.name)
+                                            .font(.callout.weight(.semibold))
+                                        Text(skill.description ?? skill.filePath)
+                                            .font(.caption)
+                                            .foregroundStyle(AppTheme.mutedText)
+                                            .lineLimit(1)
+                                    }
                                 }
-                            )) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(skill.name)
-                                        .font(.callout.weight(.semibold))
-                                    Text(skill.description ?? skill.filePath)
-                                        .font(.caption)
-                                        .foregroundStyle(AppTheme.mutedText)
-                                        .lineLimit(1)
-                                }
+                                .appCheckbox()
+                                .padding(.vertical, 7)
+                                if skill.id != catalogSkills.last?.id { Divider() }
                             }
-                            .appCheckbox()
-                            .padding(.vertical, 7)
-                            if skill.id != catalogSkills.last?.id { Divider() }
                         }
                     }
+                    .frame(minHeight: 260)
                 }
-                .frame(minHeight: 260)
             }
-
-            HStack {
-                if let selectedCollection {
-                    Button("Delete Collection", role: .destructive) {
-                        pendingDelete = selectedCollection
-                    }
-                    .appDestructiveButton()
-                }
-                Spacer()
-            }
+            .padding(18)
         }
-        .padding(18)
+    }
+
+    private var footer: some View {
+        HStack(spacing: 12) {
+            if let selectedCollection {
+                Button("Delete Collection", role: .destructive) {
+                    pendingDelete = selectedCollection
+                }
+                .appDestructiveButton()
+            }
+            Spacer(minLength: 0)
+            Button("Done") { dismiss() }
+                .appSecondaryButton()
+                .keyboardShortcut(.cancelAction)
+            Button("Save") { saveCollection() }
+                .appPrimaryButton()
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canSave)
+        }
+        .padding(16)
     }
 
     private func beginNewCollection() {
