@@ -2357,6 +2357,16 @@ private struct SkillCollectionEditorSheet: View {
     @State private var selectedSkillIDs: Set<SkillRecord.ID> = []
     @State private var skillSearchText = ""
     @State private var pendingDelete: SkillCollectionRecord?
+    @State private var originalSnapshot = CollectionDraftSnapshot.empty
+    @State private var saveFeedbackToken: UUID?
+
+    private struct CollectionDraftSnapshot: Equatable {
+        var name: String
+        var description: String?
+        var skillIDs: Set<SkillRecord.ID>
+
+        static let empty = CollectionDraftSnapshot(name: "", description: nil, skillIDs: [])
+    }
 
     private var collections: [SkillCollectionRecord] {
         viewModel.appSettings.skillCollections.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -2397,8 +2407,20 @@ private struct SkillCollectionEditorSheet: View {
         !skillSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var currentSnapshot: CollectionDraftSnapshot {
+        CollectionDraftSnapshot(
+            name: draftName.trimmingCharacters(in: .whitespacesAndNewlines),
+            description: normalizedDescription(draftDescription),
+            skillIDs: selectedSkillIDs
+        )
+    }
+
+    private var hasUnsavedChanges: Bool {
+        currentSnapshot != originalSnapshot
+    }
+
     private var canSave: Bool {
-        !draftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !currentSnapshot.name.isEmpty && hasUnsavedChanges
     }
 
     private var collectionMemberCountsByID: [UUID: Int] {
@@ -2626,6 +2648,7 @@ private struct SkillCollectionEditorSheet: View {
                 .appDestructiveButton()
             }
             Spacer(minLength: 0)
+            saveFeedback
             Button("Done") { dismiss() }
                 .appSecondaryButton()
                 .keyboardShortcut(.cancelAction)
@@ -2637,11 +2660,30 @@ private struct SkillCollectionEditorSheet: View {
         .padding(16)
     }
 
+    @ViewBuilder
+    private var saveFeedback: some View {
+        if saveFeedbackToken != nil {
+            Label("Saved", systemImage: "checkmark.circle.fill")
+                .font(AppTheme.Font.caption.weight(.semibold))
+                .foregroundStyle(AppTheme.brandAccent)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(AppTheme.contentSubtleFill, in: Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(AppTheme.contentStroke.opacity(0.8), lineWidth: 1)
+                )
+                .transition(.opacity.combined(with: .move(edge: .trailing)))
+        }
+    }
+
     private func beginNewCollection() {
         selectedCollectionID = nil
         draftName = ""
         draftDescription = ""
         selectedSkillIDs = []
+        originalSnapshot = .empty
+        saveFeedbackToken = nil
     }
 
     private func load(_ collection: SkillCollectionRecord) {
@@ -2649,23 +2691,52 @@ private struct SkillCollectionEditorSheet: View {
         draftName = collection.name
         draftDescription = collection.description ?? ""
         let members = viewModel.skillRecords(in: collection, forProjectPath: viewModel.selectedProjectPath)
-        selectedSkillIDs = Set(members.map(\.id))
+        let memberIDs = Set(members.map(\.id))
+        selectedSkillIDs = memberIDs
+        originalSnapshot = CollectionDraftSnapshot(
+            name: collection.name.trimmingCharacters(in: .whitespacesAndNewlines),
+            description: collection.description.flatMap(normalizedDescription),
+            skillIDs: memberIDs
+        )
+        saveFeedbackToken = nil
     }
 
     private func saveCollection() {
+        guard canSave else { return }
         let selectedSkills = catalogSkills.filter { selectedSkillIDs.contains($0.id) }
+        let snapshot = currentSnapshot
         let collection = SkillCollectionRecord(
             id: selectedCollectionID ?? UUID(),
-            name: draftName.trimmingCharacters(in: .whitespacesAndNewlines),
-            description: draftDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : draftDescription.trimmingCharacters(in: .whitespacesAndNewlines),
+            name: snapshot.name,
+            description: snapshot.description,
             skillRootPaths: Set(selectedSkills.map { viewModel.skillRootPath(forCollectionMembership: $0) }),
             skillNames: Set(selectedSkills.map(\.name)),
             importedRepositoryID: selectedCollection?.importedRepositoryID,
             sourceLabel: selectedCollection?.sourceLabel
         )
         viewModel.saveSkillCollection(collection)
-        selectedCollectionID = collection.id
+        load(collection)
         onSelect(collection)
+        showSavedFeedback()
+    }
+
+    private func normalizedDescription(_ description: String) -> String? {
+        let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func showSavedFeedback() {
+        let token = UUID()
+        withAnimation(.easeInOut(duration: 0.16)) {
+            saveFeedbackToken = token
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard saveFeedbackToken == token else { return }
+            withAnimation(.easeInOut(duration: 0.16)) {
+                saveFeedbackToken = nil
+            }
+        }
     }
 
     private func delete(_ collection: SkillCollectionRecord) {
