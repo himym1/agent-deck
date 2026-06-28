@@ -1573,9 +1573,9 @@ struct SkillsScreen: View {
             hasUpdate: hasUpdate,
             isUpdating: repository != nil && isUpdatingSkillRepository,
             canRename: canRename,
-            onUpdate: repository.map { repository in
+            onUpdate: hasUpdate ? repository.map { repository in
                 { applySkillRepositoryUpdate(repository) }
-            },
+            } : nil,
             onEdit: { skillEditTarget = makeSkillEditTarget(skill) }
         )
         // Fill the row and give it a hit-testable shape so a right-click anywhere on the
