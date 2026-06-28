@@ -2341,30 +2341,31 @@ private struct CollectionMembershipRowView: View {
 
             Spacer(minLength: 0)
 
-            HStack(spacing: 6) {
-                Button {
-                    onRuntimeIncludedChange(!isRuntimeIncluded)
-                } label: {
-                    Label(
-                        isRuntimeIncluded ? "Deactivate" : "Activate",
-                        systemImage: isRuntimeIncluded ? "pause.circle" : "play.circle"
-                    )
-                    .labelStyle(.titleAndIcon)
-                }
-                .appSmallSecondaryButton()
-                .help(isRuntimeIncluded ? "Deactivate for runtime loading" : "Activate for runtime loading")
-
-                Button(action: onOpen) {
-                    Label("Open", systemImage: "doc.text.magnifyingglass")
+            if isHovered {
+                HStack(spacing: 6) {
+                    Button {
+                        onRuntimeIncludedChange(!isRuntimeIncluded)
+                    } label: {
+                        Label(
+                            isRuntimeIncluded ? "Deactivate" : "Activate",
+                            systemImage: isRuntimeIncluded ? "pause.circle" : "play.circle"
+                        )
                         .labelStyle(.titleAndIcon)
+                    }
+                    .appSmallSecondaryButton()
+                    .help(isRuntimeIncluded ? "Deactivate for runtime loading" : "Activate for runtime loading")
+
+                    Button(action: onOpen) {
+                        Label("Open", systemImage: "doc.text.magnifyingglass")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .appSmallSecondaryButton()
+                    .help("Open read-only skill preview")
                 }
-                .appSmallSecondaryButton()
-                .help("Open read-only skill preview")
+                .fixedSize()
+                .layoutPriority(2)
+                .transition(.opacity)
             }
-            .frame(width: 230, alignment: .trailing)
-            .opacity(isHovered ? 1 : 0)
-            .allowsHitTesting(isHovered)
-            .animation(.easeInOut(duration: 0.15), value: isHovered)
         }
         .onHover { isHovered = $0 }
         .padding(.vertical, 5)
@@ -2379,35 +2380,52 @@ private struct SkillReadOnlyPreviewSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "wand.and.stars")
-                    .foregroundStyle(AppTheme.brandAccent)
-                    .frame(width: 18)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(skill.name)
-                        .font(.title3.weight(.semibold))
-                        .fontWidth(.expanded)
-                    if let description = skill.description, !description.isEmpty {
-                        Text(description)
-                            .font(.callout)
-                            .foregroundStyle(AppTheme.mutedText)
-                    }
-                }
-                Spacer(minLength: 0)
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
-            }
-            .padding(16)
-
+            header
             Divider()
-
-            ScrollView(showsIndicators: false) {
-                MarkdownDocumentView(source: skill.body, minimumHeight: 320)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .padding(16)
-            }
+            content
+            Divider()
+            footer
         }
         .frame(width: 760, height: 620)
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "wand.and.stars")
+                .foregroundStyle(AppTheme.brandAccent)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(skill.name)
+                    .font(.headline)
+                    .fontWidth(.expanded)
+                if let description = skill.description, !description.isEmpty {
+                    Text(description)
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(18)
+    }
+
+    private var content: some View {
+        ScrollView(showsIndicators: false) {
+            MarkdownDocumentView(source: skill.body, minimumHeight: 320)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(16)
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            Spacer()
+            Button("Done") { dismiss() }
+                .appPrimaryButton()
+                .keyboardShortcut(.defaultAction)
+        }
+        .padding(16)
     }
 }
 
