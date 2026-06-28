@@ -1266,10 +1266,12 @@ struct PiAgentTranscriptThreadCard: View {
     /// The children that actually render as rows, given the visibility
     /// settings — mirrors the gating inside `childView`. The AppKit
     /// block-row transcript uses this so a hidden child produces no row.
+    @MainActor
     static func visibleChildren(
         of thread: PiAgentTranscriptThread,
         visibility: PiAgentTranscriptVisibilitySettings,
-        nativeSubagentRunsByID: [UUID: PiSubagentRunRecord]
+        nativeSubagentRunsByID: [UUID: PiSubagentRunRecord],
+        projectPath: String?
     ) -> [PiAgentThreadChild] {
         let filtered = thread.children.filter { child in
             switch child {
@@ -1281,7 +1283,7 @@ struct PiAgentTranscriptThreadCard: View {
                 // A tool group whose every section is hidden must NOT stay in the
                 // list: it would still emit a 0-height row that the inter-row inset
                 // pass pads on both sides, leaving a phantom gap between turns.
-                return toolGroupHasVisibleContent(group, visibility: visibility)
+                return toolGroupHasVisibleContent(group, visibility: visibility, projectPath: projectPath)
             case .steering, .assistant, .retry: return true
             }
         }
@@ -1337,30 +1339,16 @@ struct PiAgentTranscriptThreadCard: View {
     }
 
     /// Whether a tool group would render at least one section under the current
-    /// visibility. Cheap (no diff parsing): a group shows the diff card only when
-    /// it has edit/write activities, and the web card when it has web activities.
-    /// (Per-tool call counts are no longer shown inline — they are recapped in the
-    /// Session resources popover — so a tool-only group renders nothing.)
+    /// visibility. This intentionally uses the same display-model factory as the
+    /// native row so edit/write tools without a real diff (for example /tmp writes)
+    /// do not survive filtering as 0-height spacer rows.
+    @MainActor
     static func toolGroupHasVisibleContent(
         _ group: PiAgentThreadToolGroup,
-        visibility: PiAgentTranscriptVisibilitySettings
+        visibility: PiAgentTranscriptVisibilitySettings,
+        projectPath: String?
     ) -> Bool {
-        var hasWeb = false, hasEditable = false, hasMCP = false
-        for activity in group.activities {
-            if activity.isWebActivity {
-                hasWeb = true
-            } else if activity.hasMCPCall {
-                // Name-based would over-report (list/describe have no card) and the
-                // row would flicker between a card and a spacer; gate on a real call.
-                hasMCP = true
-            } else {
-                let name = activity.name.lowercased()
-                if name == "edit" || name == "write" { hasEditable = true }
-            }
-        }
-        return (visibility.showWebActivity && hasWeb)
-            || (visibility.showDiffs && hasEditable)
-            || (visibility.showMCPCards && hasMCP)
+        NativeToolGroupModel.make(group: group, visibility: visibility, projectPath: projectPath) != nil
     }
 
     private static func shouldShowStatusEntry(

@@ -5375,8 +5375,10 @@ struct PiAgentScreen: View {
                             isThreadQuestion: true
                         ))
                     }
+                    let projectPath = store.selectedSession.map { $0.worktreePath ?? $0.projectPath }
                     for child in PiAgentTranscriptThreadCard.visibleChildren(
-                        of: thread, visibility: visibility, nativeSubagentRunsByID: subagentRuns
+                        of: thread, visibility: visibility, nativeSubagentRunsByID: subagentRuns,
+                        projectPath: projectPath
                     ) {
                         // Native rendering for the supported child types; the
                         // rest (tool groups, subagent/memory cards) still hosted.
@@ -5587,6 +5589,10 @@ struct PiAgentScreen: View {
     private static let nativeEmptyKind: PiAgentTranscriptCellKind =
         .native(.of(PiAgentNativeSpacerView.self) { view, _ in view.spacerHeight = 0 })
 
+#if DEBUG
+    private static let nativeToolGroupLog = Logger(subsystem: "streetcoding.agent-deck", category: "NativeToolGroup")
+#endif
+
     private func nativeChildKind(
         for child: PiAgentThreadChild,
         visibility: PiAgentTranscriptVisibilitySettings,
@@ -5702,8 +5708,11 @@ struct PiAgentScreen: View {
             guard let model = NativeToolGroupModel.make(
                 group: group, visibility: visibility, projectPath: store.selectedSession.map { $0.worktreePath ?? $0.projectPath }
             ) else {
-                // Tool sections all hidden by visibility → an empty 0-height row.
-                return .native(.of(PiAgentNativeSpacerView.self) { view, _ in view.spacerHeight = 0 })
+#if DEBUG
+                assertionFailure("Visible native tool group produced no display model: \(group.id)")
+                Self.nativeToolGroupLog.error("Visible native tool group produced no display model: \(group.id.uuidString, privacy: .public)")
+#endif
+                return Self.nativeEmptyKind
             }
             return .native(.of(PiAgentNativeToolGroupView.self) { view, width in
                 view.configure(model: model, width: width)
