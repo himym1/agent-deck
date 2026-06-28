@@ -25,6 +25,18 @@ final class MCPHTTPTransportTests: XCTestCase {
         XCTAssertEqual(events, ["{\"a\":\n1}"])
     }
 
+    func testParseSSEHandlesCRLFLineEndings() {
+        let body = "event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\r\n\r\n"
+        let events = MCPHTTPTransport.parseSSE(body)
+        XCTAssertEqual(events, ["{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}"])
+    }
+
+    func testParseSSEHandlesBareCRLineEndings() {
+        let body = "event: message\rdata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\r\r"
+        let events = MCPHTTPTransport.parseSSE(body)
+        XCTAssertEqual(events, ["{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}"])
+    }
+
     // MARK: - Real HTTP server (integration)
 
     private func resolveNode() -> String? {
