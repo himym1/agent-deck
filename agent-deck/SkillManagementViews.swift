@@ -50,14 +50,6 @@ private enum SkillLibraryItem: Identifiable, Hashable {
     }
 }
 
-private enum CollectionMembershipFilter: String, CaseIterable, Identifiable {
-    case all = "All"
-    case included = "Included"
-    case available = "Available"
-
-    var id: String { rawValue }
-}
-
 private enum SkillWarningSelection: Identifiable, Hashable {
     case missing(SkillReferenceWarning)
     case diagnostic(DiagnosticWarning)
@@ -138,8 +130,7 @@ struct SkillsScreen: View {
     @FocusState private var isSkillNameFocused: Bool
     @State private var skillRenameErrorMessage: String?
     @State private var detailSummariesBySkillID: [SkillRecord.ID: SkillDetailSummaryState] = [:]
-    @State private var collectionMembershipSearchText = ""
-    @State private var collectionMembershipFilter: CollectionMembershipFilter = .all
+    @State private var readOnlySkillPreview: SkillRecord?
     // Cached sectioning + filtered list + per-row inactive map. The full
     // build runs `Dictionary(grouping:)` + sort + multi-field search +
     // sectioning over `viewModel.allVisibleSkillRecords` — recomputing it on
@@ -381,6 +372,9 @@ struct SkillsScreen: View {
                 )
             )
         }
+        .sheet(item: $readOnlySkillPreview) { skill in
+            SkillReadOnlyPreviewSheet(skill: skill)
+        }
     }
 
     @ViewBuilder
@@ -559,7 +553,7 @@ struct SkillsScreen: View {
         }
 
         let global = managed.filter { viewModel.skillIsEnabledGlobally($0) }
-        let catalog = managed.filter { !viewModel.skillIsEnabledGlobally($0) }
+        let catalog = managed.filter { !viewModel.skillIsEnabledGlobally($0) && (collectionCountBySkillID[$0.id] ?? 0) == 0 }
         mark(global, inactive: false)
         if !collections.isEmpty {
             let filteredCollections: [SkillCollectionRecord]
@@ -961,100 +955,46 @@ struct SkillsScreen: View {
 
     @ViewBuilder
     private func collectionMembershipList(for collection: SkillCollectionRecord, members: [SkillRecord]) -> some View {
-        let memberIDs = Set(members.map(\.id))
-        let candidates = collectionMembershipCandidates(memberIDs: memberIDs)
-
         VStack(alignment: .leading, spacing: 12) {
-            Text("Turn skills on or off for this collection. Removing a skill here only changes collection membership; it does not remove the skill from the catalog, import, or sparse checkout.")
+            Text("Checkboxes control runtime loading only. Unchecked skills stay in this collection and remain hidden from the standalone Catalog section; import and sparse sync membership are unchanged.")
                 .font(.caption)
                 .foregroundStyle(AppTheme.mutedText)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack(spacing: 10) {
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(AppTheme.mutedText)
-                    TextField("Search skills", text: $collectionMembershipSearchText)
-                        .textFieldStyle(.plain)
-                        .appBrandTint()
-                    if !collectionMembershipSearchText.isEmpty {
-                        Button {
-                            collectionMembershipSearchText = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(AppTheme.mutedText)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Clear skill search")
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(AppTheme.contentStroke.opacity(0.8), lineWidth: 1)
-                )
-                .frame(maxWidth: 280)
-
-                Picker("Filter", selection: $collectionMembershipFilter) {
-                    ForEach(CollectionMembershipFilter.allCases) { filter in
-                        Text(filter.rawValue).tag(filter)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 240)
-
-                Spacer()
-
-                Text("\(members.count) included")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppTheme.mutedText)
-            }
-
-            if candidates.isEmpty {
+            if members.isEmpty {
                 ContentUnavailableView(
-                    collectionMembershipSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No Skills" : "No Matching Skills",
+                    "No Skills",
                     systemImage: "wand.and.stars",
-                    description: Text("Adjust the search or filter to choose skills for this collection.")
+                    description: Text("Use the Collections toolbar button to add skills to this collection.")
                 )
                 .frame(maxWidth: .infinity, minHeight: 160)
             } else {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(candidates) { skill in
-                        collectionMembershipRow(skill, collection: collection, isIncluded: memberIDs.contains(skill.id))
-                        if skill.id != candidates.last?.id { Divider() }
+                    ForEach(members) { skill in
+                        collectionMembershipRow(skill, collection: collection)
+                        if skill.id != members.last?.id { Divider() }
                     }
                 }
             }
         }
     }
 
-    private func collectionMembershipRow(_ skill: SkillRecord, collection: SkillCollectionRecord, isIncluded: Bool) -> some View {
-        Toggle(isOn: Binding(
-            get: { isIncluded },
-            set: { included in setSkill(skill, included: included, in: collection) }
-        )) {
-            HStack(spacing: 10) {
-                Image(systemName: skillIcon(skill))
-                    .foregroundStyle(skillColor(isAssigned: viewModel.cachedSkillMetadataByID[skill.id]?.isAssigned ?? false))
-                    .frame(width: 18)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(skill.name)
-                        .font(.callout.weight(.semibold))
-                    Text(skill.description ?? skillLocationLabel(skill, selectedProjectRoot: viewModel.globalCatalogSnapshot.projectRoot))
-                        .font(.caption)
-                        .foregroundStyle(AppTheme.mutedText)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 0)
-            }
-            .contentShape(Rectangle())
-        }
-        .toggleStyle(.checkbox)
-        .padding(.vertical, 8)
+    private func collectionMembershipRow(_ skill: SkillRecord, collection: SkillCollectionRecord) -> some View {
+        CollectionMembershipRowView(
+            skill: skill,
+            iconName: skillIcon(skill),
+            iconColor: skillColor(isAssigned: viewModel.cachedSkillMetadataByID[skill.id]?.isAssigned ?? false),
+            isRuntimeIncluded: !viewModel.skillIsExcludedFromRuntime(skill, in: collection),
+            onRuntimeIncludedChange: { included in setSkill(skill, runtimeIncluded: included, in: collection) },
+            onOpen: { readOnlySkillPreview = skill }
+        )
+        .contentShape(Rectangle())
         .contextMenu {
+            Button {
+                readOnlySkillPreview = skill
+            } label: {
+                Label("Open", systemImage: "doc.text.magnifyingglass")
+            }
             Button {
                 selectedCollectionID = nil
                 selectedSkillIDs = [skill.id]
@@ -1065,40 +1005,17 @@ struct SkillsScreen: View {
         }
     }
 
-    private func collectionMembershipCandidates(memberIDs: Set<SkillRecord.ID>) -> [SkillRecord] {
-        let query = collectionMembershipSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let filtered = cachedLayout.catalogSkills.filter { skill in
-            let isMember = memberIDs.contains(skill.id)
-            switch collectionMembershipFilter {
-            case .all: break
-            case .included where !isMember: return false
-            case .available where isMember: return false
-            case .included, .available: break
-            }
-            guard !query.isEmpty else { return true }
-            return [skill.name, skill.description ?? "", skill.filePath, skill.body]
-                .contains { $0.lowercased().contains(query) }
-        }
-        guard collectionMembershipFilter == .all else { return filtered }
-        return filtered.sorted { lhs, rhs in
-            let lhsIncluded = memberIDs.contains(lhs.id)
-            let rhsIncluded = memberIDs.contains(rhs.id)
-            if lhsIncluded != rhsIncluded { return lhsIncluded }
-            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-        }
-    }
-
-    private func setSkill(_ skill: SkillRecord, included: Bool, in collection: SkillCollectionRecord) {
+    private func setSkill(_ skill: SkillRecord, runtimeIncluded: Bool, in collection: SkillCollectionRecord) {
         var updated = collection
         let rootPath = viewModel.skillRootPath(forCollectionMembership: skill)
         let filePath = URL(fileURLWithPath: skill.filePath).standardizedFileURL.path
-        if included {
-            updated.skillRootPaths.insert(rootPath)
-            updated.skillNames.insert(skill.name)
+        if runtimeIncluded {
+            updated.excludedSkillRootPaths.remove(rootPath)
+            updated.excludedSkillRootPaths.remove(filePath)
+            updated.excludedSkillNames.remove(skill.name)
         } else {
-            updated.skillRootPaths.remove(rootPath)
-            updated.skillRootPaths.remove(filePath)
-            updated.skillNames.remove(skill.name)
+            updated.excludedSkillRootPaths.insert(rootPath)
+            updated.excludedSkillNames.insert(skill.name)
         }
         viewModel.saveSkillCollection(updated)
     }
@@ -2371,6 +2288,100 @@ private struct CollectionListRowView: View {
         }
         .padding(.vertical, 5)
         .opacity(isAssigned ? 1 : 0.72)
+    }
+}
+
+private struct CollectionMembershipRowView: View {
+    let skill: SkillRecord
+    let iconName: String
+    let iconColor: Color
+    let isRuntimeIncluded: Bool
+    let onRuntimeIncludedChange: (Bool) -> Void
+    let onOpen: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Toggle(isOn: Binding(
+                get: { isRuntimeIncluded },
+                set: onRuntimeIncludedChange
+            )) {
+                EmptyView()
+            }
+            .toggleStyle(.checkbox)
+            .labelsHidden()
+
+            Image(systemName: iconName)
+                .foregroundStyle(iconColor)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(skill.name)
+                    .font(.headline)
+                    .fontWidth(.expanded)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(skill.description ?? "No description")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 0)
+
+            if isHovered {
+                Button(action: onOpen) {
+                    Label("Open", systemImage: "doc.text.magnifyingglass")
+                        .labelStyle(.titleAndIcon)
+                }
+                .appSmallSecondaryButton()
+                .help("Open read-only skill preview")
+            }
+        }
+        .onHover { isHovered = $0 }
+        .padding(.vertical, 5)
+        .opacity(isRuntimeIncluded ? 1 : 0.62)
+        .saturation(isRuntimeIncluded ? 1 : 0.25)
+    }
+}
+
+private struct SkillReadOnlyPreviewSheet: View {
+    let skill: SkillRecord
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "wand.and.stars")
+                    .foregroundStyle(AppTheme.brandAccent)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(skill.name)
+                        .font(.title3.weight(.semibold))
+                        .fontWidth(.expanded)
+                    if let description = skill.description, !description.isEmpty {
+                        Text(description)
+                            .font(.callout)
+                            .foregroundStyle(AppTheme.mutedText)
+                    }
+                }
+                Spacer(minLength: 0)
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(16)
+
+            Divider()
+
+            ScrollView(showsIndicators: false) {
+                MarkdownDocumentView(source: skill.body, minimumHeight: 320)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .padding(16)
+            }
+        }
+        .frame(width: 760, height: 620)
     }
 }
 

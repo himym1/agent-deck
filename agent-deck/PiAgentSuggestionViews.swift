@@ -500,6 +500,8 @@ struct PiAgentSlashSelectionChip: View {
             return name
         case .skill(let name, _):
             return name
+        case .skillCollection(let name, _):
+            return name
         case .loopCreateNew:
             return "Create New Loop"
         case .loopDefinition(let definition):

@@ -18,6 +18,7 @@ nonisolated struct SlashItem: Identifiable, Hashable, Sendable {
 
     enum Payload: Hashable, Sendable {
         case skill(name: String, body: String)
+        case skillCollection(name: String, body: String)
         case prompt(name: String, body: String)
         case command(slashName: String, commandID: String)
         case loopCreateNew
@@ -69,6 +70,9 @@ extension SlashItem {
             }
             let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? trimmedBody : "\(trimmedBody)\n\n\(trimmed)"
+        case .skillCollection(_, let body):
+            let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? trimmedBody : "\(trimmedBody)\n\n\(trimmed)"
         case .prompt:
             return trimmed
         case .loopCreateNew, .loopDefinition:
@@ -81,6 +85,10 @@ extension SlashItem {
         if displayName.lowercased().contains(lowercasedQuery) { return true }
         if let description, description.lowercased().contains(lowercasedQuery) { return true }
         if case .command(let slashName, _) = payload, slashName.lowercased().contains(lowercasedQuery) { return true }
+        if case .skillCollection(let name, let body) = payload {
+            if name.lowercased().contains(lowercasedQuery) { return true }
+            if body.lowercased().contains(lowercasedQuery) { return true }
+        }
         if case .loopCreateNew = payload, "loops".contains(lowercasedQuery) { return true }
         if case .loopDefinition(let definition) = payload {
             if definition.name.lowercased().contains(lowercasedQuery) { return true }

@@ -9028,6 +9028,16 @@ final class AppViewModel: NSObject {
         return catalog.filter { $0.name == skill.name }.count == 1
     }
 
+    func skillIsExcludedFromRuntime(_ skill: SkillRecord, in collection: SkillCollectionRecord, catalog: [SkillRecord]? = nil) -> Bool {
+        let excludedRootPaths = Set(collection.excludedSkillRootPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+        let rootPath = skillDeletionTargetURL(for: skill).standardizedFileURL.path
+        let filePath = URL(fileURLWithPath: skill.filePath).standardizedFileURL.path
+        if excludedRootPaths.contains(rootPath) || excludedRootPaths.contains(filePath) { return true }
+        guard collection.excludedSkillNames.contains(skill.name) else { return false }
+        let lookupCatalog = catalog ?? (selectedProjectPath.map { skillCatalog(forProjectPath: $0) } ?? allVisibleSkillRecords)
+        return lookupCatalog.filter { $0.name == skill.name }.count == 1
+    }
+
     func skillCollectionIsEnabledGlobally(_ collection: SkillCollectionRecord) -> Bool {
         appSettings.defaultSkillCollectionIDs.contains(collection.id)
     }
@@ -9059,7 +9069,7 @@ final class AppViewModel: NSObject {
         let collectionsByID = Dictionary(uniqueKeysWithValues: appSettings.skillCollections.map { ($0.id, $0) })
         for id in collectionIDs {
             guard let collection = collectionsByID[id] else { continue }
-            for skill in catalog where skillBelongsToCollection(skill, collection: collection, catalog: catalog) {
+            for skill in catalog where skillBelongsToCollection(skill, collection: collection, catalog: catalog) && !skillIsExcludedFromRuntime(skill, in: collection, catalog: catalog) {
                 names.insert(skill.name)
             }
         }
@@ -9253,20 +9263,20 @@ final class AppViewModel: NSObject {
         let scopedPath = projectPath ?? selectedProjectPath
 
         // Skills
-        let skillRecords: [SkillRecord]
+        let catalogSkillRecords: [SkillRecord]
         if let path = scopedPath {
-            skillRecords = skillCatalog(forProjectPath: path)
+            catalogSkillRecords = skillCatalog(forProjectPath: path)
         } else {
             var seen = Set<String>()
-            skillRecords = (globalSnapshot.skills + globalSnapshot.librarySkills).filter { seen.insert($0.id).inserted }
+            catalogSkillRecords = (globalSnapshot.skills + globalSnapshot.librarySkills).filter { seen.insert($0.id).inserted }
         }
         let activeSkillNames = activeParentSkillNames(forProjectPath: scopedPath)
+        let activeCollectionIDs = appSettings.defaultSkillCollectionIDs.union(scopedPath.map { projectPreference(for: $0).assignedSkillCollectionIDs } ?? [])
         let disabledBundledSkillNames = appSettings.disabledBundledSkillNames
         var seenSkillName = Set<String>()
-        let skills = skillRecords
+        let individualSkillItems = catalogSkillRecords
             .filter { !($0.source.kind == .builtin && disabledBundledSkillNames.contains($0.name)) }
             .filter { seenSkillName.insert($0.name).inserted }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             .map { record in
                 SlashItem(
                     id: "skill:\(record.id)",
@@ -9278,6 +9288,31 @@ final class AppViewModel: NSObject {
                     payload: .skill(name: record.name, body: record.body)
                 )
             }
+        let collectionItems = appSettings.skillCollections.map { collection in
+            let members = skillRecords(in: collection, forProjectPath: scopedPath)
+                .filter { !skillIsExcludedFromRuntime($0, in: collection, catalog: catalogSkillRecords) }
+            let memberList = members.map { "- `\($0.name)`" }.joined(separator: "\n")
+            let description = collection.description?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let body = """
+            # \(collection.name)
+
+            \(description?.isEmpty == false ? description! : "Skill collection")
+
+            Included skills:
+            \(memberList.isEmpty ? "- None" : memberList)
+            """
+            return SlashItem(
+                id: "skill-collection:\(collection.id.uuidString)",
+                kind: .skill,
+                displayName: collection.name,
+                description: description?.isEmpty == false ? description : "Skill collection",
+                scopeLabel: "Collection",
+                isActive: activeCollectionIDs.contains(collection.id),
+                payload: .skillCollection(name: collection.name, body: body)
+            )
+        }
+        let skills = (collectionItems + individualSkillItems)
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
 
         // Prompts
         let promptRecords: [PromptTemplateRecord]
@@ -9399,6 +9434,8 @@ final class AppViewModel: NSObject {
             let before = collection
             collection.skillNames.remove(skillName)
             collection.skillRootPaths.subtract(removalPaths)
+            collection.excludedSkillNames.remove(skillName)
+            collection.excludedSkillRootPaths.subtract(removalPaths)
             if collection.skillRootPaths.isEmpty && collection.skillNames.isEmpty {
                 didChange = true
                 continue
