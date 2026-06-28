@@ -2648,33 +2648,20 @@ private struct SkillCollectionEditorSheet: View {
                 .appDestructiveButton()
             }
             Spacer(minLength: 0)
-            saveFeedback
             Button("Done") { dismiss() }
                 .appSecondaryButton()
                 .keyboardShortcut(.cancelAction)
-            Button("Save") { saveCollection() }
-                .appPrimaryButton()
-                .keyboardShortcut(.defaultAction)
-                .disabled(!canSave)
+            Button { saveCollection() } label: {
+                Label(saveFeedbackToken == nil ? "Save" : "Saved", systemImage: saveFeedbackToken == nil ? "tray.and.arrow.down" : "checkmark")
+                    .contentTransition(.opacity)
+                    .id(saveFeedbackToken == nil ? "save" : "saved")
+            }
+            .appPrimaryButton()
+            .keyboardShortcut(.defaultAction)
+            .disabled(!canSave)
+            .animation(.easeInOut(duration: 0.16), value: saveFeedbackToken)
         }
         .padding(16)
-    }
-
-    @ViewBuilder
-    private var saveFeedback: some View {
-        if saveFeedbackToken != nil {
-            Label("Saved", systemImage: "checkmark.circle.fill")
-                .font(AppTheme.Font.caption.weight(.semibold))
-                .foregroundStyle(AppTheme.brandAccent)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(AppTheme.contentSubtleFill, in: Capsule())
-                .overlay(
-                    Capsule()
-                        .stroke(AppTheme.contentStroke.opacity(0.8), lineWidth: 1)
-                )
-                .transition(.opacity.combined(with: .move(edge: .trailing)))
-        }
     }
 
     private func beginNewCollection() {
