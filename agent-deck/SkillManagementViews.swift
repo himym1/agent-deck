@@ -2437,53 +2437,77 @@ private struct SkillCollectionEditorSheet: View {
     private var collectionSidebar: some View {
         let memberCountsByID = collectionMemberCountsByID
         return AppSidebarPane(title: "Collections") {
-            VStack(alignment: .leading, spacing: 12) {
-                Button {
-                    beginNewCollection()
-                } label: {
-                    Label("New Collection", systemImage: "plus")
-                        .frame(maxWidth: .infinity)
-                }
-                .appSecondaryButton()
-                .padding([.horizontal, .top], 12)
-
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 6) {
-                        ForEach(collections) { collection in
-                            collectionSidebarRow(collection, skillCount: memberCountsByID[collection.id] ?? 0)
-                        }
-                    }
+            VStack(alignment: .leading, spacing: 0) {
+                NewCollectionSidebarButton(action: beginNewCollection)
                     .padding(.horizontal, 8)
-                    .padding(.bottom, 12)
+                    .padding(.top, 10)
+                    .padding(.bottom, 6)
+
+                AppList(
+                    sections: [AppListSection(
+                        id: "collections",
+                        title: "Collections",
+                        items: collections,
+                        emptyMessage: "No collections yet — use New Collection to create one."
+                    )],
+                    selection: .single(Binding(
+                        get: { selectedCollectionID },
+                        set: { id in
+                            guard let id, let collection = collections.first(where: { $0.id == id }) else { return }
+                            load(collection)
+                        }
+                    )),
+                    bottomContentInset: 12
+                ) { collection in
+                    collectionSidebarRowContent(collection, skillCount: memberCountsByID[collection.id] ?? 0)
                 }
             }
         }
     }
 
-    private func collectionSidebarRow(_ collection: SkillCollectionRecord, skillCount: Int) -> some View {
-        let isSelected = selectedCollectionID == collection.id
-        return Button {
-            load(collection)
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "folder.badge.gearshape")
-                    .foregroundStyle(isSelected ? AppTheme.brandAccent : AppTheme.mutedText)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(collection.name)
-                        .font(.callout.weight(.semibold))
-                        .lineLimit(1)
-                    Text("\(skillCount) skills")
-                        .font(.caption2)
-                        .foregroundStyle(AppTheme.mutedText)
-                }
-                Spacer(minLength: 0)
+    private func collectionSidebarRowContent(_ collection: SkillCollectionRecord, skillCount: Int) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "folder.badge.gearshape")
+                .foregroundStyle(selectedCollectionID == collection.id ? AppTheme.brandAccent : AppTheme.mutedText)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(collection.name)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                Text("\(skillCount) skill\(skillCount == 1 ? "" : "s")")
+                    .font(.caption2)
+                    .foregroundStyle(AppTheme.mutedText)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .appContentSurface(cornerRadius: 10, isSelected: isSelected)
+            Spacer(minLength: 0)
         }
-        .buttonStyle(.plain)
+    }
+
+    private struct NewCollectionSidebarButton: View {
+        let action: () -> Void
+        @State private var isHovering = false
+
+        var body: some View {
+            Button(action: action) {
+                HStack(spacing: 8) {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundStyle(AppTheme.brandAccent)
+                        .frame(width: 18)
+                    Text("New Collection")
+                        .font(.callout.weight(.semibold))
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, AppListMetrics.rowHorizontalPadding)
+                .padding(.vertical, AppListMetrics.rowVerticalPadding + 1)
+                .background {
+                    RoundedRectangle(cornerRadius: AppListMetrics.cornerRadius, style: .continuous)
+                        .fill(isHovering ? AppListMetrics.hoverFill : Color.clear)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: AppListMetrics.cornerRadius, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovering = $0 }
+            .accessibilityLabel("New Collection")
+        }
     }
 
     private var editorContent: some View {
