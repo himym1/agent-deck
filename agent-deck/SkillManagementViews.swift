@@ -106,6 +106,7 @@ struct SkillsScreen: View {
     @State private var selectedSkillIDs: Set<SkillRecord.ID> = []
     @State private var selectedCollectionID: UUID?
     @State private var skillsPendingBatchDeletion: [SkillRecord]?
+    @State private var collectionPendingDeletion: SkillCollectionRecord?
     @State private var selectedWarning: SkillWarningSelection?
     @State private var isImportSheetPresented = false
     @State private var isCollectionSheetPresented = false
@@ -183,6 +184,17 @@ struct SkillsScreen: View {
                 Button("Cancel", role: .cancel) { skillsPendingBatchDeletion = nil }
             } message: { skills in
                 Text("Move \(skills.count) skills to the Trash and remove their Default, project, and agent assignments?")
+            }
+            .alert("Delete Collection?", isPresented: Binding(
+                get: { collectionPendingDeletion != nil },
+                set: { if !$0 { collectionPendingDeletion = nil } }
+            ), presenting: collectionPendingDeletion) { collection in
+                Button("Delete Collection Only", role: .destructive) { deleteCollectionOnly(collection) }
+                Button("Delete Collection and Skills", role: .destructive) { deleteCollectionAndMembers(collection) }
+                Button("Cancel", role: .cancel) { collectionPendingDeletion = nil }
+            } message: { collection in
+                let memberCount = cachedLayout.collectionMembersByID[collection.id]?.count ?? 0
+                Text("Delete \"\(collection.name)\" only, keeping its member skills as standalone catalog skills, or also move its \(memberCount) member skill\(memberCount == 1 ? "" : "s") to the Trash?")
             }
             .alert("Remove Skill?", isPresented: Binding(
                 get: { skillPendingRemoval != nil },
@@ -951,6 +963,21 @@ struct SkillsScreen: View {
         AppCard(title: "Collection Membership") {
             collectionMembershipList(for: collection, members: members)
         }
+
+        AppCard(title: "Delete Collection") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Delete this collection, or delete the collection and move its member skills to the Trash. Deleting only the collection keeps member skills in the catalog as standalone skills.")
+                    .font(.callout)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button("Delete Collection", role: .destructive) {
+                    collectionPendingDeletion = collection
+                }
+                .appDestructiveButton()
+            }
+        }
     }
 
     @ViewBuilder
@@ -980,11 +1007,22 @@ struct SkillsScreen: View {
     }
 
     private func collectionMembershipRow(_ skill: SkillRecord, collection: SkillCollectionRecord) -> some View {
-        CollectionMembershipRowView(
+        let repository = cachedLayout.repositoryBySkillID[skill.id]
+        let isRuntimeIncluded = !viewModel.skillIsExcludedFromRuntime(skill, in: collection)
+        return SkillListRowView(
             skill: skill,
             iconName: skillIcon(skill),
             iconColor: skillColor(isAssigned: viewModel.cachedSkillMetadataByID[skill.id]?.isAssigned ?? false),
-            isRuntimeIncluded: !viewModel.skillIsExcludedFromRuntime(skill, in: collection),
+            isInactive: !isRuntimeIncluded,
+            isDisabled: viewModel.bundledSkillIsDisabled(skill),
+            repositoryDisplayName: repository?.displayName,
+            collectionCount: cachedLayout.collectionCountBySkillID[skill.id] ?? 0,
+            hasUpdate: repository?.hasKnownUpdate == true,
+            isUpdating: false,
+            canRename: false,
+            onUpdate: nil,
+            onEdit: {},
+            runtimeIncluded: isRuntimeIncluded,
             onRuntimeIncludedChange: { included in setSkill(skill, runtimeIncluded: included, in: collection) },
             onOpen: { readOnlySkillPreview = skill }
         )
@@ -1908,6 +1946,28 @@ struct SkillsScreen: View {
         let failed = viewModel.deleteSkills(skills)
         skillsPendingBatchDeletion = nil
         selectedSkillIDs = []
+        reportBatchSkillDeletionFailures(failed)
+    }
+
+    private func deleteCollectionOnly(_ collection: SkillCollectionRecord) {
+        viewModel.removeSkillCollection(collection)
+        collectionPendingDeletion = nil
+        selectedCollectionID = nil
+        syncLibrarySelectionFromState()
+    }
+
+    private func deleteCollectionAndMembers(_ collection: SkillCollectionRecord) {
+        let members = cachedLayout.collectionMembersByID[collection.id] ?? []
+        viewModel.removeSkillCollection(collection)
+        let failed = viewModel.deleteSkills(members)
+        collectionPendingDeletion = nil
+        selectedCollectionID = nil
+        selectedSkillIDs = []
+        syncLibrarySelectionFromState()
+        reportBatchSkillDeletionFailures(failed)
+    }
+
+    private func reportBatchSkillDeletionFailures(_ failed: [String]) {
         if !failed.isEmpty {
             NSSound.beep()
             skillActionErrorMessage = """
@@ -2310,70 +2370,6 @@ private struct CollectionListRowView: View {
     }
 }
 
-private struct CollectionMembershipRowView: View {
-    let skill: SkillRecord
-    let iconName: String
-    let iconColor: Color
-    let isRuntimeIncluded: Bool
-    let onRuntimeIncludedChange: (Bool) -> Void
-    let onOpen: () -> Void
-
-    @State private var isHovered = false
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Image(systemName: iconName)
-                .foregroundStyle(iconColor)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(skill.name)
-                    .font(.headline)
-                    .fontWidth(.expanded)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(skill.description ?? "No description")
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.mutedText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            .layoutPriority(1)
-
-            Spacer(minLength: 0)
-
-            if isHovered {
-                HStack(spacing: 6) {
-                    Button {
-                        onRuntimeIncludedChange(!isRuntimeIncluded)
-                    } label: {
-                        Label(
-                            isRuntimeIncluded ? "Deactivate" : "Activate",
-                            systemImage: isRuntimeIncluded ? "pause.circle" : "play.circle"
-                        )
-                        .labelStyle(.titleAndIcon)
-                    }
-                    .appSmallSecondaryButton()
-                    .help(isRuntimeIncluded ? "Deactivate for runtime loading" : "Activate for runtime loading")
-
-                    Button(action: onOpen) {
-                        Label("Open", systemImage: "doc.text.magnifyingglass")
-                            .labelStyle(.titleAndIcon)
-                    }
-                    .appSmallSecondaryButton()
-                    .help("Open read-only skill preview")
-                }
-                .fixedSize()
-                .layoutPriority(2)
-                .transition(.opacity)
-            }
-        }
-        .onHover { isHovered = $0 }
-        .padding(.vertical, 5)
-        .opacity(isRuntimeIncluded ? 1 : 0.62)
-        .saturation(isRuntimeIncluded ? 1 : 0.25)
-    }
-}
-
 private struct SkillReadOnlyPreviewSheet: View {
     let skill: SkillRecord
     @Environment(\.dismiss) private var dismiss
@@ -2442,6 +2438,9 @@ private struct SkillListRowView: View {
     let canRename: Bool
     let onUpdate: (() -> Void)?
     let onEdit: () -> Void
+    var runtimeIncluded: Bool? = nil
+    var onRuntimeIncludedChange: ((Bool) -> Void)? = nil
+    var onOpen: (() -> Void)? = nil
 
     @State private var isHovered = false
 
@@ -2493,6 +2492,29 @@ private struct SkillListRowView: View {
 
             if showsRowActions {
                 HStack(spacing: 6) {
+                    if let runtimeIncluded, let onRuntimeIncludedChange {
+                        Button {
+                            onRuntimeIncludedChange(!runtimeIncluded)
+                        } label: {
+                            Label(
+                                runtimeIncluded ? "Deactivate" : "Activate",
+                                systemImage: runtimeIncluded ? "pause.circle" : "play.circle"
+                            )
+                            .labelStyle(.titleAndIcon)
+                        }
+                        .appSmallSecondaryButton()
+                        .help(runtimeIncluded ? "Deactivate for runtime loading" : "Activate for runtime loading")
+                    }
+
+                    if let onOpen {
+                        Button(action: onOpen) {
+                            Label("Open", systemImage: "doc.text.magnifyingglass")
+                                .labelStyle(.titleAndIcon)
+                        }
+                        .appSmallSecondaryButton()
+                        .help("Open read-only skill preview")
+                    }
+
                     if let onUpdate {
                         Button(action: onUpdate) {
                             if isUpdating {
@@ -2516,6 +2538,9 @@ private struct SkillListRowView: View {
                         .help("Edit SKILL.md")
                     }
                 }
+                .fixedSize()
+                .layoutPriority(2)
+                .transition(.opacity)
             }
         }
         .onHover { isHovered = $0 }
