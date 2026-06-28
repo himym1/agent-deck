@@ -956,7 +956,7 @@ struct SkillsScreen: View {
     @ViewBuilder
     private func collectionMembershipList(for collection: SkillCollectionRecord, members: [SkillRecord]) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Checkboxes control runtime loading only. Unchecked skills stay in this collection and remain hidden from the standalone Catalog section; import and sparse sync membership are unchanged.")
+            Text("Deactivate skills to keep them in this collection while excluding them from runtime loading. Use the row context menu to remove a skill from the collection without deleting its files.")
                 .font(.caption)
                 .foregroundStyle(AppTheme.mutedText)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1002,7 +1002,26 @@ struct SkillsScreen: View {
             } label: {
                 Label("Show Skill Details", systemImage: "sidebar.right")
             }
+            Divider()
+            Button(role: .destructive) {
+                removeSkillFromCollection(skill, collection: collection)
+            } label: {
+                Label("Remove from Collection", systemImage: "minus.circle")
+            }
         }
+    }
+
+    private func removeSkillFromCollection(_ skill: SkillRecord, collection: SkillCollectionRecord) {
+        var updated = collection
+        let rootPath = viewModel.skillRootPath(forCollectionMembership: skill)
+        let filePath = URL(fileURLWithPath: skill.filePath).standardizedFileURL.path
+        updated.skillRootPaths.remove(rootPath)
+        updated.skillRootPaths.remove(filePath)
+        updated.skillNames.remove(skill.name)
+        updated.excludedSkillRootPaths.remove(rootPath)
+        updated.excludedSkillRootPaths.remove(filePath)
+        updated.excludedSkillNames.remove(skill.name)
+        viewModel.saveSkillCollection(updated)
     }
 
     private func setSkill(_ skill: SkillRecord, runtimeIncluded: Bool, in collection: SkillCollectionRecord) {
@@ -2303,15 +2322,6 @@ private struct CollectionMembershipRowView: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            Toggle(isOn: Binding(
-                get: { isRuntimeIncluded },
-                set: onRuntimeIncludedChange
-            )) {
-                EmptyView()
-            }
-            .toggleStyle(.checkbox)
-            .labelsHidden()
-
             Image(systemName: iconName)
                 .foregroundStyle(iconColor)
                 .frame(width: 18)
@@ -2331,7 +2341,19 @@ private struct CollectionMembershipRowView: View {
 
             Spacer(minLength: 0)
 
-            if isHovered {
+            HStack(spacing: 6) {
+                Button {
+                    onRuntimeIncludedChange(!isRuntimeIncluded)
+                } label: {
+                    Label(
+                        isRuntimeIncluded ? "Deactivate" : "Activate",
+                        systemImage: isRuntimeIncluded ? "pause.circle" : "play.circle"
+                    )
+                    .labelStyle(.titleAndIcon)
+                }
+                .appSmallSecondaryButton()
+                .help(isRuntimeIncluded ? "Deactivate for runtime loading" : "Activate for runtime loading")
+
                 Button(action: onOpen) {
                     Label("Open", systemImage: "doc.text.magnifyingglass")
                         .labelStyle(.titleAndIcon)
@@ -2339,6 +2361,10 @@ private struct CollectionMembershipRowView: View {
                 .appSmallSecondaryButton()
                 .help("Open read-only skill preview")
             }
+            .frame(width: 230, alignment: .trailing)
+            .opacity(isHovered ? 1 : 0)
+            .allowsHitTesting(isHovered)
+            .animation(.easeInOut(duration: 0.15), value: isHovered)
         }
         .onHover { isHovered = $0 }
         .padding(.vertical, 5)
