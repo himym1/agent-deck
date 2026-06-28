@@ -168,4 +168,56 @@ openai gpt-5.2 400k 128k yes yes
         XCTAssertEqual(identifiers.first?.provider, "openai")
         XCTAssertEqual(identifiers.first?.model, "gpt-5.2")
     }
+
+    @MainActor
+    func testVertexProviderThinkingLevelsUseTargetedAliasFallback() async {
+        let output = """
+provider model context output thinking images
+google-vertex gemini-2.5-pro 1M 64K yes yes
+"""
+        let runner = FakeModelDiscoveryCommandRunner(
+            listOutput: output,
+            nodeOutput: #"{"google-vertex/gemini-2.5-pro":["off","low","medium","high"]}"#
+        )
+        let service = PiModelDiscoveryService(
+            commandRunner: runner,
+            piResolver: PiExecutableResolver(candidatesProvider: { [] }, defaultPathDirectories: { [] })
+        )
+
+        let models = await service.loadAvailableModels()
+        let script = await runner.nodeScript ?? ""
+
+        XCTAssertTrue(script.contains("item.provider.endsWith('-vertex')"))
+        XCTAssertTrue(script.contains("byKey.get(`${baseProvider}/${item.model}`)"))
+        XCTAssertEqual(models.first?.identifier, "google-vertex/gemini-2.5-pro")
+        XCTAssertEqual(models.first?.supportedThinkingLevels, ["off", "low", "medium", "high"])
+    }
+}
+
+private actor FakeModelDiscoveryCommandRunner: CommandRunning {
+    private let listOutput: String
+    private let nodeOutput: String
+    private(set) var nodeScript: String?
+
+    init(listOutput: String, nodeOutput: String) {
+        self.listOutput = listOutput
+        self.nodeOutput = nodeOutput
+    }
+
+    func run(
+        _ command: String,
+        arguments: [String],
+        currentDirectoryURL: URL?,
+        timeout: TimeInterval?,
+        environment: [String: String]?
+    ) async throws -> CommandResult {
+        if arguments == ["--list-models"] {
+            return CommandResult(stdout: listOutput, stderr: "", exitCode: 0)
+        }
+        if command == "node" {
+            nodeScript = arguments.last
+            return CommandResult(stdout: nodeOutput, stderr: "", exitCode: 0)
+        }
+        return CommandResult(stdout: "", stderr: "unexpected command", exitCode: 1)
+    }
 }

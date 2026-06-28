@@ -109,7 +109,13 @@ const input = JSON.parse(process.env.AGENT_DECK_MODEL_INPUT ?? '[]');
 const result = {};
 for (const item of input) {
   const key = `${item.provider}/${item.model}`;
-  const model = byKey.get(key);
+  let model = byKey.get(key);
+  if (!model && item.provider.endsWith('-vertex')) {
+    const baseProvider = item.provider.slice(0, -'-vertex'.length);
+    if (baseProvider) {
+      model = byKey.get(`${baseProvider}/${item.model}`);
+    }
+  }
   if (!model || !model.reasoning) {
     result[key] = ['off'];
     continue;
