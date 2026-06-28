@@ -922,6 +922,14 @@ struct SkillsScreen: View {
             } label: {
                 Label("Manage Collections", systemImage: "folder.badge.gearshape")
             }
+
+            Divider()
+
+            Button(role: .destructive) {
+                collectionPendingDeletion = collection
+            } label: {
+                Label("Delete Collection", systemImage: "trash")
+            }
         }
     }
 
