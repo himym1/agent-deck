@@ -1,8 +1,9 @@
 import Foundation
 
-nonisolated enum GitHubHostKind: String, Hashable, Sendable {
+nonisolated enum GitForgeKind: String, Hashable, Sendable {
     case github
-    case other
+    case gitea
+    case unsupported
 }
 
 nonisolated struct GitHubRemote: Hashable, Sendable {
@@ -10,17 +11,46 @@ nonisolated struct GitHubRemote: Hashable, Sendable {
     let owner: String
     let repo: String
     let remoteURL: String
+    let forgeKind: GitForgeKind
 
-    var hostKind: GitHubHostKind {
-        host.caseInsensitiveCompare("github.com") == .orderedSame ? .github : .other
+    init(
+        host: String,
+        owner: String,
+        repo: String,
+        remoteURL: String,
+        forgeKind: GitForgeKind? = nil
+    ) {
+        self.host = host
+        self.owner = owner
+        self.repo = repo
+        self.remoteURL = remoteURL
+        self.forgeKind = forgeKind ?? (host.caseInsensitiveCompare("github.com") == .orderedSame ? .github : .gitea)
     }
+
+    var hostKind: GitForgeKind { forgeKind }
 
     var nameWithOwner: String {
         "\(owner)/\(repo)"
     }
 
+    var repositoryKey: String {
+        "\(host.lowercased())/\(nameWithOwner.lowercased())"
+    }
+
     var isGitHubDotCom: Bool {
-        hostKind == .github
+        forgeKind == .github && host.caseInsensitiveCompare("github.com") == .orderedSame
+    }
+
+    var supportsIssues: Bool {
+        forgeKind == .github || forgeKind == .gitea
+    }
+
+    var displayHostName: String {
+        switch forgeKind {
+        case .github: return "GitHub"
+        case .gitea: return "Gitea"
+        case .unsupported: return host
+        }
     }
 }
 

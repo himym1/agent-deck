@@ -1562,3 +1562,21 @@
 "Image Playground is not available on this Mac." = "此 Mac 上不可用 Image Playground。";
 "Import from File…" = "从文件导入…";
 "Pick an image file from your computer to use as the avatar." = "从电脑中选择一张图片作为头像。";
+
+/* Gitea issue support */
+"Add GITEA_TOKEN…" = "添加 GITEA_TOKEN…";
+"Add a GITEA_TOKEN in Agent Deck's environment to browse issues on this Gitea host." = "在 Agent Deck 环境中添加 GITEA_TOKEN，以浏览此 Gitea 主机上的 Issues。";
+"Add a GITEA_TOKEN to enable issue browse, comment, and close workflows for self-hosted Gitea projects." = "添加 GITEA_TOKEN，以启用自托管 Gitea 项目的 Issue 浏览、评论和关闭流程。";
+"Connect GitHub first to attach an issue." = "请先连接 GitHub，再附加 Issue。";
+"GITEA_TOKEN configured. Issue workflows are ready when a Gitea project is opened." = "已配置 GITEA_TOKEN。打开 Gitea 项目时，Issue 流程已可用。";
+"Gitea" = "Gitea";
+"Loading issues for the selected repository…" = "正在加载所选仓库的 Issues…";
+"Missing Token" = "缺少 Token";
+"No Issue Remote" = "无 Issue 远端";
+"No issues loaded for the selected repository yet." = "尚未加载所选仓库的 Issues。";
+"No matching issues." = "没有匹配的 Issues。";
+"Select a GitHub or Gitea project to attach one of its issues." = "选择一个 GitHub 或 Gitea 项目以附加其中一个 Issue。";
+"The selected project is not mapped to a supported GitHub or Gitea remote." = "所选项目未映射到受支持的 GitHub 或 Gitea 远端。";
+"Token configured. Issue browse, comment, and close workflows are available for this Gitea host." = "已配置 Token。此 Gitea 主机可使用 Issue 浏览、评论和关闭流程。";
+"Configured" = "已配置";
+"Optional" = "可选";

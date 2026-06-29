@@ -1719,8 +1719,7 @@ final class AppViewModel: NSObject {
             return
         }
 
-        let repos = gitHubProjects.compactMap(\.gitHubRemote)
-        githubIsLoadingAggregateBoard = true
+        let repos = gitHubProjects.compactMap(\.gitHubRemote).filter { $0.forgeKind == .github }
         githubLastError = nil
 
         Task { [weak self] in
@@ -1748,15 +1747,6 @@ final class AppViewModel: NSObject {
     }
 
     func refreshProjectBoard(force: Bool = false) {
-        guard let session = gitHubSession else {
-            githubIsLoadingProjectBoard = false
-            githubLastError = "Connect GitHub first."
-            githubProjectBoard = nil
-            githubProjectBoardCacheKey = nil
-            githubProjectBoardFetchedAt = nil
-            return
-        }
-
         guard let remote = selectedGitHubProject?.gitHubRemote else {
             githubIsLoadingProjectBoard = false
             githubLastError = nil
@@ -1765,6 +1755,16 @@ final class AppViewModel: NSObject {
             githubProjectBoardFetchedAt = nil
             return
         }
+
+        if remote.forgeKind == .github, gitHubSession == nil {
+            githubIsLoadingProjectBoard = false
+            githubLastError = "Connect GitHub first."
+            githubProjectBoard = nil
+            githubProjectBoardCacheKey = nil
+            githubProjectBoardFetchedAt = nil
+            return
+        }
+
 
         let state = githubIssueStateFilter
         let closeReason = effectiveCloseReasonFilter
@@ -1784,13 +1784,29 @@ final class AppViewModel: NSObject {
         Task { [weak self] in
             guard let self else { return }
             do {
-                let service = GitHubSearchService(apiClient: GitHubAPIClient(session: session))
-                let snapshot = try await service.fetchRepositoryIssues(
-                    repo: remote,
-                    state: state,
-                    closeReason: closeReason,
-                    bypassCache: force
-                )
+                let snapshot: GitHubBoardSnapshot
+                switch remote.forgeKind {
+                case .github:
+                    guard let session = self.gitHubSession else {
+                        throw GitHubAPIClient.APIError.requestFailed(statusCode: 0, message: "Connect GitHub first.")
+                    }
+                    let service = GitHubSearchService(apiClient: GitHubAPIClient(session: session))
+                    snapshot = try await service.fetchRepositoryIssues(
+                        repo: remote,
+                        state: state,
+                        closeReason: closeReason,
+                        bypassCache: force
+                    )
+                case .gitea:
+                    let environment = EnvRuntimeEnvironment().environment(projectRoot: self.selectedDiscoveredProject?.url)
+                    let service = try GiteaIssueService(remote: remote, environment: environment)
+                    snapshot = try await service.fetchRepositoryIssues(
+                        state: state,
+                        bypassCache: force
+                    )
+                case .unsupported:
+                    throw GitHubAPIClient.APIError.requestFailed(statusCode: 0, message: "Unsupported Git forge host: \(remote.host)")
+                }
 
                 await MainActor.run {
                     guard self.githubProjectBoardRequestID == requestID,
@@ -2267,12 +2283,17 @@ final class AppViewModel: NSObject {
     }
 
     func loadIssueDetail(for item: GitHubWorkItem, bypassCache: Bool = false) {
-        guard let session = gitHubSession else {
+        guard let remote = remote(for: item) else {
+            githubIsLoadingIssueDetail = false
+            githubLastError = "No repository remote is available for this issue."
+            return
+        }
+
+        if remote.forgeKind == .github, gitHubSession == nil {
             githubIsLoadingIssueDetail = false
             githubLastError = "Connect GitHub first."
             return
         }
-
         githubIssueDetailRequestID += 1
         let requestID = githubIssueDetailRequestID
         githubIsLoadingIssueDetail = true
@@ -2281,8 +2302,21 @@ final class AppViewModel: NSObject {
         Task { [weak self] in
             guard let self else { return }
             do {
-                let service = GitHubIssueService(apiClient: GitHubAPIClient(session: session))
-                let detail = try await service.fetchDetail(for: item, bypassCache: bypassCache)
+                let detail: GitHubIssueDetail
+                switch remote.forgeKind {
+                case .github:
+                    guard let session = self.gitHubSession else {
+                        throw GitHubAPIClient.APIError.requestFailed(statusCode: 0, message: "Connect GitHub first.")
+                    }
+                    let service = GitHubIssueService(apiClient: GitHubAPIClient(session: session))
+                    detail = try await service.fetchDetail(for: item, bypassCache: bypassCache)
+                case .gitea:
+                    let environment = EnvRuntimeEnvironment().environment(projectRoot: self.selectedDiscoveredProject?.url)
+                    let service = try GiteaIssueService(remote: remote, environment: environment)
+                    detail = try await service.fetchDetail(for: item, bypassCache: bypassCache)
+                case .unsupported:
+                    throw GitHubAPIClient.APIError.requestFailed(statusCode: 0, message: "Unsupported Git forge host: \(remote.host)")
+                }
                 await MainActor.run {
                     guard self.githubIssueDetailRequestID == requestID,
                           self.githubSelectedWorkItem == item else { return }
@@ -2304,18 +2338,30 @@ final class AppViewModel: NSObject {
     }
 
     func fetchPiAgentIssueAttachment(for item: GitHubWorkItem, completion: @escaping (Result<PiAgentIssueAttachment, Error>) -> Void) {
-        guard let session = gitHubSession else {
-            completion(.failure(GitHubAPIClient.APIError.requestFailed(statusCode: 0, message: "Connect GitHub first.")))
+        guard let remote = remote(for: item) else {
+            completion(.failure(GitHubAPIClient.APIError.requestFailed(statusCode: 0, message: "No repository remote is available for this issue.")))
             return
         }
-
         Task { [weak self] in
             // Bail out early if the view model has been deallocated. The body
             // below doesn't reference `self`, so a boolean test is enough.
             guard self != nil else { return }
             do {
-                let service = GitHubIssueService(apiClient: GitHubAPIClient(session: session))
-                let detail = try await service.fetchDetail(for: item)
+                let detail: GitHubIssueDetail
+                switch remote.forgeKind {
+                case .github:
+                    guard let session = self?.gitHubSession else {
+                        throw GitHubAPIClient.APIError.requestFailed(statusCode: 0, message: "Connect GitHub first.")
+                    }
+                    let service = GitHubIssueService(apiClient: GitHubAPIClient(session: session))
+                    detail = try await service.fetchDetail(for: item)
+                case .gitea:
+                    let environment = EnvRuntimeEnvironment().environment(projectRoot: self?.selectedDiscoveredProject?.url)
+                    let service = try GiteaIssueService(remote: remote, environment: environment)
+                    detail = try await service.fetchDetail(for: item)
+                case .unsupported:
+                    throw GitHubAPIClient.APIError.requestFailed(statusCode: 0, message: "Unsupported Git forge host: \(remote.host)")
+                }
                 await MainActor.run {
                     completion(.success(PiAgentIssueAttachment(detail: detail)))
                 }
@@ -2334,7 +2380,7 @@ final class AppViewModel: NSObject {
             await MainActor.run {
                 if selectedGitHubProject?.gitHubRemote != nil {
                     refreshProjectBoard(force: false)
-                } else if githubAggregateBoard == nil, !gitHubProjects.isEmpty {
+                } else if githubAggregateBoard == nil, !gitHubProjects.filter({ $0.gitHubRemote?.forgeKind == .github }).isEmpty {
                     refreshAggregateBoard()
                 }
             }
@@ -5580,7 +5626,7 @@ final class AppViewModel: NSObject {
     }
 
     func submitComment() {
-        guard let item = githubSelectedWorkItem, let session = gitHubSession else {
+        guard let item = githubSelectedWorkItem, let remote = remote(for: item) else {
             githubLastError = "Select an issue or pull request first."
             return
         }
@@ -5597,11 +5643,22 @@ final class AppViewModel: NSObject {
         Task { [weak self] in
             guard let self else { return }
             do {
-                let service = GitHubIssueService(apiClient: GitHubAPIClient(session: session))
-                try await service.postComment(body: body, for: item)
+                switch remote.forgeKind {
+                case .github:
+                    guard let session = self.gitHubSession else {
+                        throw GitHubAPIClient.APIError.requestFailed(statusCode: 0, message: "Connect GitHub first.")
+                    }
+                    let service = GitHubIssueService(apiClient: GitHubAPIClient(session: session))
+                    try await service.postComment(body: body, for: item)
+                case .gitea:
+                    let environment = EnvRuntimeEnvironment().environment(projectRoot: self.selectedDiscoveredProject?.url)
+                    let service = try GiteaIssueService(remote: remote, environment: environment)
+                    try await service.postComment(body: body, for: item)
+                case .unsupported:
+                    throw GitHubAPIClient.APIError.requestFailed(statusCode: 0, message: "Unsupported Git forge host: \(remote.host)")
+                }
                 await MainActor.run {
-                    guard self.githubSelectedWorkItem == item,
-                          self.gitHubSession == session else {
+                    guard self.githubSelectedWorkItem == item else {
                         self.githubIsSubmittingComment = false
                         return
                     }
@@ -5645,8 +5702,8 @@ final class AppViewModel: NSObject {
     /// selection, and open detail with the new state. `githubIsClosingIssue`
     /// doubles as the in-flight flag for both directions.
     private func setIssueState(_ item: GitHubWorkItem, open: Bool, reason: GitHubIssueCloseReason?) {
-        guard let session = gitHubSession else {
-            githubLastError = "Connect GitHub first."
+        guard let remote = remote(for: item) else {
+            githubLastError = "No repository remote is available for this issue."
             return
         }
         githubIsClosingIssue = true
@@ -5655,11 +5712,27 @@ final class AppViewModel: NSObject {
         Task { [weak self] in
             guard let self else { return }
             do {
-                let service = GitHubIssueService(apiClient: GitHubAPIClient(session: session))
-                if open {
-                    try await service.reopenIssue(item)
-                } else {
-                    try await service.closeIssue(item, reason: reason ?? .completed)
+                switch remote.forgeKind {
+                case .github:
+                    guard let session = self.gitHubSession else {
+                        throw GitHubAPIClient.APIError.requestFailed(statusCode: 0, message: "Connect GitHub first.")
+                    }
+                    let service = GitHubIssueService(apiClient: GitHubAPIClient(session: session))
+                    if open {
+                        try await service.reopenIssue(item)
+                    } else {
+                        try await service.closeIssue(item, reason: reason ?? .completed)
+                    }
+                case .gitea:
+                    let environment = EnvRuntimeEnvironment().environment(projectRoot: self.selectedDiscoveredProject?.url)
+                    let service = try GiteaIssueService(remote: remote, environment: environment)
+                    if open {
+                        try await service.reopenIssue(item)
+                    } else {
+                        try await service.closeIssue(item)
+                    }
+                case .unsupported:
+                    throw GitHubAPIClient.APIError.requestFailed(statusCode: 0, message: "Unsupported Git forge host: \(remote.host)")
                 }
                 await MainActor.run {
                     self.githubIsClosingIssue = false
@@ -5731,8 +5804,18 @@ final class AppViewModel: NSObject {
         githubLabelFilters = []
     }
 
+    private func remote(for item: GitHubWorkItem) -> GitHubRemote? {
+        if let remote = selectedGitHubProject?.gitHubRemote,
+           remote.nameWithOwner.caseInsensitiveCompare(item.repository) == .orderedSame {
+            return remote
+        }
+        return discoveredProjects.compactMap(\.gitHubRemote).first { remote in
+            remote.nameWithOwner.caseInsensitiveCompare(item.repository) == .orderedSame
+        }
+    }
+
     private func boardCacheKey(for remote: GitHubRemote, state: GitHubIssueStateFilter, closeReason: GitHubIssueCloseReason?) -> String {
-        let reasonPart = closeReason?.rawValue ?? "any"
+        let reasonPart = remote.forgeKind == .github ? (closeReason?.rawValue ?? "any") : "any"
         return "\(remote.host.lowercased())|\(remote.nameWithOwner.lowercased())|\(state.rawValue.lowercased())|\(reasonPart)"
     }
 
@@ -7160,7 +7243,7 @@ final class AppViewModel: NSObject {
     }
 
     var gitHubProjects: [DiscoveredProject] {
-        enabledProjects.filter(\.isGitHubRepository)
+        enabledProjects.filter { $0.gitHubRemote?.supportsIssues == true }
     }
 
     var selectedDiscoveredProject: DiscoveredProject? {
@@ -7169,10 +7252,9 @@ final class AppViewModel: NSObject {
     }
 
     var selectedGitHubProject: DiscoveredProject? {
-        guard let selectedDiscoveredProject, selectedDiscoveredProject.isGitHubRepository else { return nil }
+        guard let selectedDiscoveredProject, selectedDiscoveredProject.gitHubRemote?.supportsIssues == true else { return nil }
         return selectedDiscoveredProject
     }
-
     var shouldWarnProjectSelection: Bool {
         enabledProjects.isEmpty
     }

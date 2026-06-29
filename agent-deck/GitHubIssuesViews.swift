@@ -171,16 +171,24 @@ struct GitHubIssueRowContent: View {
         }
         if isOpen, let onClose {
             Divider()
-            Menu {
-                ForEach(GitHubIssueCloseReason.allCases) { reason in
-                    Button {
-                        onClose(reason)
-                    } label: {
-                        Label(reason.title, systemImage: reason.systemImage)
+            if item.url.host()?.caseInsensitiveCompare("github.com") == .orderedSame {
+                Menu {
+                    ForEach(GitHubIssueCloseReason.allCases) { reason in
+                        Button {
+                            onClose(reason)
+                        } label: {
+                            Label(reason.title, systemImage: reason.systemImage)
+                        }
                     }
+                } label: {
+                    Label("Close Issue", systemImage: "checkmark.circle")
                 }
-            } label: {
-                Label("Close Issue", systemImage: "checkmark.circle")
+            } else {
+                Button {
+                    onClose(.completed)
+                } label: {
+                    Label("Close Issue", systemImage: "checkmark.circle")
+                }
             }
         } else if !isOpen, let onReopen {
             Divider()
@@ -339,7 +347,18 @@ struct GitHubIssueDetailView: View {
             .help(viewModel.selectedDiscoveredProject == nil ? "Select a project first." : "Open a Pi Agent session for this issue.")
 
             if detail.state.lowercased() == "open" {
-                closeSplitButton
+                if detail.item.url.host()?.caseInsensitiveCompare("github.com") == .orderedSame {
+                    closeSplitButton
+                } else {
+                    Button {
+                        viewModel.closeSelectedIssue(reason: .completed)
+                    } label: {
+                        Text(viewModel.githubIsClosingIssue ? "Closing…" : "Close")
+                            .fontWeight(.semibold)
+                    }
+                    .appSecondaryButton()
+                    .disabled(viewModel.githubIsClosingIssue)
+                }
             }
         }
     }
@@ -393,6 +412,7 @@ struct GitHubIssueDetailView: View {
         .disabled(viewModel.githubIsClosingIssue)
         .opacity(viewModel.githubIsClosingIssue ? 0.6 : 1)
     }
+
 
     private func metadataRow(_ detail: GitHubIssueDetail) -> some View {
         VStack(alignment: .leading, spacing: 12) {

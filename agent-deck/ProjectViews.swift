@@ -490,17 +490,21 @@ struct ProjectsScreen: View {
                         .fontWidth(.expanded)
                         .lineLimit(1)
 
-                    if project.isGitHubRepository {
+                    if project.gitHubRemote?.forgeKind == .github {
                         Image("github")
                             .resizable()
                             .renderingMode(.template)
                             .foregroundStyle(.secondary)
                             .frame(width: 12, height: 12)
+                    } else if project.gitHubRemote?.forgeKind == .gitea {
+                        Image(systemName: "point.3.connected.trianglepath.dotted")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
                     }
 
                     if isActiveSessionProject {
-                        AppLabelTag(text: "Active", color: AppTheme.brandAccent)
-                            .help("Active session project")
+                        AppLabelTag(text: AppLocalization.string("Active", default: "Active"), color: AppTheme.brandAccent)
+                            .help(AppLocalization.string("Active session project", default: "Active session project"))
                     }
                 }
 

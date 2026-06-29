@@ -14,7 +14,7 @@ nonisolated struct DiscoveredProject: Identifiable, Hashable, Sendable {
     var path: String { url.path }
     var repositoryName: String? { gitHubRemote?.nameWithOwner }
     var repositoryDisplayName: String { repositoryName ?? name }
-    var isGitHubRepository: Bool { gitHubRemote?.isGitHubDotCom == true }
+    var isGitHubRepository: Bool { gitHubRemote?.supportsIssues == true }
 }
 
 nonisolated struct ProjectDiscovery {
@@ -278,9 +278,7 @@ nonisolated struct ProjectDiscovery {
     }
 
     private func buildRemote(host: String, path: String, remoteURL: String) -> GitHubRemote? {
-        guard host.caseInsensitiveCompare("github.com") == .orderedSame else {
-            return nil
-        }
+        let forgeKind: GitForgeKind = host.caseInsensitiveCompare("github.com") == .orderedSame ? .github : .gitea
 
         let normalizedPath: String
         if path.hasSuffix(".git") {
@@ -296,7 +294,8 @@ nonisolated struct ProjectDiscovery {
             host: host,
             owner: String(components[0]),
             repo: String(components[1]),
-            remoteURL: remoteURL
+            remoteURL: remoteURL,
+            forgeKind: forgeKind
         )
     }
 

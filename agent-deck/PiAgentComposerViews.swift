@@ -327,7 +327,7 @@ struct PiAgentComposerBox: View {
 
     private var composerActionControls: some View {
         AppControlGroup(spacing: 6) {
-            if viewModel.githubConnectionState.isConnected && viewModel.selectedGitHubProject?.gitHubRemote != nil {
+            if canAttachIssue {
                 Button {
                     isIssuePickerPresented.toggle()
                 } label: {
@@ -341,8 +341,8 @@ struct PiAgentComposerBox: View {
                         .appGlassCircle()
                 }
                 .buttonStyle(.plain)
-                .help("Attach GitHub issue")
-                .accessibilityLabel("Attach GitHub issue")
+                .help("Attach issue")
+                .accessibilityLabel("Attach issue")
                 .popover(isPresented: $isIssuePickerPresented, arrowEdge: .bottom) {
                     PiAgentIssuePickerPopover(
                         viewModel: viewModel,
@@ -367,6 +367,11 @@ struct PiAgentComposerBox: View {
             .accessibilityLabel("Attach files")
             .accessibilityHint("Attach images, text files, or local file paths")
         }
+    }
+
+    private var canAttachIssue: Bool {
+        guard let remote = viewModel.selectedGitHubProject?.gitHubRemote else { return false }
+        return remote.forgeKind != .github || viewModel.githubConnectionState.isConnected
     }
 
     private func attachImagesFromOpenPanel() {
@@ -849,10 +854,10 @@ private struct PiAgentIssuePickerPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Attach GitHub Issue")
+            Text(AppLocalization.string("Attach GitHub Issue", default: "Attach GitHub Issue"))
                 .font(AppTheme.Font.headline)
 
-            AppTextField(text: $query, placeholder: "Search visible issues")
+            AppTextField(text: $query, placeholder: AppLocalization.string("Search visible issues", default: "Search visible issues"))
 
             if let errorText {
                 Text(errorText)
@@ -896,20 +901,20 @@ private struct PiAgentIssuePickerPopover: View {
     }
 
     private var emptyStateText: String {
-        if !viewModel.githubConnectionState.isConnected {
-            return "Connect GitHub first to attach an issue."
+        if viewModel.selectedGitHubProject?.gitHubRemote?.forgeKind == .github,
+           !viewModel.githubConnectionState.isConnected {
+            return AppLocalization.string("Connect GitHub first to attach an issue.", default: "Connect GitHub first to attach an issue.")
         }
         if viewModel.selectedGitHubProject?.gitHubRemote != nil {
             return viewModel.githubIsLoadingProjectBoard
-                ? "Loading issues for the selected repository…"
-                : "No issues loaded for the selected repository yet."
+                ? AppLocalization.string("Loading issues for the selected repository…", default: "Loading issues for the selected repository…")
+                : AppLocalization.string("No issues loaded for the selected repository yet.", default: "No issues loaded for the selected repository yet.")
         }
         if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "No matching issues."
+            return AppLocalization.string("No matching issues.", default: "No matching issues.")
         }
-        return "Select a GitHub project to attach one of its issues."
+        return AppLocalization.string("Select a GitHub or Gitea project to attach one of its issues.", default: "Select a GitHub or Gitea project to attach one of its issues.")
     }
-
     private func attach(_ item: GitHubWorkItem) {
         isLoading = true
         loadingIssueID = item.id

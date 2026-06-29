@@ -146,8 +146,7 @@ struct GitHubSearchService {
             parts.append(closeReason.searchQualifier)
         }
 
-        let uniqueRepos = Array(Set(repos.map(\.nameWithOwner))).sorted()
-        parts.append(contentsOf: uniqueRepos.map { "repo:\($0)" })
+        let uniqueRepos = Array(Set(repos.filter { $0.forgeKind == .github }.map(\.nameWithOwner))).sorted()
         return parts.joined(separator: " ")
     }
 }

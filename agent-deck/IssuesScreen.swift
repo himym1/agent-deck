@@ -20,9 +20,9 @@ struct IssuesScreen: View {
         }
         .task(id: refreshKey) {
             await Task.yield()
-            guard viewModel.githubConnectionState.isConnected,
-                  viewModel.selectedGitHubProject?.gitHubRemote != nil else { return }
-            viewModel.refreshProjectBoard(force: false)
+            guard viewModel.selectedGitHubProject?.gitHubRemote != nil else { return }
+            if viewModel.selectedGitHubProject?.gitHubRemote?.forgeKind == .github,
+               !viewModel.githubConnectionState.isConnected { return }
         }
         .task(id: visibleItemsCacheKey) { recomputeVisibleItems() }
         .onChange(of: viewModel.githubIssueStateFilter) { _, _ in
@@ -62,11 +62,11 @@ struct IssuesScreen: View {
 
         if project?.gitHubRemote == nil {
             noProjectPlaceholder
-        } else if !viewModel.githubConnectionState.isConnected {
+        } else if project?.gitHubRemote?.forgeKind == .github && !viewModel.githubConnectionState.isConnected {
             ContentUnavailableView(
-                "Not Connected to GitHub",
+                AppLocalization.string("Not Connected to GitHub", default: "Not Connected to GitHub"),
                 systemImage: "person.crop.circle.badge.questionmark",
-                description: Text("Connect your GitHub CLI session to browse issues.")
+                description: Text(AppLocalization.string("Connect your GitHub CLI session to browse issues.", default: "Connect your GitHub CLI session to browse issues."))
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if viewModel.githubIsLoadingProjectBoard && viewModel.githubProjectBoard == nil {
@@ -75,9 +75,9 @@ struct IssuesScreen: View {
             boardContent(board: board)
         } else {
             ContentUnavailableView(
-                "No Issues Loaded",
+                AppLocalization.string("No Issues Loaded", default: "No Issues Loaded"),
                 systemImage: "circle.dashed",
-                description: Text("Refresh to load issues for this repository.")
+                description: Text(AppLocalization.string("Refresh to load issues for this repository.", default: "Refresh to load issues for this repository."))
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -87,16 +87,16 @@ struct IssuesScreen: View {
     private var noProjectPlaceholder: some View {
         if viewModel.selectedProjectPath != nil {
             ContentUnavailableView(
-                "No GitHub Remote",
+                AppLocalization.string("No Issue Remote", default: "No Issue Remote"),
                 systemImage: "link.badge.plus",
-                description: Text("The selected project is not mapped to a GitHub remote.")
+                description: Text(AppLocalization.string("The selected project is not mapped to a supported GitHub or Gitea remote.", default: "The selected project is not mapped to a supported GitHub or Gitea remote."))
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ContentUnavailableView(
-                "No Project Selected",
+                AppLocalization.string("No Project Selected", default: "No Project Selected"),
                 systemImage: "folder",
-                description: Text("Choose a project to browse its issues.")
+                description: Text(AppLocalization.string("Choose a project to browse its issues.", default: "Choose a project to browse its issues."))
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -110,8 +110,7 @@ struct IssuesScreen: View {
                         .controlSize(.small)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Loading issues")
-                            .font(.headline)
-                        Text("Fetching open issues for this repository.")
+                        Text("Fetching issues for this repository.")
                             .foregroundStyle(AppTheme.mutedText)
                     }
                     Spacer()
@@ -163,7 +162,7 @@ struct IssuesScreen: View {
                         listNote("Showing first \(totalShown) of \(totalCount) matching issues.", tint: .orange)
                     }
                     if incomplete {
-                        listNote("GitHub reported incomplete search results — narrow the scope if items look missing.", tint: .orange)
+                        listNote("The issue provider reported incomplete search results — narrow the scope if items look missing.", tint: .orange)
                     }
                 }
                 .padding(.horizontal, AppTheme.pagePadding)

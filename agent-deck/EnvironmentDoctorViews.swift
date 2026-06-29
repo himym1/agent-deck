@@ -285,6 +285,7 @@ struct DoctorScreen: View {
             piAgentSection
             dependenciesSection
             githubAccessSection
+            giteaAccessSection
             webAccessSection
             if !snapshot.warnings.isEmpty {
                 warningsSection
@@ -884,6 +885,128 @@ struct DoctorScreen: View {
         // crisper at 32pt and ~7x lighter to download.
         return URL(string: "https://avatars.githubusercontent.com/\(account.login)?s=160")
     }
+
+    // MARK: - Gitea Access
+
+    /// Discovers unique Gitea hosts from all discovered projects.
+    private var giteaHosts: [String] {
+        let hosts = viewModel.discoveredProjects.compactMap { project -> String? in
+            guard let remote = project.gitHubRemote, remote.forgeKind == .gitea else { return nil }
+            return remote.host
+        }
+        return Array(Set(hosts)).sorted()
+    }
+
+    private func giteaTokenExists(for host: String) -> Bool {
+        let env = EnvRuntimeEnvironment().environment(projectRoot: viewModel.selectedProjectPath.map { URL(fileURLWithPath: $0) })
+        let suffix = Self.giteaTokenSuffix(for: host)
+        let key = "GITEA_TOKEN_\(suffix)"
+        return [key, "GITEA_TOKEN"].contains { candidate in
+            (env[candidate]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+        }
+    }
+
+    private static func giteaTokenSuffix(for host: String) -> String {
+        host.uppercased().map { $0.isLetter || $0.isNumber ? $0 : "_" }.map(String.init).joined()
+    }
+    private var giteaGlobalTokenExists: Bool {
+        let env = EnvRuntimeEnvironment().environment(projectRoot: viewModel.selectedProjectPath.map { URL(fileURLWithPath: $0) })
+        return (env["GITEA_TOKEN"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+    }
+
+    private var giteaEmptyRow: some View {
+        let hasToken = giteaGlobalTokenExists
+        return HStack(alignment: .center, spacing: 14) {
+            Image(systemName: "point.3.connected.trianglepath.dotted")
+                .font(.title3)
+                .foregroundStyle(hasToken ? .green : AppTheme.mutedText)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Gitea")
+                    .font(.body.weight(.semibold))
+                    .fontWidth(.expanded)
+
+                Text(hasToken
+                     ? AppLocalization.string("GITEA_TOKEN configured. Issue workflows are ready when a Gitea project is opened.", default: "GITEA_TOKEN configured. Issue workflows are ready when a Gitea project is opened.")
+                     : AppLocalization.string("Add a GITEA_TOKEN to enable issue browse, comment, and close workflows for self-hosted Gitea projects.", default: "Add a GITEA_TOKEN to enable issue browse, comment, and close workflows for self-hosted Gitea projects."))
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if !hasToken {
+                    Button(AppLocalization.string("Add GITEA_TOKEN…", default: "Add GITEA_TOKEN…")) {
+                        envDraft = viewModel.makeNewEnvDraft(scope: .global, prefilledKey: "GITEA_TOKEN")
+                    }
+                    .appPrimaryButton()
+                }
+            }
+
+            Spacer(minLength: 8)
+            AppLabelTag(
+                text: hasToken ? AppLocalization.string("Configured", default: "Configured") : AppLocalization.string("Optional", default: "Optional"),
+                color: hasToken ? .green : .secondary
+            )
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var giteaAccessSection: some View {
+        AppCard(title: AppLocalization.string("Gitea", default: "Gitea")) {
+            VStack(alignment: .leading, spacing: 14) {
+                if giteaHosts.isEmpty {
+                    giteaEmptyRow
+                } else {
+                    ForEach(giteaHosts, id: \.self) { host in
+                        giteaHostRow(host: host)
+                        if host != giteaHosts.last {
+                            Divider()
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 12)
+        }
+    }
+    private func giteaHostRow(host: String) -> some View {
+        let hasToken = giteaTokenExists(for: host)
+        return HStack(alignment: .center, spacing: 14) {
+            Image(systemName: "point.3.connected.trianglepath.dotted")
+                .font(.title3)
+                .foregroundStyle(hasToken ? .green : AppTheme.mutedText)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(host)
+                    .font(.body.weight(.semibold))
+                    .fontWidth(.expanded)
+
+                Text(hasToken
+                     ? AppLocalization.string("Token configured. Issue browse, comment, and close workflows are available for this Gitea host.", default: "Token configured. Issue browse, comment, and close workflows are available for this Gitea host.")
+                     : AppLocalization.string("Add a GITEA_TOKEN in Agent Deck's environment to browse issues on this Gitea host.", default: "Add a GITEA_TOKEN in Agent Deck's environment to browse issues on this Gitea host."))
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if !hasToken {
+                    Button(AppLocalization.string("Add GITEA_TOKEN…", default: "Add GITEA_TOKEN…")) {
+                        envDraft = viewModel.makeNewEnvDraft(scope: .global, prefilledKey: "GITEA_TOKEN")
+                    }
+                    .appPrimaryButton()
+                }
+            }
+
+            Spacer(minLength: 8)
+            AppLabelTag(
+                text: hasToken ? AppLocalization.string("Configured", default: "Configured") : AppLocalization.string("Missing Token", default: "Missing Token"),
+                color: hasToken ? .green : .secondary
+            )
+        }
+        .padding(.vertical, 4)
+    }
+
+    // MARK: - Web Access
 
     // MARK: - Web Access
 
