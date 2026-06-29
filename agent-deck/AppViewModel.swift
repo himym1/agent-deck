@@ -4711,7 +4711,14 @@ final class AppViewModel: NSObject {
         let status = try await gitRepositoryService.statusText(in: workingURL)
         let diff = try await gitRepositoryService.stagedDiffForCommitMessage(in: workingURL)
         let message = try await withCheckedThrowingContinuation { continuation in
-            shipService.generateCommitMessage(status: status, diff: diff, model: model, projectURL: workingURL, environment: environment) { result in
+            shipService.generateCommitMessage(
+                status: status,
+                diff: diff,
+                model: model,
+                projectURL: workingURL,
+                environment: environment,
+                language: .init(appLanguage: appSettings.appLanguage)
+            ) { result in
                 continuation.resume(with: result)
             }
         }

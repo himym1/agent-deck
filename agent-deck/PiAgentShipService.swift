@@ -31,6 +31,40 @@ final class PiAgentShipService {
         let body: String
     }
 
+    enum CommitMessageLanguage {
+        case english
+        case simplifiedChinese
+
+        init(appLanguage: AppLanguage) {
+            switch appLanguage {
+            case .simplifiedChinese:
+                self = .simplifiedChinese
+            case .english:
+                self = .english
+            case .system:
+                self = Locale.current.language.languageCode?.identifier == "zh" ? .simplifiedChinese : .english
+            }
+        }
+
+        var instruction: String {
+            switch self {
+            case .english:
+                return "Write the title and body in English."
+            case .simplifiedChinese:
+                return "Write the title and body in Simplified Chinese. Keep technical identifiers, file names, commands, branch names, and product names in English when appropriate."
+            }
+        }
+
+        var promptLead: String {
+            switch self {
+            case .english:
+                return "Generate a git commit message for these staged changes."
+            case .simplifiedChinese:
+                return "为这些已暂存的改动生成一条 Git commit message。"
+            }
+        }
+    }
+
     private final class Run {
         let client: PiRPCClient
         let completion: (Result<CommitMessage, Error>) -> Void
@@ -53,14 +87,15 @@ final class PiAgentShipService {
         model: AvailableModel,
         projectURL: URL,
         environment: [String: String],
+        language: CommitMessageLanguage,
         completion: @escaping (Result<CommitMessage, Error>) -> Void
     ) {
         if FoundationModelAutomationService.isFoundationModel(model) {
             Task { [status, diff] in
                 do {
                     let text = try await FoundationModelAutomationService.generateOneShot(
-                        prompt: foundationPrompt(status: status, diff: diff),
-                        systemPrompt: Self.commitMessageSystemPrompt,
+                        prompt: foundationPrompt(status: status, diff: diff, language: language),
+                        systemPrompt: Self.commitMessageSystemPrompt(language: language),
                         temperature: 0.2,
                         maxTokens: 320
                     )
@@ -87,7 +122,7 @@ final class PiAgentShipService {
                     "--no-prompt-templates",
                     "--no-themes",
                     "--system-prompt",
-                    Self.commitMessageSystemPrompt,
+                    Self.commitMessageSystemPrompt(language: language),
                     "--append-system-prompt",
                     "",
                 ],
@@ -111,7 +146,7 @@ final class PiAgentShipService {
                 guard !Task.isCancelled else { return }
                 await MainActor.run { [weak self] in self?.finish(runID: runID, result: .failure(ShipError.timedOut)) }
             }
-            client.prompt(prompt(status: status, diff: diff))
+            client.prompt(prompt(status: status, diff: diff, language: language))
         } catch {
             completion(.failure(error))
         }
@@ -157,26 +192,30 @@ final class PiAgentShipService {
         run.completion(result)
     }
 
-    private static let commitMessageSystemPrompt = """
-    You are Agent Deck's git commit message generator. Your only job is to write a commit message from the supplied git status and staged diff.
-
-    The commit message must be concise and explanatory: capture the concrete code or product change being committed, not the mechanical act of editing files. Prefer the intended behavior or user-visible outcome when the diff makes it clear.
-
-    Return exactly this format, with no markdown:
-    Title: <imperative commit title, max 72 chars>
-    Body: <1-3 concise bullet points or one short paragraph>
-
-    Requirements:
-    - Title must be imperative, specific, and <= 72 characters
-    - Body must explain what changed, not repeat filenames only
-    - No quotes around the title
-    - No markdown fences
-    - Do not invent changes not supported by the status or diff
-    """
-
-    private func prompt(status: String, diff: String) -> String {
+    private static func commitMessageSystemPrompt(language: CommitMessageLanguage) -> String {
         """
-        Generate a git commit message for these staged changes.
+        You are Agent Deck's git commit message generator. Your only job is to write a commit message from the supplied git status and staged diff.
+
+        The commit message must be concise and explanatory: capture the concrete code or product change being committed, not the mechanical act of editing files. Prefer the intended behavior or user-visible outcome when the diff makes it clear.
+
+        \(language.instruction)
+
+        Return exactly this format, with no markdown. Keep the labels `Title:` and `Body:` in English so the app can parse the result:
+        Title: <imperative commit title, max 72 chars>
+        Body: <1-3 concise bullet points or one short paragraph>
+
+        Requirements:
+        - Title must be imperative, specific, and <= 72 characters
+        - Body must explain what changed, not repeat filenames only
+        - No quotes around the title
+        - No markdown fences
+        - Do not invent changes not supported by the status or diff
+        """
+    }
+
+    private func prompt(status: String, diff: String, language: CommitMessageLanguage) -> String {
+        """
+        \(language.promptLead)
 
         Git status:
         \(status)
@@ -186,9 +225,9 @@ final class PiAgentShipService {
         """
     }
 
-    private func foundationPrompt(status: String, diff: String) -> String {
+    private func foundationPrompt(status: String, diff: String, language: CommitMessageLanguage) -> String {
         """
-        Generate a git commit message for these staged changes.
+        \(language.promptLead)
 
         Git status:
         \(status)
@@ -203,11 +242,15 @@ final class PiAgentShipService {
         guard !trimmed.isEmpty else { return .failure(ShipError.emptyCommitMessage) }
         let lines = trimmed.components(separatedBy: .newlines)
         let title = lines.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }?
-            .replacingOccurrences(of: "Title:", with: "")
+            .strippingCommitMessagePrefix("Title:")
+            .strippingCommitMessagePrefix("标题：")
+            .strippingCommitMessagePrefix("标题:")
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !title.isEmpty else { return .failure(ShipError.emptyCommitMessage) }
         let body = lines.dropFirst().joined(separator: "\n")
-            .replacingOccurrences(of: "Body:", with: "")
+            .strippingCommitMessagePrefix("Body:")
+            .strippingCommitMessagePrefix("正文：")
+            .strippingCommitMessagePrefix("正文:")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return .success(CommitMessage(title: String(title.prefix(120)), body: body))
     }
@@ -220,5 +263,11 @@ final class PiAgentShipService {
             return blocks.compactMap { $0["text"]?.stringValue }.joined(separator: "\n")
         default: return content.compactDescription
         }
+    }
+}
+
+private extension String {
+    func strippingCommitMessagePrefix(_ prefix: String) -> String {
+        hasPrefix(prefix) ? String(dropFirst(prefix.count)) : self
     }
 }
