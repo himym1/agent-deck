@@ -881,8 +881,8 @@ private struct JumpToLatestPill: View {
         .scaleEffect(isHovering ? 1.07 : 1)
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.12), value: isHovering)
-        .help("Jump to latest")
-        .accessibilityLabel("Jump to latest message")
+        .help(AppLocalization.string("Jump to latest", default: "Jump to latest"))
+        .accessibilityLabel(AppLocalization.string("Jump to latest message", default: "Jump to latest message"))
     }
 }
 
@@ -3835,8 +3835,8 @@ private struct PiAgentSessionGroupHeader: View {
                 }
                 .buttonStyle(.plain)
                 .frame(width: 30, height: 30, alignment: .center)
-                .help("New session in \(section.title)")
-                .accessibilityLabel("New session in \(section.title)")
+                .help(AppLocalization.format("New session in %@", default: "New session in %@", section.title))
+                .accessibilityLabel(AppLocalization.format("New session in %@", default: "New session in %@", section.title))
             }
         }
         // Aligns the icon's leading edge with the session row title (row text
@@ -3855,7 +3855,7 @@ private struct PiAgentSessionGroupFooter: View {
 
     var body: some View {
         Button(action: onToggleShowMore) {
-            Text(section.isShowMoreActive ? "Show less" : "Show more")
+            Text(section.isShowMoreActive ? AppLocalization.string("Show less", default: "Show less") : AppLocalization.string("Show more", default: "Show more"))
                 .font(AppTheme.Font.footnote.weight(.semibold))
                 .foregroundStyle(isHovering ? AppTheme.brandAccentBright : AppTheme.brandAccent)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -3869,7 +3869,7 @@ private struct PiAgentSessionGroupFooter: View {
                 .fill(isHovering ? AppTheme.brandAccent.opacity(0.10) : Color.clear)
         )
         .onHover { isHovering = $0 }
-        .help(section.isShowMoreActive ? "Show fewer" : "Show \(section.hiddenCount) hidden session\(section.hiddenCount == 1 ? "" : "s")")
+        .help(section.isShowMoreActive ? AppLocalization.string("Show fewer", default: "Show fewer") : AppLocalization.format("Show %lld hidden sessions", default: "Show %lld hidden sessions", Int64(section.hiddenCount)))
     }
 }
 
@@ -4044,7 +4044,7 @@ struct CodingAgentExpandedPanel: View {
             if isActive { rebuildSessionActivityCache() }
         }
         .alert(deleteSessionsAlertTitle, isPresented: $isDeleteSessionsAlertPresented) {
-            Button("Delete", role: .destructive) {
+            Button(AppLocalization.string("Delete", default: "Delete"), role: .destructive) {
                 let deleteIDs = pendingDeleteSessionIDs
                 let nextID = PiAgentSessionGrouping.nextSelectionAfterDeletion(
                     visibleSessions: visibleSessions,
@@ -4054,7 +4054,7 @@ struct CodingAgentExpandedPanel: View {
                 viewModel.deletePiAgentSessions(deleteIDs, fallbackSelectionID: nextID)
                 pendingDeleteSessionIDs = []
             }
-            Button("Cancel", role: .cancel) { pendingDeleteSessionIDs = [] }
+            Button(AppLocalization.string("Cancel", default: "Cancel"), role: .cancel) { pendingDeleteSessionIDs = [] }
         } message: {
             Text(deleteSessionsAlertMessage)
         }
@@ -4074,7 +4074,7 @@ struct CodingAgentExpandedPanel: View {
                         .background(Circle().fill(Color.red.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
-                .help("Delete selected sessions")
+                .help(AppLocalization.string("Delete selected sessions", default: "Delete selected sessions"))
             }
             CodingAgentNewSessionControls(viewModel: viewModel)
         }
@@ -4656,8 +4656,8 @@ struct PiAgentScreen: View {
             )
         }
         .alert(deleteSessionsAlertTitle, isPresented: $isDeleteSessionsAlertPresented) {
-            Button(pendingDeleteIsClearAll ? "Clear" : "Delete", role: .destructive, action: deletePendingSessions)
-            Button("Cancel", role: .cancel) {
+            Button(pendingDeleteIsClearAll ? AppLocalization.string("Clear", default: "Clear") : AppLocalization.string("Delete", default: "Delete"), role: .destructive, action: deletePendingSessions)
+            Button(AppLocalization.string("Cancel", default: "Cancel"), role: .cancel) {
                 resetPendingSessionDelete()
             }
         } message: {
@@ -4829,8 +4829,8 @@ struct PiAgentScreen: View {
                                 .background(Circle().fill(Color.red.opacity(0.12)))
                         }
                         .buttonStyle(.plain)
-                        .help("Delete selected sessions")
-                        .accessibilityLabel("Delete selected sessions")
+                        .help(AppLocalization.string("Delete selected sessions", default: "Delete selected sessions"))
+                        .accessibilityLabel(AppLocalization.string("Delete selected sessions", default: "Delete selected sessions"))
                     }
                     if viewModel.appSettings.nativeSubagentsEnabledForNewSessions {
                         PiAgentNewSessionSplitButton(
@@ -5092,7 +5092,7 @@ struct PiAgentScreen: View {
                         HStack(spacing: 4) {
                             Image(systemName: "sparkles.rectangle.stack")
                                 .font(AppTheme.Font.caption2.weight(.semibold))
-                            Text("Chat with \(agentName)")
+                            Text(AppLocalization.format("Chat with %@", default: "Chat with %@", agentName))
                                 .font(AppTheme.Font.footnote.weight(.semibold))
                         }
                         .foregroundStyle(AppTheme.brandAccent)
@@ -6065,13 +6065,18 @@ struct PiAgentScreen: View {
             Image(systemName: showArchivedPreCompactionTranscript ? "tray.and.arrow.up" : "archivebox")
                 .font(AppTheme.Font.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
-            Text(showArchivedPreCompactionTranscript ? "Showing pre-compaction transcript" : "Pre-compaction transcript hidden")
+            Text(showArchivedPreCompactionTranscript ? AppLocalization.string("Showing pre-compaction transcript", default: "Showing pre-compaction transcript") : AppLocalization.string("Pre-compaction transcript hidden", default: "Pre-compaction transcript hidden"))
                 .font(AppTheme.Font.caption.weight(.semibold))
-            Text("\(archive.hiddenCount) earlier item\(archive.hiddenCount == 1 ? "" : "s") before \(archive.compactedAt.formatted(date: .omitted, time: .shortened))")
+            Text(AppLocalization.format(
+                "%lld earlier items before %@",
+                default: "%lld earlier items before %@",
+                Int64(archive.hiddenCount),
+                archive.compactedAt.formatted(date: .omitted, time: .shortened)
+            ))
                 .font(AppTheme.Font.caption)
                 .foregroundStyle(AppTheme.mutedText)
             Spacer(minLength: 0)
-            Button(showArchivedPreCompactionTranscript ? "Hide" : "Load Earlier") {
+            Button(showArchivedPreCompactionTranscript ? AppLocalization.string("Hide", default: "Hide") : AppLocalization.string("Load Earlier", default: "Load Earlier")) {
                 withAnimation(.snappy(duration: 0.18)) {
                     showArchivedPreCompactionTranscript.toggle()
                 }
@@ -6091,14 +6096,19 @@ struct PiAgentScreen: View {
                 .font(AppTheme.Font.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Earlier transcript hidden")
+                Text(AppLocalization.string("Earlier transcript hidden", default: "Earlier transcript hidden"))
                     .font(AppTheme.Font.caption.weight(.semibold))
-                Text("Showing the latest \(archive.limit) items to keep this chat responsive. \(archive.hiddenCount) earlier item\(archive.hiddenCount == 1 ? "" : "s") are available.")
+                Text(AppLocalization.format(
+                    "Showing the latest %lld items to keep this chat responsive. %lld earlier items are available.",
+                    default: "Showing the latest %lld items to keep this chat responsive. %lld earlier items are available.",
+                    Int64(archive.limit),
+                    Int64(archive.hiddenCount)
+                ))
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
             }
             Spacer(minLength: 0)
-            Button("Open Earlier Transcript") {
+            Button(AppLocalization.string("Open Earlier Transcript", default: "Open Earlier Transcript")) {
                 isEarlierTranscriptSheetPresented = true
             }
             .buttonStyle(.borderless)
@@ -6114,14 +6124,14 @@ struct PiAgentScreen: View {
         return VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Earlier Transcript")
+                    Text(AppLocalization.string("Earlier Transcript", default: "Earlier Transcript"))
                         .font(.title2.bold())
                         .fontWidth(.expanded)
-                    Text("Messages before the latest \(recentTranscriptTimelineItemLimit) visible items.")
+                    Text(AppLocalization.format("Messages before the latest %lld visible items.", default: "Messages before the latest %lld visible items.", Int64(recentTranscriptTimelineItemLimit)))
                         .foregroundStyle(AppTheme.mutedText)
                 }
                 Spacer()
-                Button("Done") {
+                Button(AppLocalization.string("Done", default: "Done")) {
                     isEarlierTranscriptSheetPresented = false
                 }
                 .keyboardShortcut(.cancelAction)

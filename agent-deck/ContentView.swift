@@ -773,27 +773,27 @@ struct ContentView: View {
                 viewModel.openMemory(byID: id)
             }
         }
-        .alert("Enable all projects?", isPresented: $showingEnableAllProjectsAlert) {
-            Button("Enable All") { viewModel.setAllProjectsEnabled(true) }
-            Button("Cancel", role: .cancel) {}
+        .alert(AppLocalization.string("Enable all projects?", default: "Enable all projects?"), isPresented: $showingEnableAllProjectsAlert) {
+            Button(AppLocalization.string("Enable All", default: "Enable All")) { viewModel.setAllProjectsEnabled(true) }
+            Button(AppLocalization.string("Cancel", default: "Cancel"), role: .cancel) {}
         } message: {
-            Text("This will enable every project currently in \(AppBrand.displayName).")
+            Text(AppLocalization.format("This will enable every project currently in %@.", default: "This will enable every project currently in %@.", AppBrand.displayName))
         }
-        .alert("Disable all projects?", isPresented: $showingDisableAllProjectsAlert) {
-            Button("Disable All", role: .destructive) { viewModel.setAllProjectsEnabled(false) }
-            Button("Cancel", role: .cancel) {}
+        .alert(AppLocalization.string("Disable all projects?", default: "Disable all projects?"), isPresented: $showingDisableAllProjectsAlert) {
+            Button(AppLocalization.string("Disable All", default: "Disable All"), role: .destructive) { viewModel.setAllProjectsEnabled(false) }
+            Button(AppLocalization.string("Cancel", default: "Cancel"), role: .cancel) {}
         } message: {
-            Text("This will disable every project currently in \(AppBrand.displayName) and clear the active project selection.")
+            Text(AppLocalization.format("This will disable every project currently in %@ and clear the active project selection.", default: "This will disable every project currently in %@ and clear the active project selection.", AppBrand.displayName))
         }
-        .alert("Delete Pi Agent session?", isPresented: $showingPiAgentDeleteAlert) {
-            Button("Delete", role: .destructive) {
+        .alert(AppLocalization.string("Delete Pi Agent session?", default: "Delete Pi Agent session?"), isPresented: $showingPiAgentDeleteAlert) {
+            Button(AppLocalization.string("Delete", default: "Delete"), role: .destructive) {
                 if let session = viewModel.piAgentSessionStore.selectedSession {
                     viewModel.deletePiAgentSession(session.id)
                 }
             }
-            Button("Cancel", role: .cancel) {}
+            Button(AppLocalization.string("Cancel", default: "Cancel"), role: .cancel) {}
         } message: {
-            Text("This removes the selected Pi Agent session and its local transcript from \(AppBrand.displayName).")
+            Text(AppLocalization.format("This removes the selected Pi Agent session and its local transcript from %@.", default: "This removes the selected Pi Agent session and its local transcript from %@.", AppBrand.displayName))
         }
         .toolbar { mainToolbarContent }
         // Detect the selected project's dev-server commands off the render path
@@ -1165,10 +1165,10 @@ struct ContentView: View {
         Button {
             isAgentsFilterPopoverPresented.toggle()
         } label: {
-            Label("Filter", systemImage: viewModel.selectedAgentFilter == .all ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+            Label(AppLocalization.string("Filter", default: "Filter"), systemImage: viewModel.selectedAgentFilter == .all ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
         }
         .toolbarNeutralChrome()
-        .help("Filter agents")
+        .help(AppLocalization.string("Filter agents", default: "Filter agents"))
         .popover(isPresented: $isAgentsFilterPopoverPresented, arrowEdge: .bottom) {
             AgentsFilterPopover(viewModel: viewModel)
         }
@@ -1183,13 +1183,13 @@ struct ContentView: View {
             get: { viewModel.appSettings.nativeSubagentsEnabledForNewSessions },
             set: { _ in viewModel.toggleSubagentsForNewSessions() }
         )) {
-            Label("Deck Agents", systemImage: "paperplane")
+            Label(AppLocalization.string("Deck Agents", default: "Deck Agents"), systemImage: "paperplane")
         }
         .toggleStyle(.button)
         .symbolRenderingMode(.monochrome)
         .foregroundStyle(enabled ? AppTheme.brandAccent : .secondary)
         .tint(AppTheme.brandAccent)
-        .help(enabled ? "Deck agents are on for new sessions. Click to turn off." : "Deck agents are off for new sessions. Click to turn on.")
+        .help(enabled ? AppLocalization.string("Deck agents are on for new sessions. Click to turn off.", default: "Deck agents are on for new sessions. Click to turn off.") : AppLocalization.string("Deck agents are off for new sessions. Click to turn on.", default: "Deck agents are off for new sessions. Click to turn on."))
     }
 
     @ToolbarContentBuilder
@@ -1258,29 +1258,31 @@ struct ContentView: View {
                     get: { viewModel.appSettings.mcpEnabled },
                     set: { viewModel.setMCPEnabled($0) }
                 )) {
-                    Label("Enable MCP", systemImage: SidebarItem.mcp.systemImage)
+                    Label(AppLocalization.string("Enable MCP", default: "Enable MCP"), systemImage: SidebarItem.mcp.systemImage)
                 }
                 .toggleStyle(.button)
                 .symbolRenderingMode(.monochrome)
                 .foregroundStyle(viewModel.appSettings.mcpEnabled ? AppTheme.brandAccent : .secondary)
                 .tint(AppTheme.brandAccent)
-                .help(viewModel.appSettings.mcpEnabled ? "MCP is on for new sessions. Click to turn off." : "MCP is off. Click to enable it for new sessions.")
+                .help(viewModel.appSettings.mcpEnabled
+                    ? AppLocalization.string("MCP is on for new sessions. Click to turn off.", default: "MCP is on for new sessions. Click to turn off.")
+                    : AppLocalization.string("MCP is off. Click to enable it for new sessions.", default: "MCP is off. Click to enable it for new sessions."))
 
                 Button {
                     viewModel.requestRefreshMCPServers()
                 } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
+                    Label(AppLocalization.string("Refresh", default: "Refresh"), systemImage: "arrow.clockwise")
                 }
                 .toolbarNeutralChrome()
-                .help("Reload MCP servers")
+                .help(AppLocalization.string("Reload MCP servers", default: "Reload MCP servers"))
 
                 Button {
                     viewModel.requestAddMCPServer()
                 } label: {
-                    Label("Add server", systemImage: "plus")
+                    Label(AppLocalization.string("Add server", default: "Add server"), systemImage: "plus")
                 }
                 .toolbarPrimaryActionChrome()
-                .help("Add an MCP server")
+                .help(AppLocalization.string("Add an MCP server", default: "Add an MCP server"))
             }
         }
     }
@@ -1292,10 +1294,10 @@ struct ContentView: View {
             Button {
                 viewModel.refreshDiscoveredPiExtensions()
             } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
+                Label(AppLocalization.string("Refresh", default: "Refresh"), systemImage: "arrow.clockwise")
             }
             .toolbarNeutralChrome()
-            .help("Re-scan for Pi extensions")
+            .help(AppLocalization.string("Re-scan for Pi extensions", default: "Re-scan for Pi extensions"))
         }
     }
 
@@ -1306,20 +1308,20 @@ struct ContentView: View {
                 Button {
                     viewModel.refresh(includeModels: false, scanAllProjects: true)
                 } label: {
-                    Label(viewModel.isRefreshingProjects ? "Refreshing" : "Refresh", systemImage: "arrow.clockwise")
+                    Label(viewModel.isRefreshingProjects ? AppLocalization.string("Refreshing", default: "Refreshing") : AppLocalization.string("Refresh", default: "Refresh"), systemImage: "arrow.clockwise")
                 }
                 .symbolEffect(.rotate.byLayer, isActive: viewModel.isRefreshingProjects)
                 .toolbarNeutralChrome()
-                .help("Refresh project discovery")
+                .help(AppLocalization.string("Refresh project discovery", default: "Refresh project discovery"))
                 .disabled(viewModel.isRefreshingProjects)
 
                 Button {
                     viewModel.chooseProjectRoot()
                 } label: {
-                    Label("Add Project", systemImage: "plus")
+                    Label(AppLocalization.string("Add Project", default: "Add Project"), systemImage: "plus")
                 }
                 .toolbarPrimaryActionChrome()
-                .help("Add project manually")
+                .help(AppLocalization.string("Add project manually", default: "Add project manually"))
             }
         }
     }
@@ -1335,10 +1337,10 @@ struct ContentView: View {
                 Button {
                     agentModelQuickEditor = currentAgentModelQuickEditorContext
                 } label: {
-                    Label("Quick Edit Models", systemImage: "cpu")
+                    Label(AppLocalization.string("Quick Edit Models", default: "Quick Edit Models"), systemImage: "cpu")
                 }
                 .toolbarNeutralChrome()
-                .help("Quick edit agent models and thinking")
+                .help(AppLocalization.string("Quick edit agent models and thinking", default: "Quick edit agent models and thinking"))
                 .disabled(currentAgentModelQuickEditorContext.sections.allSatisfy { $0.agents.isEmpty })
 
                 if let agent = viewModel.selectedAgent {
@@ -1365,16 +1367,16 @@ struct ContentView: View {
 
     private var newAgentMenu: some View {
         Menu {
-            Button("New Library Agent") {
+            Button(AppLocalization.string("New Library Agent", default: "New Library Agent")) {
                 editingAgent = nil
                 agentDraft = viewModel.makeNewAgentDraft(scope: .library)
             }
         } label: {
-            Label("New", systemImage: "plus")
+            Label(AppLocalization.string("New", default: "New"), systemImage: "plus")
         }
         .menuIndicator(.hidden)
         .toolbarPrimaryActionChrome()
-        .help("Create a library agent, then choose global or project visibility")
+        .help(AppLocalization.string("Create a library agent, then choose global or project visibility", default: "Create a library agent, then choose global or project visibility"))
     }
 
     private func replacementAgentButton(for agent: EffectiveAgentRecord) -> some View {
@@ -1382,10 +1384,10 @@ struct ContentView: View {
             editingAgent = nil
             agentDraft = viewModel.makeReplacementAgentDraft(from: agent, scope: .global)
         } label: {
-            Label("Replacement", systemImage: "arrow.triangle.2.circlepath")
+            Label(AppLocalization.string("Replacement", default: "Replacement"), systemImage: "arrow.triangle.2.circlepath")
         }
         .toolbarNeutralChrome()
-        .help("Create a global replacement for this builtin agent")
+        .help(AppLocalization.string("Create a global replacement for this builtin agent", default: "Create a global replacement for this builtin agent"))
         .disabled(!(agent.builtin != nil && agent.globalCustom == nil))
     }
 
@@ -1393,9 +1395,9 @@ struct ContentView: View {
         Button {
             isSubagentsInfoPresented.toggle()
         } label: {
-            Label("Info", systemImage: "info.circle")
+            Label(AppLocalization.string("Info", default: "Info"), systemImage: "info.circle")
         }
-        .help("Explain Deck agent library visibility")
+        .help(AppLocalization.string("Explain Deck agent library visibility", default: "Explain Deck agent library visibility"))
         .popover(isPresented: $isSubagentsInfoPresented, arrowEdge: .bottom) {
             SubagentsInfoPopover()
         }
@@ -1409,9 +1411,9 @@ struct ContentView: View {
                 Button {
                     isEnvironmentInfoPresented.toggle()
                 } label: {
-                    Label("Info", systemImage: "info.circle")
+                    Label(AppLocalization.string("Info", default: "Info"), systemImage: "info.circle")
                 }
-                .help("Explain environment resolution order")
+                .help(AppLocalization.string("Explain environment resolution order", default: "Explain environment resolution order"))
                 .popover(isPresented: $isEnvironmentInfoPresented, arrowEdge: .bottom) {
                     EnvironmentInfoPopover()
                 }
@@ -1424,10 +1426,10 @@ struct ContentView: View {
                         viewModel.selectedProjectPath == nil ? .global : .project
                     envDraft = viewModel.makeNewEnvDraft(scope: scope)
                 } label: {
-                    Label("New Key", systemImage: "plus")
+                    Label(AppLocalization.string("New Key", default: "New Key"), systemImage: "plus")
                 }
                 .toolbarPrimaryActionChrome()
-                .help("Add one or more environment keys")
+                .help(AppLocalization.string("Add one or more environment keys", default: "Add one or more environment keys"))
             }
         }
     }
@@ -1439,9 +1441,9 @@ struct ContentView: View {
                 Button {
                     isModelsInfoPresented.toggle()
                 } label: {
-                    Label("Info", systemImage: "info.circle")
+                    Label(AppLocalization.string("Info", default: "Info"), systemImage: "info.circle")
                 }
-                .help("Explain the models catalog and Pi Agent defaults")
+                .help(AppLocalization.string("Explain the models catalog and Pi Agent defaults", default: "Explain the models catalog and Pi Agent defaults"))
                 .popover(isPresented: $isModelsInfoPresented, arrowEdge: .bottom) {
                     ModelsInfoPopover()
                 }
@@ -1450,27 +1452,27 @@ struct ContentView: View {
                 Button {
                     viewModel.refreshModels()
                 } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
+                    Label(AppLocalization.string("Refresh", default: "Refresh"), systemImage: "arrow.clockwise")
                 }
                 .toolbarNeutralChrome()
-                .help("Refresh models")
+                .help(AppLocalization.string("Refresh models", default: "Refresh models"))
 
                 Button {
                     agentModelQuickEditor = currentAgentModelQuickEditorContext
                 } label: {
-                    Label("Quick Edit", systemImage: "cpu")
+                    Label(AppLocalization.string("Quick Edit", default: "Quick Edit"), systemImage: "cpu")
                 }
                 .toolbarNeutralChrome()
-                .help("Quick edit every agent's model and thinking at once")
+                .help(AppLocalization.string("Quick edit every agent's model and thinking at once", default: "Quick edit every agent's model and thinking at once"))
                 .disabled(currentAgentModelQuickEditorContext.sections.allSatisfy { $0.agents.isEmpty })
 
                 Button {
                     viewModel.isAddProviderPresented = true
                 } label: {
-                    Label("Add Provider", systemImage: "plus")
+                    Label(AppLocalization.string("Add Provider", default: "Add Provider"), systemImage: "plus")
                 }
                 .toolbarPrimaryActionChrome()
-                .help("Connect a model provider")
+                .help(AppLocalization.string("Connect a model provider", default: "Connect a model provider"))
             }
         }
     }
@@ -1479,18 +1481,18 @@ struct ContentView: View {
     private var promptsPrimaryToolbarContent: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             Menu {
-                Button("New Prompt") {
+                Button(AppLocalization.string("New Prompt", default: "New Prompt")) {
                     NotificationCenter.default.post(name: .agentDeckNewPromptRequested, object: nil)
                 }
-                Button("Import Prompt") {
+                Button(AppLocalization.string("Import Prompt", default: "Import Prompt")) {
                     NotificationCenter.default.post(name: .agentDeckImportPromptRequested, object: nil)
                 }
             } label: {
-                Label("New", systemImage: "plus")
+                Label(AppLocalization.string("New", default: "New"), systemImage: "plus")
             }
             .menuIndicator(.hidden)
             .toolbarPrimaryActionChrome()
-            .help("Create a new prompt template or import an existing markdown file")
+            .help(AppLocalization.string("Create a new prompt template or import an existing markdown file", default: "Create a new prompt template or import an existing markdown file"))
         }
     }
 
@@ -1500,10 +1502,10 @@ struct ContentView: View {
             Button {
                 viewModel.requestNewLoopDefinition()
             } label: {
-                Label("New Loop", systemImage: "plus")
+                Label(AppLocalization.string("New Loop", default: "New Loop"), systemImage: "plus")
             }
             .toolbarPrimaryActionChrome()
-            .help("Create a user loop")
+            .help(AppLocalization.string("Create a user loop", default: "Create a user loop"))
         }
     }
 
@@ -1524,22 +1526,22 @@ struct ContentView: View {
                         Task { await viewModel.checkAllSkillRepositoriesForUpdates() }
                     } label: {
                         Label(
-                            viewModel.isCheckingAllSkillUpdates ? "Checking" : "Check for Updates",
+                            viewModel.isCheckingAllSkillUpdates ? AppLocalization.string("Checking", default: "Checking") : AppLocalization.string("Check for Updates", default: "Check for Updates"),
                             systemImage: "arrow.triangle.2.circlepath"
                         )
                     }
                     .symbolEffect(.rotate.byLayer, isActive: viewModel.isCheckingAllSkillUpdates)
                     .toolbarNeutralChrome()
-                    .help("Check every synced skill repository for updates")
+                    .help(AppLocalization.string("Check every synced skill repository for updates", default: "Check every synced skill repository for updates"))
                     .disabled(viewModel.isCheckingAllSkillUpdates || viewModel.isUpdatingAllSkillRepositories)
 
                     Button {
                         Task { await viewModel.updateAllSkillRepositoriesWithKnownUpdates() }
                     } label: {
-                        Label(skillsUpdateAllTitle, systemImage: "arrow.down.circle")
+                        Label(AppLocalization.string(skillsUpdateAllTitle, default: skillsUpdateAllTitle), systemImage: "arrow.down.circle")
                     }
                     .toolbarNeutralChrome()
-                    .help("Update every synced skill that has a new version available")
+                    .help(AppLocalization.string("Update every synced skill that has a new version available", default: "Update every synced skill that has a new version available"))
                     .disabled(
                         viewModel.skillRepositoriesWithKnownUpdates.isEmpty
                             || viewModel.isCheckingAllSkillUpdates
@@ -1557,36 +1559,36 @@ struct ContentView: View {
                 Button {
                     viewModel.refresh(includeModels: false, scanAllProjects: true)
                 } label: {
-                    Label(viewModel.isRefreshingProjects ? "Refreshing" : "Refresh", systemImage: "arrow.clockwise")
+                    Label(viewModel.isRefreshingProjects ? AppLocalization.string("Refreshing", default: "Refreshing") : AppLocalization.string("Refresh", default: "Refresh"), systemImage: "arrow.clockwise")
                 }
                 .symbolEffect(.rotate.byLayer, isActive: viewModel.isRefreshingProjects)
                 .toolbarNeutralChrome()
-                .help("Rescan skills")
+                .help(AppLocalization.string("Rescan skills", default: "Rescan skills"))
                 .disabled(viewModel.isRefreshingProjects)
 
                 Button {
                     isSkillsInfoPresented.toggle()
                 } label: {
-                    Label("Info", systemImage: "info.circle")
+                    Label(AppLocalization.string("Info", default: "Info"), systemImage: "info.circle")
                 }
-                .help("Explain Pi skill visibility")
+                .help(AppLocalization.string("Explain Pi skill visibility", default: "Explain Pi skill visibility"))
                 .popover(isPresented: $isSkillsInfoPresented, arrowEdge: .bottom) {
                     SkillsInfoPopover()
                 }
                 .toolbarNeutralChrome()
 
                 Menu {
-                    Button("New Skill") {
+                    Button(AppLocalization.string("New Skill", default: "New Skill")) {
                         NotificationCenter.default.post(name: .agentDeckNewSkillRequested, object: nil)
                     }
-                    Button("Import Skills") {
+                    Button(AppLocalization.string("Import Skills", default: "Import Skills")) {
                         NotificationCenter.default.post(name: .agentDeckImportSkillsRequested, object: nil)
                     }
                 } label: {
-                    Label("New", systemImage: "plus")
+                    Label(AppLocalization.string("New", default: "New"), systemImage: "plus")
                 }
                 .menuIndicator(.hidden)
-                .help("Create a new skill or import skill folders from an external source")
+                .help(AppLocalization.string("Create a new skill or import skill folders from an external source", default: "Create a new skill or import skill folders from an external source"))
                 .toolbarPrimaryActionChrome()
             }
         }
@@ -1613,10 +1615,10 @@ struct ContentView: View {
                 Button {
                     isPiAgentStartupResourcesPresented.toggle()
                 } label: {
-                    Label("Session Resources", systemImage: "info.circle")
+                    Label(AppLocalization.string("Session Resources", default: "Session Resources"), systemImage: "info.circle")
                 }
                 .toolbarNeutralChrome()
-                .help("Agents, skills, prompts, and environment available to this session")
+                .help(AppLocalization.string("Agents, skills, prompts, and environment available to this session", default: "Agents, skills, prompts, and environment available to this session"))
                 .disabled(viewModel.piAgentSessionStore.selectedSession == nil)
                 .popover(isPresented: $isPiAgentStartupResourcesPresented, arrowEdge: .bottom) {
                     if let session = viewModel.piAgentSessionStore.selectedSession {
@@ -1627,10 +1629,10 @@ struct ContentView: View {
                 Button {
                     isPiAgentTranscriptOptionsPresented.toggle()
                 } label: {
-                    Label("Transcript Display", systemImage: "eye")
+                    Label(AppLocalization.string("Transcript Display", default: "Transcript Display"), systemImage: "eye")
                 }
                 .toolbarNeutralChrome()
-                .help("Choose what appears in the agent transcript")
+                .help(AppLocalization.string("Choose what appears in the agent transcript", default: "Choose what appears in the agent transcript"))
                 .popover(isPresented: $isPiAgentTranscriptOptionsPresented, arrowEdge: .bottom) {
                     PiAgentTranscriptDisplayOptionsPopover(viewModel: viewModel)
                 }
@@ -1638,10 +1640,10 @@ struct ContentView: View {
                 Button {
                     isPiAgentSystemPromptPresented.toggle()
                 } label: {
-                    Label("System Prompt", systemImage: "doc.text.magnifyingglass")
+                    Label(AppLocalization.string("System Prompt", default: "System Prompt"), systemImage: "doc.text.magnifyingglass")
                 }
                 .toolbarNeutralChrome()
-                .help("View the final system prompt sent to the agent")
+                .help(AppLocalization.string("View the final system prompt sent to the agent", default: "View the final system prompt sent to the agent"))
                 .disabled((viewModel.piAgentSessionStore.selectedSession?.finalSystemPrompt ?? "").isEmpty)
                 .sheet(isPresented: $isPiAgentSystemPromptPresented) {
                     if let prompt = viewModel.piAgentSessionStore.selectedSession?.finalSystemPrompt, !prompt.isEmpty {
@@ -1750,10 +1752,10 @@ struct ContentView: View {
                 Button {
                     isMemoryInfoPresented.toggle()
                 } label: {
-                    Label("Info", systemImage: "info.circle")
+                    Label(AppLocalization.string("Info", default: "Info"), systemImage: "info.circle")
                 }
                 .toolbarNeutralChrome()
-                .help("Explain Agent Deck memory")
+                .help(AppLocalization.string("Explain Agent Deck memory", default: "Explain Agent Deck memory"))
                 .popover(isPresented: $isMemoryInfoPresented, arrowEdge: .bottom) {
                     let counts = memoryInfoCounts()
                     MemoryInfoPopover(
@@ -1768,10 +1770,10 @@ struct ContentView: View {
                 Button {
                     NotificationCenter.default.post(name: .agentDeckNewMemoryRequested, object: nil)
                 } label: {
-                    Label("New Memory", systemImage: "plus")
+                    Label(AppLocalization.string("New Memory", default: "New Memory"), systemImage: "plus")
                 }
                 .toolbarPrimaryActionChrome()
-                .help(viewModel.selectedProjectPath == nil ? "Select a project before creating memory." : "Create a project memory")
+                .help(viewModel.selectedProjectPath == nil ? AppLocalization.string("Select a project before creating memory.", default: "Select a project before creating memory.") : AppLocalization.string("Create a project memory", default: "Create a project memory"))
                 .disabled(viewModel.selectedProjectPath == nil)
             }
         }
@@ -1794,10 +1796,10 @@ struct ContentView: View {
         Button {
             isIssuesFilterPopoverPresented.toggle()
         } label: {
-            Label("Filter", systemImage: issuesFiltersAreActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+            Label(AppLocalization.string("Filter", default: "Filter"), systemImage: issuesFiltersAreActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
         }
         .toolbarNeutralChrome()
-        .help("Filter issues")
+        .help(AppLocalization.string("Filter issues", default: "Filter issues"))
         .disabled(viewModel.selectedGitHubProject?.gitHubRemote == nil)
         .popover(isPresented: $isIssuesFilterPopoverPresented, arrowEdge: .bottom) {
             IssuesFiltersPopover(viewModel: viewModel)
@@ -1808,11 +1810,11 @@ struct ContentView: View {
         Button {
             viewModel.refreshProjectBoard(force: true)
         } label: {
-            Label(viewModel.githubIsLoadingProjectBoard ? "Refreshing" : "Refresh", systemImage: "arrow.clockwise")
+            Label(viewModel.githubIsLoadingProjectBoard ? AppLocalization.string("Refreshing", default: "Refreshing") : AppLocalization.string("Refresh", default: "Refresh"), systemImage: "arrow.clockwise")
         }
         .symbolEffect(.rotate.byLayer, isActive: viewModel.githubIsLoadingProjectBoard)
         .toolbarNeutralChrome()
-        .help("Refresh issues")
+        .help(AppLocalization.string("Refresh issues", default: "Refresh issues"))
         .disabled(!viewModel.githubConnectionState.isConnected || viewModel.githubIsLoadingProjectBoard)
     }
 

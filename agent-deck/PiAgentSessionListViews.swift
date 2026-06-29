@@ -43,12 +43,12 @@ struct PiAgentAddSessionButton: View {
             style: .soft,
             tint: isEnabled ? AppTheme.brandAccent : AppTheme.mutedText,
             size: 30,
-            help: "New Pi Agent session",
+            help: AppLocalization.string("New Pi Agent session", default: "New Pi Agent session"),
             action: action
         ) {
             Image(systemName: "plus")
         }
-        .accessibilityLabel("New Pi Agent session")
+        .accessibilityLabel(AppLocalization.string("New Pi Agent session", default: "New Pi Agent session"))
     }
 }
 
@@ -66,13 +66,13 @@ struct PiAgentAddSessionMenuButton: View {
             tint: isEnabled ? AppTheme.brandAccent : AppTheme.mutedText,
             size: 30,
             help: projects.isEmpty
-                ? "New projectless Pi Agent session"
-                : "Choose a project for the new Pi Agent session",
+                ? AppLocalization.string("New projectless Pi Agent session", default: "New projectless Pi Agent session")
+                : AppLocalization.string("Choose a project for the new Pi Agent session", default: "Choose a project for the new Pi Agent session"),
             action: primaryAction
         ) {
             Image(systemName: "plus")
         }
-        .accessibilityLabel("New Pi Agent session")
+        .accessibilityLabel(AppLocalization.string("New Pi Agent session", default: "New Pi Agent session"))
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             PiAgentProjectPickerPopover(
                 projects: orderedProjects,
@@ -142,8 +142,8 @@ struct PiAgentNewSessionSplitButton: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Chat directly with an agent")
-            .accessibilityLabel("Chat with agent")
+            .help(AppLocalization.string("Chat directly with an agent", default: "Chat directly with an agent"))
+            .accessibilityLabel(AppLocalization.string("Chat with agent", default: "Chat with agent"))
             .popover(isPresented: $isAgentPickerPresented, arrowEdge: .bottom) {
                 PiAgentChatWithAgentPopover(
                     project: resolvedProject,
@@ -170,8 +170,8 @@ struct PiAgentNewSessionSplitButton: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(selectedProject == nil ? "New Pi Agent session" : "New session in \(selectedProject!.repositoryDisplayName)")
-            .accessibilityLabel("New Pi Agent session")
+            .help(selectedProject == nil ? AppLocalization.string("New Pi Agent session", default: "New Pi Agent session") : AppLocalization.format("New session in %@", default: "New session in %@", selectedProject!.repositoryDisplayName))
+            .accessibilityLabel(AppLocalization.string("New Pi Agent session", default: "New Pi Agent session"))
             .popover(isPresented: $isProjectPickerPresented, arrowEdge: .bottom) {
                 PiAgentProjectPickerPopover(
                     projects: projects,
@@ -514,8 +514,8 @@ struct PiAgentSessionRow: View, Equatable {
                 AppSpinner()
                     .controlSize(.small)
                     .frame(width: 14, height: 14)
-                    .help("Loop running")
-                    .accessibilityLabel("Loop running")
+                    .help(AppLocalization.string("Loop running", default: "Loop running"))
+                    .accessibilityLabel(AppLocalization.string("Loop running", default: "Loop running"))
                     .transition(.opacity)
             } else if isRunning {
                 PiAgentTypingIndicator()
@@ -535,8 +535,8 @@ struct PiAgentSessionRow: View, Equatable {
         Image(systemName: "questionmark.bubble.fill")
             .font(AppTheme.Font.caption.weight(.semibold))
             .foregroundStyle(AppTheme.brandAccent)
-            .help("Pi Agent is waiting for your response")
-            .accessibilityLabel("Waiting for your response")
+            .help(AppLocalization.string("Pi Agent is waiting for your response", default: "Pi Agent is waiting for your response"))
+            .accessibilityLabel(AppLocalization.string("Waiting for your response", default: "Waiting for your response"))
     }
 
     private var needsAttentionBell: some View {
@@ -657,9 +657,9 @@ struct PiAgentSessionRow: View, Equatable {
     }
 
     private var statusHelp: String {
-        if hasUIRequest { return "Waiting for your response" }
-        if hasActiveLoop { return "Loop running" }
-        if isRunning { return "Active" }
+        if hasUIRequest { return AppLocalization.string("Waiting for your response", default: "Waiting for your response") }
+        if hasActiveLoop { return AppLocalization.string("Loop running", default: "Loop running") }
+        if isRunning { return AppLocalization.string("Active", default: "Active") }
         return session.status.rawValue
     }
 
@@ -685,8 +685,8 @@ private struct SessionGitActivityStrip: View {
                 Image(systemName: "infinity")
                     .font(AppTheme.Font.caption2.weight(.semibold))
                     .foregroundStyle(isSelected ? AppTheme.brandAccent : AppTheme.mutedText)
-                    .help("Loop active")
-                    .accessibilityLabel("Loop active")
+                    .help(AppLocalization.string("Loop active", default: "Loop active"))
+                    .accessibilityLabel(AppLocalization.string("Loop active", default: "Loop active"))
             }
             pip(kind: .commit, date: activity.lastCommit, verb: "commit")
             pip(kind: .push,   date: activity.lastPush,   verb: "push")
@@ -836,6 +836,6 @@ struct PiAgentTypingIndicator: View {
                 }
             }
         }
-        .accessibilityLabel("Pi is typing")
+        .accessibilityLabel(AppLocalization.string("Pi is typing", default: "Pi is typing"))
     }
 }

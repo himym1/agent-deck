@@ -166,16 +166,16 @@ struct CodingAgentCollapsedPanel: View {
             guard !viewModel.isCodingAgentPanelExpanded, let newID else { return }
             recentScrollRequest = newID
         }
-        .alert("Delete Pi Agent session?", isPresented: $isDeleteSessionAlertPresented) {
-            Button("Delete", role: .destructive) {
+        .alert(AppLocalization.string("Delete Pi Agent session?", default: "Delete Pi Agent session?"), isPresented: $isDeleteSessionAlertPresented) {
+            Button(AppLocalization.string("Delete", default: "Delete"), role: .destructive) {
                 if let id = pendingDeleteSessionID {
                     viewModel.deletePiAgentSessions([id])
                 }
                 pendingDeleteSessionID = nil
             }
-            Button("Cancel", role: .cancel) { pendingDeleteSessionID = nil }
+            Button(AppLocalization.string("Cancel", default: "Cancel"), role: .cancel) { pendingDeleteSessionID = nil }
         } message: {
-            Text("This removes the selected Pi Agent session and its local transcript from \(AppBrand.displayName).")
+            Text(AppLocalization.format("This removes the selected Pi Agent session and its local transcript from %@.", default: "This removes the selected Pi Agent session and its local transcript from %@.", AppBrand.displayName))
         }
     }
 
@@ -386,16 +386,16 @@ struct CodingAgentRecentRow: View, Equatable {
             Image(systemName: "questionmark.bubble.fill")
                 .font(AppTheme.Font.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.brandAccent)
-                .help("Pi Agent is waiting for your response")
-                .accessibilityLabel("Waiting for your response")
+                .help(AppLocalization.string("Pi Agent is waiting for your response", default: "Pi Agent is waiting for your response"))
+                .accessibilityLabel(AppLocalization.string("Waiting for your response", default: "Waiting for your response"))
         } else if isRunning {
             PiAgentTypingIndicator()
         } else if session.needsAttention {
             Image(systemName: "bell.fill")
                 .font(AppTheme.Font.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.brandAccent)
-                .help("Pi Agent finished and needs review")
-                .accessibilityLabel("Needs review")
+                .help(AppLocalization.string("Pi Agent finished and needs review", default: "Pi Agent finished and needs review"))
+                .accessibilityLabel(AppLocalization.string("Needs review", default: "Needs review"))
         }
     }
 
@@ -405,7 +405,7 @@ struct CodingAgentRecentRow: View, Equatable {
                 .font(AppTheme.Font.caption.weight(.semibold))
         }
         .appSmallSecondaryButton()
-        .help("Delete session")
-        .accessibilityLabel("Delete session")
+        .help(AppLocalization.string("Delete session", default: "Delete session"))
+        .accessibilityLabel(AppLocalization.string("Delete session", default: "Delete session"))
     }
 }

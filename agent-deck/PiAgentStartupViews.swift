@@ -524,11 +524,16 @@ struct PiAgentSessionSubagentPickerCard: View {
         }
 
         var subtitle: String {
-            var text = "\(selectedCount) of \(rows.count) default selected"
+            var text = AppLocalization.format(
+                "%lld of %lld default selected",
+                default: "%lld of %lld default selected",
+                Int64(selectedCount),
+                Int64(rows.count)
+            )
             // Never say "None selected" once there are hidden added agents —
             // the count alone would understate the effective launch set.
             if addedCount > 0 {
-                text += " · \(addedCount) added"
+                text += AppLocalization.format(" · %lld added", default: " · %lld added", Int64(addedCount))
             }
             return text
         }
@@ -654,10 +659,10 @@ struct PiAgentSessionSubagentPickerCard: View {
                         .foregroundStyle(Self.accent)
                         .frame(width: 18)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Deck agents for this session")
+                        Text(AppLocalization.string("Deck agents for this session", default: "Deck agents for this session"))
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(.primary)
-                        Text(data?.subtitle ?? "Off, Pi will not delegate in this session")
+                        Text(data?.subtitle ?? AppLocalization.string("Off, Pi will not delegate in this session", default: "Off, Pi will not delegate in this session"))
                             .font(.caption)
                             .foregroundStyle(AppTheme.mutedText)
                     }
@@ -691,7 +696,7 @@ struct PiAgentSessionSubagentPickerCard: View {
     /// of silently resetting (the launcher consumes `subagentsEnabled` at first
     /// send to decide whether Pi gets the Deck agent tools at all).
     private var enabledSwitch: some View {
-        Toggle("Deck agents", isOn: Binding(
+        Toggle(AppLocalization.string("Deck agents", default: "Deck agents"), isOn: Binding(
             get: { session.subagentsEnabled },
             set: { newValue in
                 if !newValue { setExpanded(false) }
@@ -702,8 +707,8 @@ struct PiAgentSessionSubagentPickerCard: View {
         .labelsHidden()
         .controlSize(.small)
         .help(session.subagentsEnabled
-            ? "Deck agents are on. Applies to this session and as the default for new sessions"
-            : "Deck agents are off. Applies to this session and as the default for new sessions")
+            ? AppLocalization.string("Deck agents are on. Applies to this session and as the default for new sessions", default: "Deck agents are on. Applies to this session and as the default for new sessions")
+            : AppLocalization.string("Deck agents are off. Applies to this session and as the default for new sessions", default: "Deck agents are off. Applies to this session and as the default for new sessions"))
     }
 
     private func setExpanded(_ expanded: Bool) {
@@ -821,10 +826,10 @@ struct PiAgentSessionSubagentPickerCard: View {
             HStack(spacing: 10) {
                 boundAgentAvatar
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("1:1 chat with \(session.agentName ?? "agent")")
+                    Text(AppLocalization.format("1:1 chat with %@", default: "1:1 chat with %@", session.agentName ?? AppLocalization.string("agent", default: "agent")))
                         .font(.callout.weight(.semibold))
                         .foregroundStyle(.primary)
-                    Text("Only this agent replies, with its own prompt and tools")
+                    Text(AppLocalization.string("Only this agent replies, with its own prompt and tools", default: "Only this agent replies, with its own prompt and tools"))
                         .font(.caption)
                         .foregroundStyle(AppTheme.mutedText)
                 }
@@ -834,13 +839,13 @@ struct PiAgentSessionSubagentPickerCard: View {
                         viewModel.unbindPiAgentDraft(session.id)
                     }
                 } label: {
-                    Text("Switch back")
+                    Text(AppLocalization.string("Switch back", default: "Switch back"))
                         .font(.caption.weight(.semibold))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Self.accent)
-                .help("Turn this back into a regular session with Deck agents")
+                .help(AppLocalization.string("Turn this back into a regular session with Deck agents", default: "Turn this back into a regular session with Deck agents"))
             }
         }
     }
@@ -1113,12 +1118,12 @@ private struct PiAgentPickerLaunchControls: View {
     }
 
     private var modelLabel: String {
-        guard let id = selectedModelIdentifier, !id.isEmpty else { return "Pi default" }
+        guard let id = selectedModelIdentifier, !id.isEmpty else { return AppLocalization.string("Pi default", default: "Pi default") }
         return id
     }
 
     private var thinkingLabel: String {
-        guard let level = selectedThinkingLevel, !level.isEmpty, level != "off" else { return "Pi default" }
+        guard let level = selectedThinkingLevel, !level.isEmpty, level != "off" else { return AppLocalization.string("Pi default", default: "Pi default") }
         return level.capitalized
     }
 
@@ -1155,7 +1160,7 @@ private struct PiAgentPickerLaunchControls: View {
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "brain.head.profile")
-                Text("Thinking: \(thinkingLabel)")
+                Text(AppLocalization.format("Thinking: %@", default: "Thinking: %@", thinkingLabel))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 0)
@@ -1187,7 +1192,7 @@ private struct PiAgentPickerLaunchControls: View {
                         onSelectModel(nil)
                         isModelPresented = false
                     } label: {
-                        popoverRow(label: "Pi default", isSelected: selectedModelIdentifier == nil)
+                        popoverRow(label: AppLocalization.string("Pi default", default: "Pi default"), isSelected: selectedModelIdentifier == nil)
                     }
                     .buttonStyle(.plain)
                     ForEach(groupedModels, id: \.provider) { group in
@@ -1232,7 +1237,7 @@ private struct PiAgentPickerLaunchControls: View {
                         onSelectThinking(nil)
                         isThinkingPresented = false
                     } label: {
-                        popoverRow(label: "Pi default", isSelected: isThinkingDefault)
+                        popoverRow(label: AppLocalization.string("Pi default", default: "Pi default"), isSelected: isThinkingDefault)
                     }
                     .buttonStyle(.plain)
                     ForEach(thinkingOptions, id: \.self) { level in
@@ -1240,7 +1245,7 @@ private struct PiAgentPickerLaunchControls: View {
                             onSelectThinking(level)
                             isThinkingPresented = false
                         } label: {
-                            popoverRow(label: level.capitalized, isSelected: level == selectedThinkingLevel)
+                            popoverRow(label: AppLocalization.thinkingLevel(level), isSelected: level == selectedThinkingLevel)
                         }
                         .buttonStyle(.plain)
                     }
@@ -1343,7 +1348,7 @@ private struct PiAgentPickerAddRow: View {
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(Self.accent)
                         }
-                    Text("Add agents…")
+                    Text(AppLocalization.string("Add agents…", default: "Add agents…"))
                         .font(.callout.weight(.medium))
                         .foregroundStyle(Self.accent)
                     Spacer(minLength: 0)
@@ -1355,7 +1360,7 @@ private struct PiAgentPickerAddRow: View {
             .opacity(isEnabled ? 1 : 0.4)
 
             if showsReset {
-                Button("Reset to default", action: onReset)
+                Button(AppLocalization.string("Reset to default", default: "Reset to default"), action: onReset)
                     .buttonStyle(.plain)
                     .font(.caption)
                     .foregroundStyle(AppTheme.mutedText)
@@ -1429,10 +1434,10 @@ struct PiAgentAddAgentsSheet: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Add agents")
+                Text(AppLocalization.string("Add agents", default: "Add agents"))
                     .font(.headline)
                     .fontWidth(.expanded)
-                Text("Pick agents to include in this session. Existing default-row selections are preserved; chosen agents are added when you click Update.")
+                Text(AppLocalization.string("Pick agents to include in this session. Existing default-row selections are preserved; chosen agents are added when you click Update.", default: "Pick agents to include in this session. Existing default-row selections are preserved; chosen agents are added when you click Update."))
                     .font(.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1446,7 +1451,7 @@ struct PiAgentAddAgentsSheet: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(AppTheme.mutedText)
-            TextField("Search agents", text: $query)
+            TextField(AppLocalization.string("Search agents", default: "Search agents"), text: $query)
                 .textFieldStyle(.plain)
                 .appBrandTint()
                 .focused($isSearchFocused)
@@ -1473,9 +1478,13 @@ struct PiAgentAddAgentsSheet: View {
     @ViewBuilder
     private var list: some View {
         if addable.isEmpty {
-            emptyState("Every available agent is already in the session.")
+            emptyState(AppLocalization.string("Every available agent is already in the session.", default: "Every available agent is already in the session."))
         } else if filtered.isEmpty {
-            emptyState("No agents match “\(query.trimmingCharacters(in: .whitespacesAndNewlines))”.")
+            emptyState(AppLocalization.format(
+                "No agents match “%@”.",
+                default: "No agents match “%@”.",
+                query.trimmingCharacters(in: .whitespacesAndNewlines)
+            ))
         } else {
             ScrollView(showsIndicators: false) {
                 LazyVStack(spacing: 4) {
@@ -1535,15 +1544,15 @@ struct PiAgentAddAgentsSheet: View {
     private var footer: some View {
         HStack {
             if !selected.isEmpty {
-                Text("\(selected.count) selected")
+                Text(AppLocalization.format("%lld selected", default: "%lld selected", Int64(selected.count)))
                     .font(.caption)
                     .foregroundStyle(AppTheme.mutedText)
             }
             Spacer()
-            Button("Cancel") { dismiss() }
+            Button(AppLocalization.string("Cancel", default: "Cancel")) { dismiss() }
                 .appSecondaryButton()
                 .keyboardShortcut(.cancelAction)
-            Button(selected.isEmpty ? "Update" : "Update \(selected.count)") {
+            Button(selected.isEmpty ? AppLocalization.string("Update", default: "Update") : AppLocalization.format("Update %lld", default: "Update %lld", Int64(selected.count))) {
                 onApply(selected)
                 dismiss()
             }

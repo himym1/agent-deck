@@ -429,13 +429,12 @@ extension NativeArchiveNoticePayload {
         isShowing: Bool,
         onToggle: @escaping () -> Void
     ) -> NativeArchiveNoticePayload {
-        let plural = hiddenCount == 1 ? "" : "s"
         let time = compactedAt.formatted(date: .omitted, time: .shortened)
         return NativeArchiveNoticePayload(
             icon: isShowing ? "tray.and.arrow.up" : "archivebox",
-            title: isShowing ? "Showing pre-compaction transcript" : "Pre-compaction transcript hidden",
-            detail: "\(hiddenCount) earlier item\(plural) before \(time)",
-            actionTitle: isShowing ? "Hide" : "Load Earlier",
+            title: isShowing ? AppLocalization.string("Showing pre-compaction transcript", default: "Showing pre-compaction transcript") : AppLocalization.string("Pre-compaction transcript hidden", default: "Pre-compaction transcript hidden"),
+            detail: AppLocalization.format("%lld earlier items before %@", default: "%lld earlier items before %@", Int64(hiddenCount), time),
+            actionTitle: isShowing ? AppLocalization.string("Hide", default: "Hide") : AppLocalization.string("Load Earlier", default: "Load Earlier"),
             action: onToggle,
             stacked: false
         )
@@ -448,12 +447,16 @@ extension NativeArchiveNoticePayload {
         limit: Int,
         onOpen: @escaping () -> Void
     ) -> NativeArchiveNoticePayload {
-        let plural = hiddenCount == 1 ? "" : "s"
         return NativeArchiveNoticePayload(
             icon: "clock.arrow.circlepath",
-            title: "Earlier transcript hidden",
-            detail: "Showing the latest \(limit) items to keep this chat responsive. \(hiddenCount) earlier item\(plural) are available.",
-            actionTitle: "Open Earlier Transcript",
+            title: AppLocalization.string("Earlier transcript hidden", default: "Earlier transcript hidden"),
+            detail: AppLocalization.format(
+                "Showing the latest %lld items to keep this chat responsive. %lld earlier items are available.",
+                default: "Showing the latest %lld items to keep this chat responsive. %lld earlier items are available.",
+                Int64(limit),
+                Int64(hiddenCount)
+            ),
+            actionTitle: AppLocalization.string("Open Earlier Transcript", default: "Open Earlier Transcript"),
             action: onOpen,
             stacked: true
         )

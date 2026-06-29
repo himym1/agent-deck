@@ -11,12 +11,12 @@ struct AgentsFilterPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Filter agents")
+                Text(AppLocalization.string("Filter agents", default: "Filter agents"))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
                 Spacer()
                 if viewModel.selectedAgentFilter != .all {
-                    Button("Clear") { viewModel.selectedAgentFilter = .all }
+                    Button(AppLocalization.string("Clear", default: "Clear")) { viewModel.selectedAgentFilter = .all }
                         .buttonStyle(.borderless)
                         .font(.caption)
                 }
@@ -313,7 +313,7 @@ private struct EditAgentAvatarSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Edit Avatar")
+                Text(AppLocalization.string("Edit Avatar", default: "Edit Avatar"))
                     .font(.title2.bold())
                     .fontWidth(.expanded)
                 Text(agentName)
@@ -321,16 +321,16 @@ private struct EditAgentAvatarSheet: View {
                     .foregroundStyle(AppTheme.mutedText)
             }
 
-            Text("Choose how to set the avatar for this agent.")
+            Text(AppLocalization.string("Choose how to set the avatar for this agent.", default: "Choose how to set the avatar for this agent."))
                 .foregroundStyle(AppTheme.mutedText)
                 .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: 10) {
                 avatarOptionButton(
-                    title: "Generate with Image Playground",
+                    title: AppLocalization.string("Generate with Image Playground", default: "Generate with Image Playground"),
                     subtitle: canGenerate
-                        ? "Create an illustrated avatar based on the agent's description."
-                        : "Image Playground is not available on this Mac.",
+                        ? AppLocalization.string("Create an illustrated avatar based on the agent's description.", default: "Create an illustrated avatar based on the agent's description.")
+                        : AppLocalization.string("Image Playground is not available on this Mac.", default: "Image Playground is not available on this Mac."),
                     systemImage: "wand.and.stars",
                     isPrimary: true,
                     isDisabled: !canGenerate || isGenerating,
@@ -338,8 +338,8 @@ private struct EditAgentAvatarSheet: View {
                 )
 
                 avatarOptionButton(
-                    title: "Import from File…",
-                    subtitle: "Pick an image file from your computer to use as the avatar.",
+                    title: AppLocalization.string("Import from File…", default: "Import from File…"),
+                    subtitle: AppLocalization.string("Pick an image file from your computer to use as the avatar.", default: "Pick an image file from your computer to use as the avatar."),
                     systemImage: "photo.on.rectangle",
                     isPrimary: false,
                     isDisabled: isGenerating,
@@ -349,7 +349,7 @@ private struct EditAgentAvatarSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button(AppLocalization.string("Cancel", default: "Cancel")) { dismiss() }
                     .appSecondaryButton()
                     .keyboardShortcut(.cancelAction)
             }
@@ -490,7 +490,7 @@ private struct AgentListRow: View {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange)
                                 .imageScale(.small)
-                                .accessibilityLabel("Agent warnings")
+                                .accessibilityLabel(AppLocalization.string("Agent warnings", default: "Agent warnings"))
                         }
                         .buttonStyle(.plain)
                         .popover(isPresented: Binding(
@@ -511,12 +511,12 @@ private struct AgentListRow: View {
             Spacer(minLength: 0)
 
             Button(action: onEdit) {
-                Text("Edit")
+                Text(AppLocalization.string("Edit", default: "Edit"))
                     .font(.caption.weight(.semibold))
             }
             .appSmallSecondaryButton()
             .opacity(isHovered ? 1 : 0)
-            .help("Edit agent")
+            .help(AppLocalization.string("Edit agent", default: "Edit agent"))
             .animation(.easeInOut(duration: 0.15), value: isHovered)
         }
         .onHover { isHovered = $0 }
@@ -610,18 +610,18 @@ private struct AgentLibraryPane: View {
             sidebarExpandBenchScrollRequest = cachedLayout.sections.reversed().lazy.compactMap { $0.items.last?.id }.first
         }
 #endif
-        .alert("Delete Agent?", isPresented: Binding(
+        .alert(AppLocalization.string("Delete Agent?", default: "Delete Agent?"), isPresented: Binding(
             get: { pendingDeleteAgentRecord != nil },
             set: { if !$0 { pendingDeleteAgentID = nil } }
         ), presenting: pendingDeleteAgentRecord) { record in
-            Button("Move to Trash", role: .destructive) {
+            Button(AppLocalization.string("Move to Trash", default: "Move to Trash"), role: .destructive) {
                 deleteAgent(record)
             }
-            Button("Cancel", role: .cancel) {
+            Button(AppLocalization.string("Cancel", default: "Cancel"), role: .cancel) {
                 pendingDeleteAgentID = nil
             }
         } message: { record in
-            Text("Move \"\(record.name)\" to the Trash and remove its Default and project assignments?")
+            Text(AppLocalization.format("Move \"%@\" to the Trash and remove its Default and project assignments?", default: "Move \"%@\" to the Trash and remove its Default and project assignments?", record.name))
         }
     }
 
@@ -1049,11 +1049,11 @@ private struct AgentDetailView: View {
             deleteSection
         }
         .alert(
-            "Delete \(agent.name)?",
+            AppLocalization.format("Delete %@?", default: "Delete %@?", agent.name),
             isPresented: $isDeleteConfirmationPresented,
             presenting: deletableAgentRecord
         ) { record in
-            Button("Move to Trash", role: .destructive) {
+            Button(AppLocalization.string("Move to Trash", default: "Move to Trash"), role: .destructive) {
                 do {
                     deleteErrorMessage = nil
                     try deleteAgent(record)
@@ -1062,9 +1062,9 @@ private struct AgentDetailView: View {
                     NSSound.beep()
                 }
             }
-            Button("Cancel", role: .cancel) {}
+            Button(AppLocalization.string("Cancel", default: "Cancel"), role: .cancel) {}
         } message: { _ in
-            Text("This moves the agent file to the Trash and removes its global and project assignments.")
+            Text(AppLocalization.string("This moves the agent file to the Trash and removes its global and project assignments.", default: "This moves the agent file to the Trash and removes its global and project assignments."))
         }
         .fileImporter(isPresented: $isAvatarImporterPresented, allowedContentTypes: [.image]) { result in
             handleAvatarImport(result)
@@ -1464,20 +1464,20 @@ private struct AgentDetailView: View {
             AppCard(title: "Disable Agent") {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(isDisabledGlobally
-                         ? "Re-enable this built-in agent so Pi loads it again across every project that hasn't disabled it explicitly."
-                         : "Turn this built-in agent off everywhere so Pi does not load it. Per-project overrides still apply.")
+                         ? AppLocalization.string("Re-enable this built-in agent so Pi loads it again across every project that hasn't disabled it explicitly.", default: "Re-enable this built-in agent so Pi loads it again across every project that hasn't disabled it explicitly.")
+                         : AppLocalization.string("Turn this built-in agent off everywhere so Pi does not load it. Per-project overrides still apply.", default: "Turn this built-in agent off everywhere so Pi does not load it. Per-project overrides still apply."))
                         .font(.callout)
                         .foregroundStyle(AppTheme.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                     if isDisabledGlobally {
-                        Button("Enable Agent") {
+                        Button(AppLocalization.string("Enable Agent", default: "Enable Agent")) {
                             onSetBuiltinDisabled(.global, false)
                         }
                         .appSecondaryButton()
                     } else {
-                        Button("Disable Agent", role: .destructive) {
+                        Button(AppLocalization.string("Disable Agent", default: "Disable Agent"), role: .destructive) {
                             onSetBuiltinDisabled(.global, true)
                         }
                         .appDestructiveButton()
@@ -1493,7 +1493,7 @@ private struct AgentDetailView: View {
             VStack(alignment: .leading, spacing: 10) {
                 let isGloballyEnabled = !isDisabledGlobally
 
-                Text("Enable this built-in agent for every project at once, or pick specific projects below. Toggling All Projects clears any per-project overrides so the global setting wins.")
+                Text(AppLocalization.string("Enable this built-in agent for every project at once, or pick specific projects below. Toggling All Projects clears any per-project overrides so the global setting wins.", default: "Enable this built-in agent for every project at once, or pick specific projects below. Toggling All Projects clears any per-project overrides so the global setting wins."))
                     .foregroundStyle(AppTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -1531,7 +1531,7 @@ private struct AgentDetailView: View {
         if deletableAgentRecord != nil {
             AppCard(title: "Delete Agent") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Move this agent's file to the Trash and remove its global and project assignments.")
+                    Text(AppLocalization.string("Move this agent's file to the Trash and remove its global and project assignments.", default: "Move this agent's file to the Trash and remove its global and project assignments."))
                         .font(.callout)
                         .foregroundStyle(AppTheme.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1544,7 +1544,7 @@ private struct AgentDetailView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    Button("Delete Agent", role: .destructive) {
+                    Button(AppLocalization.string("Delete Agent", default: "Delete Agent"), role: .destructive) {
                         deleteErrorMessage = nil
                         isDeleteConfirmationPresented = true
                     }
@@ -1559,10 +1559,10 @@ private struct AgentDetailView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 6) {
-                Text("Some assigned agent skills cannot be resolved unambiguously.")
+                Text(AppLocalization.string("Some assigned agent skills cannot be resolved unambiguously.", default: "Some assigned agent skills cannot be resolved unambiguously."))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.primary)
-                Text("Agents carry skill names only. Make sure each assigned skill exists once in the Agent Deck skill catalog.")
+                Text(AppLocalization.string("Agents carry skill names only. Make sure each assigned skill exists once in the Agent Deck skill catalog.", default: "Agents carry skill names only. Make sure each assigned skill exists once in the Agent Deck skill catalog."))
                     .font(.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1628,7 +1628,7 @@ private struct AgentDetailView: View {
                                     HStack(alignment: .top, spacing: 8) {
                                         Image(systemName: "exclamationmark.triangle.fill")
                                             .foregroundStyle(.orange)
-                                        Text("Missing skills here: \(projectIssue.missingSkills.joined(separator: ", "))")
+                                        Text(AppLocalization.format("Missing skills here: %@", default: "Missing skills here: %@", projectIssue.missingSkills.joined(separator: ", ")))
                                             .font(.caption)
                                             .foregroundStyle(AppTheme.mutedText)
                                             .fixedSize(horizontal: false, vertical: true)
@@ -1644,7 +1644,7 @@ private struct AgentDetailView: View {
                         if managedAgent.source.kind != .library {
                             HStack {
                                 Spacer()
-                                Button("Move to Library") {
+                                Button(AppLocalization.string("Move to Library", default: "Move to Library")) {
                                     do { try moveAgentToLibrary(managedAgent) } catch { NSSound.beep() }
                                 }
                                 .controlSize(.small)
@@ -1846,14 +1846,14 @@ private struct AgentEditSheet: View {
             // Header
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Edit Agent")
+                    Text(AppLocalization.string("Edit Agent", default: "Edit Agent"))
                         .font(.headline.weight(.semibold))
                     Text(agent.name)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
-                .help("Close")
+                .help(AppLocalization.string("Close", default: "Close"))
             }
             .padding(.horizontal, 24)
             .padding(.top, 20)
@@ -1917,12 +1917,12 @@ private struct AgentEditSheet: View {
                         .lineLimit(2)
                 }
                 Spacer(minLength: 0)
-                Button("Discard") {
+                Button(AppLocalization.string("Discard", default: "Discard")) {
                     dismiss()
                 }
                 .keyboardShortcut(.cancelAction)
 
-                Button("Save") {
+                Button(AppLocalization.string("Save", default: "Save")) {
                     performConfirmedSave()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -1990,7 +1990,7 @@ private struct AgentEditSheet: View {
                         }
                         .appMenuPicker()
                         .frame(maxWidth: 180, alignment: .leading)
-                        Text(selectedModel == nil ? "Applies while using Pi's default model when supported." : "Only values supported by the selected model are shown.")
+                        Text(selectedModel == nil ? AppLocalization.string("Applies while using Pi's default model when supported.", default: "Applies while using Pi's default model when supported.") : AppLocalization.string("Only values supported by the selected model are shown.", default: "Only values supported by the selected model are shown."))
                             .font(.caption)
                             .foregroundStyle(AppTheme.mutedText)
                     }
@@ -1999,7 +1999,7 @@ private struct AgentEditSheet: View {
                         VStack(alignment: .leading, spacing: 10) {
                             Menu("Add Fallback Model") {
                                 if !availableModels.isEmpty {
-                                    Button("Use None") {
+                                    Button(AppLocalization.string("Use None", default: "Use None")) {
                                         draft?.config.fallbackModels = []
                                     }
                                     Divider()
@@ -2134,11 +2134,11 @@ private struct AgentEditSheet: View {
                     editSection {
                         configRow("Reset") {
                             HStack(spacing: 10) {
-                                Button("Reset Tool Access") {
+                                Button(AppLocalization.string("Reset Tool Access", default: "Reset Tool Access")) {
                                     resetToolAccess()
                                 }
                                 .controlSize(.small)
-                                Text(selectedToolValues.isEmpty ? "Currently using Pi default tool access." : "Using an explicit tool allowlist.")
+                                Text(selectedToolValues.isEmpty ? AppLocalization.string("Currently using Pi default tool access.", default: "Currently using Pi default tool access.") : AppLocalization.string("Using an explicit tool allowlist.", default: "Using an explicit tool allowlist."))
                                     .font(.caption)
                                     .foregroundStyle(AppTheme.mutedText)
                             }
@@ -2169,12 +2169,12 @@ private struct AgentEditSheet: View {
                         editSection {
                             configRow("Extension Mode") {
                                 HStack(spacing: 10) {
-                                    Button("Use Default Extensions") {
+                                    Button(AppLocalization.string("Use Default Extensions", default: "Use Default Extensions")) {
                                         draft?.config.extensions = nil
                                     }
                                     .controlSize(.small)
                                     .lineLimit(1)
-                                    Text((draft?.config.extensions == nil) ? "Inherits Pi's default extension behavior." : "Using an explicit extension list.")
+                                    Text((draft?.config.extensions == nil) ? AppLocalization.string("Inherits Pi's default extension behavior.", default: "Inherits Pi's default extension behavior.") : AppLocalization.string("Using an explicit extension list.", default: "Using an explicit extension list."))
                                         .font(.caption)
                                         .fontWidth(.condensed)
                                         .lineLimit(1)
@@ -2247,11 +2247,11 @@ private struct AgentEditSheet: View {
                     editSection {
                         configRow("Available") {
                             if availableMcpServers.isEmpty {
-                                Text("No MCP servers are configured. Add them in Runtime → MCP.")
+                                Text(AppLocalization.string("No MCP servers are configured. Add them in Runtime → MCP.", default: "No MCP servers are configured. Add them in Runtime → MCP."))
                                     .font(.caption)
                                     .foregroundStyle(AppTheme.mutedText)
                             } else {
-                                Menu("Choose MCP server") {
+                                Menu(AppLocalization.string("Choose MCP server", default: "Choose MCP server")) {
                                     ForEach(selectableMcpServers, id: \.self) { server in
                                         Button(server) { addMcpServer(server) }
                                     }
@@ -2263,7 +2263,7 @@ private struct AgentEditSheet: View {
                             tokenList(draft?.config.mcpServers ?? [], remove: removeMcpServer)
                         }
                     }
-                    Text("When this agent runs as a Deck agent, it can call tools from the MCP servers assigned here through the `mcp` proxy tool. Requires MCP enabled in Runtime → MCP.")
+                    Text(AppLocalization.string("When this agent runs as a Deck agent, it can call tools from the MCP servers assigned here through the `mcp` proxy tool. Requires MCP enabled in Runtime → MCP.", default: "When this agent runs as a Deck agent, it can call tools from the MCP servers assigned here through the `mcp` proxy tool. Requires MCP enabled in Runtime → MCP."))
                         .font(.caption)
                         .foregroundStyle(AppTheme.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2622,23 +2622,23 @@ private struct SubagentsProjectRecapPanel: View {
             HStack(spacing: 10) {
                 ProjectIconView(imageURL: project.iconFileURL, symbolName: project.fallbackSymbolName, size: 32, assetName: project.projectType.assetName)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Deck Agents Recap").font(.headline).fontWidth(.expanded)
+                    Text(AppLocalization.string("Deck Agents Recap", default: "Deck Agents Recap")).font(.headline).fontWidth(.expanded)
                     Text(project.name).font(.caption).foregroundStyle(AppTheme.mutedText)
                 }
                 Spacer()
                 Button(action: onClose) { Image(systemName: "xmark") }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Close recap")
+                    .accessibilityLabel(AppLocalization.string("Close recap", default: "Close recap"))
             }
             .padding(16)
             Divider()
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("These are the Deck agents \(AppBrand.displayName) discovers for this project, after global/project precedence and builtin overrides.")
+                    Text(AppLocalization.format("These are the Deck agents %@ discovers for this project, after global/project precedence and builtin overrides.", default: "These are the Deck agents %@ discovers for this project, after global/project precedence and builtin overrides.", AppBrand.displayName))
                         .font(.caption)
                         .foregroundStyle(AppTheme.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
-                    agentRecapSection("Effective Agents", agents: snapshot.effectiveAgents, color: AppTheme.assistantAccent)
+                    agentRecapSection(AppLocalization.string("Effective Agents", default: "Effective Agents"), agents: snapshot.effectiveAgents, color: AppTheme.assistantAccent)
                     if !libraryAgents.isEmpty { libraryAgentSection }
                 }
                 .padding(16)
@@ -2656,15 +2656,15 @@ private struct SubagentsProjectRecapPanel: View {
     }
 
     private var libraryAgentSection: some View {
-        recapShell("Library Agents", count: libraryAgents.count, color: .secondary) {
-            ForEach(libraryAgents) { agent in recapRow(icon: "books.vertical", color: .secondary, title: agent.name, subtitle: "Stored, not loaded until assigned") }
+        recapShell(AppLocalization.string("Library Agents", default: "Library Agents"), count: libraryAgents.count, color: .secondary) {
+            ForEach(libraryAgents) { agent in recapRow(icon: "books.vertical", color: .secondary, title: agent.name, subtitle: AppLocalization.string("Stored, not loaded until assigned", default: "Stored, not loaded until assigned")) }
         }
     }
 
     private func recapShell<Content: View>(_ title: String, count: Int, color: Color, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack { Text(title).font(.headline).fontWidth(.expanded); Spacer() }
-            if count == 0 { Text("None").font(.caption).foregroundStyle(AppTheme.mutedText) } else { VStack(alignment: .leading, spacing: 8) { content() } }
+            if count == 0 { Text(AppLocalization.string("None", default: "None")).font(.caption).foregroundStyle(AppTheme.mutedText) } else { VStack(alignment: .leading, spacing: 8) { content() } }
         }
     }
 
