@@ -913,7 +913,8 @@ struct SkillsScreen: View {
             memberCount: members.count,
             isAssigned: viewModel.skillCollectionIsEnabledGlobally(collection)
                 || viewModel.enabledProjects.contains { viewModel.skillCollection(collection, isEnabledFor: $0) }
-                || !viewModel.assignedAgents(for: collection).isEmpty
+                || !viewModel.assignedAgents(for: collection).isEmpty,
+            onEdit: { isCollectionSheetPresented = true }
         )
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
@@ -2366,6 +2367,9 @@ private struct CollectionListRowView: View {
     let collection: SkillCollectionRecord
     let memberCount: Int
     let isAssigned: Bool
+    let onEdit: () -> Void
+
+    @State private var isHovered = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -2383,19 +2387,39 @@ private struct CollectionListRowView: View {
                     .foregroundStyle(AppTheme.mutedText)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                HStack(spacing: 6) {
-                    Label("\(memberCount) skill\(memberCount == 1 ? "" : "s")", systemImage: "wand.and.stars")
+                HStack(spacing: 10) {
                     if let sourceLabel = collection.sourceLabel {
+                        Image("github")
+                            .resizable()
+                            .renderingMode(.template)
+                            .scaledToFit()
+                            .frame(width: 11, height: 11)
                         Text(sourceLabel)
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
+                    Label("\(memberCount) skill\(memberCount == 1 ? "" : "s")", systemImage: "wand.and.stars")
+                        .lineLimit(1)
                 }
                 .font(.caption2)
                 .foregroundStyle(AppTheme.mutedText)
+                .help(collection.sourceLabel.map { "Synced from GitHub · \($0)" } ?? "Skill collection")
             }
+            .layoutPriority(1)
+
             Spacer(minLength: 0)
+
+            if isHovered {
+                Button(action: onEdit) {
+                    Label("Edit Collection", systemImage: "square.and.pencil")
+                        .labelStyle(.iconOnly)
+                }
+                .appSmallSecondaryButton()
+                .help("Edit collection")
+                .transition(.opacity)
+            }
         }
+        .onHover { isHovered = $0 }
         .padding(.vertical, 5)
         .opacity(isAssigned ? 1 : 0.72)
     }
