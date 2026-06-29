@@ -913,6 +913,7 @@ struct SkillsScreen: View {
             memberCount: members.count,
             isAssigned: viewModel.skillCollectionIsEnabledGlobally(collection)
                 || viewModel.enabledProjects.contains { viewModel.skillCollection(collection, isEnabledFor: $0) }
+                || !viewModel.assignedAgents(for: collection).isEmpty
         )
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
@@ -961,8 +962,12 @@ struct SkillsScreen: View {
             }
         }
 
-        AppCard(title: "Runtime Assignment") {
+        AppCard(title: "Project Runtime Assignment") {
             collectionAssignmentList(for: collection)
+        }
+
+        AppCard(title: "Deck Agent Runtime Assignment") {
+            collectionAgentAssignmentList(for: collection)
         }
 
         AppCard(title: "Collection Membership") {
@@ -1148,6 +1153,16 @@ struct SkillsScreen: View {
                 if project.id != viewModel.enabledProjects.last?.id { Divider() }
             }
         }
+    }
+
+    private func collectionAgentAssignmentList(for collection: SkillCollectionRecord) -> some View {
+        SkillCollectionAgentAssignmentList(
+            viewModel: viewModel,
+            collection: collection,
+            presentError: { error, action in
+                skillActionErrorMessage = "Could not \(action): \(error.localizedDescription)"
+            }
+        )
     }
 
     @ViewBuilder
@@ -2299,6 +2314,110 @@ private struct SkillAgentAssignmentSection: View {
     let emptyText: String
 
     var body: some View {
+        AgentAssignmentSection(
+            title: title,
+            agents: agents,
+            viewModel: viewModel,
+            isInactiveSection: isInactiveSection,
+            emptyText: emptyText,
+            isAssigned: { agent in viewModel.skill(skill, isAssignedTo: agent) },
+            setAssigned: { agent, enabled in
+                do { try viewModel.setSkill(skill, enabled: enabled, for: agent) }
+                catch { presentError(error, enabled ? "assign this skill to agent" : "remove this skill from agent") }
+            }
+        )
+    }
+}
+
+private struct SkillCollectionAgentAssignmentList: View {
+    let viewModel: AppViewModel
+    let collection: SkillCollectionRecord
+    let presentError: (Error, String) -> Void
+
+    @State private var activeAgents: [EffectiveAgentRecord] = []
+    @State private var inactiveAgents: [EffectiveAgentRecord] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Assign this collection only to the selected Deck agents when they run. Parent Pi Agent sessions do not receive it from this setting.")
+                .foregroundStyle(AppTheme.mutedText)
+
+            VStack(alignment: .leading, spacing: 14) {
+                SkillCollectionAgentAssignmentSection(
+                    title: "Active",
+                    agents: activeAgents,
+                    collection: collection,
+                    viewModel: viewModel,
+                    presentError: presentError,
+                    isInactiveSection: false,
+                    emptyText: "No active Deck agents."
+                )
+
+                if !inactiveAgents.isEmpty {
+                    SkillCollectionAgentAssignmentSection(
+                        title: "Inactive",
+                        agents: inactiveAgents,
+                        collection: collection,
+                        viewModel: viewModel,
+                        presentError: presentError,
+                        isInactiveSection: true,
+                        emptyText: "No inactive Deck agents."
+                    )
+                }
+            }
+        }
+        .onAppear { recompute() }
+        .onChange(of: collection.id) { _, _ in recompute() }
+        .onChange(of: viewModel.displayAgentsRevision) { _, _ in recompute() }
+    }
+
+    private func recompute() {
+        let active = viewModel.globalCatalogSnapshot.effectiveAgents
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let activeIDs = Set(active.map(\.id))
+        let inactive = viewModel.allDisplayAgents
+            .filter { !activeIDs.contains($0.id) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        activeAgents = active
+        inactiveAgents = inactive
+    }
+}
+
+private struct SkillCollectionAgentAssignmentSection: View {
+    let title: String
+    let agents: [EffectiveAgentRecord]
+    let collection: SkillCollectionRecord
+    let viewModel: AppViewModel
+    let presentError: (Error, String) -> Void
+    let isInactiveSection: Bool
+    let emptyText: String
+
+    var body: some View {
+        AgentAssignmentSection(
+            title: title,
+            agents: agents,
+            viewModel: viewModel,
+            isInactiveSection: isInactiveSection,
+            emptyText: emptyText,
+            isAssigned: { agent in viewModel.skillCollection(collection, isAssignedTo: agent) },
+            setAssigned: { agent, enabled in
+                do { try viewModel.setSkillCollection(collection, enabled: enabled, for: agent) }
+                catch { presentError(error, enabled ? "assign this collection to agent" : "remove this collection from agent") }
+            }
+        )
+    }
+}
+
+private struct AgentAssignmentSection: View {
+    let title: String
+    let agents: [EffectiveAgentRecord]
+    let viewModel: AppViewModel
+    let isInactiveSection: Bool
+    let emptyText: String
+    let isAssigned: (EffectiveAgentRecord) -> Bool
+    let setAssigned: (EffectiveAgentRecord, Bool) -> Void
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.subheadline.weight(.semibold))
@@ -2314,11 +2433,8 @@ private struct SkillAgentAssignmentSection: View {
                             imageURL: viewModel.agentImageStore.imageURL(for: agent.name),
                             isInactive: isInactiveSection,
                             isOn: Binding(
-                                get: { viewModel.skill(skill, isAssignedTo: agent) },
-                                set: { enabled in
-                                    do { try viewModel.setSkill(skill, enabled: enabled, for: agent) }
-                                    catch { presentError(error, enabled ? "assign this skill to agent" : "remove this skill from agent") }
-                                }
+                                get: { isAssigned(agent) },
+                                set: { enabled in setAssigned(agent, enabled) }
                             )
                         )
 

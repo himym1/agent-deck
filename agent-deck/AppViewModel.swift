@@ -7212,7 +7212,9 @@ final class AppViewModel: NSObject {
 
     func availableSkillNames(for target: AgentEditingTarget) -> [String] {
         let snapshot = scopeSnapshot(for: target)
-        return Array(Set((snapshot.skills + snapshot.librarySkills).map(\.name)))
+        let skillNames = (snapshot.skills + snapshot.librarySkills).map(\.name)
+        let collectionNames = appSettings.skillCollections.map(\.name)
+        return Array(Set(skillNames + collectionNames))
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
@@ -8405,6 +8407,7 @@ final class AppViewModel: NSObject {
             let issues: [AgentSkillVisibilityIssue] = assignedProjects(for: managedRecord).compactMap { project in
                 guard let projectSnapshot = allProjectSnapshots[project.path] else { return nil }
                 let visibleSkillNames = Set(PiSkillLaunchResolver.catalog(from: projectSnapshot).map(\.name))
+                    .union(appSettings.skillCollections.map(\.name))
                 let missingSkills = explicitSkills.filter { !visibleSkillNames.contains($0) }
                 guard !missingSkills.isEmpty else { return nil }
                 return AgentSkillVisibilityIssue(project: project, missingSkills: missingSkills)
@@ -8528,12 +8531,32 @@ final class AppViewModel: NSObject {
     }
 
     func setSkill(_ skill: SkillRecord, enabled: Bool, for agent: EffectiveAgentRecord) throws {
+        try setAgentSkillName(skill.name, enabled: enabled, for: agent)
+    }
+
+    func assignedAgents(for skillRecord: SkillRecord) -> [EffectiveAgentRecord] {
+        snapshot.effectiveAgents.filter { skill(skillRecord, isAssignedTo: $0) }
+    }
+
+    func skillCollection(_ collection: SkillCollectionRecord, isAssignedTo agent: EffectiveAgentRecord) -> Bool {
+        agent.resolved.skills.contains(collection.name)
+    }
+
+    func setSkillCollection(_ collection: SkillCollectionRecord, enabled: Bool, for agent: EffectiveAgentRecord) throws {
+        try setAgentSkillName(collection.name, enabled: enabled, for: agent)
+    }
+
+    func assignedAgents(for collection: SkillCollectionRecord) -> [EffectiveAgentRecord] {
+        snapshot.effectiveAgents.filter { skillCollection(collection, isAssignedTo: $0) }
+    }
+
+    private func setAgentSkillName(_ name: String, enabled: Bool, for agent: EffectiveAgentRecord) throws {
         guard var draft = makeAgentDraft(for: agent) else { throw CocoaError(.fileNoSuchFile) }
         var skills = draft.config.skills
         if enabled {
-            if !skills.contains(skill.name) { skills.append(skill.name) }
+            if !skills.contains(name) { skills.append(name) }
         } else {
-            skills.removeAll { $0 == skill.name }
+            skills.removeAll { $0 == name }
         }
         draft.config.skills = PiSkillLaunchResolver.normalizedNames(skills)
         try saveAgentDraft(draft, for: agent)
@@ -8543,10 +8566,6 @@ final class AppViewModel: NSObject {
         // of waiting for that rescan to land.
         patchEffectiveAgentSkills(agentName: agent.name, skills: draft.config.skills)
         rebuildWarningCaches()
-    }
-
-    func assignedAgents(for skillRecord: SkillRecord) -> [EffectiveAgentRecord] {
-        snapshot.effectiveAgents.filter { skill(skillRecord, isAssignedTo: $0) }
     }
 
     private func setSkill(_ skill: SkillRecord, enabled: Bool, forProjectPath projectPath: String) throws {
@@ -9086,6 +9105,11 @@ final class AppViewModel: NSObject {
         guard appSettingsController.removeSkillCollection(id: collection.id) else { return }
         for projectPath in projectPreferencesStore.preferencesByPath.keys {
             projectPreferencesStore.setAssignedSkillCollection(collection.id, assigned: false, for: projectPath)
+        }
+        for agent in snapshot.effectiveAgents where agent.resolved.skills.contains(collection.name) {
+            guard var draft = makeAgentDraft(for: agent) else { continue }
+            draft.config.skills.removeAll { $0 == collection.name }
+            try? agentPersistence.save(draft, original: agent, projectRoot: selectedProjectPath)
         }
         appSettings = appSettingsController.settings
         applyProjectPreferenceChanges()
