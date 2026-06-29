@@ -615,7 +615,7 @@ private enum PiAgentTranscriptTableSection: Hashable {
     case main
 }
 
-private struct UserQuestionNavigationRailItem: Identifiable, Equatable {
+private struct UserQuestionNavigationRailItem: Identifiable, Equatable, Sendable {
     let id: String
     let title: String
     let isActive: Bool
@@ -639,6 +639,16 @@ private enum TranscriptFloatingControlGeometry {
     /// SwiftUI horizontal padding so both trailing strokes land on the same screen x.
     static var questionRailTrailingInsetInsideScrollView: CGFloat {
         max(0, jumpToLatestTrailingPadding - transcriptHorizontalPadding)
+    }
+}
+
+struct QuestionRailVisibilityPolicy {
+    static let minimumWindowHeightForOverflowLayout: CGFloat = 420
+
+    func shouldShow(questionCount: Int, windowHeight: CGFloat, evenStackedHeight: CGFloat, railHeight: CGFloat) -> Bool {
+        guard questionCount >= 2 else { return false }
+        let overflowsStack = evenStackedHeight > railHeight
+        return !overflowsStack || windowHeight >= Self.minimumWindowHeightForOverflowLayout
     }
 }
 
@@ -1236,7 +1246,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private var pendingRemeasureIDs = Set<String>()
         private var pendingScrollSettle = false
         private var pendingWidthWork: DispatchWorkItem?
+        private var widthReconfigureGeneration = 0
         private var lastWidthChangeTime: CFTimeInterval = 0
+        private let widthChangeSettleWindow: CFTimeInterval = 0.30
         // Smooth auto-follow. The streaming follow doesn't snap to the bottom each
         // batch (that reads as a step every ~130ms); instead a 60fps timer eases
         // the clip origin toward the *current* bottom each frame, continuously
@@ -1640,10 +1652,17 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         private func updateQuestionRail() {
             guard let scrollView, let tableView, questionRailModel != nil else { return }
             let questionRows = currentQuestionRows()
+            let stackedHeight = evenStackedHeight(questionCount: questionRows.count)
             let railHeight = questionRailHeight(scrollView: scrollView, questionCount: questionRows.count)
             updateQuestionRailFrame(for: scrollView, railHeight: railHeight)
 
-            guard questionRows.count >= 2 else {
+            let shouldShowRail = QuestionRailVisibilityPolicy().shouldShow(
+                questionCount: questionRows.count,
+                windowHeight: scrollView.bounds.height,
+                evenStackedHeight: stackedHeight,
+                railHeight: railHeight
+            )
+            guard shouldShowRail else {
                 forcedActiveQuestionID = nil
                 questionRail?.isHidden = true
                 applyRailModel(items: [], width: scrollView.bounds.width, railHeight: railHeight, isSliding: false)
@@ -1660,7 +1679,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // Sliding window kicks in only when the even-spaced stack wouldn't fit.
             // `isSliding` depends only on window height + question count, so it is
             // stable across scrolling and never flips mid-scroll (no flicker).
-            let isSliding = evenStackedHeight(questionCount: questionRows.count) > railHeight
+            let isSliding = stackedHeight > railHeight
 
             var items: [UserQuestionNavigationRailItem] = []
             if isSliding {
@@ -1709,17 +1728,20 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// `ObservableObject` synchronously emits "Publishing changes from within
         /// view updates"). Defer to the next runloop when inside that pass.
         private func applyRailModel(items: [UserQuestionNavigationRailItem], width: CGFloat, railHeight: CGFloat, isSliding: Bool) {
-            let perform = { [weak self] in
-                guard let self, let model = self.questionRailModel else { return }
+            if isInsideNSViewUpdate {
+                Task { @MainActor [weak self, items] in
+                    guard let self, let model = self.questionRailModel else { return }
+                    model.items = items
+                    model.availableWidth = width
+                    model.railHeight = railHeight
+                    model.isSliding = isSliding
+                }
+            } else {
+                guard let model = questionRailModel else { return }
                 model.items = items
                 model.availableWidth = width
                 model.railHeight = railHeight
                 model.isSliding = isSliding
-            }
-            if isInsideNSViewUpdate {
-                DispatchQueue.main.async(execute: perform)
-            } else {
-                perform()
             }
         }
 
@@ -2549,14 +2571,45 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // char-count estimates (not bucketed) are dropped.
             estimateByID.removeAll()
 
+            scheduleVisibleWidthReconfigure()
+        }
+
+        private func scheduleVisibleWidthReconfigure() {
             pendingWidthWork?.cancel()
+            widthReconfigureGeneration += 1
+            let generation = widthReconfigureGeneration
+            let scheduledWidth = contentWidth
+            let scheduledChangeTime = lastWidthChangeTime
+            let delay = max(0, widthChangeSettleWindow - (CACurrentMediaTime() - scheduledChangeTime))
+#if DEBUG
+            if TranscriptScrollProfiler.verboseTrace {
+                TranscriptScrollProfiler.fileLog("WIDTH reconfig scheduled width=\(String(format: "%.0f", scheduledWidth)) delay=\(String(format: "%.0f", delay * 1000))ms")
+            }
+#endif
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
+                guard generation == self.widthReconfigureGeneration else { return }
                 self.pendingWidthWork = nil
+                let widthChangedAgain = abs(self.contentWidth - scheduledWidth) > 0.5 || self.lastWidthChangeTime != scheduledChangeTime
+                let quietFor = CACurrentMediaTime() - self.lastWidthChangeTime
+                guard !widthChangedAgain, quietFor >= self.widthChangeSettleWindow else {
+#if DEBUG
+                    if TranscriptScrollProfiler.verboseTrace {
+                        TranscriptScrollProfiler.fileLog("WIDTH reconfig reschedule quietFor=\(String(format: "%.0f", quietFor * 1000))ms")
+                    }
+#endif
+                    self.scheduleVisibleWidthReconfigure()
+                    return
+                }
+#if DEBUG
+                if TranscriptScrollProfiler.verboseTrace {
+                    TranscriptScrollProfiler.fileLog("WIDTH reconfig visible width=\(String(format: "%.0f", self.contentWidth))")
+                }
+#endif
                 self.reconfigureAllVisibleCells()
             }
             pendingWidthWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
         }
 
         /// Walk visible rows and reconfigure cells whose content has changed since
@@ -2706,7 +2759,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // detaches the host. That's what keeps multiple visible cells from
             // ever contending for a single shared host (the bug fixed here).
             profiler.noteConfigure()
-            cell.installRootView(item: item, width: width, profiler: profiler, via: via)
+            let deferWidthOnlySettle = CACurrentMediaTime() - lastWidthChangeTime < widthChangeSettleWindow
+            cell.installRootView(item: item, width: width, profiler: profiler, via: via, deferWidthOnlySettle: deferWidthOnlySettle)
             // No measurement here — the cell reports its real height via
             // `onMeasuredHeight` once it lays out. Until then `heightOfRow`
             // serves the char-count estimate (or a cached real height).
@@ -3321,10 +3375,16 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
         /// Configure the cell for an item. Every row is native; the spec's view is
         /// built/reused and pinned to the cell with the row insets.
-        func installRootView(item: PiAgentAppKitTranscriptItem, width: CGFloat, profiler: TranscriptScrollProfiler? = nil, via: String = "scroll-vend") {
+        func installRootView(
+            item: PiAgentAppKitTranscriptItem,
+            width: CGFloat,
+            profiler: TranscriptScrollProfiler? = nil,
+            via: String = "scroll-vend",
+            deferWidthOnlySettle: Bool = false
+        ) {
             self.profiler = profiler
             guard case .native(let spec) = item.kind else { return }
-            installNativeRow(spec: spec, item: item, width: width, via: via)
+            installNativeRow(spec: spec, item: item, width: width, via: via, deferWidthOnlySettle: deferWidthOnlySettle)
         }
 
         /// Tear down the native row view (when a recycled cell switches to a
@@ -3344,7 +3404,13 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// Native render path: build/configure the spec's view pinned to the cell
         /// with the row insets, rebuilding if the recycled cell held a different
         /// view type.
-        private func installNativeRow(spec: NativeRowSpec, item: PiAgentAppKitTranscriptItem, width: CGFloat, via: String = "scroll-vend") {
+        private func installNativeRow(
+            spec: NativeRowSpec,
+            item: PiAgentAppKitTranscriptItem,
+            width: CGFloat,
+            via: String = "scroll-vend",
+            deferWidthOnlySettle: Bool = false
+        ) {
             // A recycled cell holding a different native view type must rebuild it.
             if let existingType = nativeRowTypeID, existingType != spec.typeID {
                 teardownNativeRow()
@@ -3446,8 +3512,17 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // The cell will lay out naturally when it scrolls into view.
             let hasVisibleNativeGeometry = spec.typeID != ObjectIdentifier(PiAgentNativeSpacerView.self)
             let needsInitialSettle = hasVisibleNativeGeometry && (createdNow || itemChanged)
+            let isWidthOnlySettle = !createdNow && !needsInitialSettle && widthChanged && !insetChanged
             if via != "prewarm", needsInitialSettle || (!createdNow && (widthChanged || insetChanged)) {
-                spec.settle(row)
+                if deferWidthOnlySettle && isWidthOnlySettle {
+#if DEBUG
+                    if TranscriptScrollProfiler.verboseTrace {
+                        TranscriptScrollProfiler.fileLog("WIDTH settle skipped row=\(row) via=\(via)")
+                    }
+#endif
+                } else {
+                    spec.settle(row)
+                }
             }
             configuredItemID = item.id
             configuredRevision = item.contentRevision
@@ -4371,6 +4446,10 @@ struct PiAgentScreen: View {
     @State private var sessionActivityCache: [UUID: PiAgentSessionGitActivity] = [:]
     @State private var isUIRequestSheetPresented = false
     @State private var isSupervisorRequestSheetPresented = false
+#if DEBUG
+    @State private var didStartPickerStress = false
+    @State private var pickerStressExpansionRequest = false
+#endif
     @State private var frozenRuntimeFooterSession: PiAgentSessionRecord?
     @State private var stabilizedProcessingMessage: String?
     @State private var processingMessageUpdateTask: Task<Void, Never>?
@@ -4416,6 +4495,9 @@ struct PiAgentScreen: View {
             updateStabilizedProcessingMessage(selectedSessionProcessingMessage)
             Task { @MainActor in
                 await Task.yield()
+#if DEBUG
+                await runPickerStressIfRequested()
+#endif
                 viewModel.acknowledgeVisibleSelectedPiAgentSession()
                 scheduleTranscriptCacheUpdate()
                 viewModel.prepareRepoChangesForSelectedPiAgentSession()
@@ -4858,6 +4940,60 @@ struct PiAgentScreen: View {
         })
     }
 
+#if DEBUG
+    private var isPickerStressRequested: Bool {
+        ProcessInfo.processInfo.environment["AGENTDECK_PICKER_STRESS"] != nil
+    }
+
+    @MainActor
+    private func runPickerStressIfRequested() async {
+        guard isPickerStressRequested, !didStartPickerStress else { return }
+        didStartPickerStress = true
+
+        viewModel.openPiAgentScreen()
+        let selected = store.selectedSession
+        let needsDraft = selected?.status != .draft
+            || selected?.isAgentBound == true
+            || selected.flatMap({ store.activeLoopRun(for: $0.id) }) != nil
+        if needsDraft {
+            pickerStressLog("PICKER_STRESS PREPARE creating draft selected=\(selected?.id.uuidString ?? "none") status=\(selected?.status.rawValue ?? "none")")
+            viewModel.createPiAgentDraftForSelectedProject()
+        } else {
+            pickerStressLog("PICKER_STRESS PREPARE reusing draft session=\(selected?.id.uuidString ?? "none")")
+        }
+
+        if store.selectedSession?.subagentsEnabled == false {
+            viewModel.setSubagentsEnabledForSelectedDraftAndNewSessions(true)
+            pickerStressLog("PICKER_STRESS PREPARE enabled subagents session=\(store.selectedSession?.id.uuidString ?? "none")")
+        }
+
+        let sessionID = store.selectedSession?.id.uuidString ?? "none"
+        let rounds = 24
+        pickerStressLog("PICKER_STRESS START session=\(sessionID) rounds=\(rounds)")
+        try? await Task.sleep(for: .milliseconds(500))
+
+        for index in 0..<rounds {
+            guard !Task.isCancelled else {
+                pickerStressLog("PICKER_STRESS CANCELLED round=\(index)")
+                return
+            }
+            let expanded = index.isMultiple(of: 2)
+            pickerStressExpansionRequest = expanded
+            pickerStressLog("PICKER_STRESS TOGGLE round=\(index + 1)/\(rounds) expanded=\(expanded)")
+            try? await Task.sleep(for: .milliseconds(260))
+        }
+
+        try? await Task.sleep(for: .milliseconds(500))
+        pickerStressLog("PICKER_STRESS COMPLETE rounds=\(rounds)")
+        NSApp.terminate(nil)
+    }
+
+    private func pickerStressLog(_ line: String) {
+        fputs(line + "\n", stderr)
+        TranscriptScrollProfiler.fileLog(line)
+    }
+#endif
+
     private var visibleSessionActivityByID: [UUID: PiAgentSessionGitActivity] {
         var map: [UUID: PiAgentSessionGitActivity] = [:]
         for session in visibleSessions where sessionActivityCache[session.id] != nil {
@@ -4907,8 +5043,17 @@ struct PiAgentScreen: View {
                 if let session = store.selectedSession,
                    session.status == .draft,
                    store.activeLoopRun(for: session.id) == nil {
+#if DEBUG
+                    PiAgentSessionSubagentPickerCard(
+                        viewModel: viewModel,
+                        session: session,
+                        stressExpansionRequest: isPickerStressRequested ? pickerStressExpansionRequest : nil
+                    )
+                    .id(session.id)
+#else
                     PiAgentSessionSubagentPickerCard(viewModel: viewModel, session: session)
                         .id(session.id)
+#endif
                 }
 
                 if let request = store.selectedUIRequest {

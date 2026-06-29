@@ -6,14 +6,15 @@ import Foundation
 ///
 /// Launched with `AGENTDECK_AUTOPERF=1`, the app runs as an accessory
 /// (no Dock icon, no menu bar, does not steal focus) with its main window moved
-/// offscreen, then arms the built-in `ScrollBench` (sweeps sessions, short +
-/// long top↔bottom scrolls) and `STREAMSIM` (streams into the loaded transcript)
-/// journeys — both self-driven programmatically against the REAL transcript,
-/// reproducing the layout/cell-vend/height-resolution hitches the HangWatchdog
+/// offscreen unless `AGENTDECK_AUTOPERF_VISIBLE=1` is set, then arms the built-in `ScrollBench` (sweeps sessions, short +
+/// long top↔bottom scrolls), `STREAMSIM` (streams into the loaded transcript),
+/// and `SIDEBAR_EXPANDBENCH` (toggles compact↔expanded session sidebar while
+/// PiAgentTranscript remains visible) journeys — self-driven programmatically
+/// against the REAL transcript, reproducing the layout/cell-vend/height-resolution hitches the HangWatchdog
 /// auto-samples to `/tmp/agentdeck-hang-*.txt` while `TranscriptScrollProfiler`
 /// writes per-gesture summaries to `/tmp/agentdeck-perf.txt`.
 ///
-/// When both journeys finish it writes a rollup to
+/// When the requested journeys finish it writes a rollup to
 /// `/tmp/agentdeck-autoperf-rollup.md` and terminates, so the loop can invoke it
 /// as a one-shot: `AGENTDECK_AUTOPERF=1 "Agent Deck.app/Contents/MacOS/Agent Deck"`.
 ///
@@ -24,20 +25,29 @@ import Foundation
 /// The offscreen/accessory window reproduces the dominant layout/vend/sizing
 /// hitches but may under-represent pure GPU/compositing hitches; user-felt
 /// confirmation still comes from using the live app.
+extension Notification.Name {
+    static let sidebarExpandBenchShouldStart = Notification.Name("AgentDeckSidebarExpandBenchShouldStart")
+}
+
 final class AutoPerfCoordinator {
     static let enabled = ProcessInfo.processInfo.environment["AGENTDECK_AUTOPERF"] != nil
     static let shared = AutoPerfCoordinator()
 
     private static let perfLogPath = "/tmp/agentdeck-perf.txt"
     private static let rollupPath = "/tmp/agentdeck-autoperf-rollup.md"
-    private static let timeout: TimeInterval = 300      // ScrollBench(≤6 sessions) + STREAMSIM ≈ 3 min
+    private static let timeout: TimeInterval = 330      // ScrollBench(≤6 sessions) + STREAMSIM + SidebarExpandBench ≈ 3–4 min
     private static let hidePollInterval: TimeInterval = 0.05
 
     private let startedAt = CACurrentMediaTime()
     private var pollTimer: Timer?
     private var windowHiddenIDs = Set<NSWindow>()
+    private var runScrollBench = true
+    private var runStreamSim = true
+    private var runSidebarExpandBench = true
+    private var keepWindowVisible = false
     private var scrolledDone = false
     private var streamedDone = false
+    private var sidebarExpandedDone = false
     private var finished = false
     private var runStartByteOffset: Int64 = 0
 
@@ -47,20 +57,32 @@ final class AutoPerfCoordinator {
     func start() {
         guard Self.enabled else { return }
 
-        NSApp.setActivationPolicy(.accessory)
+        let env = ProcessInfo.processInfo.environment
+        keepWindowVisible = env["AGENTDECK_AUTOPERF_VISIBLE"] != nil
+        if !keepWindowVisible {
+            NSApp.setActivationPolicy(.accessory)
+        }
 
         // Enable the built-in benches for this run only. They are DEBUG-gated
-        // inside PiAgentViews, so a Release build is unaffected.
+        // inside PiAgentViews/ContentView, so a Release build is unaffected.
         let defaults = UserDefaults.standard
-        defaults.set(true, forKey: "ScrollBenchEnabled")
-        defaults.set(true, forKey: "StreamSimEnabled")
+        let sidebarOnly = env["AGENTDECK_AUTOPERF_SIDEBAR_ONLY"] != nil || defaults.bool(forKey: "AutoPerfSidebarOnly")
+        runScrollBench = !sidebarOnly
+        runStreamSim = !sidebarOnly
+        runSidebarExpandBench = true
+        if runScrollBench { defaults.set(true, forKey: "ScrollBenchEnabled") }
+        else { defaults.removeObject(forKey: "ScrollBenchEnabled") }
+        if runStreamSim { defaults.set(true, forKey: "StreamSimEnabled") }
+        else { defaults.removeObject(forKey: "StreamSimEnabled") }
+        if runSidebarExpandBench { defaults.set(true, forKey: "SidebarExpandBenchEnabled") }
+        NotificationCenter.default.post(name: .sidebarExpandBenchShouldStart, object: nil)
 
         // Snapshot the current perf-log size so the rollup reflects only this run,
         // and clear stale hang/hitch backtraces so they aren't double-counted.
         runStartByteOffset = currentPerfLogSize()
         clearBacktraces()
 
-        TranscriptScrollProfiler.fileLog("AUTOPERF START")
+        TranscriptScrollProfiler.fileLog("AUTOPERF START scroll=\(runScrollBench) stream=\(runStreamSim) sidebarExpand=\(runSidebarExpandBench) visible=\(keepWindowVisible)")
 
         let timer = Timer(timeInterval: Self.hidePollInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
@@ -70,15 +92,26 @@ final class AutoPerfCoordinator {
     }
 
     private func tick() {
-        hideWindowsOffscreen()
+        if !keepWindowVisible {
+            hideWindowsOffscreen()
+        }
 
         guard !finished else { return }
         let log = currentPerfLogSuffix()
         if log.contains("SCROLLBENCH COMPLETE") { scrolledDone = true }
         if log.contains("STREAMSIM COMPLETE") { streamedDone = true }
+        if log.contains("SIDEBAR_EXPANDBENCH COMPLETE") { sidebarExpandedDone = true }
+        if runSidebarExpandBench
+            && !log.contains("SIDEBAR_EXPANDBENCH PREPARE")
+            && !log.contains("SIDEBAR_EXPANDBENCH START_READY") {
+            NotificationCenter.default.post(name: .sidebarExpandBenchShouldStart, object: nil)
+        }
 
         let timedOut = CACurrentMediaTime() - startedAt > Self.timeout
-        if (scrolledDone && streamedDone) || timedOut {
+        let allRequestedDone = (!runScrollBench || scrolledDone)
+            && (!runStreamSim || streamedDone)
+            && (!runSidebarExpandBench || sidebarExpandedDone)
+        if allRequestedDone || timedOut {
             finish(timedOut: timedOut)
         }
     }
@@ -106,9 +139,10 @@ final class AutoPerfCoordinator {
         let defaults = UserDefaults.standard
         defaults.removeObject(forKey: "ScrollBenchEnabled")
         defaults.removeObject(forKey: "StreamSimEnabled")
+        defaults.removeObject(forKey: "SidebarExpandBenchEnabled")
 
         let rollup = buildRollup(timedOut: timedOut)
-        TranscriptScrollProfiler.fileLog("AUTOPERF COMPLETE scroll=\(scrolledDone) stream=\(streamedDone) timedOut=\(timedOut)")
+        TranscriptScrollProfiler.fileLog("AUTOPERF COMPLETE scroll=\(scrolledDone) stream=\(streamedDone) sidebarExpand=\(sidebarExpandedDone) timedOut=\(timedOut)")
         do {
             try rollup.write(toFile: Self.rollupPath, atomically: true, encoding: .utf8)
             TranscriptScrollProfiler.fileLog("AUTOPERF ROLLUP \(Self.rollupPath)")
@@ -186,8 +220,9 @@ final class AutoPerfCoordinator {
         var out: [String] = []
         out.append("# Agent Deck AutoPerf Rollup")
         out.append("")
-        out.append("- ScrollBench: \(scrolledDone ? "completed" : "did not complete")")
-        out.append("- STREAMSIM: \(streamedDone ? "completed" : "did not complete")")
+        out.append("- ScrollBench: \(runScrollBench ? (scrolledDone ? "completed" : "did not complete") : "skipped")")
+        out.append("- STREAMSIM: \(runStreamSim ? (streamedDone ? "completed" : "did not complete") : "skipped")")
+        out.append("- SidebarExpandBench: \(runSidebarExpandBench ? (sidebarExpandedDone ? "completed" : "did not complete") : "skipped")")
         out.append("- Timed out: \(timedOut)")
         out.append("")
         out.append("## Totals (this run)")

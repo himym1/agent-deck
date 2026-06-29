@@ -488,10 +488,18 @@ struct PiAgentSessionSubagentPickerCard: View {
     let session: PiAgentSessionRecord
 
     @State private var isExpanded = false
+    @State private var isExpandedContentVisible = false
+    @State private var expansionGeneration = 0
     @State private var isAddSheetPresented = false
     @State private var agentSearchText = ""
+#if DEBUG
+    var stressExpansionRequest: Bool? = nil
+#endif
 
     static let accent = Color.teal
+    private static let expandContentAnimation = Animation.easeOut(duration: 0.16)
+    private static let collapseContentAnimation = Animation.easeInOut(duration: 0.12)
+    private static let collapseSnapDelay: TimeInterval = 0.12
 
     /// All render-time data, resolved once per `body` evaluation so the
     /// catalog scan in `selectableAgentUniverse` runs exactly once — not once
@@ -578,7 +586,11 @@ struct PiAgentSessionSubagentPickerCard: View {
             // which reads as the card reloading.
             let enabled = session.subagentsEnabled
             let data = enabled ? resolve() : nil
+#if DEBUG
+            let isHidden = stressExpansionRequest == nil && enabled && data?.rows.isEmpty == true && data?.addable.isEmpty == true
+#else
             let isHidden = enabled && data?.rows.isEmpty == true && data?.addable.isEmpty == true
+#endif
             // Fade in on cold start: the universe is briefly empty while the
             // first project scan runs, then populates. Softens that handoff.
             Group {
@@ -589,11 +601,20 @@ struct PiAgentSessionSubagentPickerCard: View {
                         VStack(alignment: .leading, spacing: 0) {
                             header(data)
                             if isExpanded, let data {
-                                Divider().padding(.vertical, 10)
-                                agentList(data)
+                                expandedContent(data)
+                                    .opacity(isExpandedContentVisible ? 1 : 0)
+                                    .offset(y: isExpandedContentVisible ? 0 : -6)
+                                    .allowsHitTesting(isExpandedContentVisible)
+                                    .accessibilityHidden(!isExpandedContentVisible)
                             }
                         }
                     }
+#if DEBUG
+                    .onChange(of: stressExpansionRequest) { _, expanded in
+                        guard let expanded else { return }
+                        setExpanded(expanded)
+                    }
+#endif
                     .sheet(isPresented: $isAddSheetPresented) {
                         if let data {
                             PiAgentAddAgentsSheet(
@@ -626,7 +647,7 @@ struct PiAgentSessionSubagentPickerCard: View {
         return HStack(spacing: 10) {
             Button {
                 guard enabled else { return }
-                withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
+                setExpanded(!isExpanded)
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "paperplane")
@@ -650,12 +671,13 @@ struct PiAgentSessionSubagentPickerCard: View {
             enabledSwitch
             if enabled {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
+                    setExpanded(!isExpanded)
                 } label: {
                     Image(systemName: "chevron.down")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppTheme.mutedText)
                         .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                        .animation(.easeInOut(duration: 0.18), value: isExpanded)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -672,10 +694,8 @@ struct PiAgentSessionSubagentPickerCard: View {
         Toggle("Deck agents", isOn: Binding(
             get: { session.subagentsEnabled },
             set: { newValue in
-                if !newValue { isExpanded = false }
-                withAnimation(.easeOut(duration: 0.22)) {
-                    viewModel.setSubagentsEnabledForSelectedDraftAndNewSessions(newValue)
-                }
+                if !newValue { setExpanded(false) }
+                viewModel.setSubagentsEnabledForSelectedDraftAndNewSessions(newValue)
             }
         ))
         .appSwitch()
@@ -684,6 +704,45 @@ struct PiAgentSessionSubagentPickerCard: View {
         .help(session.subagentsEnabled
             ? "Deck agents are on. Applies to this session and as the default for new sessions"
             : "Deck agents are off. Applies to this session and as the default for new sessions")
+    }
+
+    private func setExpanded(_ expanded: Bool) {
+        guard expanded != isExpanded || expanded != isExpandedContentVisible else { return }
+        expansionGeneration += 1
+        let generation = expansionGeneration
+        if expanded {
+            isExpandedContentVisible = false
+            setLayoutExpanded(true)
+            DispatchQueue.main.async {
+                guard generation == expansionGeneration else { return }
+                withAnimation(Self.expandContentAnimation) {
+                    isExpandedContentVisible = true
+                }
+            }
+        } else {
+            withAnimation(Self.collapseContentAnimation) {
+                isExpandedContentVisible = false
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.collapseSnapDelay) {
+                guard generation == expansionGeneration else { return }
+                setLayoutExpanded(false)
+            }
+        }
+    }
+
+    private func setLayoutExpanded(_ expanded: Bool) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            isExpanded = expanded
+        }
+    }
+
+    private func expandedContent(_ data: Resolved) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Divider().padding(.vertical, 10)
+            agentList(data)
+        }
     }
 
     private func agentList(_ data: Resolved) -> some View {

@@ -538,6 +538,7 @@ private struct AgentLibraryPane: View {
     // selection is synced from `.onChange`, which runs after the pass.
     // Mirrors the pattern in `SkillsScreen`.
     @State private var selectedAgentID: EffectiveAgentRecord.ID?
+    @State private var sidebarExpandBenchScrollRequest: EffectiveAgentRecord.ID?
     // Cached sectioning + per-row tint metadata. The full layout build runs
     // five filter passes plus a mark loop over the agent list — recomputing
     // it on every body eval (every selection click) was the dominant cost.
@@ -560,7 +561,8 @@ private struct AgentLibraryPane: View {
         AppList(
             sections: layout.sections,
             selection: .single($selectedAgentID),
-            rowTint: { warningIDs.contains($0.id) ? Color.orange.opacity(0.12) : nil }
+            rowTint: { warningIDs.contains($0.id) ? Color.orange.opacity(0.12) : nil },
+            scrollRequest: $sidebarExpandBenchScrollRequest
         ) { agent in
             agentListRow(agent, inactive: layout.inactiveByID[agent.id] ?? false)
         }
@@ -603,6 +605,11 @@ private struct AgentLibraryPane: View {
             guard viewModel.selectedAgentID != id else { return }
             viewModel.selectedAgentID = id
         }
+#if DEBUG
+        .onReceive(NotificationCenter.default.publisher(for: .sidebarExpandBenchAgentsScrollRequested)) { _ in
+            sidebarExpandBenchScrollRequest = cachedLayout.sections.reversed().lazy.compactMap { $0.items.last?.id }.first
+        }
+#endif
         .alert("Delete Agent?", isPresented: Binding(
             get: { pendingDeleteAgentRecord != nil },
             set: { if !$0 { pendingDeleteAgentID = nil } }
