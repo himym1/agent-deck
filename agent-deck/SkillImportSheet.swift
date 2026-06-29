@@ -120,31 +120,33 @@ struct SkillImportSheet: View {
     }
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Picker("Source", selection: $mode) {
-                ForEach(Mode.allCases) { mode in
-                    Text(mode.label).tag(mode)
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 16) {
+                Picker("Source", selection: $mode) {
+                    ForEach(Mode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
                 }
-            }
-            .appSegmentedPicker()
-            .labelsHidden()
+                .appSegmentedPicker()
+                .labelsHidden()
 
-            AppCard(title: mode == .localFolder ? "Source Folder" : "Repository") {
-                switch mode {
-                case .localFolder: localSourceCard
-                case .gitRepository: gitSourceCard
+                AppCard(title: mode == .localFolder ? "Source Folder" : "Repository") {
+                    switch mode {
+                    case .localFolder: localSourceCard
+                    case .gitRepository: gitSourceCard
+                    }
                 }
-            }
 
-            AppCard(title: "Skills") {
-                VStack(alignment: .leading, spacing: 12) {
-                    skillsCardHeader
-                    skillsCardBody
+                AppCard(title: "Skills") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        skillsCardHeader
+                        skillsCardBody
+                    }
                 }
             }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .padding(18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var footer: some View {
@@ -379,38 +381,36 @@ struct SkillImportSheet: View {
 
             collectionOptionsView
 
-            ScrollView(showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if filteredCandidates.isEmpty {
-                        Text(isSearchActive
-                             ? "No importable skills match your search."
-                             : "No new importable skills were found. Skills already in your catalog are hidden.")
-                            .font(.caption)
-                            .foregroundStyle(AppTheme.mutedText)
-                            .frame(maxWidth: .infinity, minHeight: 120)
-                    }
-                    ForEach(Array(filteredCandidates.enumerated()), id: \.element.id) { index, candidate in
-                        CandidateRow(
-                            candidate: candidate,
-                            isSelected: Binding(
-                                get: { selectedIDs.contains(candidate.id) },
-                                set: { isSelected in
-                                    if isSelected { selectedIDs.insert(candidate.id) }
-                                    else { selectedIDs.remove(candidate.id) }
-                                }
-                            ),
-                            summaryState: summariesByID[candidate.id],
-                            isHovered: hoveredCandidateIDs.contains(candidate.id),
-                            onHover: { hovering in
-                                if hovering { hoveredCandidateIDs.insert(candidate.id) }
-                                else { hoveredCandidateIDs.remove(candidate.id) }
-                            },
-                            onRequestSummary: { Task { await requestSummary(for: candidate) } },
-                            canGenerateSummary: viewModel.skillDescriptionGenerationModel() != nil
-                        )
-                        if index < filteredCandidates.count - 1 {
-                            Divider()
-                        }
+            LazyVStack(alignment: .leading, spacing: 0) {
+                if filteredCandidates.isEmpty {
+                    Text(isSearchActive
+                         ? "No importable skills match your search."
+                         : "No new importable skills were found. Skills already in your catalog are hidden.")
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .frame(maxWidth: .infinity, minHeight: 120)
+                }
+                ForEach(Array(filteredCandidates.enumerated()), id: \.element.id) { index, candidate in
+                    CandidateRow(
+                        candidate: candidate,
+                        isSelected: Binding(
+                            get: { selectedIDs.contains(candidate.id) },
+                            set: { isSelected in
+                                if isSelected { selectedIDs.insert(candidate.id) }
+                                else { selectedIDs.remove(candidate.id) }
+                            }
+                        ),
+                        summaryState: summariesByID[candidate.id],
+                        isHovered: hoveredCandidateIDs.contains(candidate.id),
+                        onHover: { hovering in
+                            if hovering { hoveredCandidateIDs.insert(candidate.id) }
+                            else { hoveredCandidateIDs.remove(candidate.id) }
+                        },
+                        onRequestSummary: { Task { await requestSummary(for: candidate) } },
+                        canGenerateSummary: viewModel.skillDescriptionGenerationModel() != nil
+                    )
+                    if index < filteredCandidates.count - 1 {
+                        Divider()
                     }
                 }
             }
