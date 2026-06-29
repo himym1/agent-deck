@@ -958,9 +958,6 @@ struct SkillsScreen: View {
                     }
                     .appSecondaryButton()
                 }
-                Text("Assigning this collection expands to its skills at launch; Pi still receives explicit --skill arguments for each resolved skill.")
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.mutedText)
             }
         }
 
