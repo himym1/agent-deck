@@ -2244,48 +2244,32 @@ private struct AgentAssignmentToggleRow: View {
 }
 
 /// Subagent assignment card body for the skill detail pane. Owns the sorted
-/// active/inactive agent arrays in local `@State` so the sort + Set
-/// construction runs only when the snapshot or selected skill actually
-/// changes, not on every detail-pane render. Pre-extraction these were
-/// inline `let`s inside a body-eval'd function — sorting every time the
-/// detail re-rendered (e.g. on every selection click or `cachedLayout`
-/// update).
+/// agent array in local `@State` so sorting runs only when the snapshot or
+/// selected skill changes, not on every detail-pane render.
 private struct SkillAgentAssignmentList: View {
     let skill: SkillRecord
     let viewModel: AppViewModel
     let presentError: (Error, String) -> Void
 
-    @State private var activeAgents: [EffectiveAgentRecord] = []
-    @State private var inactiveAgents: [EffectiveAgentRecord] = []
+    @State private var agents: [EffectiveAgentRecord] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Assign this skill only to the selected Deck agents when they run. Parent Pi Agent sessions do not receive it from this setting.")
                 .foregroundStyle(AppTheme.mutedText)
 
-            VStack(alignment: .leading, spacing: 14) {
-                SkillAgentAssignmentSection(
-                    title: "Active",
-                    agents: activeAgents,
-                    skill: skill,
-                    viewModel: viewModel,
-                    presentError: presentError,
-                    isInactiveSection: false,
-                    emptyText: "No active Deck agents."
-                )
-
-                if !inactiveAgents.isEmpty {
-                    SkillAgentAssignmentSection(
-                        title: "Inactive",
-                        agents: inactiveAgents,
-                        skill: skill,
-                        viewModel: viewModel,
-                        presentError: presentError,
-                        isInactiveSection: true,
-                        emptyText: "No inactive Deck agents."
-                    )
+            AgentAssignmentSection(
+                title: "Agents",
+                agents: agents,
+                viewModel: viewModel,
+                isInactiveSection: false,
+                emptyText: "No Deck agents.",
+                isAssigned: { agent in viewModel.skill(skill, isAssignedTo: agent) },
+                setAssigned: { agent, enabled in
+                    do { try viewModel.setSkill(skill, enabled: enabled, for: agent) }
+                    catch { presentError(error, enabled ? "assign this skill to agent" : "remove this skill from agent") }
                 }
-            }
+            )
         }
         .onAppear { recompute() }
         .onChange(of: skill.id) { _, _ in recompute() }
@@ -2293,39 +2277,8 @@ private struct SkillAgentAssignmentList: View {
     }
 
     private func recompute() {
-        let active = viewModel.globalCatalogSnapshot.effectiveAgents
+        agents = viewModel.allDisplayAgents
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        let activeIDs = Set(active.map(\.id))
-        let inactive = viewModel.allDisplayAgents
-            .filter { !activeIDs.contains($0.id) }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        activeAgents = active
-        inactiveAgents = inactive
-    }
-}
-
-private struct SkillAgentAssignmentSection: View {
-    let title: String
-    let agents: [EffectiveAgentRecord]
-    let skill: SkillRecord
-    let viewModel: AppViewModel
-    let presentError: (Error, String) -> Void
-    let isInactiveSection: Bool
-    let emptyText: String
-
-    var body: some View {
-        AgentAssignmentSection(
-            title: title,
-            agents: agents,
-            viewModel: viewModel,
-            isInactiveSection: isInactiveSection,
-            emptyText: emptyText,
-            isAssigned: { agent in viewModel.skill(skill, isAssignedTo: agent) },
-            setAssigned: { agent, enabled in
-                do { try viewModel.setSkill(skill, enabled: enabled, for: agent) }
-                catch { presentError(error, enabled ? "assign this skill to agent" : "remove this skill from agent") }
-            }
-        )
     }
 }
 
