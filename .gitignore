@@ -43,3 +43,6 @@ scripts/release.sh
 
 # Local-only loop planning docs
 /docs/loop-plan/
+
+# Local CodeGraph index/cache
+.codegraph/
