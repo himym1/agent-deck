@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import SwiftUI
 
 // Native (pure AppKit) rendering for the user-question (and steering) transcript
@@ -414,29 +415,67 @@ private enum QuestionChipExtractor {
 /// Decodes an image attachment once into a small (chip-sized) thumbnail and
 /// caches it, keyed by content. Used only when a chip is actually displayed, so
 /// the items pass never pays for image decoding.
-@MainActor
 private enum PiAgentChipThumbnailCache {
     private static let cache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
         cache.countLimit = 128
         return cache
     }()
-    private static let target = NSSize(width: 32, height: 32)
+    private static let queue = DispatchQueue(label: "agent-deck.question-chip-thumbnails", qos: .userInitiated)
+    private static var pending: [String: [(NSImage?) -> Void]] = [:]
 
-    static func thumbnail(for image: PiAgentImageAttachment) -> NSImage? {
+    @MainActor
+    static func cachedThumbnail(for image: PiAgentImageAttachment) -> (key: String, image: NSImage?) {
+        let key = cacheKey(forBase64: image.data)
+        return (key, cache.object(forKey: key as NSString))
+    }
+
+    @MainActor
+    static func requestThumbnail(for image: PiAgentImageAttachment, completion: @escaping (String, NSImage?) -> Void) {
+        let base64 = image.data
+        let key = cacheKey(forBase64: base64)
+        if let cached = cache.object(forKey: key as NSString) {
+            completion(key, cached)
+            return
+        }
+
+        if pending[key] != nil {
+            pending[key]?.append { completion(key, $0) }
+            return
+        }
+        pending[key] = [{ completion(key, $0) }]
+
+        queue.async {
+            let thumb = makeThumbnail(fromBase64: base64)
+            DispatchQueue.main.async {
+                if let thumb {
+                    cache.setObject(thumb, forKey: key as NSString)
+                }
+                let completions = pending.removeValue(forKey: key) ?? []
+                for completion in completions { completion(thumb) }
+            }
+        }
+    }
+
+    private static func cacheKey(forBase64 data: String) -> String {
         // Cheap content key — length + head + tail, never hashing megabytes.
-        let key = "\(image.data.count):\(image.data.prefix(64))\(image.data.suffix(64))" as NSString
-        if let cached = cache.object(forKey: key) { return cached }
-        guard let data = Data(base64Encoded: image.data), let full = NSImage(data: data) else { return nil }
-        let thumb = NSImage(size: target)
-        thumb.lockFocus()
-        NSGraphicsContext.current?.imageInterpolation = .medium
-        full.draw(in: NSRect(origin: .zero, size: target),
-                  from: NSRect(origin: .zero, size: full.size),
-                  operation: .copy, fraction: 1)
-        thumb.unlockFocus()
-        cache.setObject(thumb, forKey: key)
-        return thumb
+        "\(data.count):\(data.prefix(64))\(data.suffix(64))"
+    }
+
+    private nonisolated static func makeThumbnail(fromBase64 base64: String) -> NSImage? {
+        autoreleasepool {
+            let maxPixelSize = 32
+            guard let data = Data(base64Encoded: base64) as CFData?,
+                  let source = CGImageSourceCreateWithData(data, nil)
+            else { return nil }
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+            ]
+            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+            return NSImage(cgImage: cgImage, size: NSSize(width: maxPixelSize, height: maxPixelSize))
+        }
     }
 }
 
@@ -472,6 +511,7 @@ private final class PiAgentNativeChipView: NSView {
     /// content view, so without this the low-compression label collapses and the
     /// pill shrinks to just the icon — this is what drives the pill open.
     private var widthC: NSLayoutConstraint!
+    private var representedThumbnailKey: String?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -551,12 +591,14 @@ private final class PiAgentNativeChipView: NSView {
     func configure(_ chip: NativeQuestionChip) {
         labelField.stringValue = chip.label
         attachment = chip.attachment
+        representedThumbnailKey = nil
 
         // The `+N more` overflow pill: bold, muted, icon-less, non-previewable.
         if chip.kind == .overflow {
             toolTip = nil
             iconView.isHidden = true
             thumbView.isHidden = true
+            thumbView.image = nil
             labelField.font = NativeTranscriptFont.caption2(.bold)
             labelField.textColor = AppTheme.ns(AppTheme.mutedText)
             labelLeadingToIconC.isActive = false
@@ -570,21 +612,41 @@ private final class PiAgentNativeChipView: NSView {
         labelField.textColor = .labelColor
         toolTip = "Preview \(chip.label)"
 
-        // Image chips render a cached thumbnail (decoded lazily here, on the
-        // visible cell only); everything else shows its glyph.
-        if case .image(let image) = chip.attachment, let thumb = PiAgentChipThumbnailCache.thumbnail(for: image) {
-            thumbView.image = thumb
-            thumbView.isHidden = false
-            iconView.isHidden = true
-            iconLeadingC.constant = Self.hInset
-            labelLeadingToIconC.constant = Self.iconLabelGap + (Self.thumbSize - 12)
+        // Image chips first paint with their normal photo glyph unless a cached
+        // thumbnail is already available. Decode/draw happens off the configure
+        // path and updates the still-matching chip on the main thread.
+        if case .image(let image) = chip.attachment {
+            let cached = PiAgentChipThumbnailCache.cachedThumbnail(for: image)
+            representedThumbnailKey = cached.key
+            if let thumb = cached.image {
+                showThumbnail(thumb)
+            } else {
+                showIcon(chip.systemImage)
+                PiAgentChipThumbnailCache.requestThumbnail(for: image) { [weak self] key, thumb in
+                    guard let self, self.representedThumbnailKey == key, let thumb else { return }
+                    self.showThumbnail(thumb)
+                }
+            }
         } else {
-            iconView.image = NSImage(systemSymbolName: chip.systemImage, accessibilityDescription: nil)
-            iconView.isHidden = false
-            thumbView.isHidden = true
-            iconLeadingC.constant = Self.hInset
-            labelLeadingToIconC.constant = Self.iconLabelGap
+            showIcon(chip.systemImage)
         }
+    }
+
+    private func showThumbnail(_ thumb: NSImage) {
+        thumbView.image = thumb
+        thumbView.isHidden = false
+        iconView.isHidden = true
+        iconLeadingC.constant = Self.hInset
+        labelLeadingToIconC.constant = Self.iconLabelGap + (Self.thumbSize - 12)
+    }
+
+    private func showIcon(_ systemImage: String) {
+        thumbView.image = nil
+        iconView.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
+        iconView.isHidden = false
+        thumbView.isHidden = true
+        iconLeadingC.constant = Self.hInset
+        labelLeadingToIconC.constant = Self.iconLabelGap
     }
 
     /// Capped natural width (label width + chrome) for chip-row wrapping. Matches

@@ -2198,7 +2198,14 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     let pinnedToBottom = wasFollowing && !isUserScrollingRecently
                         && (streamingUpdate || structuralUpdate)
                     if pinnedToBottom {
-                        let retileIDs = profiler.measureForced { measureChangedCellsSynchronously(Set(changedIDs)) }
+                        let retileIDs = profiler.measureForced {
+                            measureChangedCellsSynchronously(
+                                Set(changedIDs),
+                                budgetMs: 4,
+                                maxRows: 1,
+                                deferUnmeasured: true
+                            )
+                        }
                         if !retileIDs.isEmpty {
                             flushPendingHeightWorkSynchronously()
                             noteHeightsChanged(forIDs: retileIDs)

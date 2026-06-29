@@ -1612,8 +1612,15 @@ struct SkillsScreen: View {
     }
 
     private func skillListRow(_ skill: SkillRecord, metadata: SkillListMetadata, inactive: Bool? = nil) -> some View {
-        let isActive = viewModel.activeParentSkillNames(forProjectPath: viewModel.selectedProjectPath).contains(skill.name) || !viewModel.assignedProjects(for: skill).isEmpty
-        let isInactive = inactive ?? !isActive
+        let isActive: Bool
+        let isInactive: Bool
+        if let inactive {
+            isInactive = inactive
+            isActive = !inactive
+        } else {
+            isActive = viewModel.activeParentSkillNames(forProjectPath: viewModel.selectedProjectPath).contains(skill.name) || !viewModel.assignedProjects(for: skill).isEmpty
+            isInactive = !isActive
+        }
         let hasWarnings = metadata.hasWarnings
         let iconName = hasWarnings ? "exclamationmark.triangle.fill" : skillIcon(skill)
         let iconColor: Color = hasWarnings ? .orange : skillColor(isAssigned: isActive)
