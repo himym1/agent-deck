@@ -888,26 +888,105 @@ struct DoctorScreen: View {
 
     // MARK: - Gitea Access
 
-    /// Discovers unique Gitea hosts from all discovered projects.
-    private var giteaHosts: [String] {
-        let hosts = viewModel.discoveredProjects.compactMap { project -> String? in
-            guard let remote = project.gitHubRemote, remote.forgeKind == .gitea else { return nil }
-            return remote.host
+    private struct GiteaEndpoint: Hashable {
+        let baseURL: URL
+        let hosts: [String]
+
+        var id: String { normalizedBaseURLString }
+
+        var displayName: String {
+            normalizedBaseURLString
         }
-        return Array(Set(hosts)).sorted()
+
+        var aliasesText: String? {
+            let aliases = hosts.filter { host in
+                !normalizedBaseURLString.localizedCaseInsensitiveContains(host)
+            }
+            guard !aliases.isEmpty else { return nil }
+            return AppLocalization.format("Aliases: %@", default: "Aliases: %@", aliases.joined(separator: ", "))
+        }
+
+        var normalizedBaseURLString: String {
+            Self.normalizedString(for: baseURL)
+        }
+
+        static func normalizedString(for url: URL) -> String {
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            components?.path = ""
+            components?.query = nil
+            components?.fragment = nil
+            return components?.url?.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? url.absoluteString
+        }
     }
 
-    private func giteaTokenExists(for host: String) -> Bool {
-        let env = EnvRuntimeEnvironment().environment(projectRoot: viewModel.selectedProjectPath.map { URL(fileURLWithPath: $0) })
-        let suffix = Self.giteaTokenSuffix(for: host)
-        let key = "GITEA_TOKEN_\(suffix)"
-        return [key, "GITEA_TOKEN"].contains { candidate in
+    /// Discovers unique Gitea API bases from all discovered projects.
+    private var giteaEndpoints: [GiteaEndpoint] {
+        let env = giteaEnvironment
+        var hostsByBase: [String: Set<String>] = [:]
+        var baseURLs: [String: URL] = [:]
+
+        for project in viewModel.discoveredProjects {
+            guard let remote = project.gitHubRemote, remote.forgeKind == .gitea else { continue }
+            let baseURL = giteaAPIBaseURL(for: remote, environment: env)
+            let key = GiteaEndpoint.normalizedString(for: baseURL).lowercased()
+            baseURLs[key] = baseURL
+            hostsByBase[key, default: []].insert(remote.host)
+        }
+
+        return hostsByBase.map { key, hosts in
+            GiteaEndpoint(baseURL: baseURLs[key] ?? URL(string: key)!, hosts: Array(hosts).sorted())
+        }
+        .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    private var giteaEnvironment: [String: String] {
+        EnvRuntimeEnvironment().environment(projectRoot: viewModel.selectedProjectPath.map { URL(fileURLWithPath: $0) })
+    }
+
+    private func giteaTokenExists(for endpoint: GiteaEndpoint) -> Bool {
+        let env = giteaEnvironment
+        let keys = [
+            "GITEA_TOKEN_\(Self.giteaTokenSuffix(for: endpoint.normalizedBaseURLString))"
+        ] + endpoint.hosts.map { "GITEA_TOKEN_\(Self.giteaTokenSuffix(for: $0))" } + ["GITEA_TOKEN"]
+        return (Array(NSOrderedSet(array: keys)) as? [String] ?? keys).contains { candidate in
             (env[candidate]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
         }
     }
+    private static func giteaTokenSuffix(for value: String) -> String {
+        value.uppercased().map { $0.isLetter || $0.isNumber ? $0 : "_" }.map(String.init).joined()
+    }
 
-    private static func giteaTokenSuffix(for host: String) -> String {
-        host.uppercased().map { $0.isLetter || $0.isNumber ? $0 : "_" }.map(String.init).joined()
+    private func giteaAPIBaseURL(for remote: GitHubRemote, environment: [String: String]) -> URL {
+        let keys = [
+            "GITEA_BASE_URL_\(Self.giteaTokenSuffix(for: remote.host))",
+            remote.apiBaseURL.map { "GITEA_BASE_URL_\(Self.giteaTokenSuffix(for: $0.absoluteString))" },
+            "GITEA_BASE_URL"
+        ].compactMap { $0 }
+
+        for key in keys {
+            if let rawValue = environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !rawValue.isEmpty,
+               let url = Self.normalizedGiteaAPIBaseURL(rawValue) {
+                return url
+            }
+        }
+
+        if let apiBaseURL = remote.apiBaseURL { return apiBaseURL }
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = remote.host
+        components.path = ""
+        return components.url ?? URL(string: "https://\(remote.host)")!
+    }
+
+    private static func normalizedGiteaAPIBaseURL(_ rawValue: String) -> URL? {
+        let value = rawValue.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard var components = URLComponents(string: value), components.host != nil else { return nil }
+        if components.scheme == nil { components.scheme = "https" }
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.url
     }
     private var giteaGlobalTokenExists: Bool {
         let env = EnvRuntimeEnvironment().environment(projectRoot: viewModel.selectedProjectPath.map { URL(fileURLWithPath: $0) })
@@ -955,12 +1034,12 @@ struct DoctorScreen: View {
     private var giteaAccessSection: some View {
         AppCard(title: AppLocalization.string("Gitea", default: "Gitea")) {
             VStack(alignment: .leading, spacing: 14) {
-                if giteaHosts.isEmpty {
+                if giteaEndpoints.isEmpty {
                     giteaEmptyRow
                 } else {
-                    ForEach(giteaHosts, id: \.self) { host in
-                        giteaHostRow(host: host)
-                        if host != giteaHosts.last {
+                    ForEach(giteaEndpoints, id: \.id) { endpoint in
+                        giteaEndpointRow(endpoint: endpoint)
+                        if endpoint != giteaEndpoints.last {
                             Divider()
                         }
                     }
@@ -969,8 +1048,8 @@ struct DoctorScreen: View {
             .padding(.vertical, 12)
         }
     }
-    private func giteaHostRow(host: String) -> some View {
-        let hasToken = giteaTokenExists(for: host)
+    private func giteaEndpointRow(endpoint: GiteaEndpoint) -> some View {
+        let hasToken = giteaTokenExists(for: endpoint)
         return HStack(alignment: .center, spacing: 14) {
             Image(systemName: "point.3.connected.trianglepath.dotted")
                 .font(.title3)
@@ -978,10 +1057,15 @@ struct DoctorScreen: View {
                 .frame(width: 24)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(host)
+                Text(endpoint.displayName)
                     .font(.body.weight(.semibold))
                     .fontWidth(.expanded)
 
+                if let aliasesText = endpoint.aliasesText {
+                    Text(aliasesText)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
                 Text(hasToken
                      ? AppLocalization.string("Token configured. Issue browse, comment, and close workflows are available for this Gitea host.", default: "Token configured. Issue browse, comment, and close workflows are available for this Gitea host.")
                      : AppLocalization.string("Add a GITEA_TOKEN in Agent Deck's environment to browse issues on this Gitea host.", default: "Add a GITEA_TOKEN in Agent Deck's environment to browse issues on this Gitea host."))

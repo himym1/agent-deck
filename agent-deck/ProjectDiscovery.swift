@@ -265,19 +265,28 @@ nonisolated struct ProjectDiscovery {
 
         let host = String(remainder[..<separator])
         let path = String(remainder[remainder.index(after: separator)...])
-        return buildRemote(host: host, path: path, remoteURL: remoteURL)
+        return buildRemote(host: host, path: path, remoteURL: remoteURL, apiBaseURL: defaultAPIBaseURL(host: host, scheme: "https", port: nil))
     }
 
     private func parseHTTPSGitHubRemote(from remoteURL: String) -> GitHubRemote? {
         guard let components = URLComponents(string: remoteURL), let host = components.host else {
             return nil
         }
-
         let path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        return buildRemote(host: host, path: path, remoteURL: remoteURL)
+        let scheme = components.scheme ?? "https"
+        let apiBaseURL = defaultAPIBaseURL(host: host, scheme: scheme, port: components.port)
+        return buildRemote(host: host, path: path, remoteURL: remoteURL, apiBaseURL: apiBaseURL)
+    }
+    private func defaultAPIBaseURL(host: String, scheme: String, port: Int?) -> URL? {
+        var components = URLComponents()
+        components.scheme = scheme.isEmpty ? "https" : scheme
+        components.host = host
+        components.port = port
+        components.path = ""
+        return components.url
     }
 
-    private func buildRemote(host: String, path: String, remoteURL: String) -> GitHubRemote? {
+    private func buildRemote(host: String, path: String, remoteURL: String, apiBaseURL: URL?) -> GitHubRemote? {
         let forgeKind: GitForgeKind = host.caseInsensitiveCompare("github.com") == .orderedSame ? .github : .gitea
 
         let normalizedPath: String
@@ -295,7 +304,8 @@ nonisolated struct ProjectDiscovery {
             owner: String(components[0]),
             repo: String(components[1]),
             remoteURL: remoteURL,
-            forgeKind: forgeKind
+            forgeKind: forgeKind,
+            apiBaseURL: forgeKind == .gitea ? apiBaseURL : nil
         )
     }
 

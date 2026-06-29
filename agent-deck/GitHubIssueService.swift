@@ -226,14 +226,14 @@ private struct GitHubCommentPayload: Decodable {
 
 struct GiteaIssueService {
     enum GiteaError: LocalizedError {
-        case missingToken(host: String)
+        case missingToken(host: String, tokenHint: String)
         case invalidResponse
         case requestFailed(statusCode: Int, message: String)
 
         var errorDescription: String? {
             switch self {
-            case let .missingToken(host):
-                return "Set GITEA_TOKEN or GITEA_TOKEN_\(Self.tokenSuffix(for: host)) in Agent Deck's environment to browse Gitea issues for \(host)."
+            case let .missingToken(host, tokenHint):
+                return "Set GITEA_TOKEN, \(tokenHint), or a matching GITEA_TOKEN_<HOST> in Agent Deck's environment to browse Gitea issues for \(host)."
             case .invalidResponse:
                 return "Gitea returned an invalid response."
             case let .requestFailed(statusCode, message):
@@ -250,13 +250,16 @@ struct GiteaIssueService {
 
     private let remote: GitHubRemote
     private let token: String
+    private let apiBaseURL: URL
     private var urlSession: URLSession = .shared
 
     init(remote: GitHubRemote, environment: [String: String]) throws {
         self.remote = remote
-        guard let token = Self.token(for: remote.host, environment: environment) else {
-            throw GiteaError.missingToken(host: remote.host)
+        let resolvedAPIBaseURL = Self.apiBaseURL(for: remote, environment: environment)
+        guard let token = Self.token(for: remote, apiBaseURL: resolvedAPIBaseURL, environment: environment) else {
+            throw GiteaError.missingToken(host: remote.host, tokenHint: "GITEA_TOKEN_\(Self.tokenSuffix(for: resolvedAPIBaseURL.absoluteString))")
         }
+        self.apiBaseURL = resolvedAPIBaseURL
         self.token = token
     }
 
@@ -388,9 +391,7 @@ struct GiteaIssueService {
         body: Data?,
         bypassCache: Bool = false
     ) async throws -> (Data, HTTPURLResponse) {
-        var components = URLComponents()
-        components.scheme = "https"
-        components.host = remote.host
+        guard var components = URLComponents(url: apiBaseURL, resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
         components.path = path
         components.queryItems = queryItems.isEmpty ? nil : queryItems
         guard let url = components.url else { throw URLError(.badURL) }
@@ -451,13 +452,63 @@ struct GiteaIssueService {
         }
     }
 
-    private static func token(for host: String, environment: [String: String]) -> String? {
-        let suffix = host.uppercased().map { character in
-            character.isLetter || character.isNumber ? character : "_"
-        }.map(String.init).joined()
-        return ["GITEA_TOKEN_\(suffix)", "GITEA_TOKEN"]
+    private static func apiBaseURL(for remote: GitHubRemote, environment: [String: String]) -> URL {
+        for key in apiBaseURLKeys(for: remote) {
+            if let rawValue = environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !rawValue.isEmpty,
+               let url = normalizedAPIBaseURL(rawValue) {
+                return url
+            }
+        }
+
+        if let apiBaseURL = remote.apiBaseURL {
+            return apiBaseURL
+        }
+
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = remote.host
+        components.path = ""
+        return components.url ?? URL(string: "https://\(remote.host)")!
+    }
+
+    private static func apiBaseURLKeys(for remote: GitHubRemote) -> [String] {
+        var keys = ["GITEA_BASE_URL_\(tokenSuffix(for: remote.host))"]
+        if let apiBaseURL = remote.apiBaseURL?.absoluteString {
+            keys.append("GITEA_BASE_URL_\(tokenSuffix(for: apiBaseURL))")
+        }
+        keys.append("GITEA_BASE_URL")
+        return Array(NSOrderedSet(array: keys)) as? [String] ?? keys
+    }
+
+    private static func normalizedAPIBaseURL(_ rawValue: String) -> URL? {
+        let value = rawValue.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard var components = URLComponents(string: value), components.host != nil else { return nil }
+        if components.scheme == nil { components.scheme = "https" }
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.url
+    }
+
+    private static func token(for remote: GitHubRemote, apiBaseURL: URL, environment: [String: String]) -> String? {
+        var keys = [
+            "GITEA_TOKEN_\(tokenSuffix(for: remote.host))",
+            "GITEA_TOKEN_\(tokenSuffix(for: apiBaseURL.absoluteString))",
+            "GITEA_TOKEN"
+        ]
+        if let remoteAPIBaseURL = remote.apiBaseURL?.absoluteString {
+            keys.insert("GITEA_TOKEN_\(tokenSuffix(for: remoteAPIBaseURL))", at: 1)
+        }
+        return (Array(NSOrderedSet(array: keys)) as? [String] ?? keys)
             .compactMap { environment[$0]?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty }
+    }
+
+    private static func tokenSuffix(for value: String) -> String {
+        value.uppercased().map { character in
+            character.isLetter || character.isNumber ? character : "_"
+        }.map(String.init).joined()
     }
 }
 

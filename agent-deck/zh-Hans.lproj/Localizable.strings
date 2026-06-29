@@ -1578,5 +1578,6 @@
 "Select a GitHub or Gitea project to attach one of its issues." = "选择一个 GitHub 或 Gitea 项目以附加其中一个 Issue。";
 "The selected project is not mapped to a supported GitHub or Gitea remote." = "所选项目未映射到受支持的 GitHub 或 Gitea 远端。";
 "Token configured. Issue browse, comment, and close workflows are available for this Gitea host." = "已配置 Token。此 Gitea 主机可使用 Issue 浏览、评论和关闭流程。";
+"Aliases: %@" = "别名：%@";
 "Configured" = "已配置";
 "Optional" = "可选";

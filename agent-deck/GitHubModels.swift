@@ -12,19 +12,22 @@ nonisolated struct GitHubRemote: Hashable, Sendable {
     let repo: String
     let remoteURL: String
     let forgeKind: GitForgeKind
+    let apiBaseURL: URL?
 
     init(
         host: String,
         owner: String,
         repo: String,
         remoteURL: String,
-        forgeKind: GitForgeKind? = nil
+        forgeKind: GitForgeKind? = nil,
+        apiBaseURL: URL? = nil
     ) {
         self.host = host
         self.owner = owner
         self.repo = repo
         self.remoteURL = remoteURL
         self.forgeKind = forgeKind ?? (host.caseInsensitiveCompare("github.com") == .orderedSame ? .github : .gitea)
+        self.apiBaseURL = apiBaseURL
     }
 
     var hostKind: GitForgeKind { forgeKind }
@@ -34,7 +37,16 @@ nonisolated struct GitHubRemote: Hashable, Sendable {
     }
 
     var repositoryKey: String {
-        "\(host.lowercased())/\(nameWithOwner.lowercased())"
+        "\(apiBaseKey)/\(nameWithOwner.lowercased())"
+    }
+
+    var apiBaseKey: String {
+        guard let apiBaseURL else { return host.lowercased() }
+        var components = URLComponents(url: apiBaseURL, resolvingAgainstBaseURL: false)
+        components?.path = ""
+        components?.query = nil
+        components?.fragment = nil
+        return components?.url?.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased() ?? host.lowercased()
     }
 
     var isGitHubDotCom: Bool {
