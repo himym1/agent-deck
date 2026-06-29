@@ -1021,7 +1021,7 @@ struct SkillsScreen: View {
             isInactive: !isRuntimeIncluded,
             isDisabled: viewModel.bundledSkillIsDisabled(skill),
             repositoryDisplayName: repository?.displayName,
-            collectionCount: cachedLayout.collectionCountBySkillID[skill.id] ?? 0,
+            collectionCount: 0,
             hasUpdate: repository?.hasKnownUpdate == true,
             isUpdating: false,
             canRename: false,
