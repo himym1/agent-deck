@@ -736,7 +736,6 @@ struct PiAgentSessionSubagentPickerCard: View {
             }
             if !data.addedRows.isEmpty {
                 Divider()
-                    .padding(.leading, 54)
                     .padding(.vertical, 6)
                 ForEach(data.addedRows, id: \.name) { agent in
                     agentRow(agent, checked: true, selection: data.selection)
