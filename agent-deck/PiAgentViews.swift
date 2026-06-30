@@ -643,12 +643,8 @@ private enum TranscriptFloatingControlGeometry {
 }
 
 struct QuestionRailVisibilityPolicy {
-    static let minimumWindowHeightForOverflowLayout: CGFloat = 420
-
-    func shouldShow(questionCount: Int, windowHeight: CGFloat, evenStackedHeight: CGFloat, railHeight: CGFloat) -> Bool {
-        guard questionCount >= 2 else { return false }
-        let overflowsStack = evenStackedHeight > railHeight
-        return !overflowsStack || windowHeight >= Self.minimumWindowHeightForOverflowLayout
+    func shouldShow(questionCount: Int, evenStackedHeight: CGFloat, railHeight: CGFloat) -> Bool {
+        questionCount >= 2 && evenStackedHeight <= railHeight
     }
 }
 
@@ -777,21 +773,21 @@ private struct UserQuestionNavigationRail: View {
             onSelect(item.id)
         } label: {
             HStack(spacing: 8) {
-                Text(displayText(for: item))
-                    .font(AppTheme.Font.caption.weight(.medium))
-                    .foregroundStyle(textColor(isActive: isActive, isHovered: isHovered))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .opacity(isHovered ? 1 : 0)
-                    .offset(x: isHovered ? 0 : 8)
-                    .accessibilityHidden(!isHovered)
+                if isHovered {
+                    Text(displayText(for: item))
+                        .font(AppTheme.Font.caption.weight(.medium))
+                        .foregroundStyle(textColor(isActive: isActive, isHovered: isHovered))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: expandedRowWidth - 44, alignment: .trailing)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
 
                 mark(isActive: isActive, isHovered: isHovered, isRailHovered: hoveredID != nil)
             }
-            // Constant height: hover changes width/color only, never the row's
-            // vertical metrics, so neighboring marks never shift under the pointer.
-            .frame(width: isHovered ? expandedRowWidth : collapsedMarkWidth, alignment: .trailing)
+            // The host remains fixed-width to avoid hover/layout feedback loops,
+            // but the visible hover pill hugs its content inside that stable host.
+            .frame(maxWidth: isHovered ? expandedRowWidth : collapsedMarkWidth, alignment: .trailing)
             .frame(height: TranscriptFloatingControlGeometry.questionRailRowHeight)
             .padding(.leading, isHovered ? 11 : 0)
             .padding(.trailing, isHovered ? 7 : 0)
@@ -1658,7 +1654,6 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
             let shouldShowRail = QuestionRailVisibilityPolicy().shouldShow(
                 questionCount: questionRows.count,
-                windowHeight: scrollView.bounds.height,
                 evenStackedHeight: stackedHeight,
                 railHeight: railHeight
             )
@@ -1676,38 +1671,13 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             }
             let activeID = self.forcedActiveQuestionID ?? activeQuestionID(in: questionRows, scrollView: scrollView, tableView: tableView)
 
-            // Sliding window kicks in only when the even-spaced stack wouldn't fit.
-            // `isSliding` depends only on window height + question count, so it is
-            // stable across scrolling and never flips mid-scroll (no flicker).
-            let isSliding = stackedHeight > railHeight
-
-            var items: [UserQuestionNavigationRailItem] = []
-            if isSliding {
-                let clipView = scrollView.contentView
-                let clipHeight = clipView.bounds.height
-                let viewportMid = clipView.bounds.origin.y + clipHeight / 2
-                // Map a document window of ±viewWindow px around the viewport
-                // center onto the rail. Questions within that band are visible;
-                // the rest are clipped + edge-faded. window >= ~1.5 viewports so
-                // a healthy span of nearby questions shows at once.
-                let viewWindow = max(clipHeight * 1.5, 560)
-                let scale = railHeight / (2 * viewWindow)
-                let halfRail = railHeight / 2
-                // Small overshoot so marks fully fade out before being clipped
-                // (hard cut would look jarring as they enter/exit).
-                let margin = TranscriptFloatingControlGeometry.questionRailRowHeight
-                for (row, id, title) in questionRows {
-                    let qY = tableView.rect(ofRow: row).midY
-                    let centerOffset = (qY - viewportMid) * scale
-                    guard abs(centerOffset) <= halfRail + margin else { continue }
-                    items.append(UserQuestionNavigationRailItem(id: id, title: title, isActive: id == activeID, centerOffset: centerOffset))
-                }
-            } else {
-                items = questionRows.map { _, id, title in
-                    UserQuestionNavigationRailItem(id: id, title: title, isActive: id == activeID)
-                }
+            // Only show the rail when every question mark fits in the stable stack.
+            // The scroll-synced overflow layout proved too sparse/ambiguous at its
+            // transition thresholds, so overflow hides the rail instead.
+            let items = questionRows.map { _, id, title in
+                UserQuestionNavigationRailItem(id: id, title: title, isActive: id == activeID)
             }
-            applyRailModel(items: items, width: scrollView.bounds.width, railHeight: railHeight, isSliding: isSliding)
+            applyRailModel(items: items, width: scrollView.bounds.width, railHeight: railHeight, isSliding: false)
         }
 
         private func evenStackedHeight(questionCount: Int) -> CGFloat {
@@ -2228,7 +2198,14 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     let pinnedToBottom = wasFollowing && !isUserScrollingRecently
                         && (streamingUpdate || structuralUpdate)
                     if pinnedToBottom {
-                        let retileIDs = profiler.measureForced { measureChangedCellsSynchronously(Set(changedIDs)) }
+                        let retileIDs = profiler.measureForced {
+                            measureChangedCellsSynchronously(
+                                Set(changedIDs),
+                                budgetMs: 4,
+                                maxRows: 1,
+                                deferUnmeasured: true
+                            )
+                        }
                         if !retileIDs.isEmpty {
                             flushPendingHeightWorkSynchronously()
                             noteHeightsChanged(forIDs: retileIDs)
@@ -5405,8 +5382,10 @@ struct PiAgentScreen: View {
                             isThreadQuestion: true
                         ))
                     }
+                    let projectPath = store.selectedSession.map { $0.worktreePath ?? $0.projectPath }
                     for child in PiAgentTranscriptThreadCard.visibleChildren(
-                        of: thread, visibility: visibility, nativeSubagentRunsByID: subagentRuns
+                        of: thread, visibility: visibility, nativeSubagentRunsByID: subagentRuns,
+                        projectPath: projectPath
                     ) {
                         // Native rendering for the supported child types; the
                         // rest (tool groups, subagent/memory cards) still hosted.
@@ -5617,6 +5596,10 @@ struct PiAgentScreen: View {
     private static let nativeEmptyKind: PiAgentTranscriptCellKind =
         .native(.of(PiAgentNativeSpacerView.self) { view, _ in view.spacerHeight = 0 })
 
+#if DEBUG
+    private static let nativeToolGroupLog = Logger(subsystem: "streetcoding.agent-deck", category: "NativeToolGroup")
+#endif
+
     private func nativeChildKind(
         for child: PiAgentThreadChild,
         visibility: PiAgentTranscriptVisibilitySettings,
@@ -5732,8 +5715,11 @@ struct PiAgentScreen: View {
             guard let model = NativeToolGroupModel.make(
                 group: group, visibility: visibility, projectPath: store.selectedSession.map { $0.worktreePath ?? $0.projectPath }
             ) else {
-                // Tool sections all hidden by visibility → an empty 0-height row.
-                return .native(.of(PiAgentNativeSpacerView.self) { view, _ in view.spacerHeight = 0 })
+#if DEBUG
+                assertionFailure("Visible native tool group produced no display model: \(group.id)")
+                Self.nativeToolGroupLog.error("Visible native tool group produced no display model: \(group.id.uuidString, privacy: .public)")
+#endif
+                return Self.nativeEmptyKind
             }
             return .native(.of(PiAgentNativeToolGroupView.self) { view, width in
                 view.configure(model: model, width: width)

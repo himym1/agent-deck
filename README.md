@@ -9,7 +9,7 @@
   <a href="https://github.com/a-streetcoder/agent-deck/releases/latest"><img src="https://img.shields.io/github/v/release/a-streetcoder/agent-deck?sort=semver" alt="Release"></a>
   <a href="https://github.com/a-streetcoder/agent-deck/releases"><img src="https://img.shields.io/github/downloads/a-streetcoder/agent-deck/total" alt="Downloads"></a>
   <a href="https://github.com/a-streetcoder/agent-deck/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
-  <img src="https://img.shields.io/badge/Platform-macOS%2026%20(Tahoe)-black?logo=apple" alt="Platform">
+  <img src="https://img.shields.io/badge/macOS-26%20Tahoe-black?logo=apple" alt="macOS 26 Tahoe">
   <img src="https://img.shields.io/badge/Built%20with-Swift%206-orange?logo=swift" alt="Swift">
 </p>
 

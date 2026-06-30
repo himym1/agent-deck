@@ -20,6 +20,11 @@ final class AgentDeckAppDelegate: NSObject, NSApplicationDelegate, UNUserNotific
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Ignore SIGPIPE so writing to a broken pipe (e.g. pi subprocess
+        // already exited) throws a Swift error instead of instantly killing
+        // the app. Without this the app dies silently — no exception, no
+        // crash report, no breakpoint hit.
+        signal(SIGPIPE, SIG_IGN)
         // Crash-proof hang detector: when the main thread freezes (janky scroll),
         // it auto-captures the hung backtrace via the external `sample` tool to
         // /tmp/agentdeck-hang-<n>.txt. Disable with HangWatchdogEnabled=NO.

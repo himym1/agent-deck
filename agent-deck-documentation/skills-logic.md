@@ -31,6 +31,8 @@ The Skills view import sheet lets a user choose either a skill root or a broader
 
 Importing selected skills stores the selected skill root paths in Agent Deck settings. It does not store the broad search folder, copy files, or automatically assign the skills. The selected roots become catalog entries and are injected only when assigned as Default, Project, or Agent skills.
 
+When a local-folder import or Git import contains selected skills and the user enables **Import as collection**, Agent Deck also records a first-class Skill Collection with the chosen name for that source. A collection is assignment metadata, not a runtime primitive: enabling a collection for All Projects or a project expands the collection to its member skill names, then launch resolution still emits one `--skill <path>` argument for each resolved skill. Removing a skill from the catalog removes it from collection membership; Git-backed collections continue to share the repository record and sparse-checkout metadata used for updates.
+
 ## Bundled authoring skills
 
 Agent Deck ships focused authoring skills for common resource creation workflows:
@@ -45,12 +47,12 @@ These bundled skills are catalog resources. They follow the same assignment rule
 
 ## Assignment types
 
-A discovered skill can be assigned in three ways.
+A discovered skill can be assigned directly or through a collection.
 
 | Assignment | Meaning | Runtime effect |
 |---|---|---|
-| Default | The skill is available to every parent Pi Agent session. | Parent sessions receive `--skill <path>`. |
-| Project | The skill is available to parent Pi Agent sessions for one project. | Parent sessions for that project receive `--skill <path>`. |
+| Default | The skill, or every member of a Default collection, is available to every parent Pi Agent session. | Parent sessions receive one `--skill <path>` per resolved skill. |
+| Project | The skill, or every member of a project collection, is available to parent Pi Agent sessions for one project. | Parent sessions for that project receive one `--skill <path>` per resolved skill. |
 | Agent | The skill is available to one native subagent. | That child process receives `--skill <path>` when the agent runs. |
 
 Unassigned skills are visible in the catalog but are not injected anywhere.

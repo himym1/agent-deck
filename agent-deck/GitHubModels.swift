@@ -253,6 +253,9 @@ nonisolated struct GitHubWorkItem: Identifiable, Hashable {
     let subIssuesSummary: GitHubSubIssuesSummary?
     let issueDependenciesSummary: GitHubIssueRelationshipSummary?
 
+    var kindTitle: String { isPullRequest ? "Pull Request" : "Issue" }
+    var kindShortTitle: String { isPullRequest ? "PR" : "Issue" }
+
     /// Cheap O(1) lookup of `state == "open"`. Cached so SwiftUI body reads
     /// (e.g. row state indicator) don't re-allocate the lowercase string.
     let isOpen: Bool
@@ -535,6 +538,7 @@ nonisolated struct PiAgentIssueAttachment: Identifiable, Codable, Hashable {
     let url: URL
     let state: String
     let type: String?
+    let isPullRequest: Bool
     let author: String?
     let labels: [String]
     let assignees: [String]
@@ -550,6 +554,8 @@ nonisolated struct PiAgentIssueAttachment: Identifiable, Codable, Hashable {
     let comments: [PiAgentIssueCommentAttachment]
 
     var id: String { "\(repository)#\(number)" }
+    var kindTitle: String { isPullRequest ? "Pull Request" : "Issue" }
+    var kindShortTitle: String { isPullRequest ? "PR" : "Issue" }
 
     init(detail: GitHubIssueDetail) {
         self.repository = detail.item.repository
@@ -558,6 +564,7 @@ nonisolated struct PiAgentIssueAttachment: Identifiable, Codable, Hashable {
         self.url = detail.item.url
         self.state = detail.state
         self.type = detail.type
+        self.isPullRequest = detail.item.isPullRequest
         self.author = detail.author
         self.labels = detail.labels.map(\.name)
         self.assignees = detail.assignees
@@ -571,5 +578,76 @@ nonisolated struct PiAgentIssueAttachment: Identifiable, Codable, Hashable {
         self.blockedBy = detail.blockedBy.map(PiAgentIssueReferenceAttachment.init(reference:))
         self.blocking = detail.blocking.map(PiAgentIssueReferenceAttachment.init(reference:))
         self.comments = detail.comments.map(PiAgentIssueCommentAttachment.init(comment:))
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case repository
+        case number
+        case title
+        case url
+        case state
+        case type
+        case isPullRequest
+        case author
+        case labels
+        case assignees
+        case createdAt
+        case updatedAt
+        case closedAt
+        case stateReason
+        case body
+        case parent
+        case subIssues
+        case blockedBy
+        case blocking
+        case comments
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.repository = try container.decode(String.self, forKey: .repository)
+        self.number = try container.decode(Int.self, forKey: .number)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.url = try container.decode(URL.self, forKey: .url)
+        self.state = try container.decode(String.self, forKey: .state)
+        self.type = try container.decodeIfPresent(String.self, forKey: .type)
+        self.isPullRequest = try container.decodeIfPresent(Bool.self, forKey: .isPullRequest) ?? false
+        self.author = try container.decodeIfPresent(String.self, forKey: .author)
+        self.labels = try container.decode([String].self, forKey: .labels)
+        self.assignees = try container.decode([String].self, forKey: .assignees)
+        self.createdAt = try container.decode(Date.self, forKey: .createdAt)
+        self.updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        self.closedAt = try container.decodeIfPresent(Date.self, forKey: .closedAt)
+        self.stateReason = try container.decodeIfPresent(String.self, forKey: .stateReason)
+        self.body = try container.decode(String.self, forKey: .body)
+        self.parent = try container.decodeIfPresent(PiAgentIssueReferenceAttachment.self, forKey: .parent)
+        self.subIssues = try container.decode([PiAgentIssueReferenceAttachment].self, forKey: .subIssues)
+        self.blockedBy = try container.decode([PiAgentIssueReferenceAttachment].self, forKey: .blockedBy)
+        self.blocking = try container.decode([PiAgentIssueReferenceAttachment].self, forKey: .blocking)
+        self.comments = try container.decode([PiAgentIssueCommentAttachment].self, forKey: .comments)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(repository, forKey: .repository)
+        try container.encode(number, forKey: .number)
+        try container.encode(title, forKey: .title)
+        try container.encode(url, forKey: .url)
+        try container.encode(state, forKey: .state)
+        try container.encodeIfPresent(type, forKey: .type)
+        try container.encode(isPullRequest, forKey: .isPullRequest)
+        try container.encodeIfPresent(author, forKey: .author)
+        try container.encode(labels, forKey: .labels)
+        try container.encode(assignees, forKey: .assignees)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(closedAt, forKey: .closedAt)
+        try container.encodeIfPresent(stateReason, forKey: .stateReason)
+        try container.encode(body, forKey: .body)
+        try container.encodeIfPresent(parent, forKey: .parent)
+        try container.encode(subIssues, forKey: .subIssues)
+        try container.encode(blockedBy, forKey: .blockedBy)
+        try container.encode(blocking, forKey: .blocking)
+        try container.encode(comments, forKey: .comments)
     }
 }

@@ -52,12 +52,14 @@ final class MCPAssignmentTests: XCTestCase {
         defer { suite.removePersistentDomain(forName: "mcp.assignment.reload.test") }
         let key = "projectPreferences.test"
 
+        let collectionID = UUID()
         let saved = [ProjectPreference(
             path: "/tmp/project",
             isEnabled: true,
             isHidden: false,
             customIconPath: nil,
             assignedSkillNames: ["lint"],
+            assignedSkillCollectionIDs: [collectionID],
             assignedMcpServerNames: ["Pidgeon", "github"]
         )]
         suite.set(try JSONEncoder().encode(saved), forKey: key)
@@ -65,8 +67,9 @@ final class MCPAssignmentTests: XCTestCase {
         let reloaded = ProjectPreferencesStore.loadPreferences(from: suite, key: key)
         let standardized = URL(fileURLWithPath: "/tmp/project").standardizedFileURL.path
         XCTAssertEqual(reloaded[standardized]?.assignedMcpServerNames, ["Pidgeon", "github"])
-        // Sanity: skills (which already worked) still survive the same path.
+        // Sanity: skills and skill collections survive the same reconstruction path.
         XCTAssertEqual(reloaded[standardized]?.assignedSkillNames, ["lint"])
+        XCTAssertEqual(reloaded[standardized]?.assignedSkillCollectionIDs, [collectionID])
     }
 
     @MainActor
@@ -85,5 +88,29 @@ final class MCPAssignmentTests: XCTestCase {
         let settings = try JSONDecoder().decode(AppSettings.self, from: Data(legacy.utf8))
         XCTAssertFalse(settings.mcpEnabled)
         XCTAssertTrue(settings.defaultMcpServerNames.isEmpty)
+    }
+
+    @MainActor
+    func testAppSettingsDoesNotInferCollectionsFromImportedRepositories() throws {
+        let repository = ImportedSkillRepository(
+            id: UUID(),
+            remoteURL: "https://github.com/PostHog/ai-plugin.git",
+            owner: "PostHog",
+            repo: "ai-plugin",
+            ref: "main",
+            clonePath: "/tmp/posthog-ai-plugin",
+            syncedSkillRelativePaths: ["skills/a", "skills/b"],
+            lastSyncedCommit: "abc123",
+            lastSyncedDate: Date(timeIntervalSince1970: 1_700_000_000),
+            lastCheckedDate: nil,
+            latestKnownRemoteCommit: nil
+        )
+        let data = try JSONEncoder().encode([repository])
+        let repositoriesJSON = try XCTUnwrap(String(data: data, encoding: .utf8))
+        let json = "{\"importedSkillRepositories\":\(repositoriesJSON)}"
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+
+        XCTAssertEqual(settings.importedSkillRepositories, [repository])
+        XCTAssertTrue(settings.skillCollections.isEmpty)
     }
 }

@@ -21,6 +21,8 @@ enum PiIssuePromptBuilder {
             "project: \(projectName)",
             "project-path: \(projectPath)",
             "repository: \(issue.repository)",
+            "kind: \(issue.isPullRequest ? "pull-request" : "issue")",
+            "item-number: \(issue.number)",
             "issue-number: \(issue.number)",
             "title: \(issue.title)",
             "url: \(issue.url.absoluteString)",

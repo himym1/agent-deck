@@ -38,6 +38,18 @@ struct SkillsInfoPopover: View {
     }
 }
 
+private enum SkillLibraryItem: Identifiable, Hashable {
+    case collection(SkillCollectionRecord)
+    case skill(SkillRecord)
+
+    var id: String {
+        switch self {
+        case let .collection(collection): return "collection:\(collection.id.uuidString)"
+        case let .skill(skill): return "skill:\(skill.id)"
+        }
+    }
+}
+
 private enum SkillWarningSelection: Identifiable, Hashable {
     case missing(SkillReferenceWarning)
     case diagnostic(DiagnosticWarning)
@@ -90,10 +102,14 @@ struct SkillsScreen: View {
     private static let layoutLog = Logger(subsystem: "streetcoding.agent-deck", category: "ResourceLayout")
     var viewModel: AppViewModel
     @Binding var searchText: String
+    @State private var selectedLibraryItemIDs: Set<SkillLibraryItem.ID> = []
     @State private var selectedSkillIDs: Set<SkillRecord.ID> = []
+    @State private var selectedCollectionID: UUID?
     @State private var skillsPendingBatchDeletion: [SkillRecord]?
+    @State private var collectionPendingDeletion: SkillCollectionRecord?
     @State private var selectedWarning: SkillWarningSelection?
     @State private var isImportSheetPresented = false
+    @State private var isCollectionSheetPresented = false
     @State private var importSummaryMessage: String?
     @State private var skillActionErrorMessage: String?
     @State private var skillPendingDeletion: SkillRecord?
@@ -115,6 +131,7 @@ struct SkillsScreen: View {
     @FocusState private var isSkillNameFocused: Bool
     @State private var skillRenameErrorMessage: String?
     @State private var detailSummariesBySkillID: [SkillRecord.ID: SkillDetailSummaryState] = [:]
+    @State private var readOnlySkillPreview: SkillRecord?
     // Cached sectioning + filtered list + per-row inactive map. The full
     // build runs `Dictionary(grouping:)` + sort + multi-field search +
     // sectioning over `viewModel.allVisibleSkillRecords` — recomputing it on
@@ -123,11 +140,14 @@ struct SkillsScreen: View {
     // (snapshot, search, project, metadata revision). Mirrors the pattern
     // in `AgentLibraryPane`.
     @State private var cachedLayout: (
-        sections: [AppListSection<SkillRecord>],
+        sections: [AppListSection<SkillLibraryItem>],
         inactiveByID: [SkillRecord.ID: Bool],
         managedSkills: [SkillRecord],
-        repositoryBySkillID: [SkillRecord.ID: ImportedSkillRepository]
-    ) = ([], [:], [], [:])
+        catalogSkills: [SkillRecord],
+        repositoryBySkillID: [SkillRecord.ID: ImportedSkillRepository],
+        collectionCountBySkillID: [SkillRecord.ID: Int],
+        collectionMembersByID: [UUID: [SkillRecord]]
+    ) = ([], [:], [], [], [:], [:], [:])
 
     var body: some View {
         skillsScreenWithSheets
@@ -164,6 +184,17 @@ struct SkillsScreen: View {
                 Button("Cancel", role: .cancel) { skillsPendingBatchDeletion = nil }
             } message: { skills in
                 Text("Move \(skills.count) skills to the Trash and remove their Default, project, and agent assignments?")
+            }
+            .alert("Delete Collection?", isPresented: Binding(
+                get: { collectionPendingDeletion != nil },
+                set: { if !$0 { collectionPendingDeletion = nil } }
+            ), presenting: collectionPendingDeletion) { collection in
+                Button("Delete Collection Only", role: .destructive) { deleteCollectionOnly(collection) }
+                Button("Delete Collection and Skills", role: .destructive) { deleteCollectionAndMembers(collection) }
+                Button("Cancel", role: .cancel) { collectionPendingDeletion = nil }
+            } message: { collection in
+                let memberCount = cachedLayout.collectionMembersByID[collection.id]?.count ?? 0
+                Text("Delete \"\(collection.name)\" only, keeping its member skills as standalone catalog skills, or also move its \(memberCount) member skill\(memberCount == 1 ? "" : "s") to the Trash?")
             }
             .alert("Remove Skill?", isPresented: Binding(
                 get: { skillPendingRemoval != nil },
@@ -249,16 +280,21 @@ struct SkillsScreen: View {
             cachedLayout = recomputeLayout()
             scheduleSelectionSynchronization()
         }
-        // Catches repository sync / update-check results (hasKnownUpdate),
-        // which change row badges without touching the skill records.
+        // Catches repository sync / update-check results (hasKnownUpdate) and
+        // collection changes, which change row badges without touching skill records.
         .onChange(of: viewModel.appSettings.importedSkillRepositories) { _, _ in
             cachedLayout = recomputeLayout()
+        }
+        .onChange(of: viewModel.appSettings.skillCollections) { _, _ in
+            cachedLayout = recomputeLayout()
+            scheduleSelectionSynchronization()
         }
         .onChange(of: viewModel.selectedSkillID) { _, _ in scheduleSelectionSynchronization() }
         .onChange(of: selectedSkillIDs) { _, ids in
             skillUpdateStatusMessage = nil
             if !ids.isEmpty {
                 selectedWarning = nil
+                selectedCollectionID = nil
             }
             // The view model tracks a single focused skill (toolbar title,
             // cross-view state); a multi-selection has no single focus.
@@ -266,12 +302,16 @@ struct SkillsScreen: View {
             if viewModel.selectedSkillID != primary {
                 viewModel.selectedSkillID = primary
             }
+            syncLibrarySelectionFromState()
         }
         .onReceive(NotificationCenter.default.publisher(for: .agentDeckImportSkillsRequested)) { _ in
             beginSkillImport()
         }
         .onReceive(NotificationCenter.default.publisher(for: .agentDeckNewSkillRequested)) { _ in
             createNewSkill()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .agentDeckManageSkillCollectionsRequested)) { _ in
+            isCollectionSheetPresented = true
         }
     }
 
@@ -280,6 +320,15 @@ struct SkillsScreen: View {
         .sheet(isPresented: $isImportSheetPresented) {
             SkillImportSheet(viewModel: viewModel, isPresented: $isImportSheetPresented) { result in
                 importSummaryMessage = importSummary(for: result)
+            }
+        }
+        .sheet(isPresented: $isCollectionSheetPresented) {
+            SkillCollectionEditorSheet(viewModel: viewModel) { collection in
+                selectedWarning = nil
+                selectedSkillIDs = []
+                selectedCollectionID = collection.id
+                syncLibrarySelectionFromState()
+                cachedLayout = recomputeLayout()
             }
         }
         .sheet(item: $skillEditTarget) { target in
@@ -335,6 +384,9 @@ struct SkillsScreen: View {
                 )
             )
         }
+        .sheet(item: $readOnlySkillPreview) { skill in
+            SkillReadOnlyPreviewSheet(skill: skill)
+        }
     }
 
     @ViewBuilder
@@ -349,17 +401,28 @@ struct SkillsScreen: View {
             }
             AppList(
                 sections: layout.sections,
-                selection: .multi($selectedSkillIDs),
-                rowTint: { skill in
-                    let metadata = metadataByID[skill.id]
-                    return (metadata?.hasWarnings ?? false) ? Color.orange.opacity(0.10) : nil
+                selection: .multi(Binding(
+                    get: { selectedLibraryItemIDs },
+                    set: { updateSelection(fromLibraryItemIDs: $0) }
+                )),
+                rowTint: { item in
+                    if case let .skill(skill) = item {
+                        let metadata = metadataByID[skill.id]
+                        return (metadata?.hasWarnings ?? false) ? Color.orange.opacity(0.10) : nil
+                    }
+                    return nil
                 }
-            ) { skill in
-                skillListRow(
-                    skill,
-                    metadata: metadataByID[skill.id] ?? SkillListMetadata(isAssigned: false, hasWarnings: false, isActiveForCurrentProject: false, isImported: viewModel.isImportedSkill(skill)),
-                    inactive: layout.inactiveByID[skill.id]
-                )
+            ) { item in
+                switch item {
+                case let .collection(collection):
+                    collectionListRow(collection, members: layout.collectionMembersByID[collection.id] ?? [])
+                case let .skill(skill):
+                    skillListRow(
+                        skill,
+                        metadata: metadataByID[skill.id] ?? SkillListMetadata(isAssigned: false, hasWarnings: false, isActiveForCurrentProject: false, isImported: false),
+                        inactive: layout.inactiveByID[skill.id]
+                    )
+                }
             }
         }
     }
@@ -398,10 +461,13 @@ struct SkillsScreen: View {
     /// `.onChange` paths via `cachedLayout` — never per body eval.
     /// Mirrors the pattern in `AgentLibraryPane.recomputeLayout()`.
     private func recomputeLayout() -> (
-        sections: [AppListSection<SkillRecord>],
+        sections: [AppListSection<SkillLibraryItem>],
         inactiveByID: [SkillRecord.ID: Bool],
         managedSkills: [SkillRecord],
-        repositoryBySkillID: [SkillRecord.ID: ImportedSkillRepository]
+        catalogSkills: [SkillRecord],
+        repositoryBySkillID: [SkillRecord.ID: ImportedSkillRepository],
+        collectionCountBySkillID: [SkillRecord.ID: Int],
+        collectionMembersByID: [UUID: [SkillRecord]]
     ) {
         let allRecords = viewModel.allVisibleSkillRecords
 
@@ -430,6 +496,37 @@ struct SkillsScreen: View {
             if let repository = repository(for: skill) { repositoryBySkillID[skill.id] = repository }
         }
 
+        let nameCounts = Dictionary(grouping: allRecords, by: \.name).mapValues(\.count)
+        let collections = viewModel.appSettings.skillCollections.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let collectionRootPathSets = collections.map { Set($0.skillRootPaths) }
+        var collectionCountBySkillID: [SkillRecord.ID: Int] = [:]
+        var collectionMembersByID: [UUID: [SkillRecord]] = [:]
+        if !collections.isEmpty {
+            for skill in preferred {
+                let rootPath = skillRootPath(for: skill)
+                let filePath = URL(fileURLWithPath: skill.filePath).standardizedFileURL.path
+                var count = 0
+                for (index, collection) in collections.enumerated() {
+                    let rootPaths = collectionRootPathSets[index]
+                    if rootPaths.contains(rootPath) || rootPaths.contains(filePath) {
+                        count += 1
+                    } else if collection.skillNames.contains(skill.name), nameCounts[skill.name] == 1 {
+                        count += 1
+                    }
+                }
+                if count > 0 { collectionCountBySkillID[skill.id] = count }
+            }
+            for collection in collections {
+                collectionMembersByID[collection.id] = preferred.filter { skill in
+                    let rootPath = skillRootPath(for: skill)
+                    let filePath = URL(fileURLWithPath: skill.filePath).standardizedFileURL.path
+                    let rootPaths = Set(collection.skillRootPaths)
+                    if rootPaths.contains(rootPath) || rootPaths.contains(filePath) { return true }
+                    return collection.skillNames.contains(skill.name) && nameCounts[skill.name] == 1
+                }
+            }
+        }
+
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let managed: [SkillRecord]
         if query.isEmpty {
@@ -453,11 +550,14 @@ struct SkillsScreen: View {
         // A row is visually active when the skill is Default, assigned to at
         // least one project, or assigned to at least one Deck agent. Dim only
         // skills that are present in the catalog but unused everywhere.
+        let activeParentNames = viewModel.activeParentSkillNames(forProjectPath: viewModel.selectedProjectPath)
         func isAssignedSomewhere(_ skill: SkillRecord) -> Bool {
-            viewModel.skillIsEnabledGlobally(skill) || !viewModel.assignedProjects(for: skill).isEmpty
+            activeParentNames.contains(skill.name)
+                || !viewModel.assignedProjects(for: skill).isEmpty
+                || (collectionCountBySkillID[skill.id] ?? 0) > 0
         }
 
-        var sections: [AppListSection<SkillRecord>] = []
+        var sections: [AppListSection<SkillLibraryItem>] = []
         var inactiveByID: [SkillRecord.ID: Bool] = [:]
 
         func mark(_ items: [SkillRecord], inactive: Bool) {
@@ -465,13 +565,33 @@ struct SkillsScreen: View {
         }
 
         let global = managed.filter { viewModel.skillIsEnabledGlobally($0) }
-        let catalog = managed.filter { !viewModel.skillIsEnabledGlobally($0) }
+        let catalog = managed.filter { !viewModel.skillIsEnabledGlobally($0) && (collectionCountBySkillID[$0.id] ?? 0) == 0 }
         mark(global, inactive: false)
+        if !collections.isEmpty {
+            let filteredCollections: [SkillCollectionRecord]
+            if query.isEmpty {
+                filteredCollections = collections
+            } else {
+                filteredCollections = collections.filter { collection in
+                    let members = collectionMembersByID[collection.id] ?? []
+                    return [collection.name, collection.description ?? "", collection.sourceLabel ?? ""].contains { $0.lowercased().contains(query) }
+                        || members.contains { $0.name.lowercased().contains(query) }
+                }
+            }
+            sections.append(AppListSection(
+                id: "collections",
+                title: "Collections",
+                info: "User-organized skill groups. Assigning a collection expands to its skills at launch.",
+                items: filteredCollections.map { .collection($0) },
+                emptyMessage: "No matching collections."
+            ))
+        }
+
         sections.append(AppListSection(
             id: "global",
             title: "Default Skills",
             info: "Injected into every parent Pi Agent session. This is global runtime injection, not per-project assignment.",
-            items: global,
+            items: global.map { .skill($0) },
             emptyMessage: "No default skills."
         ))
         if !catalog.isEmpty {
@@ -480,11 +600,18 @@ struct SkillsScreen: View {
                 id: "catalog",
                 title: "Catalog",
                 info: "Available skills. They are not injected until made Default, assigned to a project runtime, or assigned to a Deck agent.",
-                items: catalog
+                items: catalog.map { .skill($0) }
             ))
         }
 
-        return (sections, inactiveByID, managed, repositoryBySkillID)
+        return (sections, inactiveByID, managed, preferred, repositoryBySkillID, collectionCountBySkillID, collectionMembersByID)
+    }
+
+    private func skillRootPath(for skill: SkillRecord) -> String {
+        let fileURL = URL(fileURLWithPath: skill.filePath).standardizedFileURL
+        return fileURL.lastPathComponent == "SKILL.md"
+            ? fileURL.deletingLastPathComponent().path
+            : fileURL.path
     }
 
     /// Selection-aware list context menu. A single right-clicked skill gets the
@@ -499,11 +626,9 @@ struct SkillsScreen: View {
         for ids: Set<SkillRecord.ID>,
         metadataByID: [SkillRecord.ID: SkillListMetadata]
     ) -> some View {
-        // Cache-miss falls back to the live method; in practice the cache is
-        // populated for every skill after the first scan, so this is rare.
         let skills = managedSkills.filter { ids.contains($0.id) }
         if skills.count > 1 {
-            let importable = skills.filter { metadataByID[$0.id]?.isImported ?? viewModel.isImportedSkill($0) }
+            let importable = skills.filter { metadataByID[$0.id]?.isImported ?? false }
             let deletable = skills.filter { viewModel.canDeleteSkill($0) }
             if !importable.isEmpty {
                 Button {
@@ -657,6 +782,8 @@ struct SkillsScreen: View {
     private var skillDetailContent: some View {
         if let selectedWarning {
             skillWarningDetail(selectedWarning)
+        } else if let collection = selectedCollection {
+            collectionDetailContent(collection)
         } else if selectedSkillIDs.count > 1 {
             batchSelectionDetail(selectedSkills)
         } else if let skill = selectedSkill {
@@ -778,6 +905,265 @@ struct SkillsScreen: View {
                     .frame(maxWidth: .infinity, minHeight: 240)
             }
         }
+    }
+
+    private func collectionListRow(_ collection: SkillCollectionRecord, members: [SkillRecord]) -> some View {
+        CollectionListRowView(
+            collection: collection,
+            memberCount: members.count,
+            isAssigned: viewModel.skillCollectionIsEnabledGlobally(collection)
+                || viewModel.enabledProjects.contains { viewModel.skillCollection(collection, isEnabledFor: $0) }
+                || !viewModel.assignedAgents(for: collection).isEmpty,
+            onEdit: { isCollectionSheetPresented = true }
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button {
+                isCollectionSheetPresented = true
+            } label: {
+                Label("Manage Collections", systemImage: "folder.badge.gearshape")
+            }
+
+            Divider()
+
+            Button(role: .destructive) {
+                collectionPendingDeletion = collection
+            } label: {
+                Label("Delete Collection", systemImage: "trash")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func collectionDetailContent(_ collection: SkillCollectionRecord) -> some View {
+        let members = cachedLayout.collectionMembersByID[collection.id] ?? []
+        AppCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "folder.badge.gearshape")
+                        .foregroundStyle(AppTheme.brandAccent)
+                        .font(.title3)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(collection.name)
+                            .font(.title3.weight(.semibold))
+                            .fontWidth(.expanded)
+                        Text(collection.description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? collection.description! : "User-organized collection")
+                            .font(.callout)
+                            .foregroundStyle(AppTheme.mutedText)
+                    }
+                    Spacer()
+                    Button {
+                        isCollectionSheetPresented = true
+                    } label: {
+                        Label("Edit", systemImage: "square.and.pencil")
+                    }
+                    .appSecondaryButton()
+                }
+            }
+        }
+
+        AppCard(title: "Project Runtime Assignment") {
+            collectionAssignmentList(for: collection)
+        }
+
+        AppCard(title: "Deck Agent Runtime Assignment") {
+            collectionAgentAssignmentList(for: collection)
+        }
+
+        AppCard(title: "Collection Membership") {
+            collectionMembershipList(for: collection, members: members)
+        }
+
+        AppCard(title: "Delete Collection") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Delete this collection, or delete the collection and move its member skills to the Trash. Deleting only the collection keeps member skills in the catalog as standalone skills.")
+                    .font(.callout)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button("Delete Collection", role: .destructive) {
+                    collectionPendingDeletion = collection
+                }
+                .appDestructiveButton()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func collectionMembershipList(for collection: SkillCollectionRecord, members: [SkillRecord]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Deactivate skills to keep them in this collection while excluding them from runtime loading. Use the row context menu to remove a skill from the collection without deleting its files.")
+                .font(.caption)
+                .foregroundStyle(AppTheme.mutedText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if members.isEmpty {
+                ContentUnavailableView(
+                    "No Skills",
+                    systemImage: "wand.and.stars",
+                    description: Text("Use the Collections toolbar button to add skills to this collection.")
+                )
+                .frame(maxWidth: .infinity, minHeight: 160)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(members) { skill in
+                        collectionMembershipRow(skill, collection: collection)
+                        if skill.id != members.last?.id { Divider() }
+                    }
+                }
+            }
+        }
+    }
+
+    private func collectionMembershipRow(_ skill: SkillRecord, collection: SkillCollectionRecord) -> some View {
+        let repository = cachedLayout.repositoryBySkillID[skill.id]
+        let isRuntimeIncluded = !viewModel.skillIsExcludedFromRuntime(skill, in: collection)
+        return SkillListRowView(
+            skill: skill,
+            iconName: skillIcon(skill),
+            iconColor: skillColor(isAssigned: viewModel.cachedSkillMetadataByID[skill.id]?.isAssigned ?? false),
+            isInactive: !isRuntimeIncluded,
+            isDisabled: viewModel.bundledSkillIsDisabled(skill),
+            repositoryDisplayName: repository?.displayName,
+            collectionCount: 0,
+            hasUpdate: repository?.hasKnownUpdate == true,
+            isUpdating: false,
+            canRename: false,
+            onUpdate: nil,
+            onEdit: {},
+            runtimeIncluded: isRuntimeIncluded,
+            onRuntimeIncludedChange: { included in setSkill(skill, runtimeIncluded: included, in: collection) },
+            onOpen: { readOnlySkillPreview = skill }
+        )
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button {
+                readOnlySkillPreview = skill
+            } label: {
+                Label("Open", systemImage: "doc.text.magnifyingglass")
+            }
+            Button {
+                selectedCollectionID = nil
+                selectedSkillIDs = [skill.id]
+                syncLibrarySelectionFromState()
+            } label: {
+                Label("Show Skill Details", systemImage: "sidebar.right")
+            }
+            Divider()
+            Button(role: .destructive) {
+                removeSkillFromCollection(skill, collection: collection)
+            } label: {
+                Label("Remove from Collection", systemImage: "minus.circle")
+            }
+        }
+    }
+
+    private func removeSkillFromCollection(_ skill: SkillRecord, collection: SkillCollectionRecord) {
+        var updated = collection
+        let rootPath = viewModel.skillRootPath(forCollectionMembership: skill)
+        let filePath = URL(fileURLWithPath: skill.filePath).standardizedFileURL.path
+        updated.skillRootPaths.remove(rootPath)
+        updated.skillRootPaths.remove(filePath)
+        updated.skillNames.remove(skill.name)
+        updated.excludedSkillRootPaths.remove(rootPath)
+        updated.excludedSkillRootPaths.remove(filePath)
+        updated.excludedSkillNames.remove(skill.name)
+        viewModel.saveSkillCollection(updated)
+    }
+
+    private func setSkill(_ skill: SkillRecord, runtimeIncluded: Bool, in collection: SkillCollectionRecord) {
+        var updated = collection
+        let rootPath = viewModel.skillRootPath(forCollectionMembership: skill)
+        let filePath = URL(fileURLWithPath: skill.filePath).standardizedFileURL.path
+        if runtimeIncluded {
+            updated.excludedSkillRootPaths.remove(rootPath)
+            updated.excludedSkillRootPaths.remove(filePath)
+            updated.excludedSkillNames.remove(skill.name)
+        } else {
+            updated.excludedSkillRootPaths.insert(rootPath)
+            updated.excludedSkillNames.insert(skill.name)
+        }
+        viewModel.saveSkillCollection(updated)
+    }
+
+    @ViewBuilder
+    private func skillCollectionsCard(for skill: SkillRecord) -> some View {
+        let collections = viewModel.skillCollections(containing: skill)
+        if !collections.isEmpty {
+            AppCard(title: "Skill Collections") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Collections expand to their skills at launch; Pi still receives one --skill argument per skill.")
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    ForEach(collections) { collection in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                Label(collection.name, systemImage: "folder.badge.gearshape")
+                                    .font(.subheadline.weight(.semibold))
+                                Text("\(cachedLayout.collectionMembersByID[collection.id]?.count ?? 0) skills")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(AppTheme.mutedText)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 2)
+                                    .background(.secondary.opacity(0.12), in: Capsule())
+                                if let sourceLabel = collection.sourceLabel {
+                                    Text(sourceLabel)
+                                        .font(.caption2)
+                                        .foregroundStyle(AppTheme.mutedText)
+                                        .lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            collectionAssignmentList(for: collection)
+                        }
+                        .padding(10)
+                        .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                }
+            }
+        }
+    }
+
+    private func collectionAssignmentList(for collection: SkillCollectionRecord) -> some View {
+        let isGlobal = viewModel.skillCollectionIsEnabledGlobally(collection)
+        return LazyVStack(alignment: .leading, spacing: 0) {
+            AllProjectsAssignmentRow(
+                isOn: Binding(
+                    get: { isGlobal },
+                    set: { enabled in
+                        if enabled { viewModel.enableSkillCollectionGlobally(collection) }
+                        else { viewModel.disableSkillCollectionGlobally(collection) }
+                    }
+                ),
+                subtitle: "Enable this collection for every project"
+            )
+            Divider()
+            ForEach(viewModel.enabledProjects) { project in
+                ProjectAssignmentToggleRow(
+                    project: project,
+                    isOn: Binding(
+                        get: { isGlobal ? true : viewModel.skillCollection(collection, isEnabledFor: project) },
+                        set: { enabled in viewModel.setSkillCollection(collection, enabled: enabled, for: project) }
+                    )
+                )
+                .opacity(isGlobal ? 0.4 : 1)
+                .allowsHitTesting(!isGlobal)
+                if project.id != viewModel.enabledProjects.last?.id { Divider() }
+            }
+        }
+    }
+
+    private func collectionAgentAssignmentList(for collection: SkillCollectionRecord) -> some View {
+        SkillCollectionAgentAssignmentList(
+            viewModel: viewModel,
+            collection: collection,
+            presentError: { error, action in
+                skillActionErrorMessage = "Could not \(action): \(error.localizedDescription)"
+            }
+        )
     }
 
     @ViewBuilder
@@ -1120,12 +1506,22 @@ struct SkillsScreen: View {
         managedSkills.filter { selectedSkillIDs.contains($0.id) }
     }
 
+    private var selectedCollection: SkillCollectionRecord? {
+        guard selectedWarning == nil, let selectedCollectionID else { return nil }
+        return viewModel.appSettings.skillCollections.first { $0.id == selectedCollectionID }
+    }
+
     private var skillDetailTitle: String {
+        if let selectedCollection { return selectedCollection.name }
         if selectedSkillIDs.count > 1 { return "\(selectedSkillIDs.count) Skills Selected" }
         return selectedSkill?.name ?? "Skill Details"
     }
 
     private var skillDetailSubtitle: String? {
+        if let selectedCollection {
+            let count = cachedLayout.collectionMembersByID[selectedCollection.id]?.count ?? 0
+            return "Collection · \(count) skill\(count == 1 ? "" : "s")"
+        }
         if selectedSkillIDs.count > 1 { return "Batch actions" }
         return selectedSkill.map { skillLocationLabel($0, selectedProjectRoot: viewModel.globalCatalogSnapshot.projectRoot) }
     }
@@ -1147,16 +1543,20 @@ struct SkillsScreen: View {
 
     private func synchronizeSelectionFromViewModel() {
         let validIDs = Set(managedSkills.map(\.id))
+        let validCollectionIDs = Set(viewModel.appSettings.skillCollections.map(\.id))
 
         // Drop selections that no longer exist after a rescan.
         let pruned = selectedSkillIDs.intersection(validIDs)
         if pruned != selectedSkillIDs {
             selectedSkillIDs = pruned
         }
+        if let selectedCollectionID, !validCollectionIDs.contains(selectedCollectionID) {
+            self.selectedCollectionID = nil
+        }
 
         // Adopt an external single-skill focus request (import, warning jump)
         // without clobbering a deliberate multi-selection.
-        if let viewModelSkillID = viewModel.selectedSkillID, selectedSkillIDs.count <= 1 {
+        if let viewModelSkillID = viewModel.selectedSkillID, selectedSkillIDs.count <= 1, selectedCollectionID == nil {
             if validIDs.contains(viewModelSkillID), selectedSkillIDs != [viewModelSkillID] {
                 selectedSkillIDs = [viewModelSkillID]
                 return
@@ -1172,22 +1572,60 @@ struct SkillsScreen: View {
         }
 
         ensureSelection()
+        syncLibrarySelectionFromState()
     }
 
     private func ensureSelection() {
-        guard selectedWarning == nil, selectedSkillIDs.isEmpty else { return }
+        guard selectedWarning == nil, selectedSkillIDs.isEmpty, selectedCollectionID == nil else { return }
         if let first = managedSkills.first {
             selectedSkillIDs = [first.id]
         }
     }
 
+    private func updateSelection(fromLibraryItemIDs ids: Set<SkillLibraryItem.ID>) {
+        selectedLibraryItemIDs = ids
+        selectedWarning = nil
+        let skillPrefix = "skill:"
+        let collectionPrefix = "collection:"
+        let skillIDs = Set(ids.compactMap { id -> SkillRecord.ID? in
+            guard id.hasPrefix(skillPrefix) else { return nil }
+            return String(id.dropFirst(skillPrefix.count))
+        })
+        if let collectionIDString = ids.first(where: { $0.hasPrefix(collectionPrefix) }).map({ String($0.dropFirst(collectionPrefix.count)) }),
+           let collectionID = UUID(uuidString: collectionIDString) {
+            selectedCollectionID = collectionID
+            selectedSkillIDs = []
+            viewModel.selectedSkillID = nil
+        } else {
+            selectedCollectionID = nil
+            selectedSkillIDs = skillIDs
+        }
+        syncLibrarySelectionFromState()
+    }
+
+    private func syncLibrarySelectionFromState() {
+        if let selectedCollectionID {
+            selectedLibraryItemIDs = ["collection:\(selectedCollectionID.uuidString)"]
+        } else {
+            selectedLibraryItemIDs = Set(selectedSkillIDs.map { "skill:\($0)" })
+        }
+    }
+
     private func skillListRow(_ skill: SkillRecord, metadata: SkillListMetadata, inactive: Bool? = nil) -> some View {
-        let isActive = viewModel.skillIsEnabledGlobally(skill) || !viewModel.assignedProjects(for: skill).isEmpty
-        let isInactive = inactive ?? !isActive
+        let isActive: Bool
+        let isInactive: Bool
+        if let inactive {
+            isInactive = inactive
+            isActive = !inactive
+        } else {
+            isActive = viewModel.activeParentSkillNames(forProjectPath: viewModel.selectedProjectPath).contains(skill.name) || !viewModel.assignedProjects(for: skill).isEmpty
+            isInactive = !isActive
+        }
         let hasWarnings = metadata.hasWarnings
         let iconName = hasWarnings ? "exclamationmark.triangle.fill" : skillIcon(skill)
         let iconColor: Color = hasWarnings ? .orange : skillColor(isAssigned: isActive)
         let repository = cachedLayout.repositoryBySkillID[skill.id]
+        let collectionCount = cachedLayout.collectionCountBySkillID[skill.id] ?? 0
         let hasUpdate = repository?.hasKnownUpdate == true
         let canRename = viewModel.canRenameSkill(skill)
         return SkillListRowView(
@@ -1197,12 +1635,13 @@ struct SkillsScreen: View {
             isInactive: isInactive,
             isDisabled: viewModel.bundledSkillIsDisabled(skill),
             repositoryDisplayName: repository?.displayName,
+            collectionCount: collectionCount,
             hasUpdate: hasUpdate,
             isUpdating: repository != nil && isUpdatingSkillRepository,
             canRename: canRename,
-            onUpdate: repository.map { repository in
+            onUpdate: hasUpdate ? repository.map { repository in
                 { applySkillRepositoryUpdate(repository) }
-            },
+            } : nil,
             onEdit: { skillEditTarget = makeSkillEditTarget(skill) }
         )
         // Fill the row and give it a hit-testable shape so a right-click anywhere on the
@@ -1535,6 +1974,28 @@ struct SkillsScreen: View {
         let failed = viewModel.deleteSkills(skills)
         skillsPendingBatchDeletion = nil
         selectedSkillIDs = []
+        reportBatchSkillDeletionFailures(failed)
+    }
+
+    private func deleteCollectionOnly(_ collection: SkillCollectionRecord) {
+        viewModel.removeSkillCollection(collection)
+        collectionPendingDeletion = nil
+        selectedCollectionID = nil
+        syncLibrarySelectionFromState()
+    }
+
+    private func deleteCollectionAndMembers(_ collection: SkillCollectionRecord) {
+        let members = cachedLayout.collectionMembersByID[collection.id] ?? []
+        viewModel.removeSkillCollection(collection)
+        let failed = viewModel.deleteSkills(members)
+        collectionPendingDeletion = nil
+        selectedCollectionID = nil
+        selectedSkillIDs = []
+        syncLibrarySelectionFromState()
+        reportBatchSkillDeletionFailures(failed)
+    }
+
+    private func reportBatchSkillDeletionFailures(_ failed: [String]) {
         if !failed.isEmpty {
             NSSound.beep()
             skillActionErrorMessage = """
@@ -1793,48 +2254,32 @@ private struct AgentAssignmentToggleRow: View {
 }
 
 /// Subagent assignment card body for the skill detail pane. Owns the sorted
-/// active/inactive agent arrays in local `@State` so the sort + Set
-/// construction runs only when the snapshot or selected skill actually
-/// changes, not on every detail-pane render. Pre-extraction these were
-/// inline `let`s inside a body-eval'd function — sorting every time the
-/// detail re-rendered (e.g. on every selection click or `cachedLayout`
-/// update).
+/// agent array in local `@State` so sorting runs only when the snapshot or
+/// selected skill changes, not on every detail-pane render.
 private struct SkillAgentAssignmentList: View {
     let skill: SkillRecord
     let viewModel: AppViewModel
     let presentError: (Error, String) -> Void
 
-    @State private var activeAgents: [EffectiveAgentRecord] = []
-    @State private var inactiveAgents: [EffectiveAgentRecord] = []
+    @State private var agents: [EffectiveAgentRecord] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Assign this skill only to the selected Deck agents when they run. Parent Pi Agent sessions do not receive it from this setting.")
                 .foregroundStyle(AppTheme.mutedText)
 
-            VStack(alignment: .leading, spacing: 14) {
-                SkillAgentAssignmentSection(
-                    title: "Active",
-                    agents: activeAgents,
-                    skill: skill,
-                    viewModel: viewModel,
-                    presentError: presentError,
-                    isInactiveSection: false,
-                    emptyText: "No active Deck agents."
-                )
-
-                if !inactiveAgents.isEmpty {
-                    SkillAgentAssignmentSection(
-                        title: "Inactive",
-                        agents: inactiveAgents,
-                        skill: skill,
-                        viewModel: viewModel,
-                        presentError: presentError,
-                        isInactiveSection: true,
-                        emptyText: "No inactive Deck agents."
-                    )
+            AgentAssignmentSection(
+                title: "Agents",
+                agents: agents,
+                viewModel: viewModel,
+                isInactiveSection: false,
+                emptyText: "No Deck agents.",
+                isAssigned: { agent in viewModel.skill(skill, isAssignedTo: agent) },
+                setAssigned: { agent, enabled in
+                    do { try viewModel.setSkill(skill, enabled: enabled, for: agent) }
+                    catch { presentError(error, enabled ? "assign this skill to agent" : "remove this skill from agent") }
                 }
-            }
+            )
         }
         .onAppear { recompute() }
         .onChange(of: skill.id) { _, _ in recompute() }
@@ -1842,25 +2287,55 @@ private struct SkillAgentAssignmentList: View {
     }
 
     private func recompute() {
-        let active = viewModel.globalCatalogSnapshot.effectiveAgents
+        agents = viewModel.allDisplayAgents
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        let activeIDs = Set(active.map(\.id))
-        let inactive = viewModel.allDisplayAgents
-            .filter { !activeIDs.contains($0.id) }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        activeAgents = active
-        inactiveAgents = inactive
     }
 }
 
-private struct SkillAgentAssignmentSection: View {
+private struct SkillCollectionAgentAssignmentList: View {
+    let viewModel: AppViewModel
+    let collection: SkillCollectionRecord
+    let presentError: (Error, String) -> Void
+
+    @State private var agents: [EffectiveAgentRecord] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Assign this collection only to the selected Deck agents when they run. Parent Pi Agent sessions do not receive it from this setting.")
+                .foregroundStyle(AppTheme.mutedText)
+
+            AgentAssignmentSection(
+                title: "Agents",
+                agents: agents,
+                viewModel: viewModel,
+                isInactiveSection: false,
+                emptyText: "No Deck agents.",
+                isAssigned: { agent in viewModel.skillCollection(collection, isAssignedTo: agent) },
+                setAssigned: { agent, enabled in
+                    do { try viewModel.setSkillCollection(collection, enabled: enabled, for: agent) }
+                    catch { presentError(error, enabled ? "assign this collection to agent" : "remove this collection from agent") }
+                }
+            )
+        }
+        .onAppear { recompute() }
+        .onChange(of: collection.id) { _, _ in recompute() }
+        .onChange(of: viewModel.displayAgentsRevision) { _, _ in recompute() }
+    }
+
+    private func recompute() {
+        agents = viewModel.allDisplayAgents
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+}
+
+private struct AgentAssignmentSection: View {
     let title: String
     let agents: [EffectiveAgentRecord]
-    let skill: SkillRecord
     let viewModel: AppViewModel
-    let presentError: (Error, String) -> Void
     let isInactiveSection: Bool
     let emptyText: String
+    let isAssigned: (EffectiveAgentRecord) -> Bool
+    let setAssigned: (EffectiveAgentRecord, Bool) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1878,11 +2353,8 @@ private struct SkillAgentAssignmentSection: View {
                             imageURL: viewModel.agentImageStore.imageURL(for: agent.name),
                             isInactive: isInactiveSection,
                             isOn: Binding(
-                                get: { viewModel.skill(skill, isAssignedTo: agent) },
-                                set: { enabled in
-                                    do { try viewModel.setSkill(skill, enabled: enabled, for: agent) }
-                                    catch { presentError(error, enabled ? "assign this skill to agent" : "remove this skill from agent") }
-                                }
+                                get: { isAssigned(agent) },
+                                set: { enabled in setAssigned(agent, enabled) }
                             )
                         )
 
@@ -1900,6 +2372,123 @@ private struct SkillAgentAssignmentSection: View {
 /// invalidates row A — pre-extraction the parent owned a `hoveredSkillID`
 /// and every visible row had to re-evaluate `hoveredSkillID == skill.id`
 /// when any row was hovered, animating opacity changes across the whole list.
+private struct CollectionListRowView: View {
+    let collection: SkillCollectionRecord
+    let memberCount: Int
+    let isAssigned: Bool
+    let onEdit: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "folder.badge.gearshape")
+                .foregroundStyle(isAssigned ? AppTheme.brandAccent : AppTheme.mutedText)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(collection.name)
+                    .font(.headline)
+                    .fontWidth(.expanded)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(collection.description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? collection.description! : "User-organized collection")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                HStack(spacing: 10) {
+                    if let sourceLabel = collection.sourceLabel {
+                        Image("github")
+                            .resizable()
+                            .renderingMode(.template)
+                            .scaledToFit()
+                            .frame(width: 11, height: 11)
+                        Text(sourceLabel)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    Label("\(memberCount) skill\(memberCount == 1 ? "" : "s")", systemImage: "wand.and.stars")
+                        .lineLimit(1)
+                }
+                .font(.caption2)
+                .foregroundStyle(AppTheme.mutedText)
+                .help(collection.sourceLabel.map { "Synced from GitHub · \($0)" } ?? "Skill collection")
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 0)
+
+            if isHovered {
+                Button(action: onEdit) {
+                    Label("Edit Collection", systemImage: "square.and.pencil")
+                        .labelStyle(.iconOnly)
+                }
+                .appSmallSecondaryButton()
+                .help("Edit collection")
+                .transition(.opacity)
+            }
+        }
+        .onHover { isHovered = $0 }
+        .padding(.vertical, 5)
+        .opacity(isAssigned ? 1 : 0.72)
+    }
+}
+
+private struct SkillReadOnlyPreviewSheet: View {
+    let skill: SkillRecord
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider()
+            content
+            Divider()
+            footer
+        }
+        .frame(width: 760, height: 620)
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "wand.and.stars")
+                .foregroundStyle(AppTheme.brandAccent)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(skill.name)
+                    .font(.headline)
+                    .fontWidth(.expanded)
+                if let description = skill.description, !description.isEmpty {
+                    Text(description)
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(18)
+    }
+
+    private var content: some View {
+        ScrollView(showsIndicators: false) {
+            MarkdownDocumentView(source: skill.body, minimumHeight: 320)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(16)
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            Spacer()
+            Button("Done") { dismiss() }
+                .appPrimaryButton()
+                .keyboardShortcut(.defaultAction)
+        }
+        .padding(16)
+    }
+}
+
 private struct SkillListRowView: View {
     let skill: SkillRecord
     let iconName: String
@@ -1907,11 +2496,15 @@ private struct SkillListRowView: View {
     let isInactive: Bool
     let isDisabled: Bool
     let repositoryDisplayName: String?
+    let collectionCount: Int
     let hasUpdate: Bool
     let isUpdating: Bool
     let canRename: Bool
     let onUpdate: (() -> Void)?
     let onEdit: () -> Void
+    var runtimeIncluded: Bool? = nil
+    var onRuntimeIncludedChange: ((Bool) -> Void)? = nil
+    var onOpen: (() -> Void)? = nil
 
     @State private var isHovered = false
 
@@ -1934,20 +2527,27 @@ private struct SkillListRowView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
 
-                if let repositoryDisplayName {
+                if collectionCount > 0 || repositoryDisplayName != nil {
                     HStack(spacing: 6) {
-                        Image("github")
-                            .resizable()
-                            .renderingMode(.template)
-                            .scaledToFit()
-                            .frame(width: 11, height: 11)
-                        Text(repositoryDisplayName)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                        if collectionCount > 0 {
+                            Label("\(collectionCount) collection\(collectionCount == 1 ? "" : "s")", systemImage: "folder.badge.gearshape")
+                                .labelStyle(.titleAndIcon)
+                                .lineLimit(1)
+                        }
+                        if let repositoryDisplayName {
+                            Image("github")
+                                .resizable()
+                                .renderingMode(.template)
+                                .scaledToFit()
+                                .frame(width: 11, height: 11)
+                            Text(repositoryDisplayName)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
                     }
                     .font(.caption2)
                     .foregroundStyle(AppTheme.mutedText)
-                    .help(AppLocalization.format("Synced from GitHub · %@", default: "Synced from GitHub · %@", repositoryDisplayName))
+                    .help(repositoryDisplayName.map { AppLocalization.format("Synced from GitHub · %@", default: "Synced from GitHub · %@", $0) } ?? AppLocalization.string("Member of a skill collection", default: "Member of a skill collection"))
                 }
             }
             .layoutPriority(1)
@@ -1956,6 +2556,29 @@ private struct SkillListRowView: View {
 
             if showsRowActions {
                 HStack(spacing: 6) {
+                    if let runtimeIncluded, let onRuntimeIncludedChange {
+                        Button {
+                            onRuntimeIncludedChange(!runtimeIncluded)
+                        } label: {
+                            Label(
+                                runtimeIncluded ? "Deactivate" : "Activate",
+                                systemImage: runtimeIncluded ? "pause.circle" : "play.circle"
+                            )
+                            .labelStyle(.titleAndIcon)
+                        }
+                        .appSmallSecondaryButton()
+                        .help(runtimeIncluded ? "Deactivate for runtime loading" : "Activate for runtime loading")
+                    }
+
+                    if let onOpen {
+                        Button(action: onOpen) {
+                            Label("Open", systemImage: "doc.text.magnifyingglass")
+                                .labelStyle(.titleAndIcon)
+                        }
+                        .appSmallSecondaryButton()
+                        .help("Open read-only skill preview")
+                    }
+
                     if let onUpdate {
                         Button(action: onUpdate) {
                             if isUpdating {
@@ -1979,11 +2602,450 @@ private struct SkillListRowView: View {
                         .help("Edit SKILL.md")
                     }
                 }
+                .fixedSize()
+                .layoutPriority(2)
+                .transition(.opacity)
             }
         }
         .onHover { isHovered = $0 }
         .padding(.vertical, 5)
         .opacity(isInactive ? 0.62 : 1)
         .saturation(isInactive ? 0.25 : 1)
+    }
+}
+
+private struct SkillCollectionEditorSheet: View {
+    var viewModel: AppViewModel
+    var onSelect: (SkillCollectionRecord) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedCollectionID: UUID?
+    @State private var draftName = ""
+    @State private var draftDescription = ""
+    @State private var selectedSkillIDs: Set<SkillRecord.ID> = []
+    @State private var skillSearchText = ""
+    @State private var pendingDelete: SkillCollectionRecord?
+    @State private var originalSnapshot = CollectionDraftSnapshot.empty
+    @State private var saveFeedbackToken: UUID?
+    @State private var cachedCollections: [SkillCollectionRecord] = []
+    @State private var cachedCatalogSkills: [SkillRecord] = []
+    @State private var cachedFilteredCatalogSkills: [SkillRecord] = []
+    @State private var cachedCollectionMemberCountsByID: [UUID: Int] = [:]
+    @State private var cachedCollectionMemberIDsByID: [UUID: Set<SkillRecord.ID>] = [:]
+
+    private struct CollectionDraftSnapshot: Equatable {
+        var name: String
+        var description: String?
+        var skillIDs: Set<SkillRecord.ID>
+
+        static let empty = CollectionDraftSnapshot(name: "", description: nil, skillIDs: [])
+    }
+
+    private var collections: [SkillCollectionRecord] { cachedCollections }
+
+    private var selectedCollection: SkillCollectionRecord? {
+        guard let selectedCollectionID else { return nil }
+        return collections.first { $0.id == selectedCollectionID }
+    }
+
+    private var isSkillSearchActive: Bool {
+        !skillSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var currentSnapshot: CollectionDraftSnapshot {
+        CollectionDraftSnapshot(
+            name: draftName.trimmingCharacters(in: .whitespacesAndNewlines),
+            description: normalizedDescription(draftDescription),
+            skillIDs: selectedSkillIDs
+        )
+    }
+
+    private var hasUnsavedChanges: Bool {
+        currentSnapshot != originalSnapshot
+    }
+
+    private var canSave: Bool {
+        !currentSnapshot.name.isEmpty && hasUnsavedChanges
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider()
+            HStack(spacing: 0) {
+                collectionSidebar
+                    .frame(width: 230)
+                Divider()
+                editorContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            Divider()
+            footer
+        }
+        .frame(width: 760, height: 620)
+        .background(AppTheme.windowBackground)
+        .onAppear {
+            refreshCollectionEditorCaches()
+            if let first = collections.first {
+                load(first)
+            } else {
+                beginNewCollection()
+            }
+        }
+        .onChange(of: skillSearchText) { _, _ in
+            refreshFilteredCatalogSkills()
+        }
+        .onChange(of: viewModel.allVisibleSkillRecords) { _, _ in
+            refreshCollectionEditorCaches()
+            reloadSelectedCollectionIfNeeded()
+        }
+        .onChange(of: viewModel.appSettings.skillCollections) { _, _ in
+            refreshCollectionEditorCaches()
+            reloadSelectedCollectionIfNeeded()
+        }
+        .onChange(of: viewModel.selectedProjectPath) { _, _ in
+            refreshCollectionEditorCaches()
+            reloadSelectedCollectionIfNeeded()
+        }
+        .alert("Delete Collection?", isPresented: Binding(
+            get: { pendingDelete != nil },
+            set: { if !$0 { pendingDelete = nil } }
+        ), presenting: pendingDelete) { collection in
+            Button("Delete", role: .destructive) { delete(collection) }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: { collection in
+            Text("Delete \"\(collection.name)\" and clear its All Projects and project assignments? Skills remain in the catalog.")
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Skill Collections")
+                .font(.headline)
+                .fontWidth(.expanded)
+            Text("Create explicit user-organized groups of skills.")
+                .font(.caption)
+                .foregroundStyle(AppTheme.mutedText)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+    }
+
+    private var collectionSidebar: some View {
+        let memberCountsByID = cachedCollectionMemberCountsByID
+        return VStack(alignment: .leading, spacing: 0) {
+            NewCollectionSidebarButton(action: beginNewCollection)
+                .padding(.horizontal, 8)
+                .padding(.top, 10)
+                .padding(.bottom, 6)
+
+            AppList(
+                sections: [AppListSection(
+                    id: "collections",
+                    title: "Collections",
+                    items: collections,
+                    emptyMessage: "No collections yet — use New Collection to create one."
+                )],
+                selection: .single(Binding(
+                    get: { selectedCollectionID },
+                    set: { id in
+                        guard let id, let collection = collections.first(where: { $0.id == id }) else { return }
+                        load(collection)
+                    }
+                )),
+                bottomContentInset: 12
+            ) { collection in
+                collectionSidebarRowContent(collection, skillCount: memberCountsByID[collection.id] ?? 0)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(AppTheme.windowBackground)
+    }
+
+    private func collectionSidebarRowContent(_ collection: SkillCollectionRecord, skillCount: Int) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "folder.badge.gearshape")
+                .foregroundStyle(selectedCollectionID == collection.id ? AppTheme.brandAccent : AppTheme.mutedText)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(collection.name)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                Text("\(skillCount) skill\(skillCount == 1 ? "" : "s")")
+                    .font(.caption2)
+                    .foregroundStyle(AppTheme.mutedText)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private struct NewCollectionSidebarButton: View {
+        let action: () -> Void
+        @State private var isHovering = false
+
+        var body: some View {
+            Button(action: action) {
+                HStack(spacing: 8) {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundStyle(AppTheme.brandAccent)
+                        .frame(width: 18)
+                    Text("New Collection")
+                        .font(.callout.weight(.semibold))
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, AppListMetrics.rowHorizontalPadding)
+                .padding(.vertical, AppListMetrics.rowVerticalPadding + 1)
+                .background {
+                    RoundedRectangle(cornerRadius: AppListMetrics.cornerRadius, style: .continuous)
+                        .fill(isHovering ? AppListMetrics.hoverFill : Color.clear)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: AppListMetrics.cornerRadius, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovering = $0 }
+            .accessibilityLabel("New Collection")
+        }
+    }
+
+    private var skillSearchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(AppTheme.mutedText)
+            TextField("Search skills by name, description, source, or path", text: $skillSearchText)
+                .textFieldStyle(.plain)
+                .appBrandTint()
+            if isSkillSearchActive {
+                Button {
+                    skillSearchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(AppTheme.mutedText)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear skill search")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(AppTheme.contentStroke.opacity(0.8), lineWidth: 1)
+        )
+    }
+
+    private var editorContent: some View {
+        let filteredSkills = cachedFilteredCatalogSkills
+        return ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
+                AppCard(title: selectedCollection == nil ? "New Collection" : "Collection") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        AppTextField(text: $draftName, placeholder: "Collection name")
+                        AppTextField(text: $draftDescription, placeholder: "Description", axis: .vertical)
+                            .lineLimit(2...4)
+                        Text("Collections are explicit user-organized resources. Imported repository skills are not included unless you add them here or enable Import as collection during import.")
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.mutedText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                AppCard(title: "Skills") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        skillSearchField
+
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                if filteredSkills.isEmpty {
+                                    Text(isSkillSearchActive ? "No skills match your search." : "No catalog skills available.")
+                                        .font(.caption)
+                                        .foregroundStyle(AppTheme.mutedText)
+                                        .frame(maxWidth: .infinity, minHeight: 120)
+                                }
+
+                                ForEach(Array(filteredSkills.enumerated()), id: \.element.id) { index, skill in
+                                    Toggle(isOn: Binding(
+                                        get: { selectedSkillIDs.contains(skill.id) },
+                                        set: { enabled in
+                                            if enabled { selectedSkillIDs.insert(skill.id) }
+                                            else { selectedSkillIDs.remove(skill.id) }
+                                        }
+                                    )) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(skill.name)
+                                                .font(.callout.weight(.semibold))
+                                            Text(skill.description ?? skill.filePath)
+                                                .font(.caption)
+                                                .foregroundStyle(AppTheme.mutedText)
+                                                .lineLimit(1)
+                                        }
+                                    }
+                                    .appCheckbox()
+                                    .padding(.vertical, 7)
+
+                                    if index < filteredSkills.count - 1 { Divider() }
+                                }
+                            }
+                        }
+                        .frame(minHeight: 260)
+                    }
+                }
+            }
+            .padding(18)
+        }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 12) {
+            if let selectedCollection {
+                Button("Delete Collection", role: .destructive) {
+                    pendingDelete = selectedCollection
+                }
+                .appDestructiveButton()
+            }
+            Spacer(minLength: 0)
+            Button("Done") { dismiss() }
+                .appSecondaryButton()
+                .keyboardShortcut(.cancelAction)
+            Button { saveCollection() } label: {
+                Label(saveFeedbackToken == nil ? "Save" : "Saved", systemImage: saveFeedbackToken == nil ? "tray.and.arrow.down" : "checkmark")
+                    .contentTransition(.opacity)
+                    .id(saveFeedbackToken == nil ? "save" : "saved")
+            }
+            .appPrimaryButton()
+            .keyboardShortcut(.defaultAction)
+            .disabled(!canSave)
+            .animation(.easeInOut(duration: 0.16), value: saveFeedbackToken)
+        }
+        .padding(16)
+    }
+
+    private func refreshCollectionEditorCaches() {
+        cachedCollections = viewModel.appSettings.skillCollections.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        cachedCatalogSkills = dedupedSortedCatalogSkills(from: viewModel.allVisibleSkillRecords)
+        cachedCollectionMemberIDsByID = viewModel.skillCollectionMemberIDsByCollectionID(
+            for: cachedCollections,
+            forProjectPath: viewModel.selectedProjectPath
+        )
+        cachedCollectionMemberCountsByID = cachedCollectionMemberIDsByID.mapValues(\.count)
+        refreshFilteredCatalogSkills()
+    }
+
+    private func dedupedSortedCatalogSkills(from records: [SkillRecord]) -> [SkillRecord] {
+        let grouped = Dictionary(grouping: records, by: \.name)
+        return grouped.values.compactMap { records in
+            records.first { $0.source.kind == .library }
+            ?? records.first { $0.source.kind == .global }
+            ?? records.first { $0.source.kind == .project }
+            ?? records.first
+        }
+        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func refreshFilteredCatalogSkills() {
+        let query = skillSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else {
+            cachedFilteredCatalogSkills = cachedCatalogSkills
+            return
+        }
+        cachedFilteredCatalogSkills = cachedCatalogSkills.filter { skill in
+            [
+                skill.name,
+                skill.description ?? "",
+                skill.source.displayName,
+                skill.source.path,
+                skill.filePath
+            ]
+            .contains { $0.lowercased().contains(query) }
+        }
+    }
+
+    private func cachedMemberIDs(for collection: SkillCollectionRecord) -> Set<SkillRecord.ID> {
+        if let memberIDs = cachedCollectionMemberIDsByID[collection.id] {
+            return memberIDs
+        }
+        return Set(viewModel.skillRecords(in: collection, forProjectPath: viewModel.selectedProjectPath).map(\.id))
+    }
+
+    private func reloadSelectedCollectionIfNeeded() {
+        if let selectedCollectionID, let collection = collections.first(where: { $0.id == selectedCollectionID }) {
+            load(collection)
+        } else if selectedCollectionID != nil {
+            beginNewCollection()
+        }
+    }
+
+    private func beginNewCollection() {
+        selectedCollectionID = nil
+        draftName = ""
+        draftDescription = ""
+        selectedSkillIDs = []
+        originalSnapshot = .empty
+        saveFeedbackToken = nil
+    }
+
+    private func load(_ collection: SkillCollectionRecord) {
+        selectedCollectionID = collection.id
+        draftName = collection.name
+        draftDescription = collection.description ?? ""
+        let memberIDs = cachedMemberIDs(for: collection)
+        selectedSkillIDs = memberIDs
+        originalSnapshot = CollectionDraftSnapshot(
+            name: collection.name.trimmingCharacters(in: .whitespacesAndNewlines),
+            description: collection.description.flatMap(normalizedDescription),
+            skillIDs: memberIDs
+        )
+        saveFeedbackToken = nil
+    }
+
+    private func saveCollection() {
+        guard canSave else { return }
+        let selectedSkills = cachedCatalogSkills.filter { selectedSkillIDs.contains($0.id) }
+        let snapshot = currentSnapshot
+        let collection = SkillCollectionRecord(
+            id: selectedCollectionID ?? UUID(),
+            name: snapshot.name,
+            description: snapshot.description,
+            skillRootPaths: Set(selectedSkills.map { viewModel.skillRootPath(forCollectionMembership: $0) }),
+            skillNames: Set(selectedSkills.map(\.name)),
+            importedRepositoryID: selectedCollection?.importedRepositoryID,
+            sourceLabel: selectedCollection?.sourceLabel
+        )
+        viewModel.saveSkillCollection(collection)
+        refreshCollectionEditorCaches()
+        load(collection)
+        onSelect(collection)
+        showSavedFeedback()
+    }
+
+    private func normalizedDescription(_ description: String) -> String? {
+        let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func showSavedFeedback() {
+        let token = UUID()
+        withAnimation(.easeInOut(duration: 0.16)) {
+            saveFeedbackToken = token
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard saveFeedbackToken == token else { return }
+            withAnimation(.easeInOut(duration: 0.16)) {
+                saveFeedbackToken = nil
+            }
+        }
+    }
+
+    private func delete(_ collection: SkillCollectionRecord) {
+        viewModel.removeSkillCollection(collection)
+        pendingDelete = nil
+        refreshCollectionEditorCaches()
+        if let first = collections.first(where: { $0.id != collection.id }) {
+            load(first)
+            onSelect(first)
+        } else {
+            beginNewCollection()
+        }
     }
 }

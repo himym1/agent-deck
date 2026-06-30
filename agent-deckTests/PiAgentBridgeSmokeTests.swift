@@ -208,7 +208,8 @@ final class PiAgentBridgeSmokeTests: XCTestCase {
             diff: "agent-deck/PiSessionTitleGenerationService.swift | 12 ++++++++----",
             model: AvailableModel(provider: "zai", model: "glm-5.1:high", contextWindow: "1M", maxOutput: "64K", supportsThinking: true, supportsImages: false, supportedThinkingLevels: ["off", "low", "medium", "high"]),
             projectURL: directory,
-            environment: [:]
+            environment: [:],
+            language: .english
         ) { result in
             switch result {
             case let .success(message): generatedMessage = message

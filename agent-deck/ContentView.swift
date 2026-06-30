@@ -1577,6 +1577,14 @@ struct ContentView: View {
                 }
                 .toolbarNeutralChrome()
 
+                Button {
+                    NotificationCenter.default.post(name: .agentDeckManageSkillCollectionsRequested, object: nil)
+                } label: {
+                    Label("Collections", systemImage: "folder.badge.gearshape")
+                }
+                .help("Create and manage skill collections")
+                .toolbarNeutralChrome()
+
                 Menu {
                     Button(AppLocalization.string("New Skill", default: "New Skill")) {
                         NotificationCenter.default.post(name: .agentDeckNewSkillRequested, object: nil)

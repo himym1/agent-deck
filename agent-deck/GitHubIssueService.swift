@@ -22,22 +22,26 @@ struct GitHubIssueService {
             queryItems: [],
             bypassCache: bypassCache
         )
-        async let parentTask: GitHubIssueReference? = fetchOptionalReference(
+        async let parentTask = fetchParentIfSupported(
+            for: item,
             path: "/repos/\(repo.owner)/\(repo.name)/issues/\(item.number)/parent",
             decoder: decoder,
             bypassCache: bypassCache
         )
-        async let subIssuesTask = fetchReferences(
+        async let subIssuesTask = fetchReferencesIfSupported(
+            for: item,
             path: "/repos/\(repo.owner)/\(repo.name)/issues/\(item.number)/sub_issues",
             decoder: decoder,
             bypassCache: bypassCache
         )
-        async let blockedByTask = fetchReferences(
+        async let blockedByTask = fetchReferencesIfSupported(
+            for: item,
             path: "/repos/\(repo.owner)/\(repo.name)/issues/\(item.number)/dependencies/blocked_by",
             decoder: decoder,
             bypassCache: bypassCache
         )
-        async let blockingTask = fetchReferences(
+        async let blockingTask = fetchReferencesIfSupported(
+            for: item,
             path: "/repos/\(repo.owner)/\(repo.name)/issues/\(item.number)/dependencies/blocking",
             decoder: decoder,
             bypassCache: bypassCache
@@ -103,6 +107,16 @@ struct GitHubIssueService {
         let repo = try parseRepository(item.repository)
         let payload = try JSONEncoder().encode(["state": "open"])
         _ = try await apiClient.patch(path: "/repos/\(repo.owner)/\(repo.name)/issues/\(item.number)", body: payload)
+    }
+
+    private func fetchParentIfSupported(for item: GitHubWorkItem, path: String, decoder: JSONDecoder, bypassCache: Bool) async throws -> GitHubIssueReference? {
+        guard !item.isPullRequest else { return nil }
+        return try await fetchOptionalReference(path: path, decoder: decoder, bypassCache: bypassCache)
+    }
+
+    private func fetchReferencesIfSupported(for item: GitHubWorkItem, path: String, decoder: JSONDecoder, bypassCache: Bool) async throws -> [GitHubIssueReference] {
+        guard !item.isPullRequest else { return [] }
+        return try await fetchReferences(path: path, decoder: decoder, bypassCache: bypassCache)
     }
 
     private func fetchReferences(path: String, decoder: JSONDecoder, bypassCache: Bool) async throws -> [GitHubIssueReference] {

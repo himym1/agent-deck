@@ -3,19 +3,19 @@ import XCTest
 
 @MainActor
 final class QuestionRailScrollLandingTests: XCTestCase {
-    func testQuestionRailHidesOverflowLayoutInShortWindow() {
+    func testQuestionRailHidesWhenStackDoesNotFit() {
         let policy = QuestionRailVisibilityPolicy()
-        XCTAssertFalse(policy.shouldShow(questionCount: 18, windowHeight: 360, evenStackedHeight: 520, railHeight: 328))
+        XCTAssertFalse(policy.shouldShow(questionCount: 18, evenStackedHeight: 520, railHeight: 328))
     }
 
-    func testQuestionRailStillShowsSlidingOverflowLayoutWhenWindowIsTallEnough() {
+    func testQuestionRailHidesOverflowEvenWhenWindowIsTall() {
         let policy = QuestionRailVisibilityPolicy()
-        XCTAssertTrue(policy.shouldShow(questionCount: 40, windowHeight: 700, evenStackedHeight: 1_120, railHeight: 668))
+        XCTAssertFalse(policy.shouldShow(questionCount: 40, evenStackedHeight: 1_120, railHeight: 668))
     }
 
-    func testQuestionRailShowsShortStackEvenInShortWindowWhenItFits() {
+    func testQuestionRailShowsOnlyWhenStackFits() {
         let policy = QuestionRailVisibilityPolicy()
-        XCTAssertTrue(policy.shouldShow(questionCount: 3, windowHeight: 300, evenStackedHeight: 82, railHeight: 268))
+        XCTAssertTrue(policy.shouldShow(questionCount: 3, evenStackedHeight: 82, railHeight: 268))
     }
 
     func testLandingResolverNormalStackedRailConvergesFirstSelection() {

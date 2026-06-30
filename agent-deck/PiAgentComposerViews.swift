@@ -341,8 +341,8 @@ struct PiAgentComposerBox: View {
                         .appGlassCircle()
                 }
                 .buttonStyle(.plain)
-                .help("Attach issue")
-                .accessibilityLabel("Attach issue")
+                .help(AppLocalization.string("Attach issue or pull request", default: "Attach issue or pull request"))
+                .accessibilityLabel(AppLocalization.string("Attach issue or pull request", default: "Attach issue or pull request"))
                 .popover(isPresented: $isIssuePickerPresented, arrowEdge: .bottom) {
                     PiAgentIssuePickerPopover(
                         viewModel: viewModel,
@@ -815,7 +815,7 @@ struct PiAgentIssueAttachmentChip: View {
                 .scaledToFit()
                 .frame(width: 13, height: 13)
                 .foregroundStyle(AppTheme.mutedText)
-            Text("#\(issue.number) \(issue.title)")
+            Text("\(issue.kindShortTitle) #\(issue.number) \(issue.title)")
                 .lineLimit(1)
                 .truncationMode(.head)
             Button(action: onRemove) {
@@ -844,20 +844,21 @@ private struct PiAgentIssuePickerPopover: View {
     private var items: [GitHubWorkItem] {
         let source = viewModel.githubComposerIssueItems
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return source }
-        let needle = query.lowercased()
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return source.filter { item in
-            item.title.lowercased().contains(needle)
-            || item.repository.lowercased().contains(needle)
+            item.searchableHaystack.contains(needle)
             || "#\(item.number)".contains(needle)
+            || item.kindTitle.lowercased().contains(needle)
+            || item.kindShortTitle.lowercased().contains(needle)
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(AppLocalization.string("Attach GitHub Issue", default: "Attach GitHub Issue"))
+            Text(AppLocalization.string("Attach Issue or Pull Request", default: "Attach Issue or Pull Request"))
                 .font(AppTheme.Font.headline)
 
-            AppTextField(text: $query, placeholder: AppLocalization.string("Search visible issues", default: "Search visible issues"))
+            AppTextField(text: $query, placeholder: AppLocalization.string("Search visible issues and pull requests", default: "Search visible issues and pull requests"))
 
             if let errorText {
                 Text(errorText)
@@ -878,7 +879,8 @@ private struct PiAgentIssuePickerPopover: View {
                                 GitHubIssueListRow(
                                     item: item,
                                     isSelected: false,
-                                    onSelect: { attach(item) }
+                                    onSelect: { attach(item) },
+                                    showsKindBadge: true
                                 )
                                 if loadingIssueID == item.id && isLoading {
                                     AppSpinner()
@@ -903,17 +905,17 @@ private struct PiAgentIssuePickerPopover: View {
     private var emptyStateText: String {
         if viewModel.selectedGitHubProject?.gitHubRemote?.forgeKind == .github,
            !viewModel.githubConnectionState.isConnected {
-            return AppLocalization.string("Connect GitHub first to attach an issue.", default: "Connect GitHub first to attach an issue.")
+            return AppLocalization.string("Connect GitHub first to attach an issue or pull request.", default: "Connect GitHub first to attach an issue or pull request.")
         }
         if viewModel.selectedGitHubProject?.gitHubRemote != nil {
-            return viewModel.githubIsLoadingProjectBoard
-                ? AppLocalization.string("Loading issues for the selected repository…", default: "Loading issues for the selected repository…")
-                : AppLocalization.string("No issues loaded for the selected repository yet.", default: "No issues loaded for the selected repository yet.")
+            return viewModel.githubIsLoadingComposerBoard
+                ? AppLocalization.string("Loading issues and pull requests for the selected repository…", default: "Loading issues and pull requests for the selected repository…")
+                : AppLocalization.string("No issues or pull requests loaded for the selected repository yet.", default: "No issues or pull requests loaded for the selected repository yet.")
         }
         if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return AppLocalization.string("No matching issues.", default: "No matching issues.")
+            return AppLocalization.string("No matching issues or pull requests.", default: "No matching issues or pull requests.")
         }
-        return AppLocalization.string("Select a GitHub or Gitea project to attach one of its issues.", default: "Select a GitHub or Gitea project to attach one of its issues.")
+        return AppLocalization.string("Select a GitHub or Gitea project to attach one of its issues or pull requests.", default: "Select a GitHub or Gitea project to attach one of its issues or pull requests.")
     }
     private func attach(_ item: GitHubWorkItem) {
         isLoading = true

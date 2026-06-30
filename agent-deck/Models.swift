@@ -136,6 +136,75 @@ nonisolated struct SkillRecord: Identifiable, Hashable, Sendable {
     let body: String
 }
 
+nonisolated struct SkillCollectionRecord: Codable, Hashable, Identifiable, Sendable {
+    let id: UUID
+    var name: String
+    var description: String?
+    /// Stable root paths for the skills that belong to this collection. Paths are
+    /// standardized when written, and resolved against the current skill catalog
+    /// so launch still emits individual `--skill <path>` arguments.
+    var skillRootPaths: Set<String>
+    /// Name fallback used when a member path no longer resolves (for example, a
+    /// user moved a local imported skill but kept the same catalog entry).
+    var skillNames: Set<String>
+    /// Members that remain in the collection/catalog grouping but are excluded
+    /// from runtime expansion. Missing keys default to empty for older settings.
+    var excludedSkillRootPaths: Set<String>
+    var excludedSkillNames: Set<String>
+    /// The imported git repository this collection mirrors, when applicable.
+    var importedRepositoryID: UUID?
+    var sourceLabel: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case description
+        case skillRootPaths
+        case skillNames
+        case excludedSkillRootPaths
+        case excludedSkillNames
+        case importedRepositoryID
+        case sourceLabel
+    }
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        description: String? = nil,
+        skillRootPaths: Set<String>,
+        skillNames: Set<String>,
+        excludedSkillRootPaths: Set<String> = [],
+        excludedSkillNames: Set<String> = [],
+        importedRepositoryID: UUID? = nil,
+        sourceLabel: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.skillRootPaths = Set(skillRootPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+        self.skillNames = skillNames
+        self.excludedSkillRootPaths = Set(excludedSkillRootPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+        self.excludedSkillNames = excludedSkillNames
+        self.importedRepositoryID = importedRepositoryID
+        self.sourceLabel = sourceLabel
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
+            name: try container.decode(String.self, forKey: .name),
+            description: try container.decodeIfPresent(String.self, forKey: .description),
+            skillRootPaths: try container.decodeIfPresent(Set<String>.self, forKey: .skillRootPaths) ?? [],
+            skillNames: try container.decodeIfPresent(Set<String>.self, forKey: .skillNames) ?? [],
+            excludedSkillRootPaths: try container.decodeIfPresent(Set<String>.self, forKey: .excludedSkillRootPaths) ?? [],
+            excludedSkillNames: try container.decodeIfPresent(Set<String>.self, forKey: .excludedSkillNames) ?? [],
+            importedRepositoryID: try container.decodeIfPresent(UUID.self, forKey: .importedRepositoryID),
+            sourceLabel: try container.decodeIfPresent(String.self, forKey: .sourceLabel)
+        )
+    }
+}
+
 nonisolated struct ProjectSkillRecap: Hashable, Sendable {
     let defaultSkills: [SkillRecord]
     let projectSkills: [SkillRecord]

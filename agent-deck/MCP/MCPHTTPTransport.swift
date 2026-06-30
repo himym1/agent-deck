@@ -109,8 +109,11 @@ actor MCPHTTPTransport: MCPTransport {
                 dataLines.removeAll()
             }
         }
-        for rawLine in body.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : String(rawLine)
+        let normalizedBody = body
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        for rawLine in normalizedBody.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
             if line.isEmpty { flush(); continue }
             if line.hasPrefix(":") { continue } // comment
             if line.hasPrefix("data:") {

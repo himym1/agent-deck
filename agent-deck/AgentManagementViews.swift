@@ -1749,7 +1749,7 @@ private func agentFieldHelpText(for title: String) -> String? {
     case "Inherit Project Context", "Project Context":
         return "When enabled, the agent keeps Pi's project instruction context, including files like AGENTS.md or CLAUDE.md."
     case "Skills":
-        return "Skills assigned to this agent are passed to Pi with explicit --skill paths. The agent needs the read tool to load full skill files."
+        return "Skills and skill collections assigned to this agent are passed to Pi with explicit --skill paths. Collections expand to their member skills at launch. The agent needs the read tool to load full skill files."
     case "Disabled", "Availability":
         return "Disabled agents are hidden from Deck agent discovery and normal launches."
     case "Output", "Output File":
@@ -1775,9 +1775,9 @@ private func agentFieldHelpText(for title: String) -> String? {
     case "Add Extension":
         return "Choose from installed Pi package references already visible to \(AppBrand.displayName)."
     case "Add Skill":
-        return "Choose from skills in Agent Deck's skill catalog."
+        return "Choose from skills and skill collections in Agent Deck's catalog."
     case "Skill Catalog":
-        return "All catalog skills are available for explicit assignment; duplicate names must be resolved before launch."
+        return "All catalog skills and skill collections are available for explicit assignment; duplicate names must be resolved before launch."
     default:
         return nil
     }
@@ -2220,13 +2220,13 @@ private struct AgentEditSheet: View {
                 VStack(alignment: .leading, spacing: 18) {
                     editSection {
                         configRow("Skill Catalog") {
-                            Text("Only skills visible in this agent's scope are selectable here.")
+                            Text("Only skills and skill collections visible in this agent's scope are selectable here.")
                                 .font(.caption)
                                 .foregroundStyle(AppTheme.mutedText)
                         }
 
                         configRow("Add Skill") {
-                            Menu("Choose Skill") {
+                            Menu("Choose Skill or Collection") {
                                 ForEach(selectableSkills, id: \.self) { skill in
                                     Button(skill) {
                                         addSkill(skill)
@@ -2272,7 +2272,8 @@ private struct AgentEditSheet: View {
 
             AppCard(title: "How Skills Work") {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("• Assigned skills are attached to this agent through Pi's native `--skill` support.")
+                    Text("• Assigned skills and collections are attached to this agent through Pi's native `--skill` support.")
+                    Text("• Collections expand to their member skills at launch.")
                     Text("• Agents do not inherit parent/default/project skills; assign required skills explicitly.")
                     Text("• If this agent has a tool allowlist and assigned skills, include `read` so Pi can load the skill files.")
                 }
