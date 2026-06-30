@@ -2,6 +2,27 @@ import AppKit
 import OSLog
 import SwiftUI
 
+private func localizedSkillCount(_ count: Int) -> String {
+    AppLocalization.format(
+        count == 1 ? "%lld skill" : "%lld skills",
+        default: count == 1 ? "%lld skill" : "%lld skills",
+        count
+    )
+}
+
+private func localizedCollectionCount(_ count: Int) -> String {
+    AppLocalization.format(
+        count == 1 ? "%lld collection" : "%lld collections",
+        default: count == 1 ? "%lld collection" : "%lld collections",
+        count
+    )
+}
+
+private func localizedSkillCollectionSourceHelp(_ sourceLabel: String?) -> String {
+    sourceLabel.map { AppLocalization.format("Synced from GitHub · %@", default: "Synced from GitHub · %@", $0) }
+        ?? AppLocalization.string("Skill collection", default: "Skill collection")
+}
+
 struct SkillsInfoPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -185,16 +206,16 @@ struct SkillsScreen: View {
             } message: { skills in
                 Text("Move \(skills.count) skills to the Trash and remove their Default, project, and agent assignments?")
             }
-            .alert("Delete Collection?", isPresented: Binding(
+            .alert(AppLocalization.string("Delete Collection?", default: "Delete Collection?"), isPresented: Binding(
                 get: { collectionPendingDeletion != nil },
                 set: { if !$0 { collectionPendingDeletion = nil } }
             ), presenting: collectionPendingDeletion) { collection in
-                Button("Delete Collection Only", role: .destructive) { deleteCollectionOnly(collection) }
-                Button("Delete Collection and Skills", role: .destructive) { deleteCollectionAndMembers(collection) }
-                Button("Cancel", role: .cancel) { collectionPendingDeletion = nil }
+                Button(AppLocalization.string("Delete Collection Only", default: "Delete Collection Only"), role: .destructive) { deleteCollectionOnly(collection) }
+                Button(AppLocalization.string("Delete Collection and Skills", default: "Delete Collection and Skills"), role: .destructive) { deleteCollectionAndMembers(collection) }
+                Button(AppLocalization.string("Cancel", default: "Cancel"), role: .cancel) { collectionPendingDeletion = nil }
             } message: { collection in
                 let memberCount = cachedLayout.collectionMembersByID[collection.id]?.count ?? 0
-                Text("Delete \"\(collection.name)\" only, keeping its member skills as standalone catalog skills, or also move its \(memberCount) member skill\(memberCount == 1 ? "" : "s") to the Trash?")
+                Text(AppLocalization.format("Delete collection members warning", default: "Delete \"%@\" only, keeping its member skills as standalone catalog skills, or also move its %@ to the Trash?", collection.name, localizedSkillCount(memberCount)))
             }
             .alert("Remove Skill?", isPresented: Binding(
                 get: { skillPendingRemoval != nil },
@@ -922,7 +943,7 @@ struct SkillsScreen: View {
             Button {
                 isCollectionSheetPresented = true
             } label: {
-                Label("Manage Collections", systemImage: "folder.badge.gearshape")
+                Label(AppLocalization.string("Manage Collections", default: "Manage Collections"), systemImage: "folder.badge.gearshape")
             }
 
             Divider()
@@ -930,7 +951,7 @@ struct SkillsScreen: View {
             Button(role: .destructive) {
                 collectionPendingDeletion = collection
             } label: {
-                Label("Delete Collection", systemImage: "trash")
+                Label(AppLocalization.string("Delete Collection", default: "Delete Collection"), systemImage: "trash")
             }
         }
     }
@@ -948,7 +969,7 @@ struct SkillsScreen: View {
                         Text(collection.name)
                             .font(.title3.weight(.semibold))
                             .fontWidth(.expanded)
-                        Text(collection.description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? collection.description! : "User-organized collection")
+                        Text(collection.description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? collection.description! : AppLocalization.string("User-organized collection", default: "User-organized collection"))
                             .font(.callout)
                             .foregroundStyle(AppTheme.mutedText)
                     }
@@ -956,7 +977,7 @@ struct SkillsScreen: View {
                     Button {
                         isCollectionSheetPresented = true
                     } label: {
-                        Label("Edit", systemImage: "square.and.pencil")
+                        Label(AppLocalization.string("Edit", default: "Edit"), systemImage: "square.and.pencil")
                     }
                     .appSecondaryButton()
                 }
@@ -977,13 +998,13 @@ struct SkillsScreen: View {
 
         AppCard(title: "Delete Collection") {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Delete this collection, or delete the collection and move its member skills to the Trash. Deleting only the collection keeps member skills in the catalog as standalone skills.")
+                Text(AppLocalization.string("Delete this collection, or delete the collection and move its member skills to the Trash. Deleting only the collection keeps member skills in the catalog as standalone skills.", default: "Delete this collection, or delete the collection and move its member skills to the Trash. Deleting only the collection keeps member skills in the catalog as standalone skills."))
                     .font(.callout)
                     .foregroundStyle(AppTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                Button("Delete Collection", role: .destructive) {
+                Button(AppLocalization.string("Delete Collection", default: "Delete Collection"), role: .destructive) {
                     collectionPendingDeletion = collection
                 }
                 .appDestructiveButton()
@@ -1042,20 +1063,20 @@ struct SkillsScreen: View {
             Button {
                 readOnlySkillPreview = skill
             } label: {
-                Label("Open", systemImage: "doc.text.magnifyingglass")
+                Label(AppLocalization.string("Open", default: "Open"), systemImage: "doc.text.magnifyingglass")
             }
             Button {
                 selectedCollectionID = nil
                 selectedSkillIDs = [skill.id]
                 syncLibrarySelectionFromState()
             } label: {
-                Label("Show Skill Details", systemImage: "sidebar.right")
+                Label(AppLocalization.string("Show Skill Details", default: "Show Skill Details"), systemImage: "sidebar.right")
             }
             Divider()
             Button(role: .destructive) {
                 removeSkillFromCollection(skill, collection: collection)
             } label: {
-                Label("Remove from Collection", systemImage: "minus.circle")
+                Label(AppLocalization.string("Remove from Collection", default: "Remove from Collection"), systemImage: "minus.circle")
             }
         }
     }
@@ -1094,7 +1115,7 @@ struct SkillsScreen: View {
         if !collections.isEmpty {
             AppCard(title: "Skill Collections") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Collections expand to their skills at launch; Pi still receives one --skill argument per skill.")
+                    Text(AppLocalization.string("Collections expand to their skills at launch; Pi still receives one --skill argument per skill.", default: "Collections expand to their skills at launch; Pi still receives one --skill argument per skill."))
                         .font(.caption)
                         .foregroundStyle(AppTheme.mutedText)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1103,7 +1124,7 @@ struct SkillsScreen: View {
                             HStack(spacing: 8) {
                                 Label(collection.name, systemImage: "folder.badge.gearshape")
                                     .font(.subheadline.weight(.semibold))
-                                Text("\(cachedLayout.collectionMembersByID[collection.id]?.count ?? 0) skills")
+                                Text(localizedSkillCount(cachedLayout.collectionMembersByID[collection.id]?.count ?? 0))
                                     .font(.caption2.weight(.semibold))
                                     .foregroundStyle(AppTheme.mutedText)
                                     .padding(.horizontal, 7)
@@ -2407,12 +2428,12 @@ private struct CollectionListRowView: View {
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
-                    Label("\(memberCount) skill\(memberCount == 1 ? "" : "s")", systemImage: "wand.and.stars")
+                    Label(localizedSkillCount(memberCount), systemImage: "wand.and.stars")
                         .lineLimit(1)
                 }
                 .font(.caption2)
                 .foregroundStyle(AppTheme.mutedText)
-                .help(collection.sourceLabel.map { "Synced from GitHub · \($0)" } ?? "Skill collection")
+                .help(localizedSkillCollectionSourceHelp(collection.sourceLabel))
             }
             .layoutPriority(1)
 
@@ -2420,11 +2441,11 @@ private struct CollectionListRowView: View {
 
             if isHovered {
                 Button(action: onEdit) {
-                    Label("Edit Collection", systemImage: "square.and.pencil")
+                    Label(AppLocalization.string("Edit Collection", default: "Edit Collection"), systemImage: "square.and.pencil")
                         .labelStyle(.iconOnly)
                 }
                 .appSmallSecondaryButton()
-                .help("Edit collection")
+                .help(AppLocalization.string("Edit collection", default: "Edit collection"))
                 .transition(.opacity)
             }
         }
@@ -2481,7 +2502,7 @@ private struct SkillReadOnlyPreviewSheet: View {
     private var footer: some View {
         HStack {
             Spacer()
-            Button("Done") { dismiss() }
+            Button(AppLocalization.string("Done", default: "Done")) { dismiss() }
                 .appPrimaryButton()
                 .keyboardShortcut(.defaultAction)
         }
@@ -2530,7 +2551,7 @@ private struct SkillListRowView: View {
                 if collectionCount > 0 || repositoryDisplayName != nil {
                     HStack(spacing: 6) {
                         if collectionCount > 0 {
-                            Label("\(collectionCount) collection\(collectionCount == 1 ? "" : "s")", systemImage: "folder.badge.gearshape")
+                            Label(localizedCollectionCount(collectionCount), systemImage: "folder.badge.gearshape")
                                 .labelStyle(.titleAndIcon)
                                 .lineLimit(1)
                         }
@@ -2561,22 +2582,22 @@ private struct SkillListRowView: View {
                             onRuntimeIncludedChange(!runtimeIncluded)
                         } label: {
                             Label(
-                                runtimeIncluded ? "Deactivate" : "Activate",
+                                AppLocalization.string(runtimeIncluded ? "Deactivate" : "Activate", default: runtimeIncluded ? "Deactivate" : "Activate"),
                                 systemImage: runtimeIncluded ? "pause.circle" : "play.circle"
                             )
                             .labelStyle(.titleAndIcon)
                         }
                         .appSmallSecondaryButton()
-                        .help(runtimeIncluded ? "Deactivate for runtime loading" : "Activate for runtime loading")
+                        .help(AppLocalization.string(runtimeIncluded ? "Deactivate for runtime loading" : "Activate for runtime loading", default: runtimeIncluded ? "Deactivate for runtime loading" : "Activate for runtime loading"))
                     }
 
                     if let onOpen {
                         Button(action: onOpen) {
-                            Label("Open", systemImage: "doc.text.magnifyingglass")
+                            Label(AppLocalization.string("Open", default: "Open"), systemImage: "doc.text.magnifyingglass")
                                 .labelStyle(.titleAndIcon)
                         }
                         .appSmallSecondaryButton()
-                        .help("Open read-only skill preview")
+                        .help(AppLocalization.string("Open read-only skill preview", default: "Open read-only skill preview"))
                     }
 
                     if let onUpdate {
@@ -2707,23 +2728,23 @@ private struct SkillCollectionEditorSheet: View {
             refreshCollectionEditorCaches()
             reloadSelectedCollectionIfNeeded()
         }
-        .alert("Delete Collection?", isPresented: Binding(
+        .alert(AppLocalization.string("Delete Collection?", default: "Delete Collection?"), isPresented: Binding(
             get: { pendingDelete != nil },
             set: { if !$0 { pendingDelete = nil } }
         ), presenting: pendingDelete) { collection in
-            Button("Delete", role: .destructive) { delete(collection) }
-            Button("Cancel", role: .cancel) { pendingDelete = nil }
+            Button(AppLocalization.string("Delete", default: "Delete"), role: .destructive) { delete(collection) }
+            Button(AppLocalization.string("Cancel", default: "Cancel"), role: .cancel) { pendingDelete = nil }
         } message: { collection in
-            Text("Delete \"\(collection.name)\" and clear its All Projects and project assignments? Skills remain in the catalog.")
+            Text(AppLocalization.format("Delete collection and clear assignments warning", default: "Delete \"%@\" and clear its All Projects and project assignments? Skills remain in the catalog.", collection.name))
         }
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Skill Collections")
+            Text(AppLocalization.string("Skill Collections", default: "Skill Collections"))
                 .font(.headline)
                 .fontWidth(.expanded)
-            Text("Create explicit user-organized groups of skills.")
+            Text(AppLocalization.string("Create explicit user-organized groups of skills.", default: "Create explicit user-organized groups of skills."))
                 .font(.caption)
                 .foregroundStyle(AppTheme.mutedText)
         }
@@ -2771,7 +2792,7 @@ private struct SkillCollectionEditorSheet: View {
                 Text(collection.name)
                     .font(.callout.weight(.semibold))
                     .lineLimit(1)
-                Text("\(skillCount) skill\(skillCount == 1 ? "" : "s")")
+                Text(localizedSkillCount(skillCount))
                     .font(.caption2)
                     .foregroundStyle(AppTheme.mutedText)
             }
@@ -2789,7 +2810,7 @@ private struct SkillCollectionEditorSheet: View {
                     Image(systemName: "plus.circle.fill")
                         .foregroundStyle(AppTheme.brandAccent)
                         .frame(width: 18)
-                    Text("New Collection")
+                    Text(AppLocalization.string("New Collection", default: "New Collection"))
                         .font(.callout.weight(.semibold))
                     Spacer(minLength: 0)
                 }
@@ -2803,7 +2824,7 @@ private struct SkillCollectionEditorSheet: View {
             }
             .buttonStyle(.plain)
             .onHover { isHovering = $0 }
-            .accessibilityLabel("New Collection")
+            .accessibilityLabel(AppLocalization.string("New Collection", default: "New Collection"))
         }
     }
 
@@ -2811,7 +2832,7 @@ private struct SkillCollectionEditorSheet: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(AppTheme.mutedText)
-            TextField("Search skills by name, description, source, or path", text: $skillSearchText)
+            TextField(AppLocalization.string("Search skills by name, description, source, or path", default: "Search skills by name, description, source, or path"), text: $skillSearchText)
                 .textFieldStyle(.plain)
                 .appBrandTint()
             if isSkillSearchActive {
@@ -2822,7 +2843,7 @@ private struct SkillCollectionEditorSheet: View {
                         .foregroundStyle(AppTheme.mutedText)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Clear skill search")
+                .accessibilityLabel(AppLocalization.string("Clear skill search", default: "Clear skill search"))
             }
         }
         .padding(.horizontal, 10)
@@ -2843,7 +2864,7 @@ private struct SkillCollectionEditorSheet: View {
                         AppTextField(text: $draftName, placeholder: "Collection name")
                         AppTextField(text: $draftDescription, placeholder: "Description", axis: .vertical)
                             .lineLimit(2...4)
-                        Text("Collections are explicit user-organized resources. Imported repository skills are not included unless you add them here or enable Import as collection during import.")
+                        Text(AppLocalization.string("Collections are explicit user-organized resources. Imported repository skills are not included unless you add them here or enable Import as collection during import.", default: "Collections are explicit user-organized resources. Imported repository skills are not included unless you add them here or enable Import as collection during import."))
                             .font(.caption)
                             .foregroundStyle(AppTheme.mutedText)
                             .fixedSize(horizontal: false, vertical: true)
@@ -2857,7 +2878,7 @@ private struct SkillCollectionEditorSheet: View {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 0) {
                                 if filteredSkills.isEmpty {
-                                    Text(isSkillSearchActive ? "No skills match your search." : "No catalog skills available.")
+                                    Text(AppLocalization.string(isSkillSearchActive ? "No skills match your search." : "No catalog skills available.", default: isSkillSearchActive ? "No skills match your search." : "No catalog skills available."))
                                         .font(.caption)
                                         .foregroundStyle(AppTheme.mutedText)
                                         .frame(maxWidth: .infinity, minHeight: 120)
@@ -2898,17 +2919,17 @@ private struct SkillCollectionEditorSheet: View {
     private var footer: some View {
         HStack(spacing: 12) {
             if let selectedCollection {
-                Button("Delete Collection", role: .destructive) {
+                Button(AppLocalization.string("Delete Collection", default: "Delete Collection"), role: .destructive) {
                     pendingDelete = selectedCollection
                 }
                 .appDestructiveButton()
             }
             Spacer(minLength: 0)
-            Button("Done") { dismiss() }
+            Button(AppLocalization.string("Done", default: "Done")) { dismiss() }
                 .appSecondaryButton()
                 .keyboardShortcut(.cancelAction)
             Button { saveCollection() } label: {
-                Label(saveFeedbackToken == nil ? "Save" : "Saved", systemImage: saveFeedbackToken == nil ? "tray.and.arrow.down" : "checkmark")
+                Label(AppLocalization.string(saveFeedbackToken == nil ? "Save" : "Saved", default: saveFeedbackToken == nil ? "Save" : "Saved"), systemImage: saveFeedbackToken == nil ? "tray.and.arrow.down" : "checkmark")
                     .contentTransition(.opacity)
                     .id(saveFeedbackToken == nil ? "save" : "saved")
             }

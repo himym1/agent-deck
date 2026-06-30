@@ -193,19 +193,19 @@ struct GitHubIssueRowContent: View {
                         }
                     }
                 } label: {
-                    Label("Close \(item.kindTitle)", systemImage: "checkmark.circle")
+                    Label(AppLocalization.format("Close %@", default: "Close %@", localizedKindTitle(item)), systemImage: "checkmark.circle")
                 }
             } else {
                 Button {
                     onClose(.completed)
                 } label: {
-                    Label("Close \(item.kindTitle)", systemImage: "checkmark.circle")
+                    Label(AppLocalization.format("Close %@", default: "Close %@", localizedKindTitle(item)), systemImage: "checkmark.circle")
                 }
             }
         } else if !isOpen, let onReopen {
             Divider()
             Button(action: onReopen) {
-                Label("Reopen \(item.kindTitle)", systemImage: "arrow.counterclockwise.circle")
+                Label(AppLocalization.format("Reopen %@", default: "Reopen %@", localizedKindTitle(item)), systemImage: "arrow.counterclockwise.circle")
             }
         }
         Divider()
@@ -217,10 +217,15 @@ struct GitHubIssueRowContent: View {
         Button {
             copyToPasteboard("#\(item.number)")
         } label: {
-            Label("Copy \(item.kindTitle) Number", systemImage: "number")
+            Label(AppLocalization.format("Copy %@ Number", default: "Copy %@ Number", localizedKindTitle(item)), systemImage: "number")
         }
     }
 
+    private func localizedKindTitle(_ item: GitHubWorkItem) -> String {
+        item.isPullRequest
+            ? AppLocalization.string("Pull Request", default: "Pull Request")
+            : AppLocalization.string("Issue", default: "Issue")
+    }
     private func copyToPasteboard(_ string: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(string, forType: .string)

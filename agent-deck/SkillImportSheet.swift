@@ -18,8 +18,8 @@ struct SkillImportSheet: View {
 
         var label: String {
             switch self {
-            case .localFolder: return "Local Folder"
-            case .gitRepository: return "Git / skills.sh"
+            case .localFolder: return AppLocalization.string("Local Folder", default: "Local Folder")
+            case .gitRepository: return AppLocalization.string("Git / skills.sh", default: "Git / skills.sh")
             }
         }
     }
