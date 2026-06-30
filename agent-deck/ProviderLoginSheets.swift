@@ -103,11 +103,7 @@ struct AddProviderFlowSheet: View {
 
     /// Used when `getProviders()` couldn't be read (e.g. node missing) so the
     /// picker is never empty.
-    private static let fallbackProviders = [
-        "anthropic", "openai-codex", "github-copilot",
-        "openai", "google", "openrouter", "groq", "xai", "deepseek",
-        "mistral", "cerebras", "together", "fireworks", "nvidia", "huggingface"
-    ]
+    private static let fallbackProviders = PiProviderCatalogService.knownProviderFallbacks
 
     private var allProviders: [String] {
         viewModel.connectableProviders.isEmpty ? Self.fallbackProviders : viewModel.connectableProviders

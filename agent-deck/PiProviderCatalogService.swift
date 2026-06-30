@@ -9,6 +9,17 @@ struct PiProviderCatalogService: Sendable {
     private let commandRunner: CommandRunning
     private let piResolver: PiExecutableResolver
 
+    /// Minimum built-in provider list for the Add Provider picker. Pi's
+    /// getProviders() is still the source of truth when available, but this
+    /// prevents a non-empty partial result (for example only NeuralWatt from
+    /// Agent Deck's bundled sync) from hiding standard providers like
+    /// OpenRouter.
+    static let knownProviderFallbacks = [
+        "anthropic", "openai-codex", "github-copilot",
+        "openai", "google", "openrouter", "groq", "xai", "deepseek",
+        "mistral", "cerebras", "together", "fireworks", "nvidia", "huggingface"
+    ]
+
     init(commandRunner: CommandRunning = CommandRunner(), piResolver: PiExecutableResolver = PiExecutableResolver()) {
         self.commandRunner = commandRunner
         self.piResolver = piResolver
@@ -85,9 +96,18 @@ struct PiProviderCatalogService: Sendable {
             else {
                 return []
             }
-            return providers
+            return Self.mergingKnownProviderFallbacks(into: providers)
         } catch {
-            return []
+            return Self.knownProviderFallbacks
+        }
+    }
+
+    static func mergingKnownProviderFallbacks(into providers: [String]) -> [String] {
+        var seen = Set<String>()
+        return (providers + knownProviderFallbacks).compactMap { rawProvider in
+            let provider = rawProvider.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !provider.isEmpty, seen.insert(provider).inserted else { return nil }
+            return provider
         }
     }
 }
