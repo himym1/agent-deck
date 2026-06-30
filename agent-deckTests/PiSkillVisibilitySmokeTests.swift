@@ -83,6 +83,24 @@ final class PiSkillVisibilitySmokeTests: XCTestCase {
         XCTAssertEqual(args, ["--skill", "/tmp/default-skill/SKILL.md"])
     }
 
+    func testParentLaunchSkipsMissingAssignedSkills() throws {
+        let skill = SkillRecord(
+            id: "catalog:available-skill",
+            name: "available-skill",
+            description: "Available skill",
+            source: ScopeID(kind: .global, path: "/tmp/available-skill/SKILL.md"),
+            filePath: "/tmp/available-skill/SKILL.md",
+            body: "# Available Skill"
+        )
+
+        let args = try PiSkillLaunchResolver.parentSkillArguments(
+            defaultSkillNames: ["available-skill", "deleted-skill"],
+            projectSkillNames: [],
+            snapshot: .empty.replacing(skills: [skill])
+        )
+        XCTAssertEqual(args, ["--skill", "/tmp/available-skill/SKILL.md"])
+    }
+
     func testExternalSkillPathIsScannedAsLibraryCatalogSkillWithoutCopying() throws {
         let skillRoot = FileManager.default.temporaryDirectory.appendingPathComponent("agent-deck-external-skill-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: skillRoot, withIntermediateDirectories: true)

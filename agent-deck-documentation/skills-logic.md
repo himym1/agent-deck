@@ -80,6 +80,7 @@ Parent sessions do not receive:
 - unassigned skills,
 - skills assigned only to another project,
 - skills assigned only to native agents,
+- assigned skills that no longer exist in the Agent Deck skill catalog,
 - package/user/imported skills merely because Pi could discover them on disk,
 - project-local `.pi/skills` or legacy project `.agents/skills` resources.
 
@@ -95,6 +96,8 @@ pi --mode rpc \
 ## Native subagents
 
 Native subagents receive only their own assigned skills.
+
+Missing Default or Project skill assignments are skipped at parent-session launch time so a deleted external skill does not block the composer. The stale assignment remains visible in settings/warnings so the user can restore the skill or remove the obsolete assignment explicitly.
 
 Agent skills are stored on the agent as `skills:` names:
 

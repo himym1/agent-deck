@@ -8970,7 +8970,7 @@ final class AppViewModel: NSObject {
             collectionIDs: appSettings.defaultSkillCollectionIDs.union(projectPreference(for: projectPath).assignedSkillCollectionIDs),
             catalog: skillCatalog(forProjectPath: projectPath)
         )
-        return try PiSkillLaunchResolver.skillArguments(for: names, catalog: skillCatalog(forProjectPath: projectPath))
+        return try PiSkillLaunchResolver.skillArguments(for: names, catalog: skillCatalog(forProjectPath: projectPath), missingSkillPolicy: .skip)
     }
 
     private func parentPromptTemplateArguments(for projectURL: URL) throws -> [String] {
@@ -9163,7 +9163,9 @@ final class AppViewModel: NSObject {
             collectionIDs.formUnion(preference.assignedSkillCollectionIDs)
         }
         let catalog = path.map { skillCatalog(forProjectPath: $0) } ?? (globalSnapshot.skills + globalSnapshot.librarySkills)
+        let availableSkillNames = Set(catalog.map(\.name))
         return Set(effectiveSkillNames(directNames: directNames, collectionIDs: collectionIDs, catalog: catalog))
+            .filter { availableSkillNames.contains($0) }
     }
 
     /// The resolved `SkillRecord`s actually available to the parent session for
