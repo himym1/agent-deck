@@ -21,33 +21,39 @@ This page lists the important paths Agent Deck scans or writes.
 | Scope | Path |
 |---|---|
 | App-bundled native builtins | app bundle `bundled-agents/` |
-| Global catalog | `~/.pi/agent/agents/*.md` |
+| Global personal catalog | `~/.pi/agent/agents/*.md` |
 | Legacy global catalog | `~/.agents/*.md` |
 | Library/catalog | `~/.pi/agent/agent-library/agents/*.md` |
-| Project catalog | `PROJECT/.pi/agents/*.md` |
-| Legacy project catalog | `PROJECT/.agents/*.md` |
 | Assignment state | Agent Deck app settings/project preferences |
 | Builtin overrides | `settings.json -> subagents.agentOverrides` |
+
+Project-specific availability is controlled by Agent Deck assignment state. Agent Deck does not discover project-local `.pi/agents` or legacy project `.agents` folders as resource catalog sources.
 
 ## Skills
 
 | Scope | Path |
 |---|---|
-| Global active | `~/.pi/agent/skills/<skill>/SKILL.md` or root `.md` |
-| Legacy global | recursive `~/.agents/skills/**/SKILL.md`; root `.md` files are ignored |
-| Project active | `PROJECT/.pi/skills/<skill>/SKILL.md` or root `.md` |
-| Legacy project | recursive `PROJECT/.agents/skills/**/SKILL.md` from cwd/ancestors; root `.md` files are ignored |
-| Package/settings | package manifest/conventional paths and `settings.json -> skills` |
+| App-bundled skills | app bundle `bundled-skills/` |
+| Global personal catalog | `~/.pi/agent/skills/<skill>/SKILL.md` or root `.md` |
+| Legacy global catalog | recursive `~/.agents/skills/**/SKILL.md`; root `.md` files are ignored |
+| Imported/catalog references | Explicit paths stored in Agent Deck settings; imports are by reference, not copy |
+| Package skills | Globally resolved package-declared `pi.skills` or conventional package `skills/` folders |
+| Assignment state | Agent Deck app settings/project preferences |
+
+Project-specific availability is controlled by Agent Deck assignment state. Agent Deck does not discover project-local `.pi/skills` or legacy project `.agents/skills` folders as resource catalog sources.
 
 ## Prompt templates
 
 | Scope | Path |
 |---|---|
+| App-bundled prompts | app bundle `bundled-prompts/` |
 | Global catalog | `~/.pi/agent/prompts/*.md` |
 | Library/catalog | `~/.pi/agent/prompt-library/*.md` |
-| Project catalog | `PROJECT/.pi/prompts/*.md` |
-| Package/settings catalog | package prompt folders and `settings.json -> prompts` |
+| Imported/catalog references | Explicit paths stored in Agent Deck settings; imports are by reference, not copy |
+| Global settings/package catalog | Global `settings.json -> prompts` and globally resolved package prompt folders |
 | Assignment state | Agent Deck app settings/project preferences; parent launch uses explicit `--prompt-template` arguments |
+
+Project-specific availability is controlled by Agent Deck assignment state. Agent Deck does not discover project-local `.pi/prompts`, project settings `prompts`, or project package prompt folders as resource catalog sources.
 
 ## Extensions and packages
 
@@ -56,5 +62,5 @@ This page lists the important paths Agent Deck scans or writes.
 | Global auto extensions | `~/.pi/agent/extensions/*.ts`, `~/.pi/agent/extensions/*/index.ts` |
 | Project auto extensions | `PROJECT/.pi/extensions/*.ts`, `PROJECT/.pi/extensions/*/index.ts` |
 | Settings extensions | `settings.json -> extensions` |
-| Packages | `settings.json -> packages` |
+| Packages | global `settings.json -> packages`; project settings packages are preserved for runtime/config uses but not used as Agent Deck skill/prompt catalog sources |
 | Native bridge extensions | `~/Library/Application Support/Agent Deck/Native Subagent Extensions/managed-subagent-bridge.ts` and `contact-supervisor-bridge.ts` |

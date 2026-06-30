@@ -587,7 +587,7 @@ private struct ProjectAgentsRecapSheet: View {
         viewModel.agentRecap(for: project)
     }
 
-    private var hasLoadedProjectCatalog: Bool {
+    private var hasLoadedProjectAssignments: Bool {
         viewModel.allProjectSnapshots[project.path] != nil
     }
 
@@ -628,11 +628,11 @@ private struct ProjectAgentsRecapSheet: View {
                         if !recap.otherEffectiveAgents.isEmpty {
                             agentRecapSection(title: "Default", agents: recap.otherEffectiveAgents, color: AppTheme.assistantAccent)
                         }
-                    } else if hasLoadedProjectCatalog {
+                    } else if hasLoadedProjectAssignments {
                         ContentUnavailableView(
                             "No Agents",
                             systemImage: "paperplane",
-                            description: Text("No project agent catalog has been loaded for this project yet.")
+                            description: Text("No default or project-assigned catalog agents are configured for this project.")
                         )
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 32)
@@ -642,7 +642,7 @@ private struct ProjectAgentsRecapSheet: View {
                             .padding(.vertical, 32)
                     }
 
-                    if hasLoadedProjectCatalog, !recap.unresolvedNames.isEmpty {
+                    if hasLoadedProjectAssignments, !recap.unresolvedNames.isEmpty {
                         unresolvedAgentSection
                     }
                 }
@@ -651,7 +651,7 @@ private struct ProjectAgentsRecapSheet: View {
         }
         .frame(width: 560, height: 620)
         .task(id: project.path) {
-            guard !hasLoadedProjectCatalog else { return }
+            guard !hasLoadedProjectAssignments else { return }
             viewModel.refresh(
                 includeModels: false,
                 scanAllProjects: false,
@@ -736,7 +736,7 @@ private struct ProjectSkillsRecapSheet: View {
         viewModel.skillRecap(for: project)
     }
 
-    private var hasLoadedProjectCatalog: Bool {
+    private var hasLoadedProjectAssignments: Bool {
         viewModel.allProjectSnapshots[project.path] != nil
     }
 
@@ -780,11 +780,11 @@ private struct ProjectSkillsRecapSheet: View {
                         if !recap.projectSkills.isEmpty {
                             skillRecapSection(title: "Project", skills: recap.projectSkills, color: .green)
                         }
-                    } else if hasLoadedProjectCatalog {
+                    } else if hasLoadedProjectAssignments {
                         ContentUnavailableView(
                             "No Skills",
                             systemImage: "wand.and.stars",
-                            description: Text("No default or project-assigned skills are configured for this project.")
+                            description: Text("No default or project-assigned catalog skills are configured for this project.")
                         )
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 32)
@@ -794,7 +794,7 @@ private struct ProjectSkillsRecapSheet: View {
                             .padding(.vertical, 32)
                     }
 
-                    if hasLoadedProjectCatalog, !recap.unresolvedNames.isEmpty {
+                    if hasLoadedProjectAssignments, !recap.unresolvedNames.isEmpty {
                         unresolvedSection
                     }
                 }
@@ -803,7 +803,7 @@ private struct ProjectSkillsRecapSheet: View {
         }
         .frame(width: 520, height: 560)
         .task(id: project.path) {
-            guard !hasLoadedProjectCatalog else { return }
+            guard !hasLoadedProjectAssignments else { return }
             viewModel.refresh(
                 includeModels: false,
                 scanAllProjects: false,
@@ -884,7 +884,7 @@ private struct ProjectMcpServersRecapSheet: View {
         viewModel.mcpRecap(for: project)
     }
 
-    private var hasLoadedProjectCatalog: Bool {
+    private var hasLoadedProjectAssignments: Bool {
         viewModel.allProjectSnapshots[project.path] != nil
     }
 
@@ -928,7 +928,7 @@ private struct ProjectMcpServersRecapSheet: View {
                         if !recap.projectServers.isEmpty {
                             serverRecapSection(title: "Project", servers: recap.projectServers, color: .green)
                         }
-                    } else if hasLoadedProjectCatalog {
+                    } else if hasLoadedProjectAssignments {
                         ContentUnavailableView(
                             "No MCP Servers",
                             systemImage: "powerplug",
@@ -942,7 +942,7 @@ private struct ProjectMcpServersRecapSheet: View {
                             .padding(.vertical, 32)
                     }
 
-                    if hasLoadedProjectCatalog, !recap.unresolvedNames.isEmpty {
+                    if hasLoadedProjectAssignments, !recap.unresolvedNames.isEmpty {
                         unresolvedSection
                     }
                 }
@@ -951,7 +951,7 @@ private struct ProjectMcpServersRecapSheet: View {
         }
         .frame(width: 520, height: 560)
         .task(id: project.path) {
-            guard !hasLoadedProjectCatalog else { return }
+            guard !hasLoadedProjectAssignments else { return }
             viewModel.refresh(
                 includeModels: false,
                 scanAllProjects: false,

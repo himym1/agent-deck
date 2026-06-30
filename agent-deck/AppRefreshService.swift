@@ -140,12 +140,8 @@ nonisolated struct AppRefreshService: Sendable {
 
         for project in projects {
             let piRoot = project.url.appendingPathComponent(".pi", isDirectory: true)
-            urls.append(piRoot.appendingPathComponent("agents", isDirectory: true))
             urls.append(piRoot.appendingPathComponent("settings.json"))
             urls.append(piRoot.appendingPathComponent(".env"))
-            urls.append(piRoot.appendingPathComponent("skills", isDirectory: true))
-            urls.append(piRoot.appendingPathComponent("prompts", isDirectory: true))
-            urls.append(project.url.appendingPathComponent(".agents", isDirectory: true))
         }
 
         urls += snapshot.effectiveAgents.compactMap(\.sourcePath).map { URL(fileURLWithPath: $0) }
@@ -155,7 +151,11 @@ nonisolated struct AppRefreshService: Sendable {
         urls += externalSkillPaths.map { URL(fileURLWithPath: $0) }
         urls += externalPromptPaths.map { URL(fileURLWithPath: $0) }
         urls += (snapshot.promptTemplates + snapshot.libraryPromptTemplates).map { URL(fileURLWithPath: $0.filePath) }
-        urls += snapshot.settings.flatMap(\.prompts).map { URL(fileURLWithPath: $0) }
+        let globalSettingsPath = globalAgentRoot.appendingPathComponent("settings.json").standardizedFileURL.path
+        urls += snapshot.settings
+            .filter { URL(fileURLWithPath: $0.path).standardizedFileURL.path == globalSettingsPath }
+            .flatMap(\.prompts)
+            .map { URL(fileURLWithPath: $0) }
 
         var seen: Set<String> = []
         return urls.filter { seen.insert($0.path).inserted }

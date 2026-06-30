@@ -1147,8 +1147,8 @@ final class PiSubagentRunService {
 
     private func skillSourceDescription(for record: SkillRecord) -> String {
         switch record.source.kind {
-        case .project: return "project"
-        case .legacyProject: return "legacy project"
+        case .project: return "catalog"
+        case .legacyProject: return "catalog"
         case .global: return "global"
         case .library: return "library"
         case .package: return "package"

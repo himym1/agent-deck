@@ -60,6 +60,9 @@ struct AgentPersistence {
     }
 
     private func saveCustomAgent(_ config: AgentConfig, scope: AgentEditingTarget.CustomAgentScope, originalName: String, sourcePath: String?, projectRoot: String?) throws {
+        guard scope != .project else {
+            throw PersistenceError.invalidWriteTarget("Project-local agents are no longer cataloged. Save to a global personal or library location instead.")
+        }
         let path = sourcePath ?? customAgentPath(name: config.name, scope: scope, projectRoot: projectRoot)
         // Only validate computed paths for new files; existing source paths came from disk and are already trusted.
         if sourcePath == nil {
@@ -369,7 +372,7 @@ struct AgentPersistence {
             }
             return homeDirectory().appendingPathComponent(".pi/agent/agents/\(name).md").path
         case .project:
-            return URL(fileURLWithPath: projectRoot ?? "").appendingPathComponent(".pi/agents/\(name).md").path
+            return homeDirectory().appendingPathComponent(".pi/agent/agent-library/agents/\(name).md").path
         }
     }
 
@@ -391,8 +394,7 @@ struct AgentPersistence {
                 path.hasPrefix(homeDirectory().appendingPathComponent(".pi/agent/agent-library/agents").path) ||
                 path.hasPrefix(homeDirectory().appendingPathComponent(".agents").path)
         case .project:
-            guard let projectRoot else { return false }
-            return path.hasPrefix(URL(fileURLWithPath: projectRoot).appendingPathComponent(".pi/agents").path)
+            return false
         }
     }
 

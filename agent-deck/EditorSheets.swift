@@ -1036,7 +1036,7 @@ struct AgentEditorSheet: View {
         case .builtinOverride(scope: .global), .custom(scope: .global), .custom(scope: .library):
             return "Library/global agent: tools are based on the global environment only."
         case .builtinOverride(scope: .project), .custom(scope: .project):
-            return "Project agent: tools are based on global + selected project scope."
+            return "Project-scoped agent settings: tools are based on global + selected project scope."
         }
     }
 

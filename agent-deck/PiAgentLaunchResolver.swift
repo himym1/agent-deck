@@ -47,7 +47,7 @@ nonisolated enum PiAgentLaunchResolver {
         }
 
         for name in defaultAgentNames.sorted(by: localizedSort) {
-            guard let record = record(named: name, in: catalog, preferredKinds: [.library, .global, .project, .legacyProject]), record.source.kind != .builtin else { continue }
+            guard let record = record(named: name, in: catalog, preferredKinds: [.library, .global]), record.source.kind != .builtin else { continue }
             byName[name] = effectiveCustomAgent(
                 name: name,
                 snapshot: snapshot,
@@ -59,14 +59,14 @@ nonisolated enum PiAgentLaunchResolver {
             )
         }
         for name in projectAgentNames.sorted(by: localizedSort) {
-            guard let record = record(named: name, in: catalog, preferredKinds: [.project, .legacyProject, .library, .global]), record.source.kind != .builtin else { continue }
+            guard let record = record(named: name, in: catalog, preferredKinds: [.library, .global]), record.source.kind != .builtin else { continue }
             let existing = byName[name]
             byName[name] = effectiveCustomAgent(
                 name: name,
                 snapshot: snapshot,
                 builtin: existing?.builtin ?? snapshot.builtinAgents.first { $0.name == name },
-                globalCustom: existing?.globalCustom,
-                projectCustom: record,
+                globalCustom: record,
+                projectCustom: nil,
                 userOverride: existing?.userOverride ?? userOverrides.first { $0.agentName == name },
                 projectOverride: existing?.projectOverride ?? projectOverrides.first { $0.agentName == name }
             )

@@ -8,25 +8,23 @@ Agent Deck's UI is built around scope and resolution: where a resource lives, wh
 |---|---|
 | Builtin | App-bundled native agents and other read-only builtins. Agent Deck currently loads agent builtins from the app bundle; packages may still contribute non-agent resources such as skills, prompts, and extensions. |
 | Global | Discovered from global locations; assignment state decides whether agents/skills/prompts are used everywhere |
-| Project | Discovered from one project; assignment state decides whether agents/skills/prompts are used there |
-| Legacy Project | Compatibility resource from `.agents` paths |
 | Override | Settings-based patch to a builtin |
 | Package | Resource contributed by an installed Pi package |
-| Library | Agent Deck storage, not automatically active |
+| Library / imported catalog | Agent Deck storage or explicit by-reference imports, not automatically active |
 
 ## Catalog vs assignment
 
-Library resources are reusable storage. Global/project files are catalog sources. For agents, skills, and prompts, Agent Deck stores default/project assignments separately from the files themselves; assigning them does not create symlinks or move files.
+Global, package, library, and imported resources are catalog sources. Project-specific availability is assignment metadata on those catalog resources. Agent Deck does not discover project-local `.pi/agents`, `.pi/skills`, `.pi/prompts`, or legacy project `.agents` folders as resource catalog sources. Importing an existing local file adds it by reference; assigning it does not create symlinks, move files, or copy files.
 
 ## Agent precedence
 
 For agent names that appear in multiple places, the native-subagent winning definition is:
 
-1. project-assigned custom agent
-2. default-assigned custom agent
+1. project-assigned custom catalog agent
+2. default-assigned custom catalog agent
 3. builtin agent
 
-For same-name assigned catalog records, project assignment prefers project files before library/global files; default assignment prefers library/global files.
+For same-name assigned catalog records, Agent Deck prefers library/global catalog records; project assignment controls where the selected catalog record is available, not which local file wins.
 
 Builtin overrides are different from custom replacements: they patch supported fields only when the builtin remains the winner. Project overrides refine global builtin overrides field-by-field: project-set fields win, while omitted fields continue to inherit global override values. Builtin-disable flags can hide builtins entirely.
 
