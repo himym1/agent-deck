@@ -83,6 +83,7 @@ final class PiSubagentRunService {
                 "AGENT_DECK_SUBAGENT_RUN_ID": runID.uuidString,
                 "AGENT_DECK_SUBAGENT_AGENT": agent.name,
                 "AGENT_DECK_OPENAI_FAST_CONFIG": PiNativeSubagentBridgeExtensions.openAIFastConfigURL().path,
+                "AGENT_DECK_LANGUAGE": AppSettingsStore.shared.settings.appLanguage.runtimeLocaleIdentifier,
                 "MCP_DIRECT_TOOLS": mcpDirectTools(for: agent).isEmpty ? "__none__" : mcpDirectTools(for: agent).joined(separator: ",")
             ]
         )

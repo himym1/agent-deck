@@ -625,6 +625,10 @@ struct PiAgentUIRequestSheet: View {
         }
     }
 
+    private func localized(_ key: String, default defaultValue: String) -> String {
+        AppLocalization.string(key, default: defaultValue)
+    }
+
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
             Image(systemName: "questionmark.bubble.fill")
@@ -632,7 +636,7 @@ struct PiAgentUIRequestSheet: View {
                 .foregroundStyle(AppTheme.brandAccent)
                 .frame(width: 22, alignment: .center)
 
-            Text("Ask User")
+            Text(localized("Ask User", default: "Ask User"))
                 .font(AppTheme.Font.headline)
                 .fontWidth(.expanded)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -690,7 +694,7 @@ struct PiAgentUIRequestSheet: View {
     }
 
     private var confirmBody: some View {
-        Text("Choose whether Pi should continue with this request.")
+        Text(localized("Choose whether Pi should continue with this request.", default: "Choose whether Pi should continue with this request."))
             .foregroundStyle(AppTheme.mutedText)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -717,14 +721,14 @@ struct PiAgentUIRequestSheet: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(request.options, id: \.self) { option in
                 if option == freeformSentinel {
-                    freeformOptionRow(label: option)
+                    freeformOptionRow(label: localized("Type custom response", default: "Type custom response"))
                 } else {
                     optionRow(option, allowsMultiple: allowsMultiple)
                 }
             }
 
             if request.responseFormat == .nativeAsk, request.allowsFreeform {
-                freeformOptionRow(label: "Type custom response")
+                freeformOptionRow(label: localized("Type custom response", default: "Type custom response"))
             }
         }
     }
@@ -819,7 +823,7 @@ struct PiAgentUIRequestSheet: View {
                 .scrollIndicators(.hidden)
                 .padding(14)
             if draft.isEmpty {
-                Text("Type your custom response…")
+                Text(localized("Type your custom response…", default: "Type your custom response…"))
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(AppTheme.mutedText.opacity(0.6))
                     .padding(14)
@@ -835,36 +839,36 @@ struct PiAgentUIRequestSheet: View {
     }
 
     private var emptyOptions: some View {
-        Text("Pi requested a selection, but no options were provided.")
+        Text(localized("Pi requested a selection, but no options were provided.", default: "Pi requested a selection, but no options were provided."))
             .foregroundStyle(AppTheme.mutedText)
     }
 
     private var footer: some View {
         HStack(spacing: 10) {
             if isComposingFreeform {
-                Button("Back") { isComposingFreeform = false }
+                Button(localized("Back", default: "Back")) { isComposingFreeform = false }
                     .appSecondaryButton()
                 Spacer(minLength: 0)
-                Button("Cancel", action: onCancel)
+                Button(localized("Cancel", default: "Cancel"), action: onCancel)
                     .appSecondaryButton()
-                Button("Submit") { submitFreeform() }
+                Button(localized("Submit", default: "Submit")) { submitFreeform() }
                     .appPrimaryButton()
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSubmitFreeform)
             } else if request.method == .confirm {
                 Spacer(minLength: 0)
-                Button("No") { onConfirm(false) }
+                Button(localized("No", default: "No")) { onConfirm(false) }
                     .appSecondaryButton()
-                Button("Yes") { onConfirm(true) }
+                Button(localized("Yes", default: "Yes")) { onConfirm(true) }
                     .appPrimaryButton()
                     .keyboardShortcut(.defaultAction)
-                Button("Cancel", action: onCancel)
+                Button(localized("Cancel", default: "Cancel"), action: onCancel)
                     .appSecondaryButton()
             } else {
                 Spacer(minLength: 0)
-                Button("Cancel", action: onCancel)
+                Button(localized("Cancel", default: "Cancel"), action: onCancel)
                     .appSecondaryButton()
-                Button("Submit") { submitCurrent() }
+                Button(localized("Submit", default: "Submit")) { submitCurrent() }
                     .appPrimaryButton()
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSubmit)

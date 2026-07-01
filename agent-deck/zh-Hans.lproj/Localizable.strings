@@ -39,6 +39,7 @@
 "Agent" = "Agent";
 "Agent Deck looks in ~/.pi/agent/extensions, the selected project's .pi/extensions folder, settings.json extension paths, and installed package extension directories." = "Agent Deck 会查找 ~/.pi/agent/extensions、所选项目的 .pi/extensions 文件夹、settings.json 扩展路径，以及已安装包的扩展目录。";
 "Agent Deck Memory" = "Agent Deck 记忆";
+"Ask User" = "询问用户";
 "Agent Deck's own extensions. They take priority over yours if a tool name clashes. State below reflects your current settings." = "Agent Deck 自带扩展。如果工具名称冲突，它们优先于你的扩展。下方状态反映当前设置。";
 "Agent Defaults" = "Agent 默认值";
 "Agent name" = "Agent 名称";
@@ -128,6 +129,7 @@
 "Choose a project on the left to inspect its customizable Pi instruction components." = "选择左侧项目，查看其可自定义的 Pi 指令组件。";
 "Choose a project to browse its issues." = "选择一个项目以浏览其 issue。";
 "Choose Different Folder" = "选择其他文件夹";
+"Choose whether Pi should continue with this request." = "选择是否允许 Pi 继续此请求。";
 "Choose Extension" = "选择扩展";
 "Choose Folder" = "选择文件夹";
 "Choose how to set the avatar for this agent." = "选择如何设置此 Agent 的头像。";
@@ -844,6 +846,7 @@
 "Turn this built-in skill off everywhere so it does not appear in the composer's `/` menu or get auto-assigned." = "在所有位置关闭此内置技能，使其不出现在编辑器的 `/` 菜单中，也不会被自动分配。";
 "Type" = "类型";
 "Type custom response" = "输入自定义回复";
+"Type your custom response…" = "输入你的自定义回复…";
 "Unavailable" = "不可用";
 "Unpin Session" = "取消固定会话";
 "Unsaved" = "未保存";

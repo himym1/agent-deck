@@ -23,6 +23,10 @@ enum AppLanguage: String, Codable, CaseIterable, Hashable, Identifiable {
         }
     }
 
+    var runtimeLocaleIdentifier: String {
+        localeIdentifier ?? Locale.preferredLanguages.first ?? Locale.current.identifier
+    }
+
     var locale: Locale {
         guard let localeIdentifier else { return .current }
         return Locale(identifier: localeIdentifier)

@@ -718,7 +718,8 @@ final class PiAgentRunnerService {
                 projectRoot: projectURL,
                 extra: [
                     "AGENT_DECK_PARENT_SESSION_ID": session.id.uuidString,
-                    "AGENT_DECK_OPENAI_FAST_CONFIG": PiNativeSubagentBridgeExtensions.openAIFastConfigURL().path
+                    "AGENT_DECK_OPENAI_FAST_CONFIG": PiNativeSubagentBridgeExtensions.openAIFastConfigURL().path,
+                    "AGENT_DECK_LANGUAGE": launchSettings.appLanguage.runtimeLocaleIdentifier,
                 ]
             )
             // Agent Deck parent append prompts (Deck-agent catalog, then memory).
