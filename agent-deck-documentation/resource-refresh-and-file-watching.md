@@ -7,9 +7,9 @@ Agent Deck keeps its resource catalog current without continuously scanning ever
 `AppViewModel.refresh()` asks `AppRefreshService` to rebuild the app's current view of:
 
 - discovered projects
-- global and project agents
-- skills and external skill roots
-- prompt templates
+- global, library, and imported/catalog agents
+- global, package, bundled, and imported skill roots
+- global, package, bundled, and imported prompt templates
 - settings and `.env` metadata
 - scanner warnings
 
@@ -22,11 +22,12 @@ While the app is active, Agent Deck creates a macOS FSEvents watcher for the cur
 The watched roots are derived from the same paths used by the scanner, including:
 
 - `~/.pi/agent` resource folders
-- legacy `~/.agents` paths
-- selected project `.pi` resource folders
-- selected project `.agents`
-- imported external skill paths
+- global compatibility `~/.agents` paths
+- selected project `.pi/settings.json` and `.pi/.env` metadata
+- imported external skill and prompt paths
 - directories containing currently discovered agent, skill, and prompt files
+
+Agent Deck does not watch project-local `.pi/agents`, `.pi/skills`, `.pi/prompts`, or legacy project `.agents` folders as resource catalog sources.
 
 When FSEvents reports a change, Agent Deck waits briefly before doing any work.
 
@@ -63,7 +64,7 @@ This matters because resource discovery can change the watch set. For example:
 - a new external skill root is imported
 - a project selection changes
 - a resource file appears or disappears
-- a settings file points at different package/resource paths
+- a global settings file points at different package/resource paths
 
 The watcher is restarted only when the normalized watched paths actually change.
 

@@ -198,7 +198,6 @@ struct PromptsScreen: View {
             }
         }
 
-        let projectPrompts = visible.filter { $0.source.kind == .project && $0.discoveryKind == .standardDirectory }
         let globalPrompts = visible.filter { $0.source.kind == .global && $0.discoveryKind == .standardDirectory }
         let libraryPrompts = visible.filter { $0.source.kind == .library }
         let settingsPrompts = visible.filter { $0.discoveryKind == .settings }
@@ -208,18 +207,14 @@ struct PromptsScreen: View {
         var sections: [AppListSection<PromptTemplateRecord>] = []
 
         // Resource catalog is always global — the Prompts view is decoupled
-        // from `selectedProjectPath`. Project-scoped prompts (from any project)
-        // still surface in the project section; project assignment is managed
-        // per-prompt via the detail card's project toggles.
+        // from `selectedProjectPath`. Project assignment is managed per-prompt
+        // via the detail card's project toggles.
         sections.append(AppListSection(
             id: "global",
             title: "Global Prompts",
             items: globalPrompts,
             emptyMessage: "No global prompt templates."
         ))
-        if !projectPrompts.isEmpty {
-            sections.append(AppListSection(id: "project", title: "Project Prompts", items: projectPrompts))
-        }
         if !libraryPrompts.isEmpty {
             sections.append(AppListSection(id: "library", title: "Prompt Library", items: libraryPrompts))
         }
@@ -246,7 +241,7 @@ struct PromptsScreen: View {
             sections.append(AppListSection(
                 id: "builtin",
                 title: "Builtin Prompts",
-                info: "Builtins are bundled with \(AppBrand.displayName). Copy one into your global or project prompts directory to customize it.",
+                info: "Builtins are bundled with \(AppBrand.displayName). Duplicate one into the prompt library or import an existing template by reference to customize it.",
                 items: builtinPrompts
             ))
         }
@@ -281,8 +276,7 @@ struct PromptsScreen: View {
     }
 
     /// Reads from `cachedLayout`. Hit from selection-sync (`contains(where:)`,
-    /// `first(where:)`) and from the now-dead `projectPrompts`/`globalPrompts`
-    /// derived filters. Pre-refactor this property ran the multi-field
+    /// `first(where:)`) and from derived filters. Pre-refactor this property ran the multi-field
     /// substring search inline on every access — including from
     /// `promptListSections` (which ran seven `.filter` passes per body eval).
     /// Now O(1).
@@ -326,30 +320,6 @@ struct PromptsScreen: View {
         guard selectedCommandItemID == nil
             || !visiblePrompts.contains(where: { $0.id == selectedCommandItemID }) else { return }
         selectedCommandItemID = visiblePrompts.first?.id
-    }
-
-    private var projectPrompts: [PromptTemplateRecord] {
-        visiblePrompts.filter { $0.source.kind == .project && $0.discoveryKind == .standardDirectory }
-    }
-
-    private var globalPrompts: [PromptTemplateRecord] {
-        visiblePrompts.filter { $0.source.kind == .global && $0.discoveryKind == .standardDirectory }
-    }
-
-    private var libraryPrompts: [PromptTemplateRecord] {
-        visiblePrompts.filter { $0.source.kind == .library }
-    }
-
-    private var settingsPrompts: [PromptTemplateRecord] {
-        visiblePrompts.filter { $0.discoveryKind == .settings }
-    }
-
-    private var packagePrompts: [PromptTemplateRecord] {
-        visiblePrompts.filter { $0.source.kind == .package }
-    }
-
-    private var builtinPrompts: [PromptTemplateRecord] {
-        visiblePrompts.filter { $0.source.kind == .builtin }
     }
 
     private func promptListRow(_ prompt: PromptTemplateRecord) -> some View {

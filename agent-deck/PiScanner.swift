@@ -31,20 +31,15 @@ nonisolated struct PiScanner: @unchecked Sendable {
         let libraryPrompts = homeDirectory().appendingPathComponent(".pi/agent/prompt-library", isDirectory: true)
         let extraGlobalSkills = homeDirectory().appendingPathComponent(".agents/skills", isDirectory: true)
 
-        let projectAgentDirectory = projectRoot?.appendingPathComponent(".pi/agents", isDirectory: true)
-        let legacyProjectAgentDirectory = projectRoot?.appendingPathComponent(".agents", isDirectory: true)
         let projectSettings = projectRoot?.appendingPathComponent(".pi/settings.json")
         let projectEnv = projectRoot?.appendingPathComponent(".pi/.env")
-        let projectSkills = projectRoot?.appendingPathComponent(".pi/skills", isDirectory: true)
-        let legacyProjectSkills = projectRoot?.appendingPathComponent(".agents/skills", isDirectory: true)
-        let projectPrompts = projectRoot?.appendingPathComponent(".pi/prompts", isDirectory: true)
 
         let builtinAgents = scanAgents(at: bundledAgentsDirectory(), scope: .builtin)
         let bundledSkills = scanSkills(at: bundledSkillsDirectory(), scope: .builtin)
         let legacyGlobalAgents = scanAgents(at: legacyGlobalAgentDirectory, scope: .global)
         let globalAgents = scanAgents(at: globalAgentDirectory, scope: .global)
-        let projectAgents = scanAgents(at: projectAgentDirectory, scope: .project)
-        let legacyProjectAgents = scanAgents(at: legacyProjectAgentDirectory, scope: .legacyProject)
+        let projectAgents: [AgentRecord] = []
+        let legacyProjectAgents: [AgentRecord] = []
 
         let settings = [
             scanSettings(at: globalSettings, scope: .global),
@@ -54,17 +49,15 @@ nonisolated struct PiScanner: @unchecked Sendable {
         let libraryAgents = scanAgents(at: agentLibraryDirectory, scope: .library)
 
         let packageSkillScan = scanPackageSkills(
-            projectRoot: projectRoot,
+            projectRoot: nil,
             globalSettings: settings.first(where: { $0.path == globalSettings.path }),
-            projectSettings: settings.first(where: { $0.path == projectSettings?.path })
+            projectSettings: nil
         )
 
         let skills = deduplicatedByCanonicalPath(
             bundledSkills +
             scanSkills(at: globalSkills, scope: .global) +
-            scanSkills(at: extraGlobalSkills, scope: .global, allowRootMarkdown: false, recursive: true) +
-            scanSkills(at: projectSkills, scope: .project) +
-            scanSkills(at: legacyProjectSkills, scope: .legacyProject, allowRootMarkdown: false, recursive: true) +
+            scanSkills(at: extraGlobalSkills, scope: .global, allowRootMarkdown: false) +
             packageSkillScan.skills
         )
         let librarySkills = deduplicatedByCanonicalPath(scanExternalSkills(paths: externalSkillPaths))
@@ -76,11 +69,10 @@ nonisolated struct PiScanner: @unchecked Sendable {
         let globalSettingsSummary = settings.first(where: { $0.path == globalSettings.path })
         let projectSettingsSummary = settings.first(where: { $0.path == projectSettings?.path })
         let promptScan = scanPromptTemplates(
-            projectRoot: projectRoot,
+            projectRoot: nil,
             globalPromptsDirectory: globalPrompts,
-            projectPromptsDirectory: projectPrompts,
             globalSettings: globalSettingsSummary,
-            projectSettings: projectSettingsSummary
+            projectSettings: nil
         )
         let libraryPromptTemplates = dedupePromptTemplates(
             scanPromptTemplates(at: libraryPrompts, scope: .library, discoveryKind: .standardDirectory, packageName: nil)
@@ -107,8 +99,8 @@ nonisolated struct PiScanner: @unchecked Sendable {
             promptTemplates: promptScan.templates,
             envKeys: envKeys,
             malformedWarnings: malformedResourceWarnings(
-                agentDirectories: [bundledAgentsDirectory(), legacyGlobalAgentDirectory, globalAgentDirectory, legacyProjectAgentDirectory, projectAgentDirectory, agentLibraryDirectory].compactMap { $0 },
-                skillDirectories: [globalSkills, extraGlobalSkills, projectSkills, legacyProjectSkills].compactMap { $0 } + packageSkillScan.skillDirectories
+                agentDirectories: [bundledAgentsDirectory(), legacyGlobalAgentDirectory, globalAgentDirectory, agentLibraryDirectory].compactMap { $0 },
+                skillDirectories: [globalSkills, extraGlobalSkills].compactMap { $0 } + packageSkillScan.skillDirectories
             ) + packageSkillScan.warnings + promptScan.warnings
         )
 
@@ -446,7 +438,6 @@ nonisolated struct PiScanner: @unchecked Sendable {
     private func scanPromptTemplates(
         projectRoot: URL?,
         globalPromptsDirectory: URL,
-        projectPromptsDirectory: URL?,
         globalSettings: SettingsSummary?,
         projectSettings: SettingsSummary?
     ) -> (templates: [PromptTemplateRecord], warnings: [DiagnosticWarning]) {
@@ -457,9 +448,6 @@ nonisolated struct PiScanner: @unchecked Sendable {
             templates += scanPromptTemplates(at: bundledPromptsDirectory, scope: .builtin, discoveryKind: .standardDirectory, packageName: nil)
         }
         templates += scanPromptTemplates(at: globalPromptsDirectory, scope: .global, discoveryKind: .standardDirectory, packageName: nil)
-        if let projectPromptsDirectory {
-            templates += scanPromptTemplates(at: projectPromptsDirectory, scope: .project, discoveryKind: .standardDirectory, packageName: nil)
-        }
 
         for (settings, scope) in [(globalSettings, ResourceScopeKind.global), (projectSettings, ResourceScopeKind.project)] {
             guard let settings else { continue }
@@ -609,7 +597,6 @@ nonisolated struct PiScanner: @unchecked Sendable {
             URL(fileURLWithPath: "/usr/local/lib/node_modules/\(packageName)", isDirectory: true),
             homeDirectory().appendingPathComponent(".npm-global/lib/node_modules/\(packageName)", isDirectory: true),
             homeDirectory().appendingPathComponent("node_modules/\(packageName)", isDirectory: true),
-            projectRoot?.appendingPathComponent("node_modules/\(packageName)", isDirectory: true)
         ].compactMap { $0 }
 
         return candidates.first(where: { fileManager.fileExists(atPath: $0.path) })

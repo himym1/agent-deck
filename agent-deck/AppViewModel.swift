@@ -1084,20 +1084,14 @@ final class AppViewModel: NSObject {
         addProject(url, selectingAfterAdd: true)
     }
 
-    /// The folder the skill-import picker opens to: the selected project's
-    /// `.pi/skills` folder, or pi's global skills folder when no project is
-    /// selected. Falls back to a parent that exists so the open panel always
-    /// lands on a real directory; nothing is created on disk.
+    /// The folder the skill-import picker opens to. Skill catalogs are global
+    /// or explicit imports only, so default to Pi's global skills folder rather
+    /// than project-local `.pi/skills` folders.
     var suggestedExternalSkillsDirectoryURL: URL {
         let fileManager = FileManager.default
         func isDirectory(_ url: URL) -> Bool {
             var isDir: ObjCBool = false
             return fileManager.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
-        }
-
-        if let projectURL = selectedDiscoveredProject?.url {
-            let projectSkills = projectURL.appendingPathComponent(".pi/skills", isDirectory: true)
-            return isDirectory(projectSkills) ? projectSkills : projectURL
         }
 
         let globalSkills = fileManager.homeDirectoryForCurrentUser
@@ -6985,9 +6979,8 @@ final class AppViewModel: NSObject {
     }
 
     private var catalogOnlyEffectiveAgents: [EffectiveAgentRecord] {
-        // Global catalog: union of every project's catalog plus the global one,
-        // independent of `selectedProjectPath`. `nil` already unions all
-        // `allProjectSnapshots` in `agentCatalog(forProjectPath:)`.
+        // Global catalog: custom agents come from global/personal storage or
+        // explicit library imports, independent of `selectedProjectPath`.
         let effectivePaths = Set(globalSnapshot.effectiveAgents.compactMap(\.sourcePath).map(standardizedPath))
         return agentCatalog(forProjectPath: nil)
             .filter { $0.source.kind != .builtin }
@@ -6997,10 +6990,9 @@ final class AppViewModel: NSObject {
     }
 
     private var libraryOnlyEffectiveAgents: [EffectiveAgentRecord] {
-        // Global view: project-local agents do not hide reusable library agents
-        // with the same name. Global/custom winners still hide library duplicates.
+        // Global/custom winners hide library duplicates.
         let agentsThatHideLibrary = globalSnapshot.effectiveAgents
-            .filter { $0.projectCustom == nil && $0.projectOverride == nil }
+            .filter { $0.projectOverride == nil }
         let effectiveNames = Set(agentsThatHideLibrary.map(\.name))
         return globalSnapshot.libraryAgents
             .filter { !effectiveNames.contains($0.name) }
@@ -7162,8 +7154,8 @@ final class AppViewModel: NSObject {
 
     /// Whether a session has any non-disabled agent it could run as a subagent.
     /// Fast path: a usable effective agent (builtins normally qualify) returns
-    /// immediately, so the cross-project catalog scan only runs in the rare
-    /// case where the project has no usable effective agents at all.
+    /// immediately, so the broader global/imported catalog lookup only runs in
+    /// the rare case where the project has no usable effective agents at all.
     func sessionHasSelectableAgents(_ session: PiAgentSessionRecord) -> Bool {
         if startupSnapshot(forProjectPath: session.projectPath)
             .effectiveAgents.contains(where: { $0.resolved.disabled != true }) {
@@ -7223,21 +7215,14 @@ final class AppViewModel: NSObject {
     }
 
     private func agentCatalog(forProjectPath projectPath: String?) -> [AgentRecord] {
-        var records = globalSnapshot.globalAgents + globalSnapshot.libraryAgents
-        for projectSnapshot in allProjectSnapshots.values {
-            records += projectSnapshot.projectAgents + projectSnapshot.legacyProjectAgents + projectSnapshot.libraryAgents
-        }
-        if selectedProjectPath == projectPath {
-            records += snapshot.projectAgents + snapshot.legacyProjectAgents + snapshot.libraryAgents
-        }
+        let records = globalSnapshot.globalAgents + globalSnapshot.libraryAgents
         return deduplicateByID(records)
     }
 
     private func agentCatalog(globalSnapshot: ScanSnapshot, catalogProjectSnapshots: [ScanSnapshot]) -> [AgentRecord] {
         deduplicateByID(
             globalSnapshot.globalAgents +
-            globalSnapshot.libraryAgents +
-            catalogProjectSnapshots.flatMap { $0.projectAgents + $0.legacyProjectAgents + $0.libraryAgents }
+            globalSnapshot.libraryAgents
         )
     }
 
@@ -7269,11 +7254,6 @@ final class AppViewModel: NSObject {
     private func migrateAgentAssignmentsFromDiscoveredFiles(globalSnapshot: ScanSnapshot, projectSnapshots: [String: ScanSnapshot]) {
         for name in Set(globalSnapshot.globalAgents.map(\.name)) {
             _ = appSettingsController.setDefaultAgent(name, enabled: true)
-        }
-        for (projectPath, projectSnapshot) in projectSnapshots {
-            for name in Set((projectSnapshot.projectAgents + projectSnapshot.legacyProjectAgents).map(\.name)) {
-                projectPreferencesStore.setAssignedAgent(name, assigned: true, for: projectPath)
-            }
         }
         _ = appSettingsController.markAgentAssignmentsMigratedFromDiscoveredFiles()
         appSettings = appSettingsController.settings
@@ -8710,9 +8690,6 @@ final class AppViewModel: NSObject {
     }
 
     func enableSkillGlobally(_ skill: SkillRecord) throws {
-        if skill.source.kind == .project || skill.source.kind == .legacyProject {
-            try moveSkillToGlobalDirectory(skill)
-        }
         guard appSettingsController.setDefaultSkill(skill.name, enabled: true) else {
             refresh(includeModels: false, scanAllProjects: true)
             selectedSkillID = allVisibleSkillRecords.first { $0.name == skill.name }?.id ?? selectedSkillID
@@ -9124,7 +9101,7 @@ final class AppViewModel: NSObject {
             collectionIDs: appSettings.defaultSkillCollectionIDs.union(projectPreference(for: projectPath).assignedSkillCollectionIDs),
             catalog: skillCatalog(forProjectPath: projectPath)
         )
-        return try PiSkillLaunchResolver.skillArguments(for: names, catalog: skillCatalog(forProjectPath: projectPath))
+        return try PiSkillLaunchResolver.skillArguments(for: names, catalog: skillCatalog(forProjectPath: projectPath), missingSkillPolicy: .skip)
     }
 
     private func parentPromptTemplateArguments(for projectURL: URL) throws -> [String] {
@@ -9134,13 +9111,7 @@ final class AppViewModel: NSObject {
     }
 
     private func promptTemplateCatalog(forProjectPath projectPath: String) -> [PromptTemplateRecord] {
-        var records = globalSnapshot.promptTemplates + globalSnapshot.libraryPromptTemplates
-        if let projectSnapshot = allProjectSnapshots[projectPath] {
-            records += projectSnapshot.promptTemplates + projectSnapshot.libraryPromptTemplates
-        }
-        if selectedProjectPath == projectPath {
-            records += snapshot.promptTemplates + snapshot.libraryPromptTemplates
-        }
+        let records = globalSnapshot.promptTemplates + globalSnapshot.libraryPromptTemplates
         let disabledBundled = appSettings.disabledBundledPromptNames
         var seen = Set<String>()
         return records
@@ -9149,13 +9120,7 @@ final class AppViewModel: NSObject {
     }
 
     private func skillCatalog(forProjectPath projectPath: String) -> [SkillRecord] {
-        var records = globalSnapshot.skills + globalSnapshot.librarySkills
-        if let projectSnapshot = allProjectSnapshots[projectPath] {
-            records += projectSnapshot.skills + projectSnapshot.librarySkills
-        }
-        if selectedProjectPath == projectPath {
-            records += snapshot.skills + snapshot.librarySkills
-        }
+        let records = globalSnapshot.skills + globalSnapshot.librarySkills
         let disabledBundled = appSettings.disabledBundledSkillNames
         var seen = Set<String>()
         return records
@@ -9329,7 +9294,9 @@ final class AppViewModel: NSObject {
             collectionIDs.formUnion(preference.assignedSkillCollectionIDs)
         }
         let catalog = path.map { skillCatalog(forProjectPath: $0) } ?? (globalSnapshot.skills + globalSnapshot.librarySkills)
+        let availableSkillNames = Set(catalog.map(\.name))
         return Set(effectiveSkillNames(directNames: directNames, collectionIDs: collectionIDs, catalog: catalog))
+            .filter { availableSkillNames.contains($0) }
     }
 
     /// The resolved `SkillRecord`s actually available to the parent session for
@@ -10110,9 +10077,6 @@ final class AppViewModel: NSObject {
     }
 
     private func defaultCustomScope(for agent: EffectiveAgentRecord) -> AgentEditingTarget.CustomAgentScope {
-        if agent.projectCustom != nil || agent.projectOverride != nil || (agent.projectRoot != nil && selectedProjectPath != nil) {
-            return .project
-        }
         return .global
     }
 

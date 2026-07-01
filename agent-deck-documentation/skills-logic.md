@@ -12,18 +12,17 @@ This makes Agent Deck the source of truth for which skills are available to each
 
 The skill catalog is the list of skills Agent Deck can see on the user's machine or in the app bundle.
 
-Agent Deck can discover skills from multiple sources, including:
+Agent Deck can discover skills from global, bundled, package, and explicit import/catalog sources, including:
 
 | Source | Examples |
 |---|---|
 | Bundled skills | Skills shipped with Agent Deck, such as `agent-authoring`, `prompt-authoring`, and `skill-authoring`. |
-| User skills | `~/.pi/agent/skills/<name>/SKILL.md`, `~/.pi/agent/skills/<name>.md`. |
-| Project skills | `PROJECT/.pi/skills/<name>/SKILL.md`, `PROJECT/.pi/skills/<name>.md`. |
-| Compatibility skills | Recursive `.agents/skills/**/SKILL.md` locations, excluding broad dependency/build folders. |
-| Package skills | Package-declared `pi.skills`, including direct skill roots and simple globs such as `./cs-*`, or conventional package `skills/` folders. |
-| Imported/catalog skills | Any existing imported skill folders Agent Deck scans. |
+| User/global skills | `~/.pi/agent/skills/<name>/SKILL.md`, `~/.pi/agent/skills/<name>.md`. |
+| Legacy global skills | Recursive `~/.agents/skills/**/SKILL.md`; root `.md` files are ignored. |
+| Globally resolved package skills | Package-declared `pi.skills` or conventional package `skills/` folders from global package locations. |
+| Imported/catalog skills | Existing skill roots the user adds through Agent Deck’s `+` import flow. |
 
-A catalog skill keeps its original path. Agent Deck does not need to move, copy, or link a skill before using it. Runtime injection is controlled by assignment, not by the folder where the skill lives.
+A catalog skill keeps its original path. Agent Deck does not need to move, copy, or link a skill before using it; import is by reference, not copy. Runtime injection is controlled by assignment, not by the folder where the skill lives. Agent Deck does not discover project-local `.pi/skills` or legacy project `.agents/skills` folders as resource catalog sources.
 
 ## Importing external skills
 
@@ -73,7 +72,7 @@ Agent Deck launches parent Pi RPC sessions with:
 ```text
 --no-skills
 --skill <default-skill-path>
---skill <project-skill-path>
+--skill <project-assigned-skill-path>
 ```
 
 Parent sessions do not receive:
@@ -81,7 +80,9 @@ Parent sessions do not receive:
 - unassigned skills,
 - skills assigned only to another project,
 - skills assigned only to native agents,
-- package/user/project skills merely because Pi could discover them on disk.
+- assigned skills that no longer exist in the Agent Deck skill catalog,
+- package/user/imported skills merely because Pi could discover them on disk,
+- project-local `.pi/skills` or legacy project `.agents/skills` resources.
 
 Example:
 
@@ -89,12 +90,14 @@ Example:
 pi --mode rpc \
   --no-skills \
   --skill /Users/me/.pi/agent/skills/default-review/SKILL.md \
-  --skill /Users/me/projects/app/.pi/skills/app-patterns/SKILL.md
+  --skill /Users/me/SkillRepositories/app-patterns/SKILL.md
 ```
 
 ## Native subagents
 
 Native subagents receive only their own assigned skills.
+
+Missing Default or Project skill assignments are skipped at parent-session launch time so a deleted external skill does not block the composer. The stale assignment remains visible in settings/warnings so the user can restore the skill or remove the obsolete assignment explicitly.
 
 Agent skills are stored on the agent as `skills:` names:
 

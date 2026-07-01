@@ -31,7 +31,7 @@ struct SkillsInfoPopover: View {
                 .fontWidth(.expanded)
 
             VStack(alignment: .leading, spacing: 10) {
-                infoRow("Catalog", "Agent Deck scans skills from bundled, user, project, compatibility, package, and imported external locations.")
+                infoRow("Catalog", "Agent Deck scans skills from bundled, global user, global compatibility, package, and imported external locations. Project-specific availability is controlled by assignment.")
                 infoRow("Default", "Default skills are passed to every parent Pi Agent session with explicit --skill flags.")
                 infoRow("Project", "Project assignments are passed only to parent sessions for that project.")
                 infoRow("Agents", "Deck agents receive only skills explicitly assigned to that agent.")
@@ -2155,8 +2155,8 @@ struct SkillsScreen: View {
 
     private func presentSkillActionError(_ error: Error, skill: SkillRecord, project: DiscoveredProject? = nil, action: String) {
         NSSound.beep()
-        let target = project.map { "project \($0.name)" } ?? "global skills"
-        let conflictPath = project.map { "\($0.path)/.pi/skills/\(skill.name)" } ?? "~/.pi/agent/skills/\(skill.name)"
+        let target = project.map { "project \($0.name) assignment" } ?? "global skills"
+        let conflictPath = "~/.pi/agent/skills/\(skill.name) or an imported catalog path"
         skillActionErrorMessage = """
         \(AppBrand.displayName) could not \(action) for "\(skill.name)" in \(target).
 

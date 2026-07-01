@@ -506,21 +506,17 @@ struct PiAgentSessionSubagentPickerCard: View {
     /// per derived list.
     private struct Resolved {
         let rows: [EffectiveAgentRecord]
+        let addedRows: [EffectiveAgentRecord]
         let addable: [EffectiveAgentRecord]
         let selection: Set<String>
         let hasExplicitSelection: Bool
-
-        private var visibleRowNames: Set<String> { Set(rows.map(\.name)) }
 
         var selectedCount: Int {
             rows.filter { selection.contains($0.name) }.count
         }
 
-        /// Selected agent names that are not in a visible default row — agents
-        /// added via "Add agents" after the row list was scoped to project
-        /// defaults. Surfaced in the subtitle so added agents aren't invisible.
         var addedCount: Int {
-            selection.filter { !visibleRowNames.contains($0) }.count
+            addedRows.count
         }
 
         var subtitle: String {
@@ -548,27 +544,30 @@ struct PiAgentSessionSubagentPickerCard: View {
                 .map(\.name)
         )
         let selection = session.agentSelection ?? defaultNames
-        // Main card rows show only the project assigned/default agents. Agents
-        // added via "Add agents" are not duplicated as main rows; they stay
-        // reachable only through the Add agents sheet.
+        // Main card rows start with the project assigned/default agents. Agents
+        // added via "Add agents" render as their own section below a divider so
+        // the effective launch set is visible without mixing defaults/extras.
         let rowNames = defaultNames
 
         let byName: (EffectiveAgentRecord, EffectiveAgentRecord) -> Bool = {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
-        // `seenRows` ends up holding exactly the row names, so the "addable"
-        // pass reuses it instead of rebuilding a separate set.
         var seenRows = Set<String>()
         let rows = universe
             .filter { rowNames.contains($0.name) && seenRows.insert($0.name).inserted }
             .sorted(by: byName)
+        var seenAddedRows = Set<String>()
+        let addedRows = universe
+            .filter { selection.contains($0.name) && !rowNames.contains($0.name) && seenAddedRows.insert($0.name).inserted }
+            .sorted(by: byName)
         var seenAddable = Set<String>()
         let addable = universe
-            .filter { !seenRows.contains($0.name) && seenAddable.insert($0.name).inserted }
+            .filter { !rowNames.contains($0.name) && seenAddable.insert($0.name).inserted }
             .sorted(by: byName)
 
         return Resolved(
             rows: rows,
+            addedRows: addedRows,
             addable: addable,
             selection: selection,
             hasExplicitSelection: session.agentSelection != nil
@@ -773,6 +772,13 @@ struct PiAgentSessionSubagentPickerCard: View {
             }
             .frame(maxHeight: 420)
 
+            if !data.addedRows.isEmpty {
+                Divider()
+                    .padding(.vertical, 6)
+                ForEach(data.addedRows, id: \.name) { agent in
+                    agentRow(agent, checked: true, selection: data.selection)
+                }
+            }
             PiAgentPickerAddRow(
                 isEnabled: !data.addable.isEmpty,
                 showsReset: data.hasExplicitSelection,

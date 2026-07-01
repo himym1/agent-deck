@@ -6399,8 +6399,9 @@ struct PiAgentScreen: View {
                 )
                 .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottom)))
             } else if hasSlashSuggestions {
+                let rows = slashSuggestionRows
                 PiAgentSlashSuggestions(
-                    rows: slashSuggestionRows,
+                    rows: rows,
                     highlightedSelectableIndex: slashState.highlightedIndex,
                     scrollTick: slashState.scrollTick,
                     title: slashPanelTitle,
@@ -6411,6 +6412,11 @@ struct PiAgentScreen: View {
                     },
                     onBack: slashCanGoBack ? { popSlashScreen() } : nil
                 )
+#if DEBUG
+                .onAppear { SlashDebugLog.panelRender(rows: rows, phase: "appear", query: slashQueryString, universe: slashUniverse) }
+                .onChange(of: rows.count) { _, _ in SlashDebugLog.panelRender(rows: rows, phase: "rowsChanged", query: slashQueryString, universe: slashUniverse) }
+                .onChange(of: slashQueryString) { _, _ in SlashDebugLog.panelRender(rows: slashSuggestionRows, phase: "queryChanged", query: slashQueryString, universe: slashUniverse) }
+#endif
                 .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottom)))
             }
             PiAgentComposerBox(
@@ -6447,7 +6453,10 @@ struct PiAgentScreen: View {
             )
         }
         .animation(.easeOut(duration: 0.12), value: hasComposerSuggestions)
-        .onChange(of: composerText) { _, _ in
+        .onChange(of: composerText) { oldText, newText in
+#if DEBUG
+            SlashDebugLog.textChange(oldText: oldText, newText: newText)
+#endif
             composerSuggestionIndex = 0
             composerSuggestionsDismissed = false
             composerSuggestionScrollTick += 1
@@ -6663,9 +6672,24 @@ struct PiAgentScreen: View {
 
         if isSlashActive && !lastSlashTriggerActive {
             let projectPath = store.selectedSession?.projectPath ?? viewModel.selectedProjectPath
+#if DEBUG
+            SlashDebugLog.write("slash.lifecycle.enter", [
+                "query": slashQueryString,
+                "projectPath": projectPath
+            ])
+            SlashDebugLog.write("slash.universe.build.start", ["projectPath": projectPath])
+            let buildStart = Date()
+#endif
             slashUniverse = viewModel.slashUniverse(forProjectPath: projectPath)
+#if DEBUG
+            let durationMS = Date().timeIntervalSince(buildStart) * 1000
+            SlashDebugLog.write("slash.universe.build.end", slashUniverse.debugLogFields(durationMS: durationMS))
+#endif
             slashState = SlashSuggestionState()
         } else if !isSlashActive && lastSlashTriggerActive {
+#if DEBUG
+            SlashDebugLog.write("slash.lifecycle.exit", slashUniverse.debugLogFields(rowCount: slashSuggestionRows.count))
+#endif
             slashUniverse = .empty
             slashState = SlashSuggestionState()
         }
@@ -7257,8 +7281,9 @@ private struct PiAgentComposerPanel: View {
                     )
                     .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottom)))
                 } else if hasSlashSuggestions {
+                    let rows = slashSuggestionRows
                     PiAgentSlashSuggestions(
-                        rows: slashSuggestionRows,
+                        rows: rows,
                         highlightedSelectableIndex: slashState.highlightedIndex,
                         scrollTick: slashState.scrollTick,
                         title: slashPanelTitle,
@@ -7269,6 +7294,11 @@ private struct PiAgentComposerPanel: View {
                         },
                         onBack: slashCanGoBack ? { popSlashScreen() } : nil
                     )
+#if DEBUG
+                    .onAppear { SlashDebugLog.panelRender(rows: rows, phase: "appear", query: slashQueryString, universe: slashUniverse) }
+                    .onChange(of: rows.count) { _, _ in SlashDebugLog.panelRender(rows: rows, phase: "rowsChanged", query: slashQueryString, universe: slashUniverse) }
+                    .onChange(of: slashQueryString) { _, _ in SlashDebugLog.panelRender(rows: slashSuggestionRows, phase: "queryChanged", query: slashQueryString, universe: slashUniverse) }
+#endif
                     .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottom)))
                 }
             }
@@ -7374,7 +7404,10 @@ private struct PiAgentComposerPanel: View {
                 )
             }
         }
-        .onChange(of: composerText) { _, _ in
+        .onChange(of: composerText) { oldText, newText in
+#if DEBUG
+            SlashDebugLog.textChange(oldText: oldText, newText: newText)
+#endif
             composerSuggestionIndex = 0
             composerSuggestionsDismissed = false
             composerSuggestionScrollTick += 1
@@ -7641,9 +7674,24 @@ private struct PiAgentComposerPanel: View {
 
         if isSlashActive && !lastSlashTriggerActive {
             let projectPath = store.selectedSession?.projectPath ?? viewModel.selectedProjectPath
+#if DEBUG
+            SlashDebugLog.write("slash.lifecycle.enter", [
+                "query": slashQueryString,
+                "projectPath": projectPath
+            ])
+            SlashDebugLog.write("slash.universe.build.start", ["projectPath": projectPath])
+            let buildStart = Date()
+#endif
             slashUniverse = viewModel.slashUniverse(forProjectPath: projectPath)
+#if DEBUG
+            let durationMS = Date().timeIntervalSince(buildStart) * 1000
+            SlashDebugLog.write("slash.universe.build.end", slashUniverse.debugLogFields(durationMS: durationMS))
+#endif
             slashState = SlashSuggestionState()
         } else if !isSlashActive && lastSlashTriggerActive {
+#if DEBUG
+            SlashDebugLog.write("slash.lifecycle.exit", slashUniverse.debugLogFields(rowCount: slashSuggestionRows.count))
+#endif
             slashUniverse = .empty
             slashState = SlashSuggestionState()
         }

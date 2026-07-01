@@ -6,6 +6,11 @@ struct PiSkillLaunchResolver {
         let skills: [SkillRecord]
     }
 
+    enum MissingSkillPolicy {
+        case fail
+        case skip
+    }
+
     enum ResolutionError: LocalizedError {
         case ambiguousSkill(name: String, matches: [SkillRecord])
         case missingSkill(name: String)
@@ -35,15 +40,15 @@ struct PiSkillLaunchResolver {
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    static func skillArguments(for names: [String], catalog: [SkillRecord]) throws -> [String] {
-        let resolved = try resolve(names: names, catalog: catalog)
+    static func skillArguments(for names: [String], catalog: [SkillRecord], missingSkillPolicy: MissingSkillPolicy = .fail) throws -> [String] {
+        let resolved = try resolve(names: names, catalog: catalog, missingSkillPolicy: missingSkillPolicy)
         return resolved.flatMap { ["--skill", $0.filePath] }
     }
 
     static func parentSkillArguments(defaultSkillNames: Set<String>, projectSkillNames: Set<String>, snapshot: ScanSnapshot) throws -> [String] {
         let names = Array(defaultSkillNames.union(projectSkillNames)).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         guard !names.isEmpty else { return [] }
-        return try skillArguments(for: names, catalog: catalog(from: snapshot))
+        return try skillArguments(for: names, catalog: catalog(from: snapshot), missingSkillPolicy: .skip)
     }
 
     static func childSkillArguments(agent: EffectiveAgentRecord, snapshot: ScanSnapshot, expandedSkillNames: [String]? = nil) throws -> [String] {
@@ -53,11 +58,18 @@ struct PiSkillLaunchResolver {
         return try skillArguments(for: names, catalog: catalog(from: snapshot))
     }
 
-    static func resolve(names: [String], catalog: [SkillRecord]) throws -> [SkillRecord] {
+    static func resolve(names: [String], catalog: [SkillRecord], missingSkillPolicy: MissingSkillPolicy = .fail) throws -> [SkillRecord] {
         var resolved: [SkillRecord] = []
         for name in normalizedNames(names) {
             let matches = catalog.filter { $0.name == name }.sorted(by: skillSort)
-            if matches.isEmpty { throw ResolutionError.missingSkill(name: name) }
+            if matches.isEmpty {
+                switch missingSkillPolicy {
+                case .fail:
+                    throw ResolutionError.missingSkill(name: name)
+                case .skip:
+                    continue
+                }
+            }
             if matches.count > 1 { throw ResolutionError.ambiguousSkill(name: name, matches: matches) }
             resolved.append(matches[0])
         }

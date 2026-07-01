@@ -243,6 +243,26 @@ google-vertex gemini-2.5-pro 1M 64K yes yes
     }
 }
 
+final class PiProviderCatalogServiceTests: XCTestCase {
+    func testConnectableProvidersMergeFallbacksWhenLoadedListIsPartial() async {
+        let runner = FakeModelDiscoveryCommandRunner(
+            listOutput: "",
+            nodeOutput: #"["neuralwatt"]"#
+        )
+        let service = PiProviderCatalogService(
+            commandRunner: runner,
+            piResolver: PiExecutableResolver(candidatesProvider: { [] }, defaultPathDirectories: { [] })
+        )
+
+        let providers = await service.loadConnectableProviders()
+
+        XCTAssertTrue(providers.contains("neuralwatt"))
+        XCTAssertTrue(providers.contains("openrouter"))
+        XCTAssertTrue(providers.contains("anthropic"))
+        XCTAssertEqual(providers.filter { $0 == "neuralwatt" }.count, 1)
+    }
+}
+
 private actor FakeModelDiscoveryCommandRunner: CommandRunning {
     private let listOutput: String
     private let nodeOutput: String
